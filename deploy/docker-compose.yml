@@ -1,0 +1,63 @@
+services:
+  # vision:
+  #   build:
+  #     context: ..
+  #     dockerfile: deploy/Dockerfile.vision
+  #   ports:
+  #     - "8081:8080"
+  #   networks:
+  #     - bawal-net
+  postgres: 
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bawal_vision
+    ports:
+      - "5432:5432"
+    networks:
+    - bawal-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bawal_vision"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DB_HOST=postgres
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=bawal_vision
+      - DB_PORT=5432
+      - DB_SSLMODE=disable
+    networks:
+      - bawal-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # frontend:
+  #   build:
+  #     context: ../frontend
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "3000:80"
+  #   environment:
+  #     - BACKEND_URL=http://backend:8080
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - bawal-net
+
+networks:
+  bawal-net:
+    driver: bridge

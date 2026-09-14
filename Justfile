@@ -1,81 +1,105 @@
+# 1. Load file .env dan set shell
+set dotenv-load := true
 set shell := ["bash", "-uc"]
 
-# Fallback path for ESP-IDF if the environment variable is not set on the host
+# 2. Export environment variables secara global di level justfile
+export WIFI_SSID := env_var_or_default("WIFI_SSID", "")
+export WIFI_PASS := env_var_or_default("WIFI_PASS", "")
+
+# Fallback path for ESP-IDF
 export IDF_PATH := env_var_or_default("IDF_PATH", env_var("HOME") + "/esp/esp-idf")
 
-# Display available recipes
+COMPOSE_FILE := "deploy/docker-compose.yml"
+
 default:
     @just --list
 
-# Install native dependencies for Linux / ARM64 Graviton host
+# --- Vision & Backend Recipes ---
 setup-deps:
     sudo apt update
     sudo apt install -y build-essential cmake ninja-build pkg-config \
         libopencv-dev libomp-dev nlohmann-json3-dev
 
-# Generate CMake build files and export compile_commands.json for clangd/LSP
 configure-vision target="Release":
     cmake -B services/vision/build -S services/vision \
         -DCMAKE_BUILD_TYPE={{ target }} \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-# Compile C++20 vision service in parallel (triggers configure if build tree is missing)
 build-vision target="Release":
     @if [ ! -f "services/vision/build/Makefile" ] && [ ! -f "services/vision/build/build.ninja" ]; then just configure-vision {{ target }}; fi
     cmake --build services/vision/build --parallel $(nproc)
 
-# Run the compiled vision service binary
 run-vision:
     ./services/vision/build/bin/vision_service
 
-# Build Golang backend orchestrator
 build-gateway:
     cd backend && go build -o bin/gateway cmd/server/main.go
 
-# Run Golang backend orchestrator
 run-gateway:
     cd backend && go run cmd/server/main.go
 
-# Remove compilation artifacts for both C++ and Go
 clean:
     rm -rf services/vision/build
     rm -rf backend/bin
 
-# Build ARM64 Docker container for vision service
 docker-build-vision:
     docker build -f deploy/Dockerfile.vision -t bawal-vision:latest .
 
-# Run containerized vision service with exposed network port
 docker-run-vision:
-    docker run --rm -it \
-        -p 8080:8080 \
-        bawal-vision:latest
-# Build ESP32-S3 firmware via native CMake + Ninja
+    docker run --rm -it -p 8080:8080 bawal-vision:latest
+
+compose-up service="":
+    docker compose -f {{ COMPOSE_FILE }} up --build {{ service }}
+
+compose-up-d service="":
+    docker compose -f {{ COMPOSE_FILE }} up -d --build {{ service }}
+
+compose-backend:
+    docker compose -f {{ COMPOSE_FILE }} up --build backend
+
+compose-down:
+    docker compose -f {{ COMPOSE_FILE }} down
+
+# --- ESP32-S3 Firmware Recipes ---
+
+# Build standar tanpa override Wi-Fi
 build-edge:
     @just _idf-exec "build"
 
-# Flash firmware and open serial UART monitor
-flash-edge port="/dev/ttyUSB0":
-    @just _idf-exec "-p {{ port }} flash monitor"
+# Build firmware dengan menyuntikkan kredensial Wi-Fi dari .env secara aman
+build-edge-wifi:
+    @if [ -z "$WIFI_SSID" ]; then echo "[ERROR] WIFI_SSID belum diisi di file .env!" >&2; exit 1; fi
+    @just _idf-exec 'build -DCONFIG_ESP_WIFI_SSID="$WIFI_SSID" -DCONFIG_ESP_WIFI_PASSWORD="$WIFI_PASS"'
 
-# Launch interactive Kconfig system configuration
+# Flash firmware dan jalankan monitor
+flash-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
+    @just _idf-exec "-p {{ port }} flash monitor --no-reset"
+
+# Shortcut: Build (dengan Wi-Fi .env), Flash, dan Monitor
+run-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
+    just build-edge-wifi
+    just flash-edge {{ port }}
+
+# Erase NVS partition saja untuk reset Wi-Fi cache
+erase-nvs port=env_var_or_default("PORT", "/dev/ttyACM0"):
+    @just _idf-exec "-p {{ port }} erase-flash"
+
 menuconfig-edge:
     @just _idf-exec "menuconfig"
 
-# Clean firmware build tree artifacts
 clean-edge:
     @just _idf-exec "fullclean"
+
 # Helper internal: validate & load ESP-IDF toolchain in isolation
 [private]
 _idf-exec cmd:
     #!/usr/bin/env bash
     set -eo pipefail
     if [ ! -f "$IDF_PATH/export.sh" ]; then
-        echo "[ERROR] ESP-IDF export.sh not found at: $IDF_PATH" >&2
-        echo "[HINT] Set path manually: export IDF_PATH=/path/to/esp-idf" >&2
+        echo "[ERROR] ESP-IDF export.sh tidak ditemukan di: $IDF_PATH" >&2
+        echo "[HINT] Set path di .bashrc atau via CLI: export IDF_PATH=/path/ke/esp-idf" >&2
         exit 1
     fi
-    # Disable unbound variable verification specifically while sourcing Espressif's setup script
     set +u
     . "$IDF_PATH/export.sh" > /dev/null 2>&1
     set -u
