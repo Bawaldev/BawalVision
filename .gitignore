@@ -76,6 +76,7 @@ yarn.lock
 *.sublime-workspace
 *.swp
 *.swo
+.vscode/
 *~
 
 # Environment & Secrets
