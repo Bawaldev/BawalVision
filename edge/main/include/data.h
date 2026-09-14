@@ -12,7 +12,8 @@ typedef struct {
     float    temperature;    
     float    humidity;      
     float    gas_voc;        
-    float    pressure;      
+    float    pressure; 
+    uint8_t  current_cpu_load; 
 } telemetry_data_t;
 
 typedef struct {

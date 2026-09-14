@@ -43,6 +43,7 @@ extern char g_wifi_pass[64];
 void wifi_init_sta(void);
 bool wifi_nvs_load_credentials(void);
 bool wifi_nvs_save_credentials(const char *ssid, const char *pass);
-esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, const telemetry_data_t *data);
+esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,telemetry_data_t *data);
 bool get_backend_url(char *out_url, size_t max_len);
+bool get_backend_ip(char *out_ip, size_t max_len);
 void WiFi_Server_Task(void *pvParameters);

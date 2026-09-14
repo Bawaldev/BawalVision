@@ -10,6 +10,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_client.h"
+#include "system_monitor.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "cJSON.h"
@@ -49,6 +50,40 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         g_wifi_retry_num = 0;
         xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
     }
+}
+
+bool get_backend_ip(char *out_ip, size_t max_len) {
+    if (out_ip == NULL || max_len == 0) return false;
+
+    // 1. Prioritaskan jika CONFIG_BACKEND_IP diisi di build args/.env
+    if (strlen(CONFIG_BACKEND_IP) > 0) {
+        snprintf(out_ip, max_len, "%s", CONFIG_BACKEND_IP);
+        return true;
+    }
+
+    // 2. Fallback: Ambil Gateway IP dari interface netif
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == NULL) {
+        netif = esp_netif_get_default_netif();
+    }
+
+    if (netif == NULL) {
+        ESP_LOGE(TAG, "Network interface not found");
+        return false;
+    }
+
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK || ip_info.ip.addr == 0) {
+        ESP_LOGW(TAG, "IP interface unassigned");
+        return false;
+    }
+
+    if (ip_info.gw.addr != 0) {
+        snprintf(out_ip, max_len, IPSTR, IP2STR(&ip_info.gw));
+        return true;
+    }
+
+    return false;
 }
 
 void wifi_init_sta(void) {
@@ -221,9 +256,18 @@ bool get_backend_url(char *out_url, size_t max_len) {
     return false;
 }
 
-esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, const telemetry_data_t *data) {
+esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,telemetry_data_t *data) {
+    if (backend_ip == NULL || data == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     char url[URL_BUFFER_SIZE];
     snprintf(url, sizeof(url), "http://%s:%d%s", backend_ip, port, BACKEND_ENDPOINT);
+
+    // Ambil pemakaian CPU real-time jika belum diisi oleh producer
+    if (data->current_cpu_load == 0) {
+        data->current_cpu_load = get_cpu_usage_percentage();
+    }
 
     cJSON *root = cJSON_CreateObject();
     if (root == NULL) return ESP_ERR_NO_MEM;
@@ -234,6 +278,7 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, const
     cJSON_AddNumberToObject(root, "humidity", data->humidity);
     cJSON_AddNumberToObject(root, "gas_voc", data->gas_voc);
     cJSON_AddNumberToObject(root, "pressure", data->pressure);
+    cJSON_AddNumberToObject(root, "cpu_load", data->current_cpu_load); // Konsisten dengan backend Go & Postgres
 
     char *json_string = cJSON_PrintUnformatted(root);
     if (json_string == NULL) {
@@ -244,16 +289,24 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, const
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_POST,
-        .timeout_ms = 5000,
+        .timeout_ms = 4000,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        ESP_LOGE(TAG, "Failed to initialize esp_http_client");
+        cJSON_Delete(root);
+        cJSON_free(json_string);
+        return ESP_FAIL;
+    }
 
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, json_string, strlen(json_string));
 
+    ESP_LOGI(TAG, "Dispatching telemetry to: %s (CPU Load: %u%%)", url, data->current_cpu_load);
     esp_err_t err = esp_http_client_perform(client);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Ingest status = %d", esp_http_client_get_status_code(client));
+        int status_code = esp_http_client_get_status_code(client);
+        ESP_LOGI(TAG, "Ingest completed. Status = %d", status_code);
     } else {
         ESP_LOGE(TAG, "Ingest failed: %s", esp_err_to_name(err));
     }
@@ -268,62 +321,21 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, const
 void WiFi_Server_Task(void *pvParameters) {
     QueueHandle_t data_queue = (QueueHandle_t)pvParameters;
     telemetry_data_t telemetry;
-    char backend_url[URL_BUFFER_SIZE];
 
     for (;;) {
         if (xQueueReceive(data_queue, &telemetry, portMAX_DELAY) != pdTRUE) {
             continue;
         }
 
-        if (!get_backend_url(backend_url, sizeof(backend_url))) {
+        char backend_ip[32] = {0};
+        uint16_t backend_port = (uint16_t)atoi(CONFIG_BACKEND_PORT);
+
+        // Gunakan get_backend_ip (mengembalikan string IP murni seperti "10.79.167.155")
+        if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
             ESP_LOGE(TAG, "Failed to resolve backend gateway IP. Skipping dispatch.");
             continue;
         }
 
-        cJSON *root = cJSON_CreateObject();
-        if (root == NULL) continue;
-
-        cJSON_AddStringToObject(root, "device_id", telemetry.device_id);
-        cJSON_AddNumberToObject(root, "timestamp", (double)telemetry.timestamp);
-        cJSON_AddNumberToObject(root, "temperature", telemetry.temperature);
-        cJSON_AddNumberToObject(root, "humidity", telemetry.humidity);
-        cJSON_AddNumberToObject(root, "gas_voc", telemetry.gas_voc);
-        cJSON_AddNumberToObject(root, "pressure", telemetry.pressure);
-
-        char *json_string = cJSON_PrintUnformatted(root);
-        if (json_string == NULL) {
-            cJSON_Delete(root);
-            continue;
-        }
-
-        esp_http_client_config_t config = {
-            .url = backend_url,
-            .method = HTTP_METHOD_POST,
-            .timeout_ms = 4000,
-        };
-
-        esp_http_client_handle_t client = esp_http_client_init(&config);
-        if (client == NULL) {
-            ESP_LOGE(TAG, "Failed to initialize esp_http_client instance");
-            cJSON_Delete(root);
-            cJSON_free(json_string);
-            continue;
-        }
-
-        esp_http_client_set_header(client, "Content-Type", "application/json");
-        esp_http_client_set_post_field(client, json_string, strlen(json_string));
-
-        ESP_LOGI(TAG, "Dispatching telemetry to: %s", backend_url);
-        esp_err_t err = esp_http_client_perform(client);
-        if (err == ESP_OK) {
-            int status_code = esp_http_client_get_status_code(client);
-            ESP_LOGI(TAG, "HTTP POST completed. Status: %d", status_code);
-        } else {
-            ESP_LOGE(TAG, "HTTP POST failed: %s", esp_err_to_name(err));
-        }
-
-        esp_http_client_cleanup(client);
-        cJSON_Delete(root);
-        cJSON_free(json_string);
+        send_telemetry_to_backend(backend_ip, backend_port, &telemetry);
     }
 }

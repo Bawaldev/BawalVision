@@ -4,17 +4,21 @@ CREATE TABLE IF NOT EXISTS inspections (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id VARCHAR(64) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    image_s3_uri TEXT NOT NULL,
+    image_s3_uri TEXT,
     
+    -- Embedded Telemetry Data
     temperature NUMERIC(5, 2) NOT NULL,
     humidity NUMERIC(5, 2) NOT NULL,
     gas_voc NUMERIC(10, 2) NOT NULL,
     pressure NUMERIC(7, 2) NOT NULL,
+    cpu_load SMALLINT NOT NULL DEFAULT 0,
     
-    is_spoiled BOOLEAN NOT NULL,
-    total_grams NUMERIC(7, 2) NOT NULL,
-    t_safe_hours NUMERIC(5, 2) NOT NULL,
+    -- Embedded Prediction Result
+    is_spoiled BOOLEAN NOT NULL DEFAULT FALSE,
+    total_grams NUMERIC(7, 2) NOT NULL DEFAULT 0.00,
+    t_safe_hours NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
     
+    -- JSONB Array untuk Detail Komponen Makanan
     foods JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 

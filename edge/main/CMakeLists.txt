@@ -2,6 +2,7 @@ idf_component_register(
     SRCS 
         "src/main.c"
         "src/wifi.c"
+        "src/system_monitor.c"
         "test/test.c"
     INCLUDE_DIRS 
         "include"

@@ -5,12 +5,19 @@ import (
 )
 
 type TelemetryIngressPayload struct {
-	DeviceID    string    `json:"device_id" gorm:"-"`
-	Timestamp   time.Time `json:"timestamp" gorm:"-"`
-	Temperature float64   `json:"temperature" gorm:"column:temperature"`
-	Humidity    float64   `json:"humidity" gorm:"column:humidity"`
-	GasVOC      float64   `json:"gas_voc" gorm:"column:gas_voc"`
-	Pressure    float64   `json:"pressure" gorm:"column:pressure"`
+	DeviceID       string    `json:"device_id" gorm:"-"`
+	Timestamp      time.Time `json:"timestamp" gorm:"-"`
+	Temperature    float64   `json:"temperature" gorm:"column:temperature;type:numeric(5,2);not null"`
+	Humidity       float64   `json:"humidity" gorm:"column:humidity;type:numeric(5,2);not null"`
+	GasVOC         float64   `json:"gas_voc" gorm:"column:gas_voc;type:numeric(10,2);not null"`
+	Pressure       float64   `json:"pressure" gorm:"column:pressure;type:numeric(7,2);not null"`
+	CurrentCPULoad uint8     `json:"cpu_load" gorm:"column:cpu_load;type:smallint;not null;default:0"`
+}
+
+type PredictionResult struct {
+	IsSpoiled  bool    `json:"is_spoiled" gorm:"column:is_spoiled;not null;default:false"`
+	TotalGrams float64 `json:"total_grams" gorm:"column:total_grams;type:numeric(7,2);not null;default:0"`
+	TSafeHours float64 `json:"t_safe_hours" gorm:"column:t_safe_hours;type:numeric(5,2);not null;default:0"`
 }
 
 type FoodType struct {
@@ -24,12 +31,6 @@ type SensorData struct {
 	Timestamp   time.Time `json:"timestamp"`
 }
 
-type PredictionResult struct {
-	IsSpoiled  bool    `json:"is_spoiled" gorm:"column:is_spoiled"`
-	TotalGrams float64 `json:"total_grams" gorm:"column:total_grams"`
-	TSafeHours float64 `json:"t_safe_hours" gorm:"column:t_safe_hours"`
-}
-
 type Food struct {
 	Type       FoodType   `json:"type"`
 	FoodName   string     `json:"food_name"`
@@ -38,9 +39,9 @@ type Food struct {
 
 type InspectionRecord struct {
 	ID         string    `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
-	DeviceID   string    `json:"device_id" gorm:"column:device_id;not null"`
-	CreatedAt  time.Time `json:"created_at" gorm:"column:created_at;autoCreateTime"`
-	ImageS3URI string    `json:"image_s3_uri" gorm:"column:image_s3_uri"`
+	DeviceID   string    `json:"device_id" gorm:"column:device_id;type:varchar(64);not null"`
+	CreatedAt  time.Time `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:now()"`
+	ImageS3URI string    `json:"image_s3_uri" gorm:"column:image_s3_uri;type:text"`
 
 	Telemetry  TelemetryIngressPayload `json:"telemetry" gorm:"embedded"`
 	Prediction PredictionResult        `json:"prediction" gorm:"embedded"`
