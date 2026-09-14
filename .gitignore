@@ -16,12 +16,19 @@ CTestTestfile.cmake
 CMakeUserPresets.json
 CMakeLists.txt.user*
 
-# PlatformIO & Embedded Toolchain (edge/)
+# ESP-IDF & PlatformIO Embedded Toolchain (edge/)
 .pio/
 .pioenvs/
 .piolibdeps/
 .clang_complete
 .gcc-flags.json
+
+# ESP-IDF Generated Files & Dependencies
+**/managed_components/
+**/sdkconfig
+**/sdkconfig.old
+**/sdkconfig.defaults
+!**/sdkconfig.defaults.*
 
 # Backend (backend/)
 backend/bin/
@@ -68,7 +75,7 @@ yarn.lock
 # IDEs & Editors
 .idea/
 *.iml
-.vscode/*
+.vscode/
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
@@ -76,7 +83,6 @@ yarn.lock
 *.sublime-workspace
 *.swp
 *.swo
-.vscode/
 *~
 
 # Environment & Secrets
