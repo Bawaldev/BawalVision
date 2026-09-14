@@ -1,7 +1,6 @@
 package inspection
 
 import (
-	"sync"
 	"time"
 )
 
@@ -41,7 +40,7 @@ type InspectionRecord struct {
 	ID         string    `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	DeviceID   string    `json:"device_id" gorm:"column:device_id;not null"`
 	CreatedAt  time.Time `json:"created_at" gorm:"column:created_at;autoCreateTime"`
-	ImageS3URI string    `json:"image_s3_uri" gorm:"column:image_s3_uri;not null"`
+	ImageS3URI string    `json:"image_s3_uri" gorm:"column:image_s3_uri"`
 
 	Telemetry  TelemetryIngressPayload `json:"telemetry" gorm:"embedded"`
 	Prediction PredictionResult        `json:"prediction" gorm:"embedded"`
@@ -49,12 +48,6 @@ type InspectionRecord struct {
 	Foods []Food `json:"foods" gorm:"column:foods;type:jsonb;serializer:json;not null;default:'[]'"`
 }
 
-// TableName menentukan nama tabel PostgreSQL secara eksplisit
 func (InspectionRecord) TableName() string {
 	return "inspections"
-}
-
-type InspectionStore struct {
-	sync.RWMutex
-	readings map[string]TelemetryIngressPayload
 }

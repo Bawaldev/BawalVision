@@ -6,11 +6,12 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "esp_err.h"
 #include "data.h"
 
 #define NVS_NAMESPACE       "wifi_config"
-// #define DEFAULT_WIFI_SSID   "WiFi_Default_SSID"
-// #define DEFAULT_WIFI_PASS   "WiFi_Default_PASS"
+#define MAXIMUM_RETRY       5
+#define BACKEND_ENDPOINT    "/api/v1/telemetry"
 
 #ifndef CONFIG_ESP_WIFI_SSID
 #define CONFIG_ESP_WIFI_SSID ""
@@ -20,11 +21,13 @@
 #define CONFIG_ESP_WIFI_PASSWORD ""
 #endif
 
-#define BACKEND_TELEMETRY_URL "http://192.168.x.x:8080/api/v1/telemetry"
-#define MAXIMUM_RETRY       5
+#ifndef CONFIG_BACKEND_IP
+#define CONFIG_BACKEND_IP ""
+#endif
 
-#define BACKEND_PORT        8080
-#define BACKEND_ENDPOINT    "/api/v1/telemetry"
+#ifndef CONFIG_BACKEND_PORT
+#define CONFIG_BACKEND_PORT "8080"
+#endif
 
 #define URL_BUFFER_SIZE     128
 #define JSON_BUFFER_SIZE    512

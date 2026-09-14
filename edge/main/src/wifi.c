@@ -31,10 +31,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         esp_wifi_connect();
         ESP_LOGI(TAG_WIFI, "Connecting to AP...");
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t* dis = (wifi_event_sta_disconnected_t*) event_data;
+        ESP_LOGW(TAG_WIFI, "Connection lost (Reason code: %d)", dis->reason);
+
         if (g_wifi_retry_num < MAXIMUM_RETRY) {
             esp_wifi_connect();
             g_wifi_retry_num++;
-            ESP_LOGW(TAG_WIFI, "Connection lost. Retrying connection (%d/%d)...", g_wifi_retry_num, MAXIMUM_RETRY);
+            ESP_LOGW(TAG_WIFI, "Retrying connection (%d/%d)...", g_wifi_retry_num, MAXIMUM_RETRY);
         } else {
             xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
             ESP_LOGE(TAG_WIFI, "Failed to connect to AP after %d attempts.", MAXIMUM_RETRY);
@@ -49,6 +52,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 }
 
 void wifi_init_sta(void) {
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
     if (!wifi_nvs_load_credentials()) {
         ESP_LOGW(TAG_WIFI, "NVS kosong/invalid. Menggunakan fallback dari build args.");
         strncpy(g_wifi_ssid, CONFIG_ESP_WIFI_SSID, sizeof(g_wifi_ssid) - 1);
@@ -99,18 +109,21 @@ void wifi_init_sta(void) {
     snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%s", g_wifi_ssid);
     snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%s", g_wifi_pass);
     
-    // Authmode threshold disesuaikan dengan isi password
+    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+
     wifi_config.sta.threshold.authmode = (strlen(g_wifi_pass) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     wifi_config.sta.pmf_cfg.capable = true;
     wifi_config.sta.pmf_cfg.required = false;
+    wifi_config.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
-    ESP_LOGI(TAG_WIFI, "Connecting with SSID: '%s'", g_wifi_ssid);
+    ESP_LOGI(TAG_WIFI, "Attempting connection -> SSID: '%s' | PASS LEN: %d", 
+             g_wifi_ssid, (int)strlen(g_wifi_pass));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    // Timeout 15 detik agar tidak menggantung selamanya jika AP tidak merespon
     EventBits_t bits = xEventGroupWaitBits(
         g_wifi_event_group,
         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
@@ -186,20 +199,35 @@ bool get_backend_url(char *out_url, size_t max_len) {
     }
 
     esp_netif_ip_info_t ip_info;
-    if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK || ip_info.gw.addr == 0) {
-        ESP_LOGW(TAG, "Gateway IP unavailable or interface unassigned");
+    if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK || ip_info.ip.addr == 0) {
+        ESP_LOGW(TAG, "IP interface unassigned");
         return false;
     }
 
-    int ret = snprintf(out_url, max_len, "http://" IPSTR ":8080/api/v1/telemetry", IP2STR(&ip_info.gw));
-    return (ret > 0 && ret < (int)max_len);
+    // 1. Prioritaskan BACKEND_IP yang dikirim dari .env / build args
+    if (strlen(CONFIG_BACKEND_IP) > 0) {
+        int ret = snprintf(out_url, max_len, "http://%s:%s%s", 
+                           CONFIG_BACKEND_IP, CONFIG_BACKEND_PORT, BACKEND_ENDPOINT);
+        return (ret > 0 && ret < (int)max_len);
+    }
+
+    // 2. Fallback: Gunakan Gateway IP jika BACKEND_IP kosong
+    if (ip_info.gw.addr != 0) {
+        int ret = snprintf(out_url, max_len, "http://" IPSTR ":%s%s", 
+                           IP2STR(&ip_info.gw), CONFIG_BACKEND_PORT, BACKEND_ENDPOINT);
+        return (ret > 0 && ret < (int)max_len);
+    }
+
+    return false;
 }
 
 esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, const telemetry_data_t *data) {
-    char url[128];
-    snprintf(url, sizeof(url), "http://%s:%d/api/v1/telemetry", backend_ip, port);
+    char url[URL_BUFFER_SIZE];
+    snprintf(url, sizeof(url), "http://%s:%d%s", backend_ip, port, BACKEND_ENDPOINT);
 
     cJSON *root = cJSON_CreateObject();
+    if (root == NULL) return ESP_ERR_NO_MEM;
+
     cJSON_AddStringToObject(root, "device_id", data->device_id);
     cJSON_AddNumberToObject(root, "timestamp", (double)data->timestamp);
     cJSON_AddNumberToObject(root, "temperature", data->temperature);
@@ -232,7 +260,7 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, const
 
     esp_http_client_cleanup(client);
     cJSON_Delete(root);
-    free(json_string);
+    cJSON_free(json_string);
 
     return err;
 }
@@ -240,7 +268,7 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, const
 void WiFi_Server_Task(void *pvParameters) {
     QueueHandle_t data_queue = (QueueHandle_t)pvParameters;
     telemetry_data_t telemetry;
-    char backend_url[128];
+    char backend_url[URL_BUFFER_SIZE];
 
     for (;;) {
         if (xQueueReceive(data_queue, &telemetry, portMAX_DELAY) != pdTRUE) {
@@ -253,6 +281,8 @@ void WiFi_Server_Task(void *pvParameters) {
         }
 
         cJSON *root = cJSON_CreateObject();
+        if (root == NULL) continue;
+
         cJSON_AddStringToObject(root, "device_id", telemetry.device_id);
         cJSON_AddNumberToObject(root, "timestamp", (double)telemetry.timestamp);
         cJSON_AddNumberToObject(root, "temperature", telemetry.temperature);
@@ -276,7 +306,7 @@ void WiFi_Server_Task(void *pvParameters) {
         if (client == NULL) {
             ESP_LOGE(TAG, "Failed to initialize esp_http_client instance");
             cJSON_Delete(root);
-            free(json_string);
+            cJSON_free(json_string);
             continue;
         }
 
@@ -294,6 +324,6 @@ void WiFi_Server_Task(void *pvParameters) {
 
         esp_http_client_cleanup(client);
         cJSON_Delete(root);
-        free(json_string);
+        cJSON_free(json_string);
     }
 }

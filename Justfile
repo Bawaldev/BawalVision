@@ -5,6 +5,8 @@ set shell := ["bash", "-uc"]
 # 2. Export environment variables secara global di level justfile
 export WIFI_SSID := env_var_or_default("WIFI_SSID", "")
 export WIFI_PASS := env_var_or_default("WIFI_PASS", "")
+export BACKEND_IP := env_var_or_default("BACKEND_IP", "")
+export BACKEND_PORT := env_var_or_default("BACKEND_PORT", "8080")
 
 # Fallback path for ESP-IDF
 export IDF_PATH := env_var_or_default("IDF_PATH", env_var("HOME") + "/esp/esp-idf")
@@ -69,7 +71,8 @@ build-edge:
 # Build firmware dengan menyuntikkan kredensial Wi-Fi dari .env secara aman
 build-edge-wifi:
     @if [ -z "$WIFI_SSID" ]; then echo "[ERROR] WIFI_SSID belum diisi di file .env!" >&2; exit 1; fi
-    @just _idf-exec 'build -DCONFIG_ESP_WIFI_SSID="$WIFI_SSID" -DCONFIG_ESP_WIFI_PASSWORD="$WIFI_PASS"'
+    @if [ -z "$BACKEND_IP" ]; then echo "[ERROR] BACKEND_IP belum diisi di file .env!" >&2; exit 1; fi
+    @just _idf-exec 'build -DCONFIG_ESP_WIFI_SSID="$WIFI_SSID" -DCONFIG_ESP_WIFI_PASSWORD="$WIFI_PASS" -DCONFIG_BACKEND_IP="$BACKEND_IP" -DCONFIG_BACKEND_PORT="$BACKEND_PORT"'
 
 # Flash firmware dan jalankan monitor
 flash-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):

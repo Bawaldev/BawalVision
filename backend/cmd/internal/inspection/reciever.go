@@ -4,8 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 )
+
+type InspectionStore struct {
+	sync.RWMutex
+	readings map[string]TelemetryIngressPayload
+}
 
 func NewInspectionStore() *InspectionStore {
 	return &InspectionStore{
@@ -17,7 +23,7 @@ func (s *InspectionStore) ProcessTelemetry(r io.Reader) (*TelemetryIngressPayloa
 	var payload TelemetryIngressPayload
 
 	decoder := json.NewDecoder(r)
-	decoder.DisallowUnknownFields()
+	// Hapus DisallowUnknownFields() agar field JSON lain dari ESP32 tidak menggagalkan decoding
 	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON payload: %w", err)
 	}

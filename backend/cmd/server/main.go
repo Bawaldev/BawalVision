@@ -4,20 +4,19 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"bawal_vision_backend/cmd/internal/inspection"
 
 	fiber "github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
-	// Endpoint resmi yang dipanggil ESP32-S3: POST /api/v1/telemetry
 	router.Post("/telemetry", func(c *fiber.Ctx) error {
-		var payload inspection.TelemetryIngressPayload
+		var payload inspection.InspectionRecord
 
 		if err := c.BodyParser(&payload); err != nil {
 			log.Printf("[INGRESS ERROR] Failed to parse JSON: %v", err)
@@ -26,14 +25,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
-		record := inspection.InspectionRecord{
-			ID:        uuid.New().String(),
-			DeviceID:  payload.DeviceID,
-			CreatedAt: time.Now(),
-			Telemetry: payload,
-		}
-
-		if err := db.Create(&record).Error; err != nil {
+		if err := db.Create(&payload).Error; err != nil {
 			log.Printf("[DB ERROR] Failed to save record: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": "Failed to save data to database",
@@ -44,7 +36,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 			"status": "acknowledged",
-			"id":     record.ID,
+			"id":     payload.ID,
 		})
 	})
 }
@@ -82,7 +74,10 @@ func main() {
 		ServerHeader: "Bawal-Vision-Backend",
 	})
 
-	// Grouping Route API v1
+	// Middleware penangkap panic agar koneksi TCP tidak terputus tiba-tiba
+	app.Use(recover.New())
+	app.Use(logger.New())
+
 	apiGroup := app.Group("/api/v1")
 	RegisterDeviceRoutes(apiGroup, db)
 
