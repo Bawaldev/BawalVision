@@ -5,13 +5,13 @@ import (
 )
 
 type TelemetryIngressPayload struct {
-	DeviceID       string    `json:"device_id" gorm:"-"`
-	Timestamp      time.Time `json:"timestamp" gorm:"-"`
-	Temperature    float64   `json:"temperature" gorm:"column:temperature;type:numeric(5,2);not null"`
-	Humidity       float64   `json:"humidity" gorm:"column:humidity;type:numeric(5,2);not null"`
-	GasVOC         float64   `json:"gas_voc" gorm:"column:gas_voc;type:numeric(10,2);not null"`
-	Pressure       float64   `json:"pressure" gorm:"column:pressure;type:numeric(7,2);not null"`
-	CurrentCPULoad uint8     `json:"cpu_load" gorm:"column:cpu_load;type:smallint;not null;default:0"`
+	DeviceID       string  `json:"device_id" gorm:"-"`
+	Timestamp      int64   `json:"timestamp" gorm:"-"`
+	Temperature    float64 `json:"temperature" gorm:"column:temperature;type:numeric(5,2);not null"`
+	Humidity       float64 `json:"humidity" gorm:"column:humidity;type:numeric(5,2);not null"`
+	GasVOC         float64 `json:"gas_voc" gorm:"column:gas_voc;type:numeric(10,2);not null"`
+	Pressure       float64 `json:"pressure" gorm:"column:pressure;type:numeric(7,2);not null"`
+	CurrentCPULoad uint8   `json:"cpu_load" gorm:"column:cpu_load;type:smallint;not null;default:0"`
 }
 
 type PredictionResult struct {

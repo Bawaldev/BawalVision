@@ -31,8 +31,8 @@ func (s *InspectionStore) ProcessTelemetry(r io.Reader) (*TelemetryIngressPayloa
 	if payload.DeviceID == "" {
 		return nil, fmt.Errorf("missing required field: device_id")
 	}
-	if payload.Timestamp.IsZero() {
-		payload.Timestamp = time.Now()
+	if payload.Timestamp == 0 {
+		payload.Timestamp = time.Now().Unix()
 	}
 
 	s.Lock()

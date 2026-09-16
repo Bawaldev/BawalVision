@@ -1,7 +1,8 @@
 package api
 
 import (
-	"bawal_vision_backend/cmd/internal/inspection"
+	"bawal_vision_backend/internal/inspection"
+	"log"
 	"time"
 
 	fiber "github.com/gofiber/fiber/v2"
@@ -10,11 +11,10 @@ import (
 )
 
 func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
-	// ESP32 -> Server Ingestion
-	router.Post("/ingest", func(c *fiber.Ctx) error {
+	router.Post("/telemetry", func(c *fiber.Ctx) error {
 		var payload inspection.TelemetryIngressPayload
+		log.Printf("[RAW PAYLOAD]: %s", string(c.Body()))
 
-		// Parse the JSON body from ESP32
 		if err := c.BodyParser(&payload); err != nil {
 			return c.Status(400).JSON(fiber.Map{
 				"error": "Invalid JSON payload",
@@ -25,7 +25,19 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			ID:        uuid.New().String(),
 			DeviceID:  payload.DeviceID,
 			CreatedAt: time.Now(),
-			Telemetry: payload,
+			Telemetry: inspection.TelemetryIngressPayload{
+				Temperature:    payload.Temperature,
+				Humidity:       payload.Humidity,
+				GasVOC:         payload.GasVOC,
+				Pressure:       payload.Pressure,
+				CurrentCPULoad: payload.CurrentCPULoad,
+			},
+			Prediction: inspection.PredictionResult{
+				IsSpoiled:  false,
+				TotalGrams: 0.0,
+				TSafeHours: 0.0,
+			},
+			Foods: []inspection.Food{},
 		}
 
 		if err := db.Create(&record).Error; err != nil {

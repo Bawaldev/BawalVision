@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/gofiber/fiber/v2 v2.52.15
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/securecookie v1.1.2
 	gorm.io/driver/postgres v1.6.2
 	gorm.io/gorm v1.31.2
 )

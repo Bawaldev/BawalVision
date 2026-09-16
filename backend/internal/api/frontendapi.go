@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"bawal_vision_backend/cmd/internal/inspection"
+	"bawal_vision_backend/internal/inspection"
 
 	fiber "github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
