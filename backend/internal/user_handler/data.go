@@ -34,7 +34,7 @@ type User struct {
 type UserTelemetry struct {
 	UserID    string    `json:"user_id"`
 	Email     string    `json:"email"`
-	Event     string    `json:"event"` // "user_login", "cookie_rotated", "profile_updated"
+	Event     string    `json:"event"` // "user_login","cookie_rotated","profile_updated"
 	Timestamp time.Time `json:"timestamp"`
 	IPAddress string    `json:"ip_address"`
 	UserAgent string    `json:"user_agent"`

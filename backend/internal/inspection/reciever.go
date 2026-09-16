@@ -23,7 +23,6 @@ func (s *InspectionStore) ProcessTelemetry(r io.Reader) (*TelemetryIngressPayloa
 	var payload TelemetryIngressPayload
 
 	decoder := json.NewDecoder(r)
-	// Hapus DisallowUnknownFields() agar field JSON lain dari ESP32 tidak menggagalkan decoding
 	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON payload: %w", err)
 	}
