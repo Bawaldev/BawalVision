@@ -52,6 +52,7 @@ func main() {
 	app.Use(logger.New())
 
 	apiGroup := app.Group("/api/v1")
+	api.RegisterUserRoutes(apiGroup, db)
 	api.RegisterDeviceRoutes(apiGroup, db)
 
 	log.Println("Server running on http://0.0.0.0:8080...")

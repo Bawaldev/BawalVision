@@ -1,8 +1,9 @@
-package user
+package user_handler
 
 import (
 	"net/http"
-	"uuid"
+
+	"github.com/google/uuid"
 
 	"github.com/gofiber/fiber/v2"
 	securecookie "github.com/gorilla/securecookie"

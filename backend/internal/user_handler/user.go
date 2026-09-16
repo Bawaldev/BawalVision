@@ -1,4 +1,4 @@
-package user
+package user_handler
 
 func CreateUser(name, email, password string) *User {
 	pk := NewProtectiveKey()

@@ -39,6 +39,7 @@ type Food struct {
 
 type InspectionRecord struct {
 	ID         string    `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	UserID     string    `json:"user_id" gorm:"type:uuid;index"`
 	DeviceID   string    `json:"device_id" gorm:"column:device_id;type:varchar(64);not null"`
 	CreatedAt  time.Time `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:now()"`
 	ImageS3URI string    `json:"image_s3_uri" gorm:"column:image_s3_uri;type:text"`
