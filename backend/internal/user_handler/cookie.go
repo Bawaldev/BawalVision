@@ -14,11 +14,10 @@ var s = securecookie.New(
 	securecookie.GenerateRandomKey(32),
 )
 
-func NewProtectiveKey() *ProtectiveKey {
-	return &ProtectiveKey{
-		Hashkey:  HashKey{Key: securecookie.GenerateRandomKey(64)},  // HMAC-SHA512
-		Blockkey: BlockKey{Key: securecookie.GenerateRandomKey(32)}, // AES-256
-	}
+func GenerateKeys() ([]byte, []byte) {
+	hashKey := securecookie.GenerateRandomKey(64)  // HMAC-SHA512
+	blockKey := securecookie.GenerateRandomKey(32) // AES-256
+	return hashKey, blockKey
 }
 
 func setSecureCookieHandler(w http.ResponseWriter, r *http.Request, c *fiber.Ctx) {

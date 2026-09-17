@@ -17,6 +17,9 @@ idf_component_register(
         esp_http_client
         esp_timer
         driver
+        esp_hw_support
+        app_update
+        esp_lcd
 )
 
 if(DEFINED CONFIG_ESP_WIFI_SSID)

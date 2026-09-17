@@ -55,13 +55,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 bool get_backend_ip(char *out_ip, size_t max_len) {
     if (out_ip == NULL || max_len == 0) return false;
 
-    // 1. Prioritaskan jika CONFIG_BACKEND_IP diisi di build args/.env
     if (strlen(CONFIG_BACKEND_IP) > 0) {
         snprintf(out_ip, max_len, "%s", CONFIG_BACKEND_IP);
         return true;
     }
-
-    // 2. Fallback: Ambil Gateway IP dari interface netif
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (netif == NULL) {
         netif = esp_netif_get_default_netif();
@@ -238,15 +235,11 @@ bool get_backend_url(char *out_url, size_t max_len) {
         ESP_LOGW(TAG, "IP interface unassigned");
         return false;
     }
-
-    // 1. Prioritaskan BACKEND_IP yang dikirim dari .env / build args
     if (strlen(CONFIG_BACKEND_IP) > 0) {
         int ret = snprintf(out_url, max_len, "http://%s:%s%s", 
                            CONFIG_BACKEND_IP, CONFIG_BACKEND_PORT, BACKEND_ENDPOINT);
         return (ret > 0 && ret < (int)max_len);
     }
-
-    // 2. Fallback: Gunakan Gateway IP jika BACKEND_IP kosong
     if (ip_info.gw.addr != 0) {
         int ret = snprintf(out_url, max_len, "http://" IPSTR ":%s%s", 
                            IP2STR(&ip_info.gw), CONFIG_BACKEND_PORT, BACKEND_ENDPOINT);
@@ -264,7 +257,6 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     char url[URL_BUFFER_SIZE];
     snprintf(url, sizeof(url), "http://%s:%d%s", backend_ip, port, BACKEND_ENDPOINT);
 
-    // Ambil pemakaian CPU real-time jika belum diisi oleh producer
     if (data->current_cpu_load == 0) {
         data->current_cpu_load = get_cpu_usage_percentage();
     }
@@ -273,12 +265,15 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     if (root == NULL) return ESP_ERR_NO_MEM;
 
     cJSON_AddStringToObject(root, "device_id", data->device_id);
+    cJSON_AddStringToObject(root, "firmware_version", data->firmware_version);
     cJSON_AddNumberToObject(root, "timestamp", (double)data->timestamp);
     cJSON_AddNumberToObject(root, "temperature", data->temperature);
     cJSON_AddNumberToObject(root, "humidity", data->humidity);
     cJSON_AddNumberToObject(root, "gas_voc", data->gas_voc);
     cJSON_AddNumberToObject(root, "pressure", data->pressure);
-    cJSON_AddNumberToObject(root, "cpu_load", data->current_cpu_load); // Konsisten dengan backend Go & Postgres
+    cJSON_AddNumberToObject(root, "cpu_load", data->current_cpu_load);
+    cJSON_AddStringToObject(root, "device_name", data->device_name);
+    cJSON_AddNumberToObject(root, "device_core", data->device_core);
 
     char *json_string = cJSON_PrintUnformatted(root);
     if (json_string == NULL) {
@@ -329,8 +324,6 @@ void WiFi_Server_Task(void *pvParameters) {
 
         char backend_ip[32] = {0};
         uint16_t backend_port = (uint16_t)atoi(CONFIG_BACKEND_PORT);
-
-        // Gunakan get_backend_ip (mengembalikan string IP murni seperti "10.79.167.155")
         if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
             ESP_LOGE(TAG, "Failed to resolve backend gateway IP. Skipping dispatch.");
             continue;

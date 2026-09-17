@@ -1,13 +1,14 @@
 package user_handler
 
 func CreateUser(name, email, password string) *User {
-	pk := NewProtectiveKey()
+	hashKey, blockKey := GenerateKeys()
 
 	return &User{
-		Name:         name,
-		Email:        email,
-		Password:     password,
-		Securecookie: *pk,
+		Name:     name,
+		Email:    email,
+		Password: password,
+		HashKey:  hashKey,
+		BlockKey: blockKey,
 	}
 }
 func mapToUser(m map[string]string) User {

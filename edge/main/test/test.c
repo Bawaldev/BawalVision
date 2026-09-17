@@ -3,7 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "esp_log.h"
-
+#include "system_monitor.h"
 #include "data.h"
 
 static const char *TAG = "TEST_PRODUCER";
@@ -17,22 +17,22 @@ void test_telemetry_producer_task(void *pvParameters) {
     }
 
     telemetry_data_t dummy_data;
-    strncpy(dummy_data.device_id, "ESP32S3_TEST_NODE", sizeof(dummy_data.device_id) - 1);
-    dummy_data.device_id[sizeof(dummy_data.device_id) - 1] = '\0';
+    init_device_metadata(&dummy_data);
 
     float temp_counter = 25.0f;
 
     for (;;) {
         time_t now;
         time(&now);
-
         dummy_data.timestamp = (int64_t)now;
         dummy_data.temperature = temp_counter;
         dummy_data.humidity = 60.5f;
         dummy_data.gas_voc = 12500.0f;
         dummy_data.pressure = 1013.25f;
+        dummy_data.current_cpu_load = get_cpu_usage_percentage();
 
-        ESP_LOGI(TAG, "Mendorong payload dummy ke antrean (Temp: %.2f C)...", dummy_data.temperature);
+        ESP_LOGI(TAG, "Mendorong payload ke antrean [ID: %s, Temp: %.2f C, CPU: %d%%]...", 
+                 dummy_data.device_id, dummy_data.temperature, dummy_data.current_cpu_load);
 
         if (xQueueSend(data_queue, &dummy_data, pdMS_TO_TICKS(1000)) != pdTRUE) {
             ESP_LOGW(TAG, "Antrean penuh, payload dilewati.");

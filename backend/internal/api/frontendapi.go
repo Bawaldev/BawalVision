@@ -83,15 +83,15 @@ func RegisterUserHandler(db *gorm.DB) fiber.Handler {
 			})
 		}
 
-		protectiveKey := user_handler.NewProtectiveKey()
+		hashKey, blockKey := user_handler.GenerateKeys()
 
 		newUser := user_handler.User{
-			Name:         payload.Name,
-			Email:        payload.Email,
-			Password:     string(hashedPassword),
-			Securecookie: *protectiveKey,
+			Name:     payload.Name,
+			Email:    payload.Email,
+			Password: string(hashedPassword),
+			HashKey:  hashKey,
+			BlockKey: blockKey,
 		}
-
 		if err := db.Create(&newUser).Error; err != nil {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
 				"error": "Email already exists or database insertion failed",

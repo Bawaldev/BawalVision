@@ -22,22 +22,17 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		}
 
 		record := inspection.InspectionRecord{
-			ID:        uuid.New().String(),
-			DeviceID:  payload.DeviceID,
-			CreatedAt: time.Now(),
-			Telemetry: inspection.TelemetryIngressPayload{
-				Temperature:    payload.Temperature,
-				Humidity:       payload.Humidity,
-				GasVOC:         payload.GasVOC,
-				Pressure:       payload.Pressure,
-				CurrentCPULoad: payload.CurrentCPULoad,
-			},
-			Prediction: inspection.PredictionResult{
-				IsSpoiled:  false,
-				TotalGrams: 0.0,
-				TSafeHours: 0.0,
-			},
-			Foods: []inspection.Food{},
+			ID:              uuid.New().String(),
+			DeviceID:        payload.DeviceID,
+			FirmwareVersion: payload.FirmwareVersion,
+			CreatedAt:       time.Now(),
+			Temperature:     payload.Temperature,
+			Humidity:        payload.Humidity,
+			GasVOC:          payload.GasVOC,
+			Pressure:        payload.Pressure,
+			CPULoad:         payload.CurrentCPULoad,
+			IsSpoiled:       false,
+			TSafeHours:      0.0,
 		}
 
 		if err := db.Create(&record).Error; err != nil {
