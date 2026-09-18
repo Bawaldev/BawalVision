@@ -1,3 +1,4 @@
+-- Active: 1789537729712@@127.0.0.1@5432@bawal_vision@public
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS devices (

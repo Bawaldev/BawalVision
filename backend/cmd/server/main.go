@@ -1,14 +1,16 @@
 package main
 
 import (
+	"bawal_vision_backend/internal/api"
+	"bawal_vision_backend/internal/device"
+	"bawal_vision_backend/internal/food"
+	"bawal_vision_backend/internal/inspection"
+	"bawal_vision_backend/internal/user_handler"
 	"fmt"
 	"log"
 	"os"
 
-	"bawal_vision_backend/internal/api"
-	"bawal_vision_backend/internal/inspection"
-
-	fiber "github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"gorm.io/driver/postgres"
@@ -16,8 +18,8 @@ import (
 )
 
 func getEnv(key, fallback string) string {
-	if val, ok := os.LookupEnv(key); ok {
-		return val
+	if value, exists := os.LookupEnv(key); exists {
+		return value
 	}
 	return fallback
 }
@@ -40,7 +42,13 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	if err := db.AutoMigrate(&inspection.InspectionRecord{}); err != nil {
+	if err := db.AutoMigrate(
+		&user_handler.User{},
+		&device.Device{},
+		&food.FoodItem{},
+		&inspection.InspectionRecord{},
+		&inspection.InspectionFood{},
+	); err != nil {
 		log.Fatalf("Database migration failed: %v", err)
 	}
 

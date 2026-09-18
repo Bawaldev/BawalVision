@@ -1,21 +1,18 @@
 package inspection
 
-import "time"
+import (
+	"bawal_vision_backend/internal/food"
+	"time"
+)
 
 // GORM Models (Tabel DB)
-type FoodItem struct {
-	ID   int    `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name string `json:"name" gorm:"type:varchar(100);unique;not null"`
-}
-
-func (FoodItem) TableName() string { return "food_items" }
 
 type InspectionFood struct {
-	ID           string    `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
-	InspectionID string    `json:"inspection_id" gorm:"type:uuid;not null;index"`
-	FoodItemID   int       `json:"food_item_id" gorm:"type:int;not null;index"`
-	WeightGrams  float64   `json:"weight_grams" gorm:"column:weight_grams;type:numeric(7,2);not null;default:0.00"`
-	FoodItem     *FoodItem `json:"food_item,omitempty" gorm:"foreignKey:FoodItemID"`
+	ID           string         `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	InspectionID string         `json:"inspection_id" gorm:"type:uuid;not null;index"`
+	FoodItemID   int            `json:"food_item_id" gorm:"type:int;not null;index"`
+	WeightGrams  float64        `json:"weight_grams" gorm:"column:weight_grams;type:numeric(7,2);not null;default:0.00"`
+	FoodItem     *food.FoodItem `json:"food_item,omitempty" gorm:"foreignKey:FoodItemID"`
 }
 
 func (InspectionFood) TableName() string { return "inspection_foods" }
