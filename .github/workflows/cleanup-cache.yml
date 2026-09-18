@@ -1,0 +1,30 @@
+name: Cleanup Cache and Trash Folder
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Clean Cache Trash Directory
+        run: |
+          mkdir -p .cache_trash
+          rm -rf .cache_trash/*
+          touch .cache_trash/.gitkeep
+          echo "Cache trash directory cleared successfully."
+
+      - name: Verify OUTPUT.md Presence
+        run: |
+          if [ ! -f "OUTPUT.md" ]; then
+            echo "Warning: OUTPUT.md does not exist yet."
+          else
+            echo "OUTPUT.md verified."
+          fi
