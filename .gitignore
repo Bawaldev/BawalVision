@@ -101,6 +101,7 @@ aws-infra/.aws-sam/
 .Trashes
 ehthumbs.db
 Thumbs.db
+dataset_mbg_matang
 
 # Gemini & System Cache / Trash
 .cache_trash/
