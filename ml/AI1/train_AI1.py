@@ -12,9 +12,14 @@ import numpy as np
 # ==========================================
 # 1. KONFIGURASI DIREKTORI & HYPERPARAMETER
 # ==========================================
-DATA_DIR = r"C:\Users\LENOVO\Documents\github\BawalVision\ml\AI1\dataset"
-WEIGHTS_DIR = r"C:\Users\LENOVO\Documents\github\BawalVision\ml\AI1\weights"
-MODEL_DIR = r"C:\Users\LENOVO\Documents\github\BawalVision\ml\AI1\model"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DATA_DIR = os.path.join(BASE_DIR, "dataset")
+WEIGHTS_DIR = os.path.join(BASE_DIR, "weights")
+MODEL_DIR = os.path.join(BASE_DIR, "model")
+
+for folder in [DATA_DIR, WEIGHTS_DIR, MODEL_DIR]:
+    os.makedirs(folder, exist_ok=True)
 
 PTH_PATH = os.path.join(WEIGHTS_DIR, "best_mobilenetv3.pth")
 ONNX_PATH = os.path.join(MODEL_DIR, "ai1_vision.onnx")
@@ -180,21 +185,35 @@ def main():
     print(f"[✓] File ONNX (FP32 siap eksekusi) tersimpan di: {ONNX_PATH}")
 
     # ==========================================
-    # 7. SANITY CHECK (PyTorch vs ONNX)
+    # 7. DETAIL SANITY CHECK (PyTorch vs ONNX)
     # ==========================================
-    print("\n=== Melakukan Sanity Check ===")
+    print("\n=== Melakukan Sanity Check (Detail Perbandingan) ===")
     
+    # 1. Inferensi PyTorch Asli
     with torch.no_grad():
         torch_output = export_model(dummy_input).cpu().numpy()
 
+    # 2. Inferensi ONNX Runtime
     ort_session = ort.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
     ort_inputs = {ort_session.get_inputs()[0].name: dummy_input.cpu().numpy()}
-    
     onnx_output = ort_session.run(None, ort_inputs)[0]
+
+    # 3. Hitung Selisih Mutlak Maksimum
+    max_diff = np.max(np.abs(torch_output - onnx_output))
+    mean_diff = np.mean(np.abs(torch_output - onnx_output))
+
+    print(f" -> Bentuk Output PyTorch : {torch_output.shape}")
+    print(f" -> Bentuk Output ONNX    : {onnx_output.shape}")
+    print(f" -> Max Absolute Diff     : {max_diff:.8f}")
+    print(f" -> Mean Absolute Diff    : {mean_diff:.8f}")
+    print("-" * 50)
+    print("Contoh 7 Logit Mentah (PyTorch) :", np.round(torch_output[0], 4))
+    print("Contoh 7 Logit Mentah (ONNX)    :", np.round(onnx_output[0], 4))
+    print("-" * 50)
 
     try:
         np.testing.assert_allclose(torch_output, onnx_output, rtol=1e-03, atol=1e-05)
-        print("[✓] Sanity check sukses! Output grafik ONNX identik dengan PyTorch.")
+        print("[✓] Sanity check sukses! Grafik ONNX terbukti identik dengan PyTorch (selisih dalam batas toleransi aman).")
     except AssertionError as e:
         print("[!] Peringatan: Terdapat perbedaan margin kalkulasi antara PyTorch dan ONNX.")
         print(e)    
