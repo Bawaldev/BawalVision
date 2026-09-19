@@ -43,3 +43,9 @@ compose-backend:
 
 compose-down:
     docker compose -f {{ COMPOSE_FILE }} down
+
+allow-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
+    sudo ufw allow {{ port }}/{{ proto }}
+
+deny-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
+    sudo ufw delete allow {{ port }}/{{ proto }}
