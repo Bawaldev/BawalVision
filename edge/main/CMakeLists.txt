@@ -3,6 +3,7 @@ idf_component_register(
         "src/main.c"
         "src/wifi.c"
         "src/system_monitor.c"
+        "src/lcd_task.c"
         "test/test.c"
     INCLUDE_DIRS 
         "include"
@@ -20,6 +21,8 @@ idf_component_register(
         esp_hw_support
         app_update
         esp_lcd
+        esp_lvgl_port
+        lvgl
 )
 
 if(DEFINED CONFIG_ESP_WIFI_SSID)

@@ -15,3 +15,5 @@ dependencies:
   #   # All dependencies of `main` are public by default.
   #   public: true
   espressif/cjson: '*'
+  lvgl/lvgl: "^8.3.11"
+  espressif/esp_lvgl_port: "^2.4.0"
