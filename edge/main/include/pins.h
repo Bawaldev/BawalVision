@@ -26,7 +26,7 @@
 #define LCD_PIN_DC 21
 
 /** @brief Panel reset pin (-1 if tied to ESP EN/RST). */
-#define LCD_PIN_RST -1
+#define LCD_PIN_RST 10
 
 /** @brief SPI chip select pin (-1 if panel CS is hardwired to GND). */
 #define LCD_PIN_CS -1
@@ -41,7 +41,9 @@
 #define LCD_V_RES 240
 
 /** @brief SPI pixel clock frequency in Hertz (40 MHz default for ST7789). */
-#define LCD_PIXEL_CLOCK_HZ (40 * 1000 * 1000)
+#define LCD_PIXEL_CLOCK_HZ ( 10 * 1000 * 1000)
+// /** @brief SPI pixel clock frequency in Hertz (4 MHz safe frequency for CS-less ST7789 jumper wiring). */
+// #define LCD_PIXEL_CLOCK_HZ (4 * 1000 * 1000)
 
 /* =========================================================================
  * Legacy / Secondary Display Pinout (ESP32-S3)

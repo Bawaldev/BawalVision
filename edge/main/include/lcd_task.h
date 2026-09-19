@@ -7,6 +7,12 @@
 extern "C" {
 #endif
 
+// /**
+//  * @brief  set memory window offsets depending on panel resolution LVGL 240x240
+//  */
+// #define x_gap 0
+// #define y_gap 0
+
 /**
  * @brief Current operational and self-test state of the device.
  */

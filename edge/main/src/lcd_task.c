@@ -97,9 +97,11 @@ static void apply_status_style(system_status_t status) {
     break;
   }
 
+  lv_obj_set_style_bg_opa(s_status_card, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_color(s_status_card, bg_color, 0);
   lv_label_set_text_fmt(s_status_label, "STATUS: %s",
                         lcd_status_to_string(status));
+  lv_obj_invalidate(s_status_card);
 }
 
 void lcd_update_status(system_status_t status) {
@@ -149,6 +151,7 @@ static void create_ui(void) {
   s_status_card = lv_obj_create(cont);
   lv_obj_set_width(s_status_card, lv_pct(90));
   lv_obj_set_height(s_status_card, 48);
+  lv_obj_set_style_bg_opa(s_status_card, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(s_status_card, 0, 0);
   lv_obj_set_style_radius(s_status_card, 6, 0);
   lv_obj_set_style_pad_all(s_status_card, 4, 0);
@@ -160,8 +163,30 @@ static void create_ui(void) {
   apply_status_style(s_current_status);
 }
 
+static void lcd_direct_fill_color(esp_lcd_panel_handle_t panel, uint16_t color) {
+  const int lines_per_chunk = 20;
+  const int chunk_size = LCD_H_RES * lines_per_chunk;
+  uint16_t *buf = heap_caps_malloc(chunk_size * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+  if (!buf) {
+    buf = malloc(chunk_size * sizeof(uint16_t));
+  }
+  if (!buf) return;
+
+  for (int i = 0; i < chunk_size; i++) {
+    buf[i] = color;
+  }
+
+  for (int y = 0; y < LCD_V_RES; y += lines_per_chunk) {
+    int y_end = (y + lines_per_chunk > LCD_V_RES) ? LCD_V_RES : (y + lines_per_chunk);
+    esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_H_RES, y_end, buf);
+  }
+
+  free(buf);
+}
+
 void lcd_task(void *pvParameters) {
-  ESP_LOGI(TAG, "Initializing ST7789 SPI LCD Display on SPI host %d", LCD_HOST);
+  ESP_LOGI(TAG, "Initializing ST7789 SPI LCD Display on SPI host %d (MOSI:%d, SCK:%d, DC:%d, CS:%d, RST:%d, BCKL:%d)",
+           LCD_HOST, LCD_PIN_MOSI, LCD_PIN_SCK, LCD_PIN_DC, LCD_PIN_CS, LCD_PIN_RST, LCD_PIN_BCKL);
 
   spi_bus_config_t buscfg = {
       .sclk_io_num = LCD_PIN_SCK,
@@ -177,6 +202,7 @@ void lcd_task(void *pvParameters) {
     vTaskDelete(NULL);
     return;
   }
+  ESP_LOGI(TAG, "SPI bus initialized successfully.");
 
   esp_lcd_panel_io_handle_t io_handle = NULL;
   esp_lcd_panel_io_spi_config_t io_config = {
@@ -185,7 +211,7 @@ void lcd_task(void *pvParameters) {
       .pclk_hz = LCD_PIXEL_CLOCK_HZ,
       .lcd_cmd_bits = 8,
       .lcd_param_bits = 8,
-      .spi_mode = 0,
+      .spi_mode = 0, // Mode 3 (CPOL=1, CPHA=1) for clock idle HIGH on CS-less ST7789
       .trans_queue_depth = 10,
   };
   ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST,
@@ -200,11 +226,18 @@ void lcd_task(void *pvParameters) {
   ESP_ERROR_CHECK(
       esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
   ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
+
+  // Explicit Software Reset (0x01) for CS-less ST7789 internal state sync
+  esp_lcd_panel_io_tx_param(io_handle, 0x01, NULL, 0);
+  vTaskDelay(pdMS_TO_TICKS(150));
+
   ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
+  esp_lcd_panel_set_gap(panel_handle, 0, 0);
+
   ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
   ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+  ESP_LOGI(TAG, "ST7789 panel controller initialized (SPI Mode 3, Clock: %d Hz).", LCD_PIXEL_CLOCK_HZ);
 
-  // Optional Backlight GPIO
 #if (LCD_PIN_BCKL >= 0)
   gpio_config_t bk_gpio_config = {
       .mode = GPIO_MODE_OUTPUT,
@@ -212,48 +245,61 @@ void lcd_task(void *pvParameters) {
   };
   gpio_config(&bk_gpio_config);
   gpio_set_level(LCD_PIN_BCKL, 1);
+  ESP_LOGI(TAG, "Backlight GPIO %d set HIGH.", LCD_PIN_BCKL);
 #endif
 
-  // 4. Initialize LVGL Port
+  // Hardware self-test color cycle (Red -> Blue -> Green)
+  ESP_LOGI(TAG, "Running direct hardware screen test (RED -> BLUE -> GREEN)...");
+  lcd_direct_fill_color(panel_handle, 0xF800); // RED
+  vTaskDelay(pdMS_TO_TICKS(500));
+  lcd_direct_fill_color(panel_handle, 0x001F); // BLUE
+  vTaskDelay(pdMS_TO_TICKS(500));
+  lcd_direct_fill_color(panel_handle, 0x07E0); // GREEN
+  vTaskDelay(pdMS_TO_TICKS(500));
+
+  // Initialize LVGL Port
   lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
   ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
-  lvgl_port_display_cfg_t disp_cfg = {.io_handle = io_handle,
-                                      .panel_handle = panel_handle,
-                                      .buffer_size = LCD_H_RES * 20,
-                                      .double_buffer = true,
-                                      .hres = LCD_H_RES,
-                                      .vres = LCD_V_RES,
-                                      .monochrome = false,
-                                      .rotation =
-                                          {
-                                              .swap_xy = false,
-                                              .mirror_x = false,
-                                              .mirror_y = false,
-                                          },
-                                      .flags = {
-                                          .buff_dma = true,
-                                      }};
+  lvgl_port_display_cfg_t disp_cfg = {
+      .io_handle = io_handle,
+      .panel_handle = panel_handle,
+      .buffer_size = LCD_H_RES * 20,
+      .double_buffer = true,
+      .hres = LCD_H_RES,
+      .vres = LCD_V_RES,
+      .monochrome = false,
+      .rotation = {
+          .swap_xy = false,
+          .mirror_x = false,
+          .mirror_y = false,
+      },
+      .flags = {
+          .buff_dma = true,
+      }
+  };
   s_disp_handle = lvgl_port_add_disp(&disp_cfg);
   if (!s_disp_handle) {
     ESP_LOGE(TAG, "Failed to register LVGL display handle");
     vTaskDelete(NULL);
     return;
   }
+  ESP_LOGI(TAG, "LVGL display registered (res: %dx%d).", LCD_H_RES, LCD_V_RES);
 
-  // 5. Render UI
+  // Render UI
   if (lvgl_port_lock(0)) {
     create_ui();
     lvgl_port_unlock();
   }
 
-  ESP_LOGI(
-      TAG,
-      "LCD Task initialized successfully. ESP Type: %s, Initial Status: %s",
-      lcd_get_chip_type_string(), lcd_status_to_string(s_current_status));
+  ESP_LOGI(TAG, "LCD Task initialized successfully.");
 
-  // Main loop: keep task alive or monitor status
+  system_status_t cycle_status = SYSTEM_STATUS_IDLE;
   while (1) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    cycle_status = (cycle_status + 1) % 3;
+    ESP_LOGI(TAG, "Status cycle tick -> updating to: %s", lcd_status_to_string(cycle_status));
+    lcd_update_status(cycle_status);
   }
 }
+

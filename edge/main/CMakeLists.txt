@@ -5,6 +5,7 @@ idf_component_register(
         "src/system_monitor.c"
         "src/lcd_task.c"
         "test/test.c"
+        "test/lcd_min_test.c"
     INCLUDE_DIRS 
         "include"
         "src"
@@ -23,6 +24,7 @@ idf_component_register(
         esp_lcd
         esp_lvgl_port
         lvgl
+        
 )
 
 if(DEFINED CONFIG_ESP_WIFI_SSID)
