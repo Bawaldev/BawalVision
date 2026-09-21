@@ -4,6 +4,7 @@ idf_component_register(
         "src/wifi.c"
         "src/system_monitor.c"
         "src/lcd_task.c"
+        "src/camera_task.c"
         "test/test.c"
         "test/lcd_min_test.c"
     INCLUDE_DIRS 
@@ -12,6 +13,7 @@ idf_component_register(
         "test"
     REQUIRES 
         cjson
+        mbedtls
         esp_wifi
         esp_event
         nvs_flash

@@ -313,6 +313,74 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     return err;
 }
 
+#include "camera_task.h"
+
+esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, const char *device_id) {
+    if (backend_ip == NULL || device_id == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char *json_string = NULL;
+    if (camera_lock_frame(pdMS_TO_TICKS(100))) {
+        const camera_frame_buffer_t *shared = camera_get_shared_frame();
+        if (shared != NULL && shared->header.buffer_len > 0) {
+            cJSON *root = cJSON_CreateObject();
+            if (root != NULL) {
+                cJSON_AddStringToObject(root, "device_id", device_id);
+                cJSON_AddNumberToObject(root, "frame_id", shared->header.frame_id);
+                cJSON_AddNumberToObject(root, "width", shared->header.width);
+                cJSON_AddNumberToObject(root, "height", shared->header.height);
+                cJSON_AddNumberToObject(root, "format", shared->header.format);
+                cJSON_AddNumberToObject(root, "buffer_len", shared->header.buffer_len);
+                cJSON_AddNumberToObject(root, "timestamp_ms", (double)shared->header.timestamp_ms);
+
+                char *b64_buf = NULL;
+                size_t b64_len = 0;
+                camera_unlock_frame();
+
+                if (camera_get_latest_frame_base64(&b64_buf, &b64_len) == ESP_OK && b64_buf != NULL) {
+                    cJSON_AddStringToObject(root, "image_base64", b64_buf);
+                    free(b64_buf);
+                }
+                json_string = cJSON_PrintUnformatted(root);
+                cJSON_Delete(root);
+            } else {
+                camera_unlock_frame();
+            }
+        } else {
+            camera_unlock_frame();
+        }
+    }
+
+    if (json_string == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    char url[URL_BUFFER_SIZE];
+    snprintf(url, sizeof(url), "http://%s:%d%s", backend_ip, port, CAMERA_FRAME_ENDPOINT);
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 4000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        free(json_string);
+        return ESP_FAIL;
+    }
+
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, json_string, strlen(json_string));
+
+    ESP_LOGI(TAG, "Dispatching Logitech camera frame to: %s", url);
+    esp_err_t err = esp_http_client_perform(client);
+    esp_http_client_cleanup(client);
+    free(json_string);
+
+    return err;
+}
+
 void WiFi_Server_Task(void *pvParameters) {
     QueueHandle_t data_queue = (QueueHandle_t)pvParameters;
     telemetry_data_t telemetry;
@@ -330,5 +398,6 @@ void WiFi_Server_Task(void *pvParameters) {
         }
 
         send_telemetry_to_backend(backend_ip, backend_port, &telemetry);
+        send_camera_frame_to_backend(backend_ip, backend_port, telemetry.device_id);
     }
 }

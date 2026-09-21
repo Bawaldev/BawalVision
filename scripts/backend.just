@@ -6,16 +6,16 @@ setup-deps:
         libopencv-dev libomp-dev nlohmann-json3-dev
 
 configure-vision target="Release":
-    cmake -B services/vision/build -S services/vision \
+    cd {{ justfile_directory() }} && cmake -B services/build -S services \
         -DCMAKE_BUILD_TYPE={{ target }} \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
 build-vision target="Release":
-    @if [ ! -f "services/vision/build/Makefile" ] && [ ! -f "services/vision/build/build.ninja" ]; then just configure-vision {{ target }}; fi
-    cmake --build services/vision/build --parallel $(nproc)
+    cd {{ justfile_directory() }} && if [ ! -f "services/build/Makefile" ] && [ ! -f "services/build/build.ninja" ]; then just configure-vision {{ target }}; fi
+    cd {{ justfile_directory() }} && cmake --build services/build --parallel $(nproc)
 
 run-vision:
-    ./services/vision/build/bin/vision_service
+    cd {{ justfile_directory() }} && ./services/build/bin/vision_service
 
 build-gateway:
     cd backend && go build -o bin/gateway cmd/server/main.go
@@ -30,7 +30,7 @@ test-backend:
     cd backend && go test -v ./...
 
 clean:
-    rm -rf services/vision/build backend/bin
+    rm -rf services/build backend/bin
 
 docker-build-vision:
     docker build -f deploy/Dockerfile.vision -t bawal-vision:latest .

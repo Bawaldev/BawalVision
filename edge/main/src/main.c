@@ -9,6 +9,7 @@
 
 #include "data.h"
 #include "lcd_task.h"
+#include "camera_task.h"
 #include "test.h"
 #include "wifi.h"
 
@@ -18,6 +19,7 @@ static QueueHandle_t s_telemetry_queue = NULL;
 static TaskHandle_t s_wifi_task_handle = NULL;
 static TaskHandle_t s_test_task_handle = NULL;
 static TaskHandle_t s_lcd_task_handle = NULL;
+static TaskHandle_t s_camera_task_handle = NULL;
 
 void app_main(void) {
   esp_err_t ret = nvs_flash_init();
@@ -36,6 +38,10 @@ void app_main(void) {
     ESP_LOGE(TAG, "Gagal mengalokasikan FreeRTOS Queue");
     return;
   }
+
+  // Initialize and spawn camera FreeRTOS task with mutex synchronization
+  ESP_ERROR_CHECK(camera_task_init());
+  s_camera_task_handle = camera_task_start(4, 1);
 
   wifi_init_sta();
   xTaskCreatePinnedToCore(WiFi_Server_Task, "WiFi_Server_Task", 4096,

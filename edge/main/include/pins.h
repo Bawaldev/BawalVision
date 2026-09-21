@@ -44,7 +44,7 @@
 #define LCD_PIXEL_CLOCK_HZ      (10 * 1000 * 1000)
 
 /* =========================================================================
- * I2C Sensors (GY906 Contactless Temperature)
+ * I2C Sensors (GY906 Contactless Temperature / BME680)
  * ========================================================================= */
 
 #define I2C_MASTER_NUM          0
@@ -60,8 +60,8 @@
 #define PIN_BTN_ENABLE          42
 
 /* =========================================================================
- * USB / Webcam Interface
+ * USB / Webcam Interface (Logitech USB Camera: D-, D+, VCC, GND)
  * ========================================================================= */
 
-#define USB_PIN_DM              19
-#define USB_PIN_DP              20
+#define USB_PIN_DM              19  /**< USB D- (Data Minus) */
+#define USB_PIN_DP              20  /**< USB D+ (Data Plus)  */

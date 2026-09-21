@@ -16,6 +16,7 @@ extern "C" {
 #define NVS_NAMESPACE "wifi_config"
 #define MAXIMUM_RETRY 5
 #define BACKEND_ENDPOINT "/api/v1/telemetry"
+#define CAMERA_FRAME_ENDPOINT "/api/v1/camera/frame"
 
 #ifndef CONFIG_ESP_WIFI_SSID
 #define CONFIG_ESP_WIFI_SSID ""
@@ -79,6 +80,17 @@ bool wifi_nvs_save_credentials(const char *ssid, const char *pass);
  */
 esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,
                                     telemetry_data_t *data);
+
+/**
+ * @brief Encodes the latest camera frame and transmits it to the backend camera ingress endpoint.
+ *
+ * @param[in] backend_ip IPv4 address or hostname string of backend server.
+ * @param[in] port Destination HTTP port (e.g. 8080).
+ * @param[in] device_id Hardware device identifier.
+ * @return esp_err_t ESP_OK on success, or error code.
+ */
+esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port,
+                                       const char *device_id);
 
 /**
  * @brief Format complete telemetry endpoint URL string.

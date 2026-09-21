@@ -31,18 +31,8 @@ endif()
 # Core dependencies: concurrency, image processing, and serialization
 find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d)
-find_package(nlohmann_json 3.2.0 REQUIRED)
-
-# Network transport for local IPC / Go backend streaming
-include(FetchContent)
-FetchContent_Declare(
-    ixwebsocket
-    GIT_REPOSITORY https://github.com/machinezone/IXWebSocket.git
-    GIT_TAG        v11.4.4
-)
-set(USE_TLS OFF CACHE BOOL "" FORCE) # Disabled for local zero-overhead loopback
-FetchContent_MakeAvailable(ixwebsocket)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui)
+find_package(nlohmann_json QUIET)
 
 # Service executable definition
 add_executable(vision_service
@@ -52,6 +42,7 @@ add_executable(vision_service
     src/vision/pipeline.cpp
     src/vision/segmenter.cpp
     src/vision/types.cpp
+    src/vision/camera_receiver.cpp
 )
 
 # Public API include paths (supports umbrella header pattern)
@@ -65,8 +56,10 @@ target_link_libraries(vision_service PRIVATE
     Threads::Threads
     OpenMP::OpenMP_CXX
     ${OpenCV_LIBS}
-    nlohmann_json::nlohmann_json
-    ixwebsocket
 )
+
+if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(vision_service PRIVATE nlohmann_json::nlohmann_json)
+endif()
 
 install(TARGETS vision_service DESTINATION bin)
