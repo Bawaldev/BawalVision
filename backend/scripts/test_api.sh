@@ -118,7 +118,46 @@ else
   exit 1
 fi
 
+# ------------------------------------------------------------------------------
+# STEP 5: CAMERA FRAME INGRESS & FAST OPENCV RETRIEVAL
+# ------------------------------------------------------------------------------
+echo -e "\n${YELLOW}[5/5] Testing Camera Frame Ingress & In-Memory Retrieval...${NC}"
+CAM_RESP=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/camera/frame" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "ESP32-S3-BENCH-01",
+    "frame_id": 1,
+    "width": 320,
+    "height": 240,
+    "format": 0,
+    "buffer_len": 94,
+    "timestamp_ms": 1789958045000,
+    "image_base64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAAPAA8BAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPx8Af//Z"
+  }')
+
+CAM_BODY=$(echo "${CAM_RESP}" | head -n -1)
+CAM_CODE=$(echo "${CAM_RESP}" | tail -n 1)
+
+if [ "${CAM_CODE}" -eq 201 ]; then
+  echo -e "${GREEN}✓ Camera Frame Ingested (HTTP 201)${NC}: ${CAM_BODY}"
+else
+  echo -e "${RED}✗ Camera Frame Ingest Failed (HTTP ${CAM_CODE})${NC}: ${CAM_BODY}"
+  exit 1
+fi
+
+CAM_GET_RESP=$(curl -s -w "\n%{http_code}" -X GET "${BASE_URL}/camera/latest/ESP32-S3-BENCH-01")
+CAM_GET_BODY=$(echo "${CAM_GET_RESP}" | head -n -1)
+CAM_GET_CODE=$(echo "${CAM_GET_RESP}" | tail -n 1)
+
+if [ "${CAM_GET_CODE}" -eq 200 ]; then
+  echo -e "${GREEN}✓ Latest Camera Frame Retrieved (HTTP 200)${NC}: ${CAM_GET_BODY:0:120}..."
+else
+  echo -e "${RED}✗ Camera Frame Query Failed (HTTP ${CAM_GET_CODE})${NC}: ${CAM_GET_BODY}"
+  exit 1
+fi
+
 echo -e "\n${GREEN}======================================================${NC}"
-echo -e "${GREEN}  All Backend & Session Cookie Tests Passed! (100%)   ${NC}"
+echo -e "${GREEN}  All Backend, Camera & Session Tests Passed! (100%)  ${NC}"
 echo -e "${GREEN}======================================================${NC}"
+
 

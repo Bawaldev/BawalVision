@@ -2,6 +2,7 @@ package main
 
 import (
 	"bawal_vision_backend/internal/api"
+	"bawal_vision_backend/internal/camera_handler"
 	"bawal_vision_backend/internal/device"
 	"bawal_vision_backend/internal/food"
 	"bawal_vision_backend/internal/inspection"
@@ -48,6 +49,7 @@ func main() {
 		&food.FoodItem{},
 		&inspection.InspectionRecord{},
 		&inspection.InspectionFood{},
+		&camera_handler.CameraFrame{},
 	); err != nil {
 		log.Fatalf("Database migration failed: %v", err)
 	}
@@ -63,6 +65,7 @@ func main() {
 	api.RegisterUserRoutes(apiGroup, db)
 	api.RegisterDeviceRoutes(apiGroup, db)
 	api.RegisterFrontendRoutes(apiGroup, db)
+	api.RegisterCameraRoutes(apiGroup, db)
 
 	log.Println("Server running on http://0.0.0.0:8080...")
 	log.Fatal(app.Listen(":8080"))
