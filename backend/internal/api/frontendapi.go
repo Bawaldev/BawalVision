@@ -27,6 +27,7 @@ func RegisterFrontendRoutes(router fiber.Router, db *gorm.DB) {
 	router.Get("/records", h.GetRecords)
 	router.Get("/records/:id", h.GetRecordByID)
 }
+
 func (h *Handler) GetRecords(c *fiber.Ctx) error {
 	var records []inspection.InspectionRecord
 
@@ -61,6 +62,7 @@ func (h *Handler) GetRecordByID(c *fiber.Ctx) error {
 
 	return c.JSON(record)
 }
+
 func RegisterUserHandler(db *gorm.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		var payload user_handler.RegisterRequest
@@ -83,14 +85,10 @@ func RegisterUserHandler(db *gorm.DB) fiber.Handler {
 			})
 		}
 
-		hashKey, blockKey := user_handler.GenerateKeys()
-
 		newUser := user_handler.User{
 			Name:     payload.Name,
 			Email:    payload.Email,
 			Password: string(hashedPassword),
-			HashKey:  hashKey,
-			BlockKey: blockKey,
 		}
 		if err := db.Create(&newUser).Error; err != nil {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
@@ -133,6 +131,7 @@ func LoginUserHandler(db *gorm.DB) fiber.Handler {
 				"error": "Invalid email or password",
 			})
 		}
+
 		telemetry := user_handler.UserTelemetry{
 			UserID:    foundUser.ID,
 			Email:     foundUser.Email,
@@ -142,14 +141,12 @@ func LoginUserHandler(db *gorm.DB) fiber.Handler {
 			UserAgent: c.Get("User-Agent"),
 		}
 		_ = telemetry
-		c.Cookie(&fiber.Cookie{
-			Name:     "session",
-			Value:    foundUser.ID,
-			HTTPOnly: true,
-			Secure:   true,
-			SameSite: "Lax",
-			Expires:  time.Now().Add(24 * time.Hour),
-		})
+
+		if err := user_handler.Session.SetSessionCookie(c, foundUser.ID, 24*time.Hour); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "Failed to generate session cookie",
+			})
+		}
 
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
 			"message": "Login successful",
@@ -160,7 +157,6 @@ func LoginUserHandler(db *gorm.DB) fiber.Handler {
 
 func RegisterUserRoutes(router fiber.Router, db *gorm.DB) {
 	authGroup := router.Group("/auth")
-
 	authGroup.Post("/register", RegisterUserHandler(db))
 	authGroup.Post("/login", LoginUserHandler(db))
 }

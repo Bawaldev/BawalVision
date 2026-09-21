@@ -22,6 +22,8 @@ just
 | `just run-vision` | Execute C++ Vision service locally |
 | `just build-gateway` | Build Go Gateway REST API binary |
 | `just run-gateway` | Run Go Gateway REST API locally |
+| `just test-api [base_url]` | Execute automated backend REST API & session verification suite |
+| `just test-backend` | Run Go unit/package tests (`go test -v ./...`) |
 | `just compose-up [service]` | Start infrastructure via Docker Compose (Foreground) |
 | `just compose-up-d [service]` | Start infrastructure via Docker Compose (Background/Detached) |
 | `just compose-backend` | Shortcut to build & start backend service via Docker Compose |

@@ -23,6 +23,12 @@ build-gateway:
 run-gateway:
     cd backend && go run cmd/server/main.go
 
+test-api base_url=("http://localhost:" + BACKEND_PORT + "/api/v1"):
+    BASE_URL="{{ base_url }}" ./backend/scripts/test_api.sh
+
+test-backend:
+    cd backend && go test -v ./...
+
 clean:
     rm -rf services/vision/build backend/bin
 

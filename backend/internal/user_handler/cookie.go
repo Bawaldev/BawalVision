@@ -1,43 +1,71 @@
 package user_handler
 
 import (
-	"net/http"
-
-	"github.com/google/uuid"
+	"errors"
+	"os"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	securecookie "github.com/gorilla/securecookie"
 )
 
-var s = securecookie.New(
-	securecookie.GenerateRandomKey(64),
-	securecookie.GenerateRandomKey(32),
-)
-
-func GenerateKeys() ([]byte, []byte) {
-	hashKey := securecookie.GenerateRandomKey(64)  // HMAC-SHA512
-	blockKey := securecookie.GenerateRandomKey(32) // AES-256
-	return hashKey, blockKey
+type SessionManager struct {
+	cookie *securecookie.SecureCookie
 }
 
-func setSecureCookieHandler(w http.ResponseWriter, r *http.Request, c *fiber.Ctx) {
-	userID := uuid.New().String()
+var (
+	// Global Session manager instance
+	Session = NewSessionManager()
+)
 
-	value := mapToUser(map[string]string{
-		"user_id": userID,
-		"role":    "user",
+// NewSessionManager creates a thread-safe server-level session manager
+func NewSessionManager() *SessionManager {
+	hashKey := []byte(os.Getenv("SESSION_HASH_KEY"))
+	if len(hashKey) == 0 {
+		hashKey = securecookie.GenerateRandomKey(64) // HMAC-SHA512
+	}
+
+	blockKey := []byte(os.Getenv("SESSION_BLOCK_KEY"))
+	if len(blockKey) == 0 {
+		blockKey = securecookie.GenerateRandomKey(32) // AES-256
+	}
+
+	return &SessionManager{
+		cookie: securecookie.New(hashKey, blockKey),
+	}
+}
+
+// SetSessionCookie encodes and encrypts userID into a Fiber HTTP-only cookie
+func (s *SessionManager) SetSessionCookie(c *fiber.Ctx, userID string, duration time.Duration) error {
+	encoded, err := s.cookie.Encode("session", userID)
+	if err != nil {
+		return err
+	}
+
+	c.Cookie(&fiber.Cookie{
+		Name:     "session",
+		Value:    encoded,
+		Path:     "/",
+		HTTPOnly: true,
+		Secure:   false, // Set to true in production HTTPS
+		SameSite: "Lax",
+		Expires:  time.Now().Add(duration),
 	})
 
-	if encoded, err := s.Encode("session", value); err == nil {
-		cookie := &http.Cookie{
-			Name:     "session",
-			Value:    encoded,
-			Path:     "/",
-			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteLaxMode,
-		}
-		http.SetCookie(w, cookie)
-		w.Write([]byte("Secure signed/encrypted cookie set!"))
+	return nil
+}
+
+// GetSessionUserID decodes and decrypts the session cookie returning the authentic userID
+func (s *SessionManager) GetSessionUserID(c *fiber.Ctx) (string, error) {
+	cookieVal := c.Cookies("session")
+	if cookieVal == "" {
+		return "", errors.New("session cookie not found")
 	}
+
+	var userID string
+	if err := s.cookie.Decode("session", cookieVal, &userID); err != nil {
+		return "", errors.New("invalid or expired session cookie")
+	}
+
+	return userID, nil
 }

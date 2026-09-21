@@ -11,8 +11,6 @@ type User struct {
 	Name      string         `json:"name" gorm:"column:name;type:varchar(100);not null"`
 	Email     string         `json:"email" gorm:"column:email;type:varchar(100);uniqueIndex;not null"`
 	Password  string         `json:"-" gorm:"column:password_hash;type:varchar(255);not null"`
-	HashKey   []byte         `json:"-" gorm:"column:hash_key;type:bytea"`
-	BlockKey  []byte         `json:"-" gorm:"column:block_key;type:bytea"`
 	CreatedAt time.Time      `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt time.Time      `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
