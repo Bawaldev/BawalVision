@@ -1,0 +1,49 @@
+# ==========================================
+# Builder C++ & Model Compiler
+# ==========================================
+FROM debian:bookworm-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libopencv-dev \
+    libomp-dev \
+    libonnxruntime-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY services/vision /app/services/vision
+
+RUN cmake -B services/vision/build -S services/vision \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && \
+    cmake --build services/vision/build --parallel $(nproc)
+
+# ==========================================
+# Runtime Production Image
+# ==========================================
+FROM debian:bookworm-slim AS runner
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopencv-core416 \
+    libopencv-imgproc416 \
+    libopencv-videoio416 \
+    libgomp1 \
+    libonnxruntime1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /app/services/vision/build/bin/vision_service /usr/local/bin/vision_service
+COPY ml/AI1/model/ai1_vision.onnx /app/models/ai1_vision.onnx
+
+ENV OMP_NUM_THREADS=4
+ENV OMP_SCHEDULE=static
+ENV OMP_PROC_BIND=true
+
+EXPOSE 8080
+
+ENTRYPOINT ["vision_service"]
