@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 
+# Generate compile_commands.json untuk IntelliSense VS Code
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 project(bawal_vision_service
     VERSION 1.0.0
     DESCRIPTION "Vision processing service for MBG inspection"
@@ -33,6 +36,7 @@ find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui)
 find_package(nlohmann_json QUIET)
+find_package(CURL REQUIRED)
 
 # Service executable definition
 add_executable(vision_service
@@ -49,6 +53,7 @@ add_executable(vision_service
 target_include_directories(vision_service PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}
+    ${CURL_INCLUDE_DIRS}
 )
 
 # Linker resolution
@@ -56,6 +61,7 @@ target_link_libraries(vision_service PRIVATE
     Threads::Threads
     OpenMP::OpenMP_CXX
     ${OpenCV_LIBS}
+    CURL::libcurl
 )
 
 if(TARGET nlohmann_json::nlohmann_json)

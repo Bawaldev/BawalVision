@@ -1,294 +1,302 @@
 #include "camera_task.h"
-#include <string.h>
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#include "driver/gpio.h"
+#include "esp_heap_caps.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_heap_caps.h"
-#include "driver/gpio.h"
-#include "mbedtls/base64.h"
-#include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "pins.h"
+#include "usb/usb_host.h"
+#include "usb/uvc_host.h"
+#include "wifi.h"
 
-static const char *TAG = "CAMERA_TASK";
+static const char *TAG = "CAMERA_UVC";
 
-// FreeRTOS Mutex protecting concurrent access to the shared camera frame buffer
 static SemaphoreHandle_t s_camera_mutex = NULL;
-
-// In-memory latest frame container
 static camera_frame_buffer_t s_shared_frame = {0};
-
-// Resolution defaults for USB Webcam (QVGA / VGA)
-#define DEFAULT_FRAME_WIDTH   320
-#define DEFAULT_FRAME_HEIGHT  240
-#define INITIAL_BUF_CAPACITY  (64 * 1024) // 64 KB initial capacity for compressed JPEG
+static uvc_host_stream_hdl_t s_stream_hdl = NULL;
 
 static uint32_t s_frame_counter = 0;
 static bool s_is_initialized = false;
+static bool s_is_streaming = false;
 
-static void init_trigger_button(void) {
-#if (PIN_BTN_ENABLE >= 0)
-    gpio_config_t btn_cfg = {
-        .pin_bit_mask = (1ULL << PIN_BTN_ENABLE),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&btn_cfg);
-    ESP_LOGI(TAG, "Hardware trigger capture button initialized on GPIO %d (Active-Low)", PIN_BTN_ENABLE);
-#endif
+static bool camera_lock_frame(TickType_t timeout_ticks) {
+  if (s_camera_mutex == NULL) return false;
+  return (xSemaphoreTake(s_camera_mutex, timeout_ticks) == pdTRUE);
+}
+
+static void camera_unlock_frame(void) {
+  if (s_camera_mutex != NULL) {
+    xSemaphoreGive(s_camera_mutex);
+  }
+}
+static bool camera_uvc_frame_cb(const uvc_host_frame_t *frame, void *user_ctx) {
+  (void)user_ctx;
+  if (frame == NULL || frame->data == NULL || frame->data_len == 0) return true;
+
+  if (camera_lock_frame(pdMS_TO_TICKS(100))) {
+    if (s_shared_frame.capacity < frame->data_len) {
+      uint8_t *new_buf = (uint8_t *)heap_caps_realloc(
+          s_shared_frame.data, frame->data_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (new_buf != NULL) {
+        s_shared_frame.data = new_buf;
+        s_shared_frame.capacity = frame->data_len;
+      } else {
+        camera_unlock_frame();
+        return true;
+      }
+    }
+
+    if (s_shared_frame.capacity >= frame->data_len && s_shared_frame.data != NULL) {
+      memcpy(s_shared_frame.data, frame->data, frame->data_len);
+      s_shared_frame.header.buffer_len = frame->data_len;
+      s_shared_frame.header.width = frame->vs_format.h_res ? frame->vs_format.h_res : DEFAULT_FRAME_WIDTH;
+      s_shared_frame.header.height = frame->vs_format.v_res ? frame->vs_format.v_res : DEFAULT_FRAME_HEIGHT;
+      s_shared_frame.header.format = FRAME_FORMAT_JPEG;
+      s_shared_frame.header.frame_id = ++s_frame_counter;
+      s_shared_frame.header.timestamp_ms = esp_timer_get_time() / 1000;
+    }
+    camera_unlock_frame();
+  } else {
+    ESP_LOGW(TAG, "UVC Callback dropped frame due to Mutex timeout!");
+  }
+
+  return true;
+}
+
+#include "standby_jpeg.h"
+
+static void camera_uvc_stream_event_cb(const uvc_host_stream_event_data_t *event, void *user_ctx) {
+  (void)user_ctx;
+  if (event == NULL) return;
+  if (event->type == UVC_HOST_DEVICE_DISCONNECTED) {
+    ESP_LOGW(TAG, "Logitech UVC Camera Disconnected!");
+    s_is_streaming = false;
+  }
 }
 
 esp_err_t camera_task_init(void) {
-    if (s_is_initialized) {
-        return ESP_OK;
-    }
+  if (s_is_initialized) return ESP_OK;
 
-    // 1. Create FreeRTOS Mutex
-    s_camera_mutex = xSemaphoreCreateMutex();
-    if (s_camera_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create FreeRTOS camera mutex");
-        return ESP_ERR_NO_MEM;
-    }
+  s_camera_mutex = xSemaphoreCreateMutex();
+  if (s_camera_mutex == NULL) return ESP_ERR_NO_MEM;
 
-    // 2. Allocate frame buffer memory (prefer PSRAM if available, fallback to standard Heap)
-    s_shared_frame.capacity = INITIAL_BUF_CAPACITY;
-    s_shared_frame.data = (uint8_t *)heap_caps_malloc(s_shared_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_shared_frame.data == NULL) {
-        ESP_LOGW(TAG, "PSRAM unavailable for camera buffer, allocating from standard heap");
-        s_shared_frame.data = (uint8_t *)malloc(s_shared_frame.capacity);
-        if (s_shared_frame.data == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate memory for camera frame buffer");
-            vSemaphoreDelete(s_camera_mutex);
-            s_camera_mutex = NULL;
-            return ESP_ERR_NO_MEM;
-        }
-    }
+  s_shared_frame.capacity = INITIAL_BUF_CAPACITY;
+  s_shared_frame.data = (uint8_t *)heap_caps_malloc(s_shared_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (s_shared_frame.data == NULL) {
+    vSemaphoreDelete(s_camera_mutex);
+    return ESP_ERR_NO_MEM;
+  }
 
-    // 3. Initialize header with zero-padding defaults
-    memset(&s_shared_frame.header, 0, sizeof(camera_frame_header_t));
-    s_shared_frame.header.width = DEFAULT_FRAME_WIDTH;
-    s_shared_frame.header.height = DEFAULT_FRAME_HEIGHT;
-    s_shared_frame.header.format = FRAME_FORMAT_JPEG;
-    s_shared_frame.header.buffer_len = 0;
+  memset(&s_shared_frame.header, 0, sizeof(camera_frame_header_t));
 
-    init_trigger_button();
+  const usb_host_config_t host_config = {
+      .skip_phy_setup = false,
+      .intr_flags = ESP_INTR_FLAG_LEVEL1,
+  };
+  esp_err_t err_usb = usb_host_install(&host_config);
+  ESP_LOGI(TAG, "USB Host Install Result: %s", esp_err_to_name(err_usb));
 
-    s_is_initialized = true;
-    ESP_LOGI(TAG, "Camera subsystem (Logitech USB D-: %d, D+: %d) initialized successfully (Capacity: %u bytes)", 
-             USB_PIN_DM, USB_PIN_DP, (unsigned int)s_shared_frame.capacity);
+  uvc_host_driver_config_t driver_cfg = {
+      .driver_task_stack_size = 4096,
+      .driver_task_priority = 5,
+      .xCoreID = 0,
+      .create_background_task = true,
+  };
+  esp_err_t err_uvc = uvc_host_install(&driver_cfg);
+  ESP_LOGI(TAG, "UVC Host Driver Install Result: %s", esp_err_to_name(err_uvc));
 
-    return ESP_OK;
-}
-
-bool camera_lock_frame(TickType_t timeout_ticks) {
-    if (s_camera_mutex == NULL) {
-        return false;
-    }
-    return (xSemaphoreTake(s_camera_mutex, timeout_ticks) == pdTRUE);
-}
-
-void camera_unlock_frame(void) {
-    if (s_camera_mutex != NULL) {
-        xSemaphoreGive(s_camera_mutex);
-    }
-}
-
-const camera_frame_buffer_t* camera_get_shared_frame(void) {
-    return &s_shared_frame;
+  s_is_initialized = true;
+  return ESP_OK;
 }
 
 esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
-    if (out_frame == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+  if (out_frame == NULL) return ESP_ERR_INVALID_ARG;
 
-    if (!camera_lock_frame(pdMS_TO_TICKS(100))) {
-        ESP_LOGW(TAG, "Timeout waiting for camera frame mutex in copy operation");
-        return ESP_ERR_TIMEOUT;
-    }
+  if (!camera_lock_frame(pdMS_TO_TICKS(100))) {
+    return ESP_ERR_TIMEOUT;
+  }
 
-    // Copy packed header directly (zero padding guarantees exact memory alignment)
+  // Cek apakah buffer UVC asli sudah memiliki data frame
+  if (s_shared_frame.header.buffer_len > 0 && s_shared_frame.data != NULL) {
     memcpy(&out_frame->header, &s_shared_frame.header, sizeof(camera_frame_header_t));
 
-    if (s_shared_frame.header.buffer_len > 0 && s_shared_frame.data != NULL) {
-        if (out_frame->capacity < s_shared_frame.header.buffer_len) {
-            uint8_t *new_buf = (uint8_t *)realloc(out_frame->data, s_shared_frame.header.buffer_len);
-            if (new_buf == NULL) {
-                camera_unlock_frame();
-                return ESP_ERR_NO_MEM;
-            }
-            out_frame->data = new_buf;
-            out_frame->capacity = s_shared_frame.header.buffer_len;
-        }
-        memcpy(out_frame->data, s_shared_frame.data, s_shared_frame.header.buffer_len);
-    }
-
-    camera_unlock_frame();
-    return ESP_OK;
-}
-
-esp_err_t camera_get_latest_frame_base64(char **out_b64, size_t *out_len) {
-    if (out_b64 == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (!camera_lock_frame(pdMS_TO_TICKS(100))) {
-        return ESP_ERR_TIMEOUT;
-    }
-
-    if (s_shared_frame.header.buffer_len == 0 || s_shared_frame.data == NULL) {
-        camera_unlock_frame();
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    size_t b64_len = 0;
-    mbedtls_base64_encode(NULL, 0, &b64_len, s_shared_frame.data, s_shared_frame.header.buffer_len);
-
-    char *buf = (char *)malloc(b64_len + 1);
-    if (buf == NULL) {
+    if (out_frame->capacity < s_shared_frame.header.buffer_len) {
+      uint8_t *new_buf = (uint8_t *)heap_caps_realloc(
+          out_frame->data, s_shared_frame.header.buffer_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (new_buf == NULL) {
         camera_unlock_frame();
         return ESP_ERR_NO_MEM;
+      }
+      out_frame->data = new_buf;
+      out_frame->capacity = s_shared_frame.header.buffer_len;
+    }
+    memcpy(out_frame->data, s_shared_frame.data, s_shared_frame.header.buffer_len);
+  } else {
+    // UVC Kamera belum siap/masih proses enumerasi -> Gunakan Fallback Standby JPEG
+    uint32_t fallback_len = sizeof(s_fallback_jpeg);
+
+    // Realloc memori jika capacity out_frame kurang dari ukuran fallback JPEG
+    if (out_frame->capacity < fallback_len) {
+      uint8_t *new_buf = (uint8_t *)heap_caps_realloc(
+          out_frame->data, fallback_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (new_buf == NULL) {
+        camera_unlock_frame();
+        return ESP_ERR_NO_MEM;
+      }
+      out_frame->data = new_buf;
+      out_frame->capacity = fallback_len;
     }
 
-    size_t written = 0;
-    int ret = mbedtls_base64_encode((unsigned char *)buf, b64_len + 1, &written, s_shared_frame.data, s_shared_frame.header.buffer_len);
-    camera_unlock_frame();
+    out_frame->header.buffer_len = fallback_len;
+    out_frame->header.width = DEFAULT_FRAME_WIDTH;
+    out_frame->header.height = DEFAULT_FRAME_HEIGHT;
+    out_frame->header.format = FRAME_FORMAT_JPEG;
+    out_frame->header.frame_id = ++s_frame_counter;
+    out_frame->header.timestamp_ms = esp_timer_get_time() / 1000;
 
-    if (ret != 0) {
-        free(buf);
-        return ESP_FAIL;
+    if (out_frame->data != NULL) {
+      memcpy(out_frame->data, s_fallback_jpeg, fallback_len);
     }
+  }
 
-    buf[written] = '\0';
-    *out_b64 = buf;
-    if (out_len != NULL) {
-        *out_len = written;
-    }
-
-    return ESP_OK;
+  camera_unlock_frame();
+  return ESP_OK;
 }
-
-/**
- * @brief Generates simulated frame payload when physical camera sensor is initializing or in simulation mode.
- */
-static void generate_synthetic_frame(camera_frame_buffer_t *frame) {
-    // Valid minimal baseline JPEG image snippet for simulation and pipeline testing
-    static const uint8_t minimal_jpeg[] = {
-        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01,
-        0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
-        0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09,
-        0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
-        0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20,
-        0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
-        0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
-        0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xD9
-    };
-
-    size_t header_sz = sizeof(minimal_jpeg);
-    if (frame->capacity < header_sz) {
-        return;
-    }
-
-    memcpy(frame->data, minimal_jpeg, header_sz);
-    frame->header.buffer_len = header_sz;
-    frame->header.width = DEFAULT_FRAME_WIDTH;
-    frame->header.height = DEFAULT_FRAME_HEIGHT;
-    frame->header.format = FRAME_FORMAT_JPEG;
-    frame->header.frame_id = ++s_frame_counter;
-    frame->header.timestamp_ms = esp_timer_get_time() / 1000;
-}
-
 void Camera_Capture_Task(void *pvParameters) {
-    (void)pvParameters;
-    ESP_LOGI(TAG, "Camera Capture FreeRTOS task running on Core %d", xPortGetCoreID());
+  (void)pvParameters;
 
-    TickType_t last_wake_time = xTaskGetTickCount();
-    const TickType_t frame_interval = pdMS_TO_TICKS(100); // 10 FPS continuous acquisition loop
+  uvc_host_stream_config_t stream_cfg = {
+      .event_cb = camera_uvc_stream_event_cb,
+      .frame_cb = camera_uvc_frame_cb,
+      .vs_format = {
+          .h_res = DEFAULT_FRAME_WIDTH,
+          .v_res = DEFAULT_FRAME_HEIGHT,
+          .fps = DEFAULT_FPS,
+          .format = UVC_VS_FORMAT_MJPEG, // Wajib MJPEG format!
+      },
+      .advanced = {
+          .number_of_frame_buffers = 2,
+          .frame_size = 256 * 1024,
+          .frame_heap_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+          .number_of_urbs = 3,
+      },
+  };
 
-    for (;;) {
-        // Acquire mutex to safely update the shared frame container
-        if (camera_lock_frame(pdMS_TO_TICKS(50))) {
-            generate_synthetic_frame(&s_shared_frame);
-            camera_unlock_frame();
+  for (;;) {
+    if (!s_is_streaming && s_stream_hdl == NULL) {
+      esp_err_t open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+      if (open_res == ESP_OK) {
+        ESP_LOGI(TAG, "Logitech UVC Stream Opened Successfully!");
+        if (uvc_host_stream_start(s_stream_hdl) == ESP_OK) {
+          s_is_streaming = true;
+          ESP_LOGI(TAG, "Logitech UVC Streaming Started (640x480 MJPEG @ 15 FPS)");
         } else {
-            ESP_LOGW(TAG, "Camera capture loop skipped frame due to mutex contention");
+          ESP_LOGE(TAG, "Failed to start UVC Stream");
+          uvc_host_stream_close(s_stream_hdl);
+          s_stream_hdl = NULL;
         }
-
-        vTaskDelayUntil(&last_wake_time, frame_interval);
+      }
     }
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
 }
 
 TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id) {
-    if (!s_is_initialized) {
-        if (camera_task_init() != ESP_OK) {
-            ESP_LOGE(TAG, "Cannot start camera task: initialization failed");
-            return NULL;
-        }
-    }
+  if (!s_is_initialized) {
+    if (camera_task_init() != ESP_OK) return NULL;
+  }
 
-    TaskHandle_t task_handle = NULL;
-    BaseType_t res = xTaskCreatePinnedToCore(
-        Camera_Capture_Task,
-        "Cam_Capture_Task",
-        4096,
-        NULL,
-        priority,
-        &task_handle,
-        core_id
-    );
-
-    if (res != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create FreeRTOS Camera Capture task");
-        return NULL;
-    }
-
-    return task_handle;
+  TaskHandle_t handle = NULL;
+  xTaskCreatePinnedToCore(Camera_Capture_Task, "Cam_Capture_Task", 4096, NULL, priority, &handle, core_id);
+  return handle;
 }
 
-esp_err_t camera_frame_to_json(const camera_frame_buffer_t *frame, char **out_json_str, bool include_base64) {
-    if (frame == NULL || out_json_str == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+#include "system_monitor.h"
 
-    cJSON *root = cJSON_CreateObject();
-    if (root == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
+void http_stream_sender_task(void *pvParameters) {
+  (void)pvParameters;
 
-    // Add packed frame metadata (matching camera_frame_header_t)
-    cJSON_AddNumberToObject(root, "frame_id", frame->header.frame_id);
-    cJSON_AddNumberToObject(root, "width", frame->header.width);
-    cJSON_AddNumberToObject(root, "height", frame->header.height);
-    cJSON_AddNumberToObject(root, "format", frame->header.format);
-    cJSON_AddNumberToObject(root, "buffer_len", frame->header.buffer_len);
-    cJSON_AddNumberToObject(root, "timestamp_ms", (double)frame->header.timestamp_ms);
+  if (g_wifi_event_group != NULL) {
+    xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+  }
 
-    if (include_base64 && frame->header.buffer_len > 0 && frame->data != NULL) {
-        size_t b64_len = 0;
-        mbedtls_base64_encode(NULL, 0, &b64_len, frame->data, frame->header.buffer_len);
-        
-        char *b64_buf = (char *)malloc(b64_len + 1);
-        if (b64_buf != NULL) {
-            size_t written = 0;
-            if (mbedtls_base64_encode((unsigned char *)b64_buf, b64_len + 1, &written, frame->data, frame->header.buffer_len) == 0) {
-                b64_buf[written] = '\0';
-                cJSON_AddStringToObject(root, "image_base64", b64_buf);
-            }
-            free(b64_buf);
-        } else {
-            ESP_LOGW(TAG, "Failed to allocate buffer for base64 encoding (size: %u)", (unsigned int)b64_len);
+  camera_frame_buffer_t local_frame = {0};
+  local_frame.capacity = INITIAL_BUF_CAPACITY;
+  local_frame.data = (uint8_t *)heap_caps_malloc(local_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (local_frame.data == NULL) {
+    local_frame.data = (uint8_t *)malloc(local_frame.capacity);
+  }
+
+  if (local_frame.data == NULL) {
+    ESP_LOGE(TAG, "Failed to allocate memory for local frame buffer");
+    vTaskDelete(NULL);
+    return;
+  }
+
+  char device_id[32] = {0};
+  get_internal_device_id(device_id, sizeof(device_id));
+
+  char backend_ip[64] = {0};
+  char full_url[URL_BUFFER_SIZE] = {0};
+  uint32_t last_sent_frame_id = 0;
+  char frame_id_str[16];
+  const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
+
+  ESP_LOGI(TAG, "HTTP Stream sender task started for device: %s", device_id);
+
+  for (;;) {
+    TickType_t start_tick = xTaskGetTickCount();
+
+    if (camera_copy_latest_frame(&local_frame) == ESP_OK) {
+      if (local_frame.header.buffer_len > 0 && local_frame.header.frame_id != last_sent_frame_id) {
+        last_sent_frame_id = local_frame.header.frame_id;
+
+        if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
+          strncpy(backend_ip, CONFIG_BACKEND_IP, sizeof(backend_ip) - 1);
         }
+
+        snprintf(full_url, sizeof(full_url), "http://%s:%s%s", backend_ip, CONFIG_BACKEND_PORT, CAMERA_FRAME_ENDPOINT);
+
+        esp_http_client_config_t config = {
+            .url = full_url,
+            .method = HTTP_METHOD_POST,
+            .timeout_ms = 2000,
+            .buffer_size_tx = 4096,
+        };
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        if (client != NULL) {
+          snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)local_frame.header.frame_id);
+          esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+          esp_http_client_set_header(client, "X-Device-ID", device_id);
+          esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
+          esp_http_client_set_post_field(client, (const char *)local_frame.data, local_frame.header.buffer_len);
+
+          esp_err_t err = esp_http_client_perform(client);
+          if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Frame dispatch failed: %s", esp_err_to_name(err));
+          }
+          esp_http_client_cleanup(client);
+        }
+      }
     }
 
-    char *json_out = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-
-    if (json_out == NULL) {
-        return ESP_ERR_NO_MEM;
+    TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
+    if (elapsed_ticks < frame_interval_ticks) {
+      vTaskDelay(frame_interval_ticks - elapsed_ticks);
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(10));
     }
+  }
 
-    *out_json_str = json_out;
-    return ESP_OK;
+  if (local_frame.data) free(local_frame.data);
+  vTaskDelete(NULL);
 }

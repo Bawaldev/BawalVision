@@ -12,6 +12,7 @@ idf_component_register(
         "src"
         "test"
     REQUIRES 
+        freertos
         cjson
         mbedtls
         esp_wifi
@@ -25,8 +26,10 @@ idf_component_register(
         app_update
         esp_lcd
         esp_lvgl_port
+        esp_hw_support
         lvgl
-        
+        usb
+        usb_host_uvc
 )
 
 if(DEFINED CONFIG_ESP_WIFI_SSID)

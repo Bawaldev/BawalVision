@@ -1,0 +1,9 @@
+menu "Bawal Edge Node Configuration"
+
+    config DEVICE_ID
+        string "Device ID"
+        default "ESP32-S3-BENCH-01"
+        help
+            Static Device ID sent to the backend.
+
+endmenu

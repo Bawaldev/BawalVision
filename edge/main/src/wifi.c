@@ -320,39 +320,18 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
         return ESP_ERR_INVALID_ARG;
     }
 
-    char *json_string = NULL;
-    if (camera_lock_frame(pdMS_TO_TICKS(100))) {
-        const camera_frame_buffer_t *shared = camera_get_shared_frame();
-        if (shared != NULL && shared->header.buffer_len > 0) {
-            cJSON *root = cJSON_CreateObject();
-            if (root != NULL) {
-                cJSON_AddStringToObject(root, "device_id", device_id);
-                cJSON_AddNumberToObject(root, "frame_id", shared->header.frame_id);
-                cJSON_AddNumberToObject(root, "width", shared->header.width);
-                cJSON_AddNumberToObject(root, "height", shared->header.height);
-                cJSON_AddNumberToObject(root, "format", shared->header.format);
-                cJSON_AddNumberToObject(root, "buffer_len", shared->header.buffer_len);
-                cJSON_AddNumberToObject(root, "timestamp_ms", (double)shared->header.timestamp_ms);
-
-                char *b64_buf = NULL;
-                size_t b64_len = 0;
-                camera_unlock_frame();
-
-                if (camera_get_latest_frame_base64(&b64_buf, &b64_len) == ESP_OK && b64_buf != NULL) {
-                    cJSON_AddStringToObject(root, "image_base64", b64_buf);
-                    free(b64_buf);
-                }
-                json_string = cJSON_PrintUnformatted(root);
-                cJSON_Delete(root);
-            } else {
-                camera_unlock_frame();
-            }
-        } else {
-            camera_unlock_frame();
-        }
+    camera_frame_buffer_t local_frame = {0};
+    local_frame.capacity = INITIAL_BUF_CAPACITY;
+    local_frame.data = (uint8_t *)heap_caps_malloc(local_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (local_frame.data == NULL) {
+        local_frame.data = (uint8_t *)malloc(local_frame.capacity);
+    }
+    if (local_frame.data == NULL) {
+        return ESP_ERR_NO_MEM;
     }
 
-    if (json_string == NULL) {
+    if (camera_copy_latest_frame(&local_frame) != ESP_OK || local_frame.header.buffer_len == 0) {
+        if (local_frame.data) free(local_frame.data);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -362,21 +341,36 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_POST,
-        .timeout_ms = 4000,
+        .timeout_ms = 3000,
+        .buffer_size_tx = 4096,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {
-        free(json_string);
+        if (local_frame.data) free(local_frame.data);
         return ESP_FAIL;
     }
 
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_post_field(client, json_string, strlen(json_string));
+    char frame_id_str[16];
+    snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)local_frame.header.frame_id);
 
-    ESP_LOGI(TAG, "Dispatching Logitech camera frame to: %s", url);
+    esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+    esp_http_client_set_header(client, "X-Device-ID", device_id);
+    esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
+    esp_http_client_set_post_field(client, (const char *)local_frame.data, local_frame.header.buffer_len);
+
+    ESP_LOGI(TAG, "Dispatching Logitech camera frame to: %s (Device: %s, Frame ID: %lu, Size: %u bytes)", 
+             url, device_id, (unsigned long)local_frame.header.frame_id, (unsigned int)local_frame.header.buffer_len);
+
     esp_err_t err = esp_http_client_perform(client);
+    if (err == ESP_OK) {
+        int status_code = esp_http_client_get_status_code(client);
+        ESP_LOGI(TAG, "Camera frame ingest completed. Status = %d", status_code);
+    } else {
+        ESP_LOGE(TAG, "Camera frame ingest failed: %s", esp_err_to_name(err));
+    }
+
     esp_http_client_cleanup(client);
-    free(json_string);
+    if (local_frame.data) free(local_frame.data);
 
     return err;
 }

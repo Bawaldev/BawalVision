@@ -14,23 +14,24 @@ build-vision target="Release":
     cd {{ justfile_directory() }} && if [ ! -f "services/build/Makefile" ] && [ ! -f "services/build/build.ninja" ]; then just configure-vision {{ target }}; fi
     cd {{ justfile_directory() }} && cmake --build services/build --parallel $(nproc)
 
-run-vision:
-    cd {{ justfile_directory() }} && ./services/build/bin/vision_service
-
+run-vision device_id=env_var_or_default("DEVICE_ID", ""):
+    cd {{ justfile_directory() }} && DEVICE_ID="{{ device_id }}" ./services/build/bin/vision_service {{ device_id }}
+    
 build-gateway:
-    cd backend && go build -o bin/gateway cmd/server/main.go
+    cd {{ justfile_directory() }}/backend && go build -o bin/gateway cmd/server/main.go
 
 run-gateway:
-    cd backend && go run cmd/server/main.go
+    sudo ufw allow 8080/tcp
+    cd {{ justfile_directory() }}/backend && go run cmd/server/main.go
 
 test-api base_url=("http://localhost:" + BACKEND_PORT + "/api/v1"):
-    BASE_URL="{{ base_url }}" ./backend/scripts/test_api.sh
+    cd {{ justfile_directory() }} && BASE_URL="{{ base_url }}" ./backend/scripts/test_api.sh
 
 test-backend:
-    cd backend && go test -v ./...
+    cd {{ justfile_directory() }}/backend && go test -v ./...
 
 clean:
-    rm -rf services/build backend/bin
+    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/backend/bin
 
 docker-build-vision:
     docker build -f deploy/Dockerfile.vision -t bawal-vision:latest .

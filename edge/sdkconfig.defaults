@@ -1,4 +1,4 @@
-# Arsitektur Target
+=# Arsitektur Target
 CONFIG_IDF_TARGET="esp32s3"
 
 # Clock CPU Maksimal
@@ -11,7 +11,7 @@ CONFIG_FREERTOS_HZ=1000
 # Alokasi Stack Task Utama
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
-# Aktivasi PSRAM (Wajib untuk Frame Buffer Kamera OV2640/OV5640)
+# Aktivasi PSRAM (Wajib untuk USB Host Video Buffer / Frame Buffer Logitech USB Stream)
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
@@ -34,3 +34,6 @@ CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 # LVGL Display Driver Configuration for SPI ST7789
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_COLOR_16_SWAP=y
+
+# Config Device Identification
+CONFIG_DEVICE_ID="ESP32-S3-BENCH-01"
