@@ -1,9 +1,20 @@
-# CMake & Native C++ (services/vision/)
+# =========================================================================
+# BawalVision Project Root .gitignore
+# =========================================================================
+
+# -------------------------------------------------------------------------
+# Build & Binary Outputs (C++, Go, Embedded)
+# -------------------------------------------------------------------------
 build/
 bin/
+**/build/
+**/bin/
 cmake-build-*/
 _deps/
+services/build/
+backend/bin/
 
+# CMake Artifacts
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
@@ -16,7 +27,9 @@ CTestTestfile.cmake
 CMakeUserPresets.json
 CMakeLists.txt.user*
 
+# -------------------------------------------------------------------------
 # ESP-IDF & PlatformIO Embedded Toolchain (edge/)
+# -------------------------------------------------------------------------
 .pio/
 .pioenvs/
 .piolibdeps/
@@ -29,9 +42,14 @@ CMakeLists.txt.user*
 **/sdkconfig.old
 !**/sdkconfig.defaults
 !**/sdkconfig.defaults.*
+**/.component_hash
+**/CHECKSUMS.json
+idf_py_stderr_*
+idf_py_stdout_*
 
-# Backend (backend/)
-backend/bin/
+# -------------------------------------------------------------------------
+# Backend & Databases (backend/)
+# -------------------------------------------------------------------------
 *.exe
 *.exe~
 *.dll
@@ -40,12 +58,16 @@ backend/bin/
 *.test
 *.out
 vendor/
+*.db
+*.sqlite
+*.sqlite3
 
-# Machine Learning (ml/)
+# -------------------------------------------------------------------------
+# Machine Learning & Python (ml/)
+# -------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 .Python
 env/
 venv/
@@ -54,15 +76,23 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+.ipynb_checkpoints/
 
-# Model checkpoints berukuran besar (harus disimpan di AWS S3)
+# Model checkpoints berukuran besar (disimpan di cloud / AWS S3)
 ml/models/*.pt
 ml/models/*.pth
 ml/models/*.onnx
 ml/models/*.engine
 !ml/models/.gitkeep
 
-# Frontend
+# Dataset berukuran besar
+ml/AI1/dataset/**/*
+!ml/AI1/dataset/**/
+!ml/AI1/dataset/**/.gitkeep
+
+# -------------------------------------------------------------------------
+# Frontend (frontend/)
+# -------------------------------------------------------------------------
 frontend/node_modules/
 frontend/dist/
 frontend/.svelte-kit/
@@ -72,7 +102,9 @@ package-lock.json
 pnpm-lock.yaml
 yarn.lock
 
-# IDEs & Editors
+# -------------------------------------------------------------------------
+# IDEs, Editors & Workspaces
+# -------------------------------------------------------------------------
 .idea/
 *.iml
 .vscode/
@@ -86,6 +118,9 @@ yarn.lock
 *~
 
 # Environment & Secrets
+# -------------------------------------------------------------------------
+# Environment, Secrets & Cloud Credentials
+# -------------------------------------------------------------------------
 .env
 .env.*
 !.env.example
@@ -94,6 +129,9 @@ yarn.lock
 aws-infra/.aws-sam/
 
 # OS Generated Files
+# -------------------------------------------------------------------------
+# OS & System Generated Files
+# -------------------------------------------------------------------------
 .DS_Store
 .DS_Store?
 ._*
@@ -109,6 +147,13 @@ ml/AI1/dataset/**/*
 
 
 # Gemini & System Cache / Trash
+# -------------------------------------------------------------------------
+# Logs, Temporary & Gemini Cache
+# -------------------------------------------------------------------------
+*.log
+**/log/
 .cache_trash/
 OUTPUT.md.bak
 *.tmp
+
+usb_stream
