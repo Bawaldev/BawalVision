@@ -9,9 +9,9 @@ import onnxruntime as ort
 import numpy as np
 
 
-# ==========================================
-# 1. KONFIGURASI DIREKTORI & HYPERPARAMETER
-# ==========================================
+
+# 1.KONFIGURASI DIREKTORI & HYPERPARAMETER
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DATA_DIR = os.path.join(BASE_DIR, "dataset")
@@ -37,18 +37,18 @@ def main():
     device = torch.device("cuda" if use_cuda else "cpu")
     print(f"[+] Hardware aktif: {device}")
 
-    # ==========================================
+   
     # 2. PIPELINE PREPROCESSING
-    # ==========================================
+   
     data_transforms = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    # ==========================================
+   
     # 3. DATA LOADER
-    # ==========================================
+   
     train_dataset = datasets.ImageFolder(
         os.path.join(DATA_DIR, "train"), transform=data_transforms
     )
@@ -76,9 +76,9 @@ def main():
     print(f"[+] Daftar Kelas ({len(train_dataset.classes)}): {train_dataset.classes}")
     print(f"[+] Total Sampel -> Train: {len(train_dataset)} | Val: {len(val_dataset)}")
 
-    # ==========================================
+   
     # 4. ARSITEKTUR MODEL (MobileNetV3-Small)
-    # ==========================================
+   
     model = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
     model.classifier[2] = nn.Dropout(p=0.5, inplace=True)
     in_features = model.classifier[3].in_features
@@ -89,9 +89,9 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-3)
     scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
 
-    # ==========================================
+   
     # 5. LOOP PELATIHAN & EARLY STOPPING
-    # ==========================================
+   
     best_val_acc = 0.0
     epochs_no_improve = 0
     print("\n=== Memulai Training ===")
@@ -158,9 +158,9 @@ def main():
     time_elapsed = time.time() - start_time
     print(f"\n[⏱️] Total Waktu Training: {int(time_elapsed // 60)} menit {int(time_elapsed % 60)} detik")
 
-    # ==========================================
+   
     # 6. EKSPOR MODEL KE ONNX
-    # ==========================================
+   
     print("\n=== Mengonversi Bobot Terbaik ke ONNX ===")
     export_model = models.mobilenet_v3_small()
     export_model.classifier[2] = nn.Dropout(p=0.5, inplace=True)
@@ -184,21 +184,21 @@ def main():
     )
     print(f"[✓] File ONNX (FP32 siap eksekusi) tersimpan di: {ONNX_PATH}")
 
-    # ==========================================
+   
     # 7. DETAIL SANITY CHECK (PyTorch vs ONNX)
-    # ==========================================
+   
     print("\n=== Melakukan Sanity Check (Detail Perbandingan) ===")
     
-    # 1. Inferensi PyTorch Asli
+    # 7.1. Inferensi PyTorch Asli
     with torch.no_grad():
         torch_output = export_model(dummy_input).cpu().numpy()
 
-    # 2. Inferensi ONNX Runtime
+    # 7.2. Inferensi ONNX Runtime
     ort_session = ort.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
     ort_inputs = {ort_session.get_inputs()[0].name: dummy_input.cpu().numpy()}
     onnx_output = ort_session.run(None, ort_inputs)[0]
 
-    # 3. Hitung Selisih Mutlak Maksimum
+    # 7.3. Hitung Selisih Mutlak Maksimum
     max_diff = np.max(np.abs(torch_output - onnx_output))
     mean_diff = np.mean(np.abs(torch_output - onnx_output))
 
