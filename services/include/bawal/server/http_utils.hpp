@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 #include <curl/curl.h>
 
 namespace bawal::server{

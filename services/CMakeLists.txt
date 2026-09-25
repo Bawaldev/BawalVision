@@ -38,18 +38,17 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui)
 find_package(nlohmann_json QUIET)
 find_package(CURL REQUIRED)
 
-# Service executable definition
-add_executable(vision_service
-    src/main.cpp
-    src/vision/calibration.cpp
-    src/vision/dewarp.cpp
-    src/vision/pipeline.cpp
-    src/vision/segmenter.cpp
-    src/vision/types.cpp
-    src/vision/camera_receiver.cpp
-)
+# ==============================================================================
+# OTOMATISASI RECURSIVE SOURCE & INCLUDE PATH
+# ==============================================================================
 
-# Public API include paths (supports umbrella header pattern)
+# 1. Otomatis tangkap SEMUA file .cpp di bawah folder src/ (termasuk subfolder server, vision, dll)
+file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+
+# 2. Build executable dari seluruh sumber C++ yang ditemukan
+add_executable(vision_service ${SERVICE_SOURCES})
+
+# 3. Include directory diatur ke folder 'include' agar include path selalu relatif dari <bawal/...>
 target_include_directories(vision_service PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}
