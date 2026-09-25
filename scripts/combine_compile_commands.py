@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+# Root folder workspace BawalVision
 workspace_root = Path(__file__).resolve().parent.parent
 
 input_files = [
@@ -17,8 +18,23 @@ for file_path in input_files:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    merged_commands.extend(data)
-                print(f"[OK] Merged: {file_path}")
+                    # Folder build dari sub-project (services/build atau edge/build)
+                    build_dir = file_path.parent
+                    
+                    for entry in data:
+                        # Normalize path 'file' agar selalu Absolute Path
+                        if "file" in entry:
+                            file_p = Path(entry["file"])
+                            if not file_p.is_absolute():
+                                # Jika relative path, gabungkan dengan directory kompilasi
+                                base_dir = Path(entry.get("directory", build_dir))
+                                entry["file"] = str((base_dir / file_p).resolve())
+                            else:
+                                entry["file"] = str(file_p.resolve())
+                        
+                        merged_commands.append(entry)
+                        
+                print(f"[OK] Merged & Normalized: {file_path}")
         except Exception as e:
             print(f"[Error] Failed to read {file_path}: {e}")
     else:
