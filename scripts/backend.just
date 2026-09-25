@@ -15,6 +15,7 @@ build-vision target="Release":
     cd {{ justfile_directory() }} && cmake --build services/build --parallel $(nproc)
 
 run-vision device_id=env_var_or_default("DEVICE_ID", ""):
+    cd {{ justfile_directory() }} && if [ ! -f "services/build/bin/vision_service" ]; then just build-vision; fi
     cd {{ justfile_directory() }} && DEVICE_ID="{{ device_id }}" ./services/build/bin/vision_service {{ device_id }}
     
 build-gateway:
