@@ -1,39 +1,77 @@
-=# Arsitektur Target
+# =========================================================================
+# Target Architecture & CPU Frequency
+# =========================================================================
 CONFIG_IDF_TARGET="esp32s3"
 
-# Clock CPU Maksimal
+# Maximum CPU Clock Configuration
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 
 # FreeRTOS 1000Hz (1ms tick interval)
 CONFIG_FREERTOS_HZ=1000
 
-# Alokasi Stack Task Utama
+# Main Task Stack Size Allocation (Accommodates UVC and Wi-Fi initialization)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
-# Aktivasi PSRAM (Wajib untuk USB Host Video Buffer / Frame Buffer Logitech USB Stream)
+# =========================================================================
+# External PSRAM Configuration (8MB Octal PSRAM for UVC JPEG Frame Buffers)
+# =========================================================================
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_MEMTEST=y
 
-# Optimasi Buffer Kompilator
+# =========================================================================
+# USB Host & USB-OTG Configuration (Resolves Logitech Descriptor Overflow)
+# =========================================================================
+# Increase descriptor transfer buffer to prevent CHECK_SHORT_CONFIG_DESC error
+CONFIG_USB_OTG_CONTROL_TRANSFER_MAX_SIZE=2048
+
+# Increase USB host stack default endpoint control transfer size
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
+
+# Allocate maximum HW FIFO buffer bias to IN endpoints (allows EP MPS >= 512 for Logitech UVC stream)
+CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
+
+# =========================================================================
+# System Log Output Level (Enables USB and UVC debugging in serial monitor)
+# =========================================================================
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+CONFIG_LOG_COLORS=y
+
+# =========================================================================
+# Compiler & Partition Optimization
+# =========================================================================
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 
+# =========================================================================
+# Wi-Fi & LwIP Stack Tuning
+# =========================================================================
 CONFIG_WIFI_PROV_AUTOSTOP_TIMEOUT=30
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
 
-# Benchmark
+# =========================================================================
+# FreeRTOS Diagnostics & Runtime Metrics
+# =========================================================================
 CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
 
-# Partition Table
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
-
-# LVGL Display Driver Configuration for SPI ST7789
+# =========================================================================
+# LVGL Display Driver Configuration (ST7789 SPI)
+# =========================================================================
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_COLOR_16_SWAP=y
 
-# Config Device Identification
+# =========================================================================
+# Custom Device Identification
+# =========================================================================
 CONFIG_DEVICE_ID="ESP32-S3-BENCH-01"

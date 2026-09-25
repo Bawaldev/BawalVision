@@ -12,10 +12,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 #define DEFAULT_FRAME_WIDTH  640
 #define DEFAULT_FRAME_HEIGHT 480
-#define DEFAULT_FPS          15.0f
-#define INITIAL_BUF_CAPACITY (256 * 1024) // 256 KB PSRAM buffer
+#define DEFAULT_FPS          0.0f         /* 0.0f = Auto-negotiate camera native frame rate (Logitech 30 FPS) */
+#define INITIAL_BUF_CAPACITY (256 * 1024) /* 256 KB PSRAM buffer */
 #define DEVICE_ID            "ESP32-S3-BENCH-01"
 #define STREAM_FPS           15
 
@@ -36,6 +37,13 @@ esp_err_t camera_task_init(void);
 TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id);
 
 /**
+ * @brief Worker task for UVC video stream ingestion.
+ * 
+ * @param pvParameters Optional FreeRTOS task arguments.
+ */
+void Camera_Capture_Task(void *pvParameters);
+
+/**
  * @brief FreeRTOS task to continuously stream JPEG frames to the backend REST API via HTTP POST.
  * 
  * @param pvParameters Optional task parameters.
@@ -49,6 +57,13 @@ void http_stream_sender_task(void *pvParameters);
  * @return esp_err_t ESP_OK on success, ESP_ERR_TIMEOUT, or ESP_ERR_NO_MEM.
  */
 esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame);
+
+/**
+ * @brief Returns whether the camera is currently actively streaming frames.
+ * 
+ * @return true if streaming, false otherwise.
+ */
+bool is_camera_streaming(void);
 
 #ifdef __cplusplus
 }

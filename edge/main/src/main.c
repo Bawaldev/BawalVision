@@ -20,10 +20,14 @@ static TaskHandle_t s_wifi_task_handle = NULL;
 static TaskHandle_t s_test_task_handle = NULL;
 static TaskHandle_t s_camera_task_handle = NULL;
 static TaskHandle_t s_http_sender_task_handle = NULL;
-// s_lcd_task_handle dihapus sementara untuk menghilangkan compiler warning
 
 void app_main(void) {
-  // 1. Inisialisasi Storage NVS
+  /* Set USB Host and UVC log verbosity to DEBUG for physical signal and protocol tracing */
+  esp_log_level_set("usb_host", ESP_LOG_DEBUG);
+  esp_log_level_set("uvc_camera", ESP_LOG_DEBUG);
+  esp_log_level_set("usbh_uvc", ESP_LOG_DEBUG);
+
+  /* Initialize NVS storage */
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
       ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -32,40 +36,39 @@ void app_main(void) {
   }
   ESP_ERROR_CHECK(ret);
 
-  // 2. Inisialisasi Network Stack & Event Loop Default
+  /* Initialize network interface and default event loop */
   ESP_ERROR_CHECK(esp_netif_init());
   ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-  // 3. Buat Queue Telemetry Data
+  /* Create telemetry data queue */
   s_telemetry_queue = xQueueCreate(5, sizeof(telemetry_data_t));
   if (s_telemetry_queue == NULL) {
-    ESP_LOGE(TAG, "Gagal mengalokasikan FreeRTOS Queue");
+    ESP_LOGE(TAG, "Failed to allocate FreeRTOS Queue");
     return;
   }
 
-  // 4. Inisialisasi Driver UVC & USB Host (Dilakukan sebelum Wi-Fi agar stack USB siap)
+  /* Initialize UVC driver and USB Host stack */
   ESP_LOGI(TAG, "Initializing UVC Camera Driver...");
   ret = camera_task_init();
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Gagal menginisialisasi UVC Driver: %s", esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to initialize UVC Driver: %s", esp_err_to_name(ret));
   } else {
-    // Jalankan Camera Capture Task di Core 1 (Priority 5 agar tidak terganggu HTTP task)
     s_camera_task_handle = camera_task_start(5, 1);
   }
 
-  // 5. Inisialisasi Wi-Fi Station & Start Dispatcher Task
+  /* Connect to Wi-Fi station */
   ESP_LOGI(TAG, "Connecting to Wi-Fi Network...");
   wifi_init_sta();
-  
-  // WiFi Server Task menangani pengiriman Telemetry di Core 0
+
+  /* Dispatcher task for telemetry dispatch pinned to Core 0 */
   xTaskCreatePinnedToCore(WiFi_Server_Task, "WiFi_Server_Task", 4096,
                           (void *)s_telemetry_queue, 5, &s_wifi_task_handle, 0);
 
-  // 6. Jalankan Dedicated HTTP Video Streamer Task di Core 1 (Priority 4)
+  /* Dedicated HTTP video streamer task pinned to Core 1 */
   xTaskCreatePinnedToCore(http_stream_sender_task, "HTTP_Stream_Task", 4096,
                           NULL, 4, &s_http_sender_task_handle, 1);
 
-  // 7. Jalankan Test Telemetry Producer Task di Core 1 (Priority 3)
+  /* Telemetry producer task pinned to Core 1 */
   xTaskCreatePinnedToCore(test_telemetry_producer_task, "Test_Producer_Task",
                           3072, (void *)s_telemetry_queue, 3,
                           &s_test_task_handle, 1);

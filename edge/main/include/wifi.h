@@ -18,6 +18,7 @@ extern "C" {
 #define BACKEND_ENDPOINT "/api/v1/telemetry"
 #define CAMERA_FRAME_ENDPOINT "/api/v1/camera/frame"
 
+
 #ifndef CONFIG_ESP_WIFI_SSID
 #define CONFIG_ESP_WIFI_SSID ""
 #endif

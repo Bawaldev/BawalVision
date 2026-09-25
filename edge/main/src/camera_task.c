@@ -13,6 +13,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "pins.h"
+#include "standby_jpeg.h"
+#include "system_monitor.h"
 #include "usb/usb_host.h"
 #include "usb/uvc_host.h"
 #include "wifi.h"
@@ -37,6 +39,11 @@ static void camera_unlock_frame(void) {
     xSemaphoreGive(s_camera_mutex);
   }
 }
+
+bool is_camera_streaming(void) {
+  return s_is_streaming;
+}
+
 static bool camera_uvc_frame_cb(const uvc_host_frame_t *frame, void *user_ctx) {
   (void)user_ctx;
   if (frame == NULL || frame->data == NULL || frame->data_len == 0) return true;
@@ -71,8 +78,6 @@ static bool camera_uvc_frame_cb(const uvc_host_frame_t *frame, void *user_ctx) {
   return true;
 }
 
-#include "standby_jpeg.h"
-
 static void camera_uvc_stream_event_cb(const uvc_host_stream_event_data_t *event, void *user_ctx) {
   (void)user_ctx;
   if (event == NULL) return;
@@ -80,6 +85,23 @@ static void camera_uvc_stream_event_cb(const uvc_host_stream_event_data_t *event
     ESP_LOGW(TAG, "Logitech UVC Camera Disconnected!");
     s_is_streaming = false;
   }
+}
+
+static void usb_lib_task(void *pvParameters) {
+  (void)pvParameters;
+  while (1) {
+    uint32_t event_flags;
+    esp_err_t err = usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
+    if (err == ESP_OK) {
+      if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
+        ESP_LOGD(TAG, "No USB host clients registered");
+      }
+      if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
+        break;
+      }
+    }
+  }
+  vTaskDelete(NULL);
 }
 
 esp_err_t camera_task_init(void) {
@@ -103,6 +125,17 @@ esp_err_t camera_task_init(void) {
   };
   esp_err_t err_usb = usb_host_install(&host_config);
   ESP_LOGI(TAG, "USB Host Install Result: %s", esp_err_to_name(err_usb));
+  if (err_usb != ESP_OK) {
+    return err_usb;
+  }
+
+  /* Core 0 handles USB host low-level interrupts and event loop */
+  BaseType_t task_created = xTaskCreatePinnedToCore(
+      usb_lib_task, "usb_lib_task", 4096, NULL, 10, NULL, 0);
+  if (task_created != pdPASS) {
+    ESP_LOGE(TAG, "Failed to create USB lib background task");
+    return ESP_FAIL;
+  }
 
   uvc_host_driver_config_t driver_cfg = {
       .driver_task_stack_size = 4096,
@@ -112,6 +145,9 @@ esp_err_t camera_task_init(void) {
   };
   esp_err_t err_uvc = uvc_host_install(&driver_cfg);
   ESP_LOGI(TAG, "UVC Host Driver Install Result: %s", esp_err_to_name(err_uvc));
+  if (err_uvc != ESP_OK) {
+    return err_uvc;
+  }
 
   s_is_initialized = true;
   return ESP_OK;
@@ -124,7 +160,6 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
     return ESP_ERR_TIMEOUT;
   }
 
-  // Cek apakah buffer UVC asli sudah memiliki data frame
   if (s_shared_frame.header.buffer_len > 0 && s_shared_frame.data != NULL) {
     memcpy(&out_frame->header, &s_shared_frame.header, sizeof(camera_frame_header_t));
 
@@ -140,10 +175,8 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
     }
     memcpy(out_frame->data, s_shared_frame.data, s_shared_frame.header.buffer_len);
   } else {
-    // UVC Kamera belum siap/masih proses enumerasi -> Gunakan Fallback Standby JPEG
     uint32_t fallback_len = sizeof(s_fallback_jpeg);
 
-    // Realloc memori jika capacity out_frame kurang dari ukuran fallback JPEG
     if (out_frame->capacity < fallback_len) {
       uint8_t *new_buf = (uint8_t *)heap_caps_realloc(
           out_frame->data, fallback_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -170,17 +203,19 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
   camera_unlock_frame();
   return ESP_OK;
 }
+
 void Camera_Capture_Task(void *pvParameters) {
   (void)pvParameters;
 
+  /* Target MJPEG 640x480 with fps = 0 (Auto-match camera native descriptor FPS) */
   uvc_host_stream_config_t stream_cfg = {
       .event_cb = camera_uvc_stream_event_cb,
       .frame_cb = camera_uvc_frame_cb,
       .vs_format = {
-          .h_res = DEFAULT_FRAME_WIDTH,
-          .v_res = DEFAULT_FRAME_HEIGHT,
-          .fps = DEFAULT_FPS,
-          .format = UVC_VS_FORMAT_MJPEG, // Wajib MJPEG format!
+          .h_res = DEFAULT_FRAME_WIDTH,   /* 640 */
+          .v_res = DEFAULT_FRAME_HEIGHT,  /* 480 */
+          .fps = 0,                       /* 0 = Auto-match native FPS (prevents float mismatch on Logitech) */
+          .format = UVC_VS_FORMAT_MJPEG,  /* Wajib MJPEG */
       },
       .advanced = {
           .number_of_frame_buffers = 2,
@@ -192,17 +227,41 @@ void Camera_Capture_Task(void *pvParameters) {
 
   for (;;) {
     if (!s_is_streaming && s_stream_hdl == NULL) {
+      /* Coba buka stream 640x480 MJPEG */
       esp_err_t open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+
+      /* Fallback 1: 320x240 MJPEG */
+      if (open_res != ESP_OK) {
+        ESP_LOGW(TAG, "640x480 MJPEG ditolak (%s), mencoba 320x240 MJPEG...", esp_err_to_name(open_res));
+        stream_cfg.vs_format.h_res = 320;
+        stream_cfg.vs_format.v_res = 240;
+        stream_cfg.vs_format.fps = 0;
+        stream_cfg.vs_format.format = UVC_VS_FORMAT_MJPEG;
+        open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+      }
+
+      /* Fallback 2: Default Format */
+      if (open_res != ESP_OK) {
+        ESP_LOGW(TAG, "320x240 MJPEG ditolak (%s), mencoba format default kamera...", esp_err_to_name(open_res));
+        stream_cfg.vs_format.h_res = 0;
+        stream_cfg.vs_format.v_res = 0;
+        stream_cfg.vs_format.fps = 0;
+        stream_cfg.vs_format.format = UVC_VS_FORMAT_DEFAULT;
+        open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+      }
+
       if (open_res == ESP_OK) {
         ESP_LOGI(TAG, "Logitech UVC Stream Opened Successfully!");
         if (uvc_host_stream_start(s_stream_hdl) == ESP_OK) {
           s_is_streaming = true;
-          ESP_LOGI(TAG, "Logitech UVC Streaming Started (640x480 MJPEG @ 15 FPS)");
+          ESP_LOGI(TAG, "Logitech UVC Streaming Started (MJPEG mode active)!");
         } else {
           ESP_LOGE(TAG, "Failed to start UVC Stream");
           uvc_host_stream_close(s_stream_hdl);
           s_stream_hdl = NULL;
         }
+      } else {
+        ESP_LOGE(TAG, "uvc_host_stream_open failed: %s", esp_err_to_name(open_res));
       }
     }
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -218,8 +277,6 @@ TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id) {
   xTaskCreatePinnedToCore(Camera_Capture_Task, "Cam_Capture_Task", 4096, NULL, priority, &handle, core_id);
   return handle;
 }
-
-#include "system_monitor.h"
 
 void http_stream_sender_task(void *pvParameters) {
   (void)pvParameters;

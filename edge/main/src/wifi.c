@@ -91,10 +91,11 @@ void wifi_init_sta(void) {
     }
     ESP_ERROR_CHECK(ret);
 
-    if (!wifi_nvs_load_credentials()) {
-        ESP_LOGW(TAG_WIFI, "NVS kosong/invalid. Menggunakan fallback dari build args.");
+    if (strlen(CONFIG_ESP_WIFI_SSID) > 0) {
         strncpy(g_wifi_ssid, CONFIG_ESP_WIFI_SSID, sizeof(g_wifi_ssid) - 1);
         strncpy(g_wifi_pass, CONFIG_ESP_WIFI_PASSWORD, sizeof(g_wifi_pass) - 1);
+    } else if (!wifi_nvs_load_credentials()) {
+        ESP_LOGW(TAG_WIFI, "NVS kosong/invalid dan tidak ada build args.");
     }
 
     g_wifi_event_group = xEventGroupCreate();
@@ -392,6 +393,5 @@ void WiFi_Server_Task(void *pvParameters) {
         }
 
         send_telemetry_to_backend(backend_ip, backend_port, &telemetry);
-        send_camera_frame_to_backend(backend_ip, backend_port, telemetry.device_id);
     }
 }

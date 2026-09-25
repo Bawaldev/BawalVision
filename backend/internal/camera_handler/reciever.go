@@ -51,7 +51,17 @@ func (s *CameraStore) GetRawFrame(deviceID string) ([]byte, bool) {
 	}
 
 	frame, exists := s.frames[deviceID]
-	if !exists {
+	if !exists || len(frame.ImageBytes) == 0 {
+		var latestFrame *CachedFrame
+		for _, f := range s.frames {
+			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+				curr := f
+				latestFrame = &curr
+			}
+		}
+		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
+			return latestFrame.ImageBytes, true
+		}
 		return nil, false
 	}
 	return frame.ImageBytes, true

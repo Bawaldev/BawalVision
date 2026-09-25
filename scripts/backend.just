@@ -24,7 +24,7 @@ run-gateway:
     @just allow-firewall
     cd {{ justfile_directory() }}/backend && go run cmd/server/main.go
 
-test-api base_url=("http://localhost:" + BACKEND_PORT + "/api/v1"):
+test-api base_url=("http://localhost:" + env_var_or_default("BACKEND_PORT", "8080") + "/api/v1"):
     cd {{ justfile_directory() }} && BASE_URL="{{ base_url }}" ./backend/scripts/test_api.sh
 
 test-backend:

@@ -46,6 +46,7 @@ CMakeLists.txt.user*
 **/CHECKSUMS.json
 idf_py_stderr_*
 idf_py_stdout_*
+edge/main/include/wifi_credentials.h
 
 # -------------------------------------------------------------------------
 # Backend & Databases (backend/)

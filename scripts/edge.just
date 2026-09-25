@@ -5,10 +5,7 @@ configure-edge:
     @just _idf-exec "reconfigure"
 
 build-edge-wifi:
-    @if [ -z "$WIFI_SSID" ]; then echo "[ERROR] WIFI_SSID belum diisi di file .env!" >&2; exit 1; fi
-    @if [ -z "$BACKEND_IP" ]; then echo "[ERROR] BACKEND_IP belum diisi di file .env!" >&2; exit 1; fi
-    @touch edge/main/src/wifi.c edge/main/src/camera_task.c edge/main/src/main.c
-    @just _idf-exec 'build -DCONFIG_ESP_WIFI_SSID="$WIFI_SSID" -DCONFIG_ESP_WIFI_PASSWORD="$WIFI_PASS" -DCONFIG_BACKEND_IP="$BACKEND_IP" -DCONFIG_BACKEND_PORT="$BACKEND_PORT"'
+    @just _idf-exec "build"
 
 flash-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
     @just _idf-exec "-p {{ port }} flash monitor"
@@ -38,4 +35,4 @@ _idf-exec cmd:
     set +u
     . "$IDF_PATH/export.sh" > /dev/null 2>&1
     set -u
-    cd edge && idf.py {{ cmd }}
+    cd "{{ justfile_directory() }}/edge" && idf.py {{ cmd }}

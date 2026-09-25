@@ -13,6 +13,8 @@ idf_component_register(
         "test"
     REQUIRES 
         freertos
+        log
+        esp_system
         cjson
         mbedtls
         esp_wifi
@@ -26,12 +28,35 @@ idf_component_register(
         app_update
         esp_lcd
         esp_lvgl_port
-        esp_hw_support
         lvgl
         usb
         usb_host_uvc
 )
 
+# Parsing dinamis file .env dari root project
+set(ENV_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../.env")
+if(EXISTS "${ENV_FILE}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ENV_FILE}")
+    file(STRINGS "${ENV_FILE}" ENV_LINES REGEX "^[A-Za-z0-9_]+=")
+    foreach(line ${ENV_LINES})
+        if(line MATCHES "^([^=]+)=(.*)$")
+            string(STRIP "${CMAKE_MATCH_1}" KEY)
+            string(STRIP "${CMAKE_MATCH_2}" VAL)
+            string(REGEX REPLACE "^[\"']|[\"']$" "" VAL "${VAL}")
+            if(KEY STREQUAL "WIFI_SSID")
+                set(CONFIG_ESP_WIFI_SSID "${VAL}")
+            elseif(KEY STREQUAL "WIFI_PASS")
+                set(CONFIG_ESP_WIFI_PASSWORD "${VAL}")
+            elseif(KEY STREQUAL "BACKEND_IP")
+                set(CONFIG_BACKEND_IP "${VAL}")
+            elseif(KEY STREQUAL "BACKEND_PORT")
+                set(CONFIG_BACKEND_PORT "${VAL}")
+            endif()
+        endif()
+    endforeach()
+endif()
+
+# Definisi kompilasi dari file .env
 if(DEFINED CONFIG_ESP_WIFI_SSID)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_ESP_WIFI_SSID="${CONFIG_ESP_WIFI_SSID}")
 endif()
@@ -48,6 +73,11 @@ if(DEFINED CONFIG_BACKEND_PORT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_BACKEND_PORT="${CONFIG_BACKEND_PORT}")
 endif()
 
-target_compile_features(${COMPONENT_LIB} PRIVATE c_std_17)
+# Aktifkan level log DEBUG untuk komponen ini (Level 4 = DEBUG)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE 
+    LOG_LOCAL_LEVEL=ESP_LOG_DEBUG
+)
 
+# Standar C dan flag debug
+target_compile_features(${COMPONENT_LIB} PRIVATE c_std_17)
 target_compile_options(${COMPONENT_LIB} PRIVATE "-ggdb3" "-Og")
