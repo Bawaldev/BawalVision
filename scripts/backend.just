@@ -21,7 +21,7 @@ build-gateway:
     cd {{ justfile_directory() }}/backend && go build -o bin/gateway cmd/server/main.go
 
 run-gateway:
-    sudo ufw allow 8080/tcp
+    @just allow-firewall
     cd {{ justfile_directory() }}/backend && go run cmd/server/main.go
 
 test-api base_url=("http://localhost:" + BACKEND_PORT + "/api/v1"):
@@ -52,7 +52,21 @@ compose-down:
     docker compose -f {{ COMPOSE_FILE }} down
 
 allow-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
-    sudo ufw allow {{ port }}/{{ proto }}
+    #!/usr/bin/env bash
+    if command -v ufw >/dev/null 2>&1; then
+        echo "[INFO] Configuring Linux UFW Firewall for port {{ port }}/{{ proto }}..."
+        sudo ufw allow {{ port }}/{{ proto }} >/dev/null 2>&1 || true
+    elif [ "$OS" = "Windows_NT" ] || command -v netsh >/dev/null 2>&1; then
+        echo "[INFO] Configuring Windows Firewall for port {{ port }}..."
+        netsh advfirewall firewall add rule name="BawalVision_{{ port }}" dir=in action=allow protocol={{ proto }} localport={{ port }} >/dev/null 2>&1 || true
+    fi
 
 deny-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
-    sudo ufw delete allow {{ port }}/{{ proto }}
+    #!/usr/bin/env bash
+    if command -v ufw >/dev/null 2>&1; then
+        echo "[INFO] Removing Linux UFW rule for port {{ port }}/{{ proto }}..."
+        sudo ufw delete allow {{ port }}/{{ proto }} >/dev/null 2>&1 || true
+    elif [ "$OS" = "Windows_NT" ] || command -v netsh >/dev/null 2>&1; then
+        echo "[INFO] Removing Windows Firewall rule for port {{ port }}..."
+        netsh advfirewall firewall delete rule name="BawalVision_{{ port }}" >/dev/null 2>&1 || true
+    fi
