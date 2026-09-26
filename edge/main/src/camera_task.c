@@ -57,7 +57,7 @@ static bool camera_uvc_frame_cb(const uvc_host_frame_t *frame, void *user_ctx) {
         s_shared_frame.capacity = frame->data_len;
       } else {
         camera_unlock_frame();
-        return true;
+        return true; 
       }
     }
 
@@ -66,7 +66,7 @@ static bool camera_uvc_frame_cb(const uvc_host_frame_t *frame, void *user_ctx) {
       s_shared_frame.header.buffer_len = frame->data_len;
       s_shared_frame.header.width = frame->vs_format.h_res ? frame->vs_format.h_res : DEFAULT_FRAME_WIDTH;
       s_shared_frame.header.height = frame->vs_format.v_res ? frame->vs_format.v_res : DEFAULT_FRAME_HEIGHT;
-      s_shared_frame.header.format = FRAME_FORMAT_JPEG;
+      s_shared_frame.header.format = (frame->vs_format.format == UVC_VS_FORMAT_MJPEG) ? FRAME_FORMAT_JPEG : FRAME_FORMAT_RAW;
       s_shared_frame.header.frame_id = ++s_frame_counter;
       s_shared_frame.header.timestamp_ms = esp_timer_get_time() / 1000;
     }
@@ -204,64 +204,97 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
   return ESP_OK;
 }
 
+static const camera_profile_t s_camera_profiles[] = {
+    { .width = 320, .height = 240, .fps = 30.0f, .format = UVC_VS_FORMAT_MJPEG, .label = "320x240 MJPEG @ 30 FPS" },
+    { .width = 640, .height = 480, .fps = 30.0f, .format = UVC_VS_FORMAT_MJPEG, .label = "640x480 MJPEG @ 30 FPS" },
+};
+
 void Camera_Capture_Task(void *pvParameters) {
   (void)pvParameters;
 
-  /* Target MJPEG 640x480 with fps = 0 (Auto-match camera native descriptor FPS) */
-  uvc_host_stream_config_t stream_cfg = {
-      .event_cb = camera_uvc_stream_event_cb,
-      .frame_cb = camera_uvc_frame_cb,
-      .vs_format = {
-          .h_res = DEFAULT_FRAME_WIDTH,   /* 640 */
-          .v_res = DEFAULT_FRAME_HEIGHT,  /* 480 */
-          .fps = 0,                       /* 0 = Auto-match native FPS (prevents float mismatch on Logitech) */
-          .format = UVC_VS_FORMAT_MJPEG,  /* Wajib MJPEG */
-      },
-      .advanced = {
-          .number_of_frame_buffers = 2,
-          .frame_size = 256 * 1024,
-          .frame_heap_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
-          .number_of_urbs = 3,
-      },
-  };
+  const size_t num_profiles = sizeof(s_camera_profiles) / sizeof(s_camera_profiles[0]);
 
   for (;;) {
     if (!s_is_streaming && s_stream_hdl == NULL) {
-      /* Coba buka stream 640x480 MJPEG */
-      esp_err_t open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+      bool stream_opened = false;
 
-      /* Fallback 1: 320x240 MJPEG */
-      if (open_res != ESP_OK) {
-        ESP_LOGW(TAG, "640x480 MJPEG ditolak (%s), mencoba 320x240 MJPEG...", esp_err_to_name(open_res));
-        stream_cfg.vs_format.h_res = 320;
-        stream_cfg.vs_format.v_res = 240;
-        stream_cfg.vs_format.fps = 0;
-        stream_cfg.vs_format.format = UVC_VS_FORMAT_MJPEG;
-        open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+      // Step 1: Iterate through target profiles and attempt to open matching stream
+      for (size_t i = 0; i < num_profiles; ++i) {
+        ESP_LOGI(TAG, "Attempting to open camera stream with profile: %s", s_camera_profiles[i].label);
+
+        uvc_host_stream_config_t stream_cfg = {
+            .event_cb = camera_uvc_stream_event_cb,
+            .frame_cb = camera_uvc_frame_cb,
+            .vs_format = {
+                .h_res = s_camera_profiles[i].width,
+                .v_res = s_camera_profiles[i].height,
+                .fps = s_camera_profiles[i].fps,
+                .format = s_camera_profiles[i].format,
+            },
+            .advanced = {
+                .number_of_frame_buffers = 2,
+                .frame_size = 256 * 1024,
+                .frame_heap_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                .number_of_urbs = 3,
+            },
+        };
+
+        esp_err_t open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+        if (open_res == ESP_OK) {
+          ESP_LOGI(TAG, "Logitech UVC Stream Opened Successfully with profile: %s", s_camera_profiles[i].label);
+          stream_opened = true;
+          break;
+        } else {
+          ESP_LOGW(TAG, "Profile [%s] rejected (%s), trying next...",
+                   s_camera_profiles[i].label, esp_err_to_name(open_res));
+        }
       }
 
-      /* Fallback 2: Default Format */
-      if (open_res != ESP_OK) {
-        ESP_LOGW(TAG, "320x240 MJPEG ditolak (%s), mencoba format default kamera...", esp_err_to_name(open_res));
-        stream_cfg.vs_format.h_res = 0;
-        stream_cfg.vs_format.v_res = 0;
-        stream_cfg.vs_format.fps = 0;
-        stream_cfg.vs_format.format = UVC_VS_FORMAT_DEFAULT;
-        open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+      // Step 2: Fallback to camera default format if no custom profiles could be opened
+      if (!stream_opened) {
+        ESP_LOGW(TAG, "All configured profiles failed. Attempting fallback to camera default format...");
+
+        uvc_host_stream_config_t default_cfg = {
+            .event_cb = camera_uvc_stream_event_cb,
+            .frame_cb = camera_uvc_frame_cb,
+            .vs_format = {
+                .h_res = 0,
+                .v_res = 0,
+                .fps = 0,
+                .format = UVC_VS_FORMAT_DEFAULT,
+            },
+            .advanced = {
+                .number_of_frame_buffers = 2,
+                .frame_size = 256 * 1024,
+                .frame_heap_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                .number_of_urbs = 3,
+            },
+        };
+
+        esp_err_t def_res = uvc_host_stream_open(&default_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+        if (def_res == ESP_OK) {
+          ESP_LOGI(TAG, "Logitech UVC Stream Opened with default format.");
+          stream_opened = true;
+        } else {
+          ESP_LOGE(TAG, "Failed to open UVC stream with default format: %s", esp_err_to_name(def_res));
+        }
       }
 
-      if (open_res == ESP_OK) {
-        ESP_LOGI(TAG, "Logitech UVC Stream Opened Successfully!");
+      // Step 3: Start streaming if stream interface handle was established
+      if (stream_opened && s_stream_hdl != NULL) {
+        uvc_host_stream_format_t active_fmt = {0};
+        uvc_host_stream_format_get(s_stream_hdl, &active_fmt);
+        ESP_LOGI(TAG, "Active stream format: %ux%u @ %.1f FPS (format=%d)",
+                 active_fmt.h_res, active_fmt.v_res, active_fmt.fps, active_fmt.format);
+
         if (uvc_host_stream_start(s_stream_hdl) == ESP_OK) {
           s_is_streaming = true;
-          ESP_LOGI(TAG, "Logitech UVC Streaming Started (MJPEG mode active)!");
+          ESP_LOGI(TAG, "Logitech UVC Streaming Started Successfully!");
         } else {
           ESP_LOGE(TAG, "Failed to start UVC Stream");
           uvc_host_stream_close(s_stream_hdl);
           s_stream_hdl = NULL;
         }
-      } else {
-        ESP_LOGE(TAG, "uvc_host_stream_open failed: %s", esp_err_to_name(open_res));
       }
     }
     vTaskDelay(pdMS_TO_TICKS(2000));

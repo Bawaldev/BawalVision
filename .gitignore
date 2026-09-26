@@ -158,3 +158,5 @@ OUTPUT.md.bak
 *.tmp
 
 usb_stream
+
+OUTPUT.md

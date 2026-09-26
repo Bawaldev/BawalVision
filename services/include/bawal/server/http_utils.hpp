@@ -3,8 +3,11 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-#include <curl/curl.h>
-#include <opencv2/core.hpp>
+// #include <curl/curl.h>
+// #include <opencv2/core.hpp>
+
+// forward declaration
+typedef void CURL;
 
 namespace bawal::server {
 
@@ -13,10 +16,18 @@ struct CameraConfig {
     std::string device_id;
     int timeout_ms = 400;
 };
-
-// Free Functions
+/**
+ * @param curl Active libcurl handle.
+ * @param url Target endpoint URL.
+ * @param buffer Output buffer to receive raw image bytes.
+ * @return true if the HTTP request succeeded, false otherwise.
+ */
 bool fetchLatestFrame(CURL* curl, const std::string& url, std::vector<uint8_t>& buffer);
+/**
+ * @param curl Active libcurl handle.
+ * @param backend_base_url Base URL of the backend service.
+ * @return Device ID string if discovered, empty string otherwise.
+ */
 std::string discoverActiveDeviceID(CURL* curl, const std::string& backend_base_url);
-cv::Mat decodeMJPEGFrame(const std::vector<uint8_t>& raw_bytes);
 
 } // namespace bawal::server

@@ -4,12 +4,13 @@
 #include <cstdlib>
 #include <chrono>
 #include <thread>
+
 #include <curl/curl.h>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <bawal/vision.hpp>
-#include <bawal/server/http_utils.hpp>
+#include <bawal/server.hpp>
 
 using namespace bawal::vision;
 using namespace bawal::server;
@@ -79,68 +80,86 @@ int main(int argc, char** argv) {
     std::string stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
+    const std::string window_name = "BawalVision ESP32 Logitech Camera Stream";
     if (!headless) {
-        const std::string window_name = "BawalVision ESP32 Logitech Camera Stream";
-        cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
+        cv::namedWindow(window_name, cv::WINDOW_NORMAL);
+        cv::resizeWindow(window_name, 800, 600);
+    }
 
-        std::vector<uint8_t> raw_bytes;
-        raw_bytes.reserve(256 * 1024);
-        uint64_t frame_seq = 0;
+    std::vector<uint8_t> raw_bytes;
+    raw_bytes.reserve(256 * 1024);
+    uint64_t frame_seq = 0;
 
-        while (true) {
-            bool frame_ok = false;
-            cv::Mat frame;
+    while (true) {
+        bool frame_ok = false;
+        cv::Mat frame;
 
-            // Jika device_id belum didapat, coba re-discover secara periodik setiap iterasi
-            if (device_id == "UNKNOWN_DEVICE") {
-                const std::string discovered = discoverActiveDeviceID(curl, backend_base_url);
-                if (!discovered.empty()) {
-                    device_id = discovered;
-                    stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
-                    std::cout << "[SUCCESS] Connected to newly active device: " << device_id << "\n";
-                }
+        // Jika device_id belum didapat, coba re-discover secara periodik setiap iterasi
+        if (device_id == "UNKNOWN_DEVICE") {
+            const std::string discovered = discoverActiveDeviceID(curl, backend_base_url);
+            if (!discovered.empty()) {
+                device_id = discovered;
+                stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
+                std::cout << "[SUCCESS] Connected to newly active device: " << device_id << "\n";
             }
+        }
 
-            if (device_id != "UNKNOWN_DEVICE") {
-                if (fetchLatestFrame(curl, stream_url, raw_bytes)) {
-                    frame = decodeMJPEGFrame(raw_bytes);
-                    if (!frame.empty()) {
-                        frame_ok = true;
-                        frame_seq++;
-                        if (frame_seq % 30 == 1) {
-                            std::cout << "[STREAM] Received and displaying frame #" << frame_seq 
-                                      << " (" << frame.cols << "x" << frame.rows << " px)\n";
-                        }
+        if (device_id != "UNKNOWN_DEVICE") {
+            if (fetchLatestFrame(curl, stream_url, raw_bytes)) {
+                if (decodeMJPEGFrame(raw_bytes, frame)) {
+                    frame_ok = true;
+                    frame_seq++;
+                    if (frame_seq % 30 == 1) {
+                        std::cout << "[STREAM] Received and processed frame #" << frame_seq 
+                                  << " (" << frame.cols << "x" << frame.rows << " px, "
+                                  << raw_bytes.size() << " bytes)\n";
                     }
                 }
             }
+        }
 
+        if (!headless) {
+            cv::Mat display_frame;
             if (!frame_ok) {
                 // Generate standby waiting HUD overlay
-                frame = cv::Mat::zeros(360, 640, CV_8UC3);
-                cv::putText(frame, "BAWAL VISION EDGE AI", cv::Point(160, 140),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 255), 2);
-                cv::putText(frame, "Waiting for ESP32 Logitech stream...", cv::Point(130, 190),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(200, 200, 200), 1);
-                cv::putText(frame, "Target Device: " + device_id, cv::Point(130, 220),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(100, 255, 100), 1);
-                cv::putText(frame, "URL: " + stream_url, cv::Point(130, 250),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(180, 180, 180), 1);
+                display_frame = cv::Mat::zeros(480, 640, CV_8UC3);
+                cv::putText(display_frame, "BAWAL VISION EDGE AI", cv::Point(170, 180),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+                cv::putText(display_frame, "Waiting for ESP32 Logitech stream...", cv::Point(140, 230),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
+                cv::putText(display_frame, "Target Device: " + device_id, cv::Point(140, 265),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(100, 255, 100), 1, cv::LINE_AA);
+                cv::putText(display_frame, "URL: " + stream_url, cv::Point(140, 295),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(180, 180, 180), 1, cv::LINE_AA);
             } else {
-                const std::string hud = "ESP32-S3 Logitech (" + device_id + ") | Seq: " + std::to_string(frame_seq);
-                cv::putText(frame, hud, cv::Point(15, 30),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 2);
+                // Upscale if incoming frame resolution is small (e.g. 160x120 or 320x240)
+                if (frame.cols < 640 || frame.rows < 480) {
+                    cv::resize(frame, display_frame, cv::Size(640, 480), 0, 0, cv::INTER_LINEAR);
+                } else {
+                    display_frame = frame.clone();
+                }
+
+                // Render semi-transparent HUD banner at top
+                cv::rectangle(display_frame, cv::Point(0, 0), cv::Point(display_frame.cols, 35), cv::Scalar(25, 25, 25), cv::FILLED);
+                const std::string hud = "ESP32-S3 Logitech [" + device_id + "] | #" + std::to_string(frame_seq) + 
+                                        " (" + std::to_string(frame.cols) + "x" + std::to_string(frame.rows) + ")";
+                cv::putText(display_frame, hud, cv::Point(12, 23),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(0, 255, 128), 1, cv::LINE_AA);
             }
 
-            cv::imshow(window_name, frame);
+            cv::imshow(window_name, display_frame);
 
             const int key = cv::waitKey(30);
             if (key == 'q' || key == 'Q' || key == 27) {
                 std::cout << "[INFO] User requested stop. Closing stream window...\n";
                 break;
             }
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(33));
         }
+    }
 
+    if (!headless) {
         cv::destroyAllWindows();
     }
 
@@ -151,5 +170,4 @@ int main(int argc, char** argv) {
 
     std::cout << "\n[SUCCESS] Vision service exited cleanly.\n";
     return 0;
-}
 }
