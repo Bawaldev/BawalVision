@@ -1,5 +1,5 @@
 # ==========================================
-# Builder C++ & Model Compiler
+# Builder C++ & Vision Service Compiler
 # ==========================================
 FROM debian:bookworm-slim AS builder
 
@@ -9,18 +9,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     pkg-config \
     libopencv-dev \
+    libcurl4-openssl-dev \
     libomp-dev \
-    libonnxruntime-dev \
+    nlohmann-json3-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY services/vision /app/services/vision
+# Copy C++ source files
+COPY services/ /app/services/
 
-RUN cmake -B services/vision/build -S services/vision \
+# Build vision_service binary
+RUN cmake -B services/build -S services \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && \
-    cmake --build services/vision/build --parallel $(nproc)
+    cmake --build services/build --parallel $(nproc)
 
 # ==========================================
 # Runtime Production Image
@@ -28,21 +32,25 @@ RUN cmake -B services/vision/build -S services/vision \
 FROM debian:bookworm-slim AS runner
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libopencv-core416 \
-    libopencv-imgproc416 \
-    libopencv-videoio416 \
+    libopencv-core406 \
+    libopencv-imgproc406 \
+    libopencv-highgui406 \
+    libopencv-calib3d406 \
+    libopencv-imgcodecs406 \
+    libcurl4 \
     libgomp1 \
-    libonnxruntime1 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder /app/services/vision/build/bin/vision_service /usr/local/bin/vision_service
-COPY ml/AI1/model/ai1_vision.onnx /app/models/ai1_vision.onnx
+# Copy compiled binary from builder
+COPY --from=builder /app/services/build/bin/vision_service /usr/local/bin/vision_service
 
-ENV OMP_NUM_THREADS=4
-ENV OMP_SCHEDULE=static
-ENV OMP_PROC_BIND=true
+# Concurrency & CPU pinning optimization
+ENV OMP_NUM_THREADS=4 \
+    OMP_SCHEDULE=static \
+    OMP_PROC_BIND=true
 
 EXPOSE 8080
 

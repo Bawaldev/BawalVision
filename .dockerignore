@@ -1,0 +1,50 @@
+# Git & CI/CD
+.git
+.gitignore
+.github
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Node.js & Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+frontend/node_modules/
+frontend/.svelte-kit/
+
+# C++ & Embedded Build Artifacts
+build/
+bin/
+services/build/
+edge/build/
+edge/managed_components/
+*.o
+*.a
+*.so
+*.elf
+*.bin
+*.map
+compile_commands.json
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Temporary & Cache Directories
+.cache_trash/
+tmp/
+*.log

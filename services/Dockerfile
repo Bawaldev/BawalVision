@@ -1,0 +1,56 @@
+# ==========================================
+# Builder C++ & Vision Service Compiler
+# ==========================================
+FROM debian:bookworm-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libopencv-dev \
+    libcurl4-openssl-dev \
+    libomp-dev \
+    nlohmann-json3-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy service source files
+COPY . /app/
+
+# Build vision_service binary
+RUN cmake -B build -S . \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && \
+    cmake --build build --parallel $(nproc)
+
+# ==========================================
+# Runtime Production Image
+# ==========================================
+FROM debian:bookworm-slim AS runner
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopencv-core406 \
+    libopencv-imgproc406 \
+    libopencv-highgui406 \
+    libopencv-calib3d406 \
+    libopencv-imgcodecs406 \
+    libcurl4 \
+    libgomp1 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy compiled binary from builder
+COPY --from=builder /app/build/bin/vision_service /usr/local/bin/vision_service
+
+ENV OMP_NUM_THREADS=4 \
+    OMP_SCHEDULE=static \
+    OMP_PROC_BIND=true
+
+EXPOSE 8080
+
+ENTRYPOINT ["vision_service"]

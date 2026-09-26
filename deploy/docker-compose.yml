@@ -1,13 +1,5 @@
 services:
-  # vision:
-  #   build:
-  #     context: ..
-  #     dockerfile: deploy/Dockerfile.vision
-  #   ports:
-  #     - "8081:8080"
-  #   networks:
-  #     - bawal-net
-  postgres: 
+  postgres:
     image: postgres:16-alpine
     container_name: postgres
     environment:
@@ -17,18 +9,18 @@ services:
     ports:
       - "5432:5432"
     networks:
-    - bawal-net
+      - bawal-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d bawal_vision"]
       interval: 3s
       timeout: 5s
       retries: 5
 
-
   backend:
     build:
       context: ../backend
       dockerfile: Dockerfile
+    container_name: bawal_backend
     ports:
       - "8080:8080"
     environment:
@@ -45,18 +37,36 @@ services:
       postgres:
         condition: service_healthy
 
-  # frontend:
-  #   build:
-  #     context: ../frontend
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "3000:80"
-  #   environment:
-  #     - BACKEND_URL=http://backend:8080
-  #   depends_on:
-  #     - backend
-  #   networks:
-  #     - bawal-net
+  vision:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.vision
+    container_name: bawal_vision
+    ports:
+      - "8081:8080"
+    environment:
+      - BACKEND_URL=http://backend:8080
+      - OMP_NUM_THREADS=4
+    networks:
+      - bawal-net
+    depends_on:
+      - backend
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: bawal_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_URL=http://backend:8080
+      - HOST=0.0.0.0
+      - PORT=3000
+    networks:
+      - bawal-net
+    depends_on:
+      - backend
 
 networks:
   bawal-net:
