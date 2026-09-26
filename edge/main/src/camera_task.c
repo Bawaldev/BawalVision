@@ -104,6 +104,38 @@ static void usb_lib_task(void *pvParameters) {
   vTaskDelete(NULL);
 }
 
+void print_camera_supported_formats(void) {
+    size_t list_size = 0;
+    // Panggilan pertama untuk mendapatkan jumlah format yang tersedia
+    esp_err_t err = uvc_host_get_frame_list(0, 0, NULL, &list_size);
+    if (err != ESP_OK || list_size == 0) {
+        ESP_LOGE(TAG, "Gagal mendapatkan jumlah frame list: %s (size: %u)", esp_err_to_name(err), list_size);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Jumlah profil frame yang terdeteksi driver: %u", list_size);
+    uvc_host_frame_info_t *info_list = (uvc_host_frame_info_t *)malloc(sizeof(uvc_host_frame_info_t) * list_size);
+    if (!info_list) {
+        ESP_LOGE(TAG, "Alokasi memory frame_info_list gagal");
+        return;
+    }
+
+    // Panggilan kedua untuk mengambil data frame list
+    err = uvc_host_get_frame_list(0, 0, (uvc_host_frame_info_t (*)[])info_list, &list_size);
+    if (err == ESP_OK) {
+        for (size_t i = 0; i < list_size; i++) {
+            float fps = (info_list[i].default_interval > 0) ? (10000000.0f / (float)info_list[i].default_interval) : 0.0f;
+            ESP_LOGI(TAG, "Profil [%u]: Format=%d, Res=%ux%u, Default Interval=%lu (%.1f FPS)",
+                     i, info_list[i].format, info_list[i].h_res, info_list[i].v_res,
+                     (unsigned long)info_list[i].default_interval, fps);
+        }
+    } else {
+        ESP_LOGE(TAG, "Gagal mengisi data frame list: %s", esp_err_to_name(err));
+    }
+
+    free(info_list);
+}
+
 esp_err_t camera_task_init(void) {
   if (s_is_initialized) return ESP_OK;
 
@@ -138,12 +170,14 @@ esp_err_t camera_task_init(void) {
   }
 
   uvc_host_driver_config_t driver_cfg = {
-      .driver_task_stack_size = 4096,
-      .driver_task_priority = 5,
-      .xCoreID = 0,
-      .create_background_task = true,
-  };
-  esp_err_t err_uvc = uvc_host_install(&driver_cfg);
+    .driver_task_stack_size = 4096,
+    .driver_task_priority   = 5,
+    .xCoreID                = 1,       // Pindah ke Core 1 agar Core 0 fokus ke Wi-Fi & USB lib task
+    .create_background_task = true,
+    .event_cb               = NULL,    // Callback event driver tingkat tinggi (NULL jika tidak dipakai)
+    .user_ctx               = NULL,    // Context data user untuk event_cb
+};
+esp_err_t err_uvc = uvc_host_install(&driver_cfg);
   ESP_LOGI(TAG, "UVC Host Driver Install Result: %s", esp_err_to_name(err_uvc));
   if (err_uvc != ESP_OK) {
     return err_uvc;
@@ -204,84 +238,48 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
   return ESP_OK;
 }
 
-static const camera_profile_t s_camera_profiles[] = {
-    { .width = 320, .height = 240, .fps = 30.0f, .format = UVC_VS_FORMAT_MJPEG, .label = "320x240 MJPEG @ 30 FPS" },
-    { .width = 640, .height = 480, .fps = 30.0f, .format = UVC_VS_FORMAT_MJPEG, .label = "640x480 MJPEG @ 30 FPS" },
-};
+// static const camera_profile_t s_camera_profiles[] = {
+//     { .width = 320, .height = 240, .fps = 30.0f, .format = UVC_VS_FORMAT_MJPEG, .label = "320x240 MJPEG @ 30 FPS" },
+//     { .width = 640, .height = 480, .fps = 30.0f, .format = UVC_VS_FORMAT_MJPEG, .label = "640x480 MJPEG @ 30 FPS" },
+// };
 
 void Camera_Capture_Task(void *pvParameters) {
   (void)pvParameters;
 
-  const size_t num_profiles = sizeof(s_camera_profiles) / sizeof(s_camera_profiles[0]);
-
   for (;;) {
     if (!s_is_streaming && s_stream_hdl == NULL) {
-      bool stream_opened = false;
+      ESP_LOGI(TAG, "Membuka UVC stream langsung menggunakan mode bawaan kamera...");
 
-      // Step 1: Iterate through target profiles and attempt to open matching stream
-      for (size_t i = 0; i < num_profiles; ++i) {
-        ESP_LOGI(TAG, "Attempting to open camera stream with profile: %s", s_camera_profiles[i].label);
+      uvc_host_stream_config_t default_cfg = {
+          .event_cb = camera_uvc_stream_event_cb,
+          .frame_cb = camera_uvc_frame_cb,
+          .user_ctx = NULL,
+          .usb = {
+              .dev_addr = UVC_HOST_ANY_DEV_ADDR,
+              .vid = UVC_HOST_ANY_VID,
+              .pid = UVC_HOST_ANY_PID,
+              .uvc_stream_index = 0,
+          },
+          .vs_format = {
+              .h_res = 0,
+              .v_res = 0,
+              .fps = 0,
+              .format = UVC_VS_FORMAT_DEFAULT,
+          },
+          .advanced = {
+              .number_of_frame_buffers = 2,
+              .frame_size = 64 * 1024,
+              .frame_heap_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+              .number_of_urbs = 3,
+              .urb_size = 0,
+              .user_frame_buffers = NULL,
+          },
+      };
 
-        uvc_host_stream_config_t stream_cfg = {
-            .event_cb = camera_uvc_stream_event_cb,
-            .frame_cb = camera_uvc_frame_cb,
-            .vs_format = {
-                .h_res = s_camera_profiles[i].width,
-                .v_res = s_camera_profiles[i].height,
-                .fps = s_camera_profiles[i].fps,
-                .format = s_camera_profiles[i].format,
-            },
-            .advanced = {
-                .number_of_frame_buffers = 2,
-                .frame_size = 256 * 1024,
-                .frame_heap_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
-                .number_of_urbs = 3,
-            },
-        };
-
-        esp_err_t open_res = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
-        if (open_res == ESP_OK) {
-          ESP_LOGI(TAG, "Logitech UVC Stream Opened Successfully with profile: %s", s_camera_profiles[i].label);
-          stream_opened = true;
-          break;
-        } else {
-          ESP_LOGW(TAG, "Profile [%s] rejected (%s), trying next...",
-                   s_camera_profiles[i].label, esp_err_to_name(open_res));
-        }
-      }
-
-      // Step 2: Fallback to camera default format if no custom profiles could be opened
-      if (!stream_opened) {
-        ESP_LOGW(TAG, "All configured profiles failed. Attempting fallback to camera default format...");
-
-        uvc_host_stream_config_t default_cfg = {
-            .event_cb = camera_uvc_stream_event_cb,
-            .frame_cb = camera_uvc_frame_cb,
-            .vs_format = {
-                .h_res = 0,
-                .v_res = 0,
-                .fps = 0,
-                .format = UVC_VS_FORMAT_DEFAULT,
-            },
-            .advanced = {
-                .number_of_frame_buffers = 2,
-                .frame_size = 256 * 1024,
-                .frame_heap_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
-                .number_of_urbs = 3,
-            },
-        };
-
-        esp_err_t def_res = uvc_host_stream_open(&default_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
-        if (def_res == ESP_OK) {
-          ESP_LOGI(TAG, "Logitech UVC Stream Opened with default format.");
-          stream_opened = true;
-        } else {
-          ESP_LOGE(TAG, "Failed to open UVC stream with default format: %s", esp_err_to_name(def_res));
-        }
-      }
-
-      // Step 3: Start streaming if stream interface handle was established
-      if (stream_opened && s_stream_hdl != NULL) {
+      esp_err_t def_res = uvc_host_stream_open(&default_cfg, pdMS_TO_TICKS(1000), &s_stream_hdl);
+      if (def_res == ESP_OK) {
+        ESP_LOGI(TAG, "Logitech UVC Stream Opened with default format.");
+        
         uvc_host_stream_format_t active_fmt = {0};
         uvc_host_stream_format_get(s_stream_hdl, &active_fmt);
         ESP_LOGI(TAG, "Active stream format: %ux%u @ %.1f FPS (format=%d)",
@@ -295,11 +293,14 @@ void Camera_Capture_Task(void *pvParameters) {
           uvc_host_stream_close(s_stream_hdl);
           s_stream_hdl = NULL;
         }
+      } else {
+        ESP_LOGE(TAG, "Failed to open UVC stream: %s", esp_err_to_name(def_res));
       }
     }
     vTaskDelay(pdMS_TO_TICKS(2000));
   }
 }
+
 
 TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id) {
   if (!s_is_initialized) {
@@ -345,7 +346,16 @@ void http_stream_sender_task(void *pvParameters) {
   for (;;) {
     TickType_t start_tick = xTaskGetTickCount();
 
-    if (camera_copy_latest_frame(&local_frame) == ESP_OK) {
+    if (g_wifi_event_group != NULL) {
+      EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(100));
+      if (!(bits & WIFI_CONNECTED_BIT)) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
+    }
+
+    esp_err_t copy_status = camera_copy_latest_frame(&local_frame);
+    if (copy_status == ESP_OK) {
       if (local_frame.header.buffer_len > 0 && local_frame.header.frame_id != last_sent_frame_id) {
         last_sent_frame_id = local_frame.header.frame_id;
 
@@ -358,14 +368,21 @@ void http_stream_sender_task(void *pvParameters) {
         esp_http_client_config_t config = {
             .url = full_url,
             .method = HTTP_METHOD_POST,
-            .timeout_ms = 2000,
+            .timeout_ms = 1000,
             .buffer_size_tx = 4096,
         };
 
         esp_http_client_handle_t client = esp_http_client_init(&config);
         if (client != NULL) {
           snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)local_frame.header.frame_id);
-          esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+          
+          if (local_frame.header.format == FRAME_FORMAT_JPEG) {
+            esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+          } else {
+            esp_http_client_set_header(client, "Content-Type", "application/octet-stream");
+            esp_http_client_set_header(client, "X-Pixel-Format", "YUYV");
+          }
+
           esp_http_client_set_header(client, "X-Device-ID", device_id);
           esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
           esp_http_client_set_post_field(client, (const char *)local_frame.data, local_frame.header.buffer_len);
@@ -373,10 +390,14 @@ void http_stream_sender_task(void *pvParameters) {
           esp_err_t err = esp_http_client_perform(client);
           if (err != ESP_OK) {
             ESP_LOGW(TAG, "Frame dispatch failed: %s", esp_err_to_name(err));
+          } else {
+            ESP_LOGI(TAG, "Frame #%lu dispatched (%u bytes)", (unsigned long)last_sent_frame_id, (unsigned)local_frame.header.buffer_len);
           }
           esp_http_client_cleanup(client);
         }
       }
+    } else {
+      ESP_LOGW(TAG, "Gagal copy frame dari buffer kamera: %s", esp_err_to_name(copy_status));
     }
 
     TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
@@ -390,3 +411,4 @@ void http_stream_sender_task(void *pvParameters) {
   if (local_frame.data) free(local_frame.data);
   vTaskDelete(NULL);
 }
+

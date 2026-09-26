@@ -33,6 +33,14 @@ typedef struct {
 } camera_profile_t;
 
 /**
+ * @brief print_camera_supported_formats
+ * 
+ */
+
+void print_camera_supported_formats(void) ;
+
+/**
+ * 
  * @brief Initialize UVC camera hardware, PSRAM buffers, and FreeRTOS synchronization mutex.
  * 
  * @return esp_err_t ESP_OK on success, or appropriate error code.

@@ -34,13 +34,18 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* dis = (wifi_event_sta_disconnected_t*) event_data;
         ESP_LOGW(TAG_WIFI, "Connection lost (Reason code: %d)", dis->reason);
+        if (g_wifi_event_group != NULL) {
+            xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+        }
 
         if (g_wifi_retry_num < MAXIMUM_RETRY) {
-            esp_wifi_connect();
             g_wifi_retry_num++;
             ESP_LOGW(TAG_WIFI, "Retrying connection (%d/%d)...", g_wifi_retry_num, MAXIMUM_RETRY);
+            esp_wifi_connect();
         } else {
-            xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
+            if (g_wifi_event_group != NULL) {
+                xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
+            }
             ESP_LOGE(TAG_WIFI, "Failed to connect to AP after %d attempts.", MAXIMUM_RETRY);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -48,7 +53,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         ESP_LOGI(TAG_WIFI, "Obtained IP: " IPSTR, IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG_WIFI, "Gateway IP: " IPSTR, IP2STR(&event->ip_info.gw));
         g_wifi_retry_num = 0;
-        xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+        if (g_wifi_event_group != NULL) {
+            xEventGroupClearBits(g_wifi_event_group, WIFI_FAIL_BIT);
+            xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+        }
     }
 }
 
@@ -156,22 +164,6 @@ void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-
-    EventBits_t bits = xEventGroupWaitBits(
-        g_wifi_event_group,
-        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-        pdFALSE,
-        pdFALSE,
-        pdMS_TO_TICKS(15000)
-    );
-
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI("WIFI", "Terhubung ke AP SSID: %s", g_wifi_ssid);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGE("WIFI", "Gagal terhubung ke SSID: %s", g_wifi_ssid);
-    } else {
-        ESP_LOGE("WIFI", "Timeout saat mencoba terhubung ke SSID: %s", g_wifi_ssid);
-    }
 }
 
 bool wifi_nvs_load_credentials(void) {
@@ -383,6 +375,14 @@ void WiFi_Server_Task(void *pvParameters) {
     for (;;) {
         if (xQueueReceive(data_queue, &telemetry, portMAX_DELAY) != pdTRUE) {
             continue;
+        }
+
+        if (g_wifi_event_group != NULL) {
+            EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(1000));
+            if (!(bits & WIFI_CONNECTED_BIT)) {
+                ESP_LOGD(TAG, "WiFi not connected, skipping telemetry dispatch.");
+                continue;
+            }
         }
 
         char backend_ip[32] = {0};
