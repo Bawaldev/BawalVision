@@ -31,6 +31,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
         ESP_LOGI(TAG_WIFI, "Connecting to AP...");
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        ESP_LOGI(TAG_WIFI, "Associated with AP '%s'. Requesting IP via DHCP...", g_wifi_ssid);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* dis = (wifi_event_sta_disconnected_t*) event_data;
         ESP_LOGW(TAG_WIFI, "Connection lost (Reason code: %d)", dis->reason);
@@ -38,16 +40,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
         }
 
-        if (g_wifi_retry_num < MAXIMUM_RETRY) {
-            g_wifi_retry_num++;
-            ESP_LOGW(TAG_WIFI, "Retrying connection (%d/%d)...", g_wifi_retry_num, MAXIMUM_RETRY);
-            esp_wifi_connect();
-        } else {
-            if (g_wifi_event_group != NULL) {
-                xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
-            }
-            ESP_LOGE(TAG_WIFI, "Failed to connect to AP after %d attempts.", MAXIMUM_RETRY);
-        }
+        g_wifi_retry_num++;
+        ESP_LOGW(TAG_WIFI, "Reconnecting to AP '%s' (attempt %d)...", g_wifi_ssid, g_wifi_retry_num);
+        esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG_WIFI, "Obtained IP: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -153,10 +148,9 @@ void wifi_init_sta(void) {
     wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
-    wifi_config.sta.threshold.authmode = (strlen(g_wifi_pass) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.threshold.authmode = (strlen(g_wifi_pass) > 0) ? WIFI_AUTH_WPA_WPA2_PSK : WIFI_AUTH_OPEN;
+    wifi_config.sta.pmf_cfg.capable = false;
     wifi_config.sta.pmf_cfg.required = false;
-    wifi_config.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
     ESP_LOGI(TAG_WIFI, "Attempting connection -> SSID: '%s' | PASS LEN: %d", 
              g_wifi_ssid, (int)strlen(g_wifi_pass));
@@ -164,6 +158,7 @@ void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
 bool wifi_nvs_load_credentials(void) {

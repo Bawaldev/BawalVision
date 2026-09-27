@@ -10,8 +10,11 @@ build-edge-wifi:
 flash-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
     @just _idf-exec "-p {{ port }} flash monitor"
 
+monitor-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
+    @just _idf-exec "-p {{ port }} monitor"
+
 run-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
-    just build-edge-wifi
+    just build-edge
     just flash-edge {{ port }}
 
 erase-nvs port=env_var_or_default("PORT", "/dev/ttyACM0"):

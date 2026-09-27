@@ -29,11 +29,9 @@ idf_component_register(
         esp_lcd
         esp_lvgl_port
         lvgl
-        usb
-        usb_host_uvc
+        esp32-camera
 )
 
-# Parsing dinamis file .env dari root project
 set(ENV_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../.env")
 if(EXISTS "${ENV_FILE}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ENV_FILE}")

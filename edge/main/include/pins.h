@@ -60,8 +60,69 @@
 #define PIN_BTN_ENABLE          42
 
 /* =========================================================================
- * USB / Webcam Interface (Logitech USB Camera: D-, D+, VCC, GND)
+ * OV5640 CSP / DVP Camera Interface Wiring (esp_camera.h)
  * ========================================================================= */
 
-#define USB_PIN_DM              19  /**< USB D- (Data Minus) */
-#define USB_PIN_DP              20  /**< USB D+ (Data Plus)  */
+#ifndef CAM_PIN_PWDN
+#define CAM_PIN_PWDN            -1
+#endif
+
+#ifndef CAM_PIN_RESET
+#define CAM_PIN_RESET           -1
+#endif
+
+#ifndef CAM_PIN_XCLK
+#define CAM_PIN_XCLK            15
+#endif
+
+#ifndef CAM_PIN_SIOD
+#define CAM_PIN_SIOD            4
+#endif
+
+#ifndef CAM_PIN_SIOC
+#define CAM_PIN_SIOC            5
+#endif
+
+#ifndef CAM_PIN_D7
+#define CAM_PIN_D7              16
+#endif
+
+#ifndef CAM_PIN_D6
+#define CAM_PIN_D6              17
+#endif
+
+#ifndef CAM_PIN_D5
+#define CAM_PIN_D5              18
+#endif
+
+#ifndef CAM_PIN_D4
+#define CAM_PIN_D4              12
+#endif
+
+#ifndef CAM_PIN_D3
+#define CAM_PIN_D3              10
+#endif
+
+#ifndef CAM_PIN_D2
+#define CAM_PIN_D2              8
+#endif
+
+#ifndef CAM_PIN_D1
+#define CAM_PIN_D1              9
+#endif
+
+#ifndef CAM_PIN_D0
+#define CAM_PIN_D0              11
+#endif
+
+#ifndef CAM_PIN_VSYNC
+#define CAM_PIN_VSYNC           6
+#endif
+
+#ifndef CAM_PIN_HREF
+#define CAM_PIN_HREF            7
+#endif
+
+#ifndef CAM_PIN_PCLK
+#define CAM_PIN_PCLK            13
+#endif

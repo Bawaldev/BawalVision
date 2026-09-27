@@ -17,4 +17,4 @@ dependencies:
   espressif/cjson: '*'
   lvgl/lvgl: "^8.3.11"
   espressif/esp_lvgl_port: "^2.4.0"
-  espressif/usb_host_uvc: "*"
+  espressif/esp32-camera: "*"

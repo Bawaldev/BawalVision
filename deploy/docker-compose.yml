@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: bawal_vision
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     networks:
       - bawal-net
     healthcheck:
@@ -22,7 +22,7 @@ services:
       dockerfile: Dockerfile
     container_name: bawal_backend
     ports:
-      - "8080:8080"
+      - "${BACKEND_PORT:-8080}:8080"
     environment:
       - PORT=8080
       - DB_HOST=postgres
@@ -43,8 +43,10 @@ services:
       dockerfile: deploy/Dockerfile.vision
     container_name: bawal_vision
     ports:
-      - "8081:8080"
+      - "${VISION_PORT:-8081}:8080"
     environment:
+      - HEADLESS=1
+      - QT_QPA_PLATFORM=offscreen
       - BACKEND_URL=http://backend:8080
       - OMP_NUM_THREADS=4
     networks:
@@ -58,7 +60,7 @@ services:
       dockerfile: Dockerfile
     container_name: bawal_frontend
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3001}:3000"
     environment:
       - BACKEND_URL=http://backend:8080
       - HOST=0.0.0.0

@@ -6,9 +6,9 @@
 
 #include "data.h"
 #include "esp_err.h"
+#include "esp_camera.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "usb/uvc_host.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,28 +16,9 @@ extern "C" {
 
 #define DEFAULT_FRAME_WIDTH  640
 #define DEFAULT_FRAME_HEIGHT 480
-#define DEFAULT_FPS          0.0f         /* 0.0f = Auto-negotiate camera native frame rate */
 #define INITIAL_BUF_CAPACITY (256 * 1024) /* 256 KB PSRAM buffer */
 #define DEVICE_ID            "ESP32-S3-BENCH-01"
-#define STREAM_FPS           15
-
-/**
- * @brief Structured definition for camera stream negotiation profiles.
- */
-typedef struct {
-    unsigned int width;
-    unsigned int height;
-    float fps;
-    enum uvc_host_stream_format format;
-    const char *label;
-} camera_profile_t;
-
-/**
- * @brief print_camera_supported_formats
- * 
- */
-
-void print_camera_supported_formats(void) ;
+#define STREAM_FPS           5
 
 /**
  * 

@@ -22,10 +22,9 @@ static TaskHandle_t s_camera_task_handle = NULL;
 static TaskHandle_t s_http_sender_task_handle = NULL;
 
 void app_main(void) {
-  /* Set USB Host and UVC log verbosity to DEBUG for physical signal and protocol tracing */
-  esp_log_level_set("usb_host", ESP_LOG_DEBUG);
-  esp_log_level_set("uvc_camera", ESP_LOG_DEBUG);
-  esp_log_level_set("usbh_uvc", ESP_LOG_DEBUG);
+  /* Set camera log verbosity */
+  esp_log_level_set("camera", ESP_LOG_INFO);
+  esp_log_level_set("esp_camera", ESP_LOG_INFO);
 
   /* Initialize NVS storage */
   esp_err_t ret = nvs_flash_init();
@@ -47,11 +46,11 @@ void app_main(void) {
     return;
   }
 
-  /* Initialize UVC driver and USB Host stack */
-  ESP_LOGI(TAG, "Initializing UVC Camera Driver...");
+  /* Initialize OV5640 CSP camera driver */
+  ESP_LOGI(TAG, "Initializing OV5640 CSP Camera Driver (esp_camera)...");
   ret = camera_task_init();
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to initialize UVC Driver: %s", esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to initialize Camera Driver: %s", esp_err_to_name(ret));
   } else {
     s_camera_task_handle = camera_task_start(5, 1);
   }
