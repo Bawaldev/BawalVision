@@ -31,28 +31,6 @@ except ImportError:
 
 # Target search queries with multi-lingual and contextual variations
 LARGE_DATASET_QUERIES = {
-    "pomfret_fish": [
-        "ikan bawal air tawar segar",
-        "fresh black pomfret fish",
-        "ikan bawal bintang hidup",
-        "ikan bawal kolam budidaya",
-        "white pomfret fish market",
-        "fresh pomfret fish top view",
-        "ikan bawal laut segar",
-        "pampus argenteus fish",
-        "ikan bawal goreng matang piring",
-        "ikan bawal bakar kecap",
-        "ikan bawal asam manis",
-        "raw pomfret fish fillet",
-        "ikan bawal segar di pasar",
-        "fresh pomfret on ice table",
-        "aquaculture freshwater pomfret",
-        "ikan bawal siap masak",
-        "colossoma macropomum fish",
-        "ikan bawal piring saji",
-        "steamed pomfret fish chinese style",
-        "ikan bawal bumbu kuning"
-    ],
     "tofu": [
         "raw white tofu block plate",
         "tahu putih mentah piring",
