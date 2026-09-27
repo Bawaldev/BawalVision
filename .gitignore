@@ -79,16 +79,40 @@ ENV/
 htmlcov/
 .ipynb_checkpoints/
 
-# Model checkpoints berukuran besar (disimpan di cloud / AWS S3)
+# Model checkpoints berukuran besar (disimpan di cloud / AWS S3 / DVC)
 ml/models/*.pt
 ml/models/*.pth
 ml/models/*.onnx
 ml/models/*.engine
 !ml/models/.gitkeep
 
-# Dataset berukuran besar
-ml/AI1/dataset/**/*
-!ml/AI1/dataset/**/
+# -------------------------------------------------------------------------
+# Datasets & DVC (Data Version Control)
+# -------------------------------------------------------------------------
+# Scraped & raw image datasets
+dataset*/
+dataset_mbg_matang/
+dataset_tofu_flat/
+ml/dataset/
+ml/data/
+ml/scrap/dataset*/
+ml/AI1/dataset/
+*.zip
+*.tar.gz
+*.tar
+
+# DVC internals (cache and local configs)
+.dvc/cache/
+.dvc/tmp/
+.dvc/config.local
+
+# Always track DVC pointer files and DVC project configs
+!*.dvc
+!.dvc/
+!.dvc/config
+!.dvc/.gitignore
+!.dvcignore
+!ml/dataset/**/.gitkeep
 !ml/AI1/dataset/**/.gitkeep
 
 # -------------------------------------------------------------------------
@@ -141,14 +165,6 @@ aws-infra/.aws-sam/
 ehthumbs.db
 Thumbs.db
 
-# dataset berukuran besar 
-ml/AI1/dataset/**/*
-!ml/AI1/dataset/**/
-!ml/AI1/dataset/**/.gitkeep
-
-
-# Gemini & System Cache / Trash
-# -------------------------------------------------------------------------
 # Logs, Temporary & Gemini Cache
 # -------------------------------------------------------------------------
 *.log

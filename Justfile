@@ -6,6 +6,7 @@ export IDF_PATH    := env_var_or_default("IDF_PATH", env_var("HOME") + "/esp/esp
 # Import modul dari folder scripts/
 import 'scripts/backend.just'
 import 'scripts/edge.just'
+import 'scripts/ml.just'
 
 default:
     @just --list
