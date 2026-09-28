@@ -1,4 +1,4 @@
-#pragma once 
+#pragma once
 
 #include <cstdint>
 #include <string>
@@ -15,43 +15,20 @@ enum class FrameFormat : uint32_t {
     RAW = 4
 };
 
-#pragma pack(push, 1)
-/**
- * @brief Packed camera frame header matching ESP-IDF camera_frame_header_t (zero padding).
- */
-struct CameraFrameHeader {
-    uint32_t frame_id;         ///< Monotonic sequence identifier
-    uint32_t width;            ///< Width in pixels
-    uint32_t height;           ///< Height in pixels
-    uint32_t format;           ///< Pixel format enum (FrameFormat)
-    uint32_t buffer_len;       ///< Exact byte length of image payload
-    int64_t  timestamp_ms;     ///< Capture millisecond epoch/uptime
+struct __attribute__((__packed__)) CameraFrameHeader {
+    uint32_t frame_id{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t format{0};
+    uint32_t buffer_len{0};
+    int64_t  timestamp_ms{0};
 };
 
-/**
- * @brief Packed telemetry data structure matching ESP-IDF telemetry_data_t (zero padding).
- */
-struct TelemetryPacket {
-    char device_id[64];
-    char firmware_version[54];
-    int64_t timestamp;
-    float temperature;
-    float humidity;
-    float gas_voc;
-    float pressure;
-    uint8_t current_cpu_load;
-    char device_name[100];
-    uint8_t device_core;
-};
-#pragma pack(pop)
-
-/**
- * @brief Decoded OpenCV frame container with synchronized metadata.
- */
 struct DecodedFrame {
-    CameraFrameHeader header;
-    cv::Mat image;             ///< OpenCV image matrix (BGR / Grayscale)
-    bool is_valid = false;
+    CameraFrameHeader header{};
+    uint32_t frame_id{0};
+    cv::Mat image;
+    bool is_valid{false};
 };
 
 } // namespace bawal::vision

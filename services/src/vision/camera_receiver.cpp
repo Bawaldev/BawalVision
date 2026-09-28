@@ -214,4 +214,21 @@ bool CameraReceiver::decodeFromJson(const std::string& json_str, DecodedFrame& o
     return false;
 }
 
+bool CameraReceiver::decodeMJPEG(const uint8_t* raw_bytes, size_t len, DecodedFrame& out_frame) {
+    out_frame.is_valid = false;
+    if (!raw_bytes || len == 0) {
+        m_metrics.corrupted_frames++;
+        return false;
+    }
+
+    CameraFrameHeader header{};
+    header.format = static_cast<uint32_t>(FrameFormat::JPEG);
+    header.buffer_len = static_cast<uint32_t>(len);
+    return decode(header, raw_bytes, len, out_frame);
+}
+
+bool CameraReceiver::decodeMJPEG(const std::vector<uint8_t>& raw_bytes, DecodedFrame& out_frame) {
+    return decodeMJPEG(raw_bytes.data(), raw_bytes.size(), out_frame);
+}
+
 } // namespace bawal::vision

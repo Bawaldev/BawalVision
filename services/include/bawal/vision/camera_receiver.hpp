@@ -75,6 +75,16 @@ public:
     bool decodeFromJson(const std::string& json_str, DecodedFrame& out_frame);
 
     /**
+     * @brief Decode raw MJPEG / JPEG buffer from HTTP stream with automatic header repair.
+     * 
+     * @param raw_bytes Raw compressed JPEG payload
+     * @param out_frame Destination DecodedFrame
+     * @return true on successful decode, false on error
+     */
+    bool decodeMJPEG(const uint8_t* raw_bytes, size_t len, DecodedFrame& out_frame);
+    bool decodeMJPEG(const std::vector<uint8_t>& raw_bytes, DecodedFrame& out_frame);
+
+    /**
      * @brief Access runtime metrics.
      */
     [[nodiscard]] const ReceiverMetrics& getMetrics() const noexcept { return m_metrics; }

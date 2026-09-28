@@ -20,7 +20,9 @@ bool decodeMJPEGFrame(const std::vector<uint8_t>& raw_bytes, cv::Mat& out_frame)
     // Step 2: Search for SOI marker (0xFF, 0xD8) to strip any leading transport bytes
     bool found_soi = false;
     size_t soi = 0;
-    for (size_t i = 0; i + 1 < raw_bytes.size(); ++i) {
+    const size_t byte_count = raw_bytes.size();
+
+    for (size_t i = 0; i + 1 < byte_count; ++i) {
         if (raw_bytes[i] == 0xFF && raw_bytes[i + 1] == 0xD8) {
             soi = i;
             found_soi = true;
@@ -67,7 +69,6 @@ bool decodeMJPEGFrame(const std::vector<uint8_t>& raw_bytes, cv::Mat& out_frame)
     }
 
     // Step 4: Fallback for raw uncompressed YUYV (YUV422) camera streams
-    const size_t byte_count = raw_bytes.size();
     int width = 0;
     int height = 0;
 

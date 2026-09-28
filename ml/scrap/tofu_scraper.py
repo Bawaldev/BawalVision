@@ -56,6 +56,6 @@ for root, dirs, files in os.walk(source_dir):
             shutil.copy(old_path, new_path)
             counter += 1
 
-print(f"Total gambar yang diproses dan diubah namanya: {counter - 1}")
+print(f"Total images processed and renamed: {counter - 1}")
 
 !zip -q -r dataset_tofu_flat.zip dataset_tofu_flat

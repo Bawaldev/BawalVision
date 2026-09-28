@@ -98,7 +98,7 @@ void wifi_init_sta(void) {
         strncpy(g_wifi_ssid, CONFIG_ESP_WIFI_SSID, sizeof(g_wifi_ssid) - 1);
         strncpy(g_wifi_pass, CONFIG_ESP_WIFI_PASSWORD, sizeof(g_wifi_pass) - 1);
     } else if (!wifi_nvs_load_credentials()) {
-        ESP_LOGW(TAG_WIFI, "NVS kosong/invalid dan tidak ada build args.");
+        ESP_LOGW(TAG_WIFI, "NVS empty/invalid and no build args provided.");
     }
 
     g_wifi_event_group = xEventGroupCreate();
@@ -166,7 +166,7 @@ bool wifi_nvs_load_credentials(void) {
 
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Gagal membuka NVS (err: %s)", esp_err_to_name(err));
+        ESP_LOGW(TAG, "Failed to open NVS (err: %s)", esp_err_to_name(err));
         return false;
     }
 
@@ -179,11 +179,11 @@ bool wifi_nvs_load_credentials(void) {
     nvs_close(nvs_handle);
 
     if (err_ssid == ESP_OK && err_pass == ESP_OK && strlen(g_wifi_ssid) > 0) {
-        ESP_LOGI(TAG, "Berhasil membaca kredensial dari NVS (SSID: %s)", g_wifi_ssid);
+        ESP_LOGI(TAG, "Successfully read credentials from NVS (SSID: %s)", g_wifi_ssid);
         return true;
     }
 
-    ESP_LOGW(TAG, "Kredensial tidak ditemukan atau kosong di NVS");
+    ESP_LOGW(TAG, "Credentials not found or empty in NVS");
     return false;
 }
 
@@ -191,7 +191,7 @@ bool wifi_nvs_save_credentials(const char *ssid, const char *pass) {
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Gagal membuka NVS untuk menulis: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to open NVS for writing: %s", esp_err_to_name(err));
         return false;
     }
 
@@ -202,9 +202,9 @@ bool wifi_nvs_save_credentials(const char *ssid, const char *pass) {
 
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
-        ESP_LOGI(TAG, "Berhasil menyimpan WiFi ke NVS: %s", ssid);
+        ESP_LOGI(TAG, "Successfully saved WiFi to NVS: %s", ssid);
     } else {
-        ESP_LOGE(TAG, "Gagal menyimpan ke NVS: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to save to NVS: %s", esp_err_to_name(err));
     }
 
     nvs_close(nvs_handle);

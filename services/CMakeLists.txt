@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-# Generate compile_commands.json untuk IntelliSense VS Code
+# Generate compile_commands.json for VS Code IntelliSense
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(bawal_vision_service
@@ -34,21 +34,21 @@ endif()
 # Core dependencies: concurrency, image processing, and serialization
 find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui dnn)
 find_package(nlohmann_json QUIET)
 find_package(CURL REQUIRED)
 
 # ==============================================================================
-# OTOMATISASI RECURSIVE SOURCE & INCLUDE PATH
+# RECURSIVE SOURCE & INCLUDE PATH AUTOMATION
 # ==============================================================================
 
-# 1. Otomatis tangkap SEMUA file .cpp di bawah folder src/ (termasuk subfolder server, vision, dll)
+# 1. Automatically collect ALL .cpp files under src/ (including server, vision, etc.)
 file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 
-# 2. Build executable dari seluruh sumber C++ yang ditemukan
+# 2. Build executable from all discovered C++ source files
 add_executable(vision_service ${SERVICE_SOURCES})
 
-# 3. Include directory diatur ke folder 'include' agar include path selalu relatif dari <bawal/...>
+# 3. Include directory set to 'include' for uniform <bawal/...> header paths
 target_include_directories(vision_service PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}

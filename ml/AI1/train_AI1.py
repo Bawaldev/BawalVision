@@ -10,7 +10,7 @@ import numpy as np
 
 
 
-# 1.KONFIGURASI DIREKTORI & HYPERPARAMETER
+# 1. DIRECTORY CONFIGURATION & HYPERPARAMETERS
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -35,20 +35,16 @@ def main():
 
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
-    print(f"[+] Hardware aktif: {device}")
+    print(f"[+] Active hardware: {device}")
 
-   
-    # 2. PIPELINE PREPROCESSING
-   
+    # 2. PREPROCESSING PIPELINE
     data_transforms = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-   
     # 3. DATA LOADER
-   
     train_dataset = datasets.ImageFolder(
         os.path.join(DATA_DIR, "train"), transform=data_transforms
     )
@@ -73,12 +69,10 @@ def main():
         pin_memory=use_cuda,
     )
 
-    print(f"[+] Daftar Kelas ({len(train_dataset.classes)}): {train_dataset.classes}")
-    print(f"[+] Total Sampel -> Train: {len(train_dataset)} | Val: {len(val_dataset)}")
+    print(f"[+] Classes ({len(train_dataset.classes)}): {train_dataset.classes}")
+    print(f"[+] Total Samples -> Train: {len(train_dataset)} | Val: {len(val_dataset)}")
 
-   
-    # 4. ARSITEKTUR MODEL (MobileNetV3-Small)
-   
+    # 4. MODEL ARCHITECTURE (MobileNetV3-Small)
     model = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
     model.classifier[2] = nn.Dropout(p=0.5, inplace=True)
     in_features = model.classifier[3].in_features
@@ -89,20 +83,18 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-3)
     scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
 
-   
-    # 5. LOOP PELATIHAN & EARLY STOPPING
-   
+    # 5. TRAINING & EARLY STOPPING LOOP
     best_val_acc = 0.0
     epochs_no_improve = 0
-    print("\n=== Memulai Training ===")
+    print("\n=== Starting Training ===")
     
-    start_time = time.time()  # <-- Mulai stopwatch
+    start_time = time.time()
 
     for epoch in range(EPOCHS):
         model.train()
         running_loss, correct_train, total_train = 0.0, 0, 0
 
-        # Fase Pelatihan (Train)
+        # Training Phase
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
@@ -120,7 +112,7 @@ def main():
             correct_train += torch.sum(preds == labels.data).item()
             total_train += labels.size(0)
 
-        # Fase Evaluasi (Validasi)
+        # Evaluation Phase (Validation)
         model.eval()
         correct_val, total_val = 0, 0
         with torch.no_grad():
@@ -131,7 +123,7 @@ def main():
                 correct_val += torch.sum(preds == labels.data).item()
                 total_val += labels.size(0)
 
-        # Perhitungan Metrik
+        # Metric Computation
         train_acc = correct_train / total_train
         val_acc = correct_val / total_val
 
@@ -140,28 +132,25 @@ def main():
             f"Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}"
         )
 
-        # Evaluasi Early Stopping
+        # Early Stopping Evaluation
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             epochs_no_improve = 0
             torch.save(model.state_dict(), PTH_PATH)
-            print(f"    -> Bobot terbaik disimpan di: {PTH_PATH} (Acc: {best_val_acc:.4f})")
+            print(f"    -> Best weights saved to: {PTH_PATH} (Acc: {best_val_acc:.4f})")
         else:
             epochs_no_improve += 1
             print(f"    -> Early stopping counter: {epochs_no_improve}/{PATIENCE}")
 
         if epochs_no_improve >= PATIENCE:
-            print(f"\n[!] Early stopping terpicu pada epoch {epoch+1}. Menghentikan pelatihan.")
+            print(f"\n[!] Early stopping triggered at epoch {epoch+1}. Halting training.")
             break
 
-    # <-- Hentikan stopwatch
-    time_elapsed = time.time() - start_time
-    print(f"\n[⏱️] Total Waktu Training: {int(time_elapsed // 60)} menit {int(time_elapsed % 60)} detik")
+        time_elapsed = time.time() - start_time
+    print(f"\n[⏱️] Total Training Duration: {int(time_elapsed // 60)} min {int(time_elapsed % 60)} sec")
 
-   
-    # 6. EKSPOR MODEL KE ONNX
-   
-    print("\n=== Mengonversi Bobot Terbaik ke ONNX ===")
+    # 6. EXPORT MODEL TO ONNX
+    print("\n=== Exporting Best Weights to ONNX ===")
     export_model = models.mobilenet_v3_small()
     export_model.classifier[2] = nn.Dropout(p=0.5, inplace=True)
     export_model.classifier[3] = nn.Linear(in_features, NUM_CLASSES)
@@ -182,40 +171,38 @@ def main():
         output_names=["output"],
         dynamic_axes=None, 
     )
-    print(f"[✓] File ONNX (FP32 siap eksekusi) tersimpan di: {ONNX_PATH}")
+    print(f"[✓] ONNX model (FP32 execution-ready) saved to: {ONNX_PATH}")
 
-   
-    # 7. DETAIL SANITY CHECK (PyTorch vs ONNX)
-   
-    print("\n=== Melakukan Sanity Check (Detail Perbandingan) ===")
+    # 7. SANITY CHECK (PyTorch vs ONNX Runtime)
+    print("\n=== Running Numerical Sanity Check ===")
     
-    # 7.1. Inferensi PyTorch Asli
+    # 7.1. Native PyTorch Inference
     with torch.no_grad():
         torch_output = export_model(dummy_input).cpu().numpy()
 
-    # 7.2. Inferensi ONNX Runtime
+    # 7.2. ONNX Runtime Inference
     ort_session = ort.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
     ort_inputs = {ort_session.get_inputs()[0].name: dummy_input.cpu().numpy()}
     onnx_output = ort_session.run(None, ort_inputs)[0]
 
-    # 7.3. Hitung Selisih Mutlak Maksimum
+    # 7.3. Calculate Maximum & Mean Absolute Difference
     max_diff = np.max(np.abs(torch_output - onnx_output))
     mean_diff = np.mean(np.abs(torch_output - onnx_output))
 
-    print(f" -> Bentuk Output PyTorch : {torch_output.shape}")
-    print(f" -> Bentuk Output ONNX    : {onnx_output.shape}")
-    print(f" -> Max Absolute Diff     : {max_diff:.8f}")
-    print(f" -> Mean Absolute Diff    : {mean_diff:.8f}")
+    print(f" -> PyTorch Output Shape : {torch_output.shape}")
+    print(f" -> ONNX Output Shape    : {onnx_output.shape}")
+    print(f" -> Max Absolute Diff    : {max_diff:.8f}")
+    print(f" -> Mean Absolute Diff   : {mean_diff:.8f}")
     print("-" * 50)
-    print("Contoh 7 Logit Mentah (PyTorch) :", np.round(torch_output[0], 4))
-    print("Contoh 7 Logit Mentah (ONNX)    :", np.round(onnx_output[0], 4))
+    print("Sample 7 Raw Logits (PyTorch) :", np.round(torch_output[0], 4))
+    print("Sample 7 Raw Logits (ONNX)    :", np.round(onnx_output[0], 4))
     print("-" * 50)
 
     try:
         np.testing.assert_allclose(torch_output, onnx_output, rtol=1e-03, atol=1e-05)
-        print("[✓] Sanity check sukses! Grafik ONNX terbukti identik dengan PyTorch (selisih dalam batas toleransi aman).")
+        print("[✓] Sanity check passed! ONNX graph produces identical predictions to PyTorch within tolerance.")
     except AssertionError as e:
-        print("[!] Peringatan: Terdapat perbedaan margin kalkulasi antara PyTorch dan ONNX.")
+        print("[!] Warning: Discrepancy detected between PyTorch and ONNX outputs.")
         print(e)    
 
 if __name__ == "__main__":
