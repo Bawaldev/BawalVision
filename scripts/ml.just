@@ -8,7 +8,7 @@ scrap-dataset category="all" target="1000" engine="all":
         python3 ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset
     fi
 
-split-dataset source="dataset_mbg_matang" output="ml/AI1/dataset":
+split-dataset source="ml/dataset/dataset_mbg_matang" output="ml/AI1/dataset":
     #!/usr/bin/env bash
     if [ -f ".venv/bin/python3" ]; then
         .venv/bin/python3 ml/split_dataset.py --source-dir {{ source }} --output-dir {{ output }}
