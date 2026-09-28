@@ -1,6 +1,11 @@
-torch
-torchvision
-onnxruntime
-numpy
-icrawler>=0.6.10
-Pillow>=10.0.0
+pillow>=10.0.0
+numpy>=1.24.0
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.2.0
+torchvision>=0.17.0
+onnx>=1.15.0
+onnxruntime>=1.16.0
+
+bing-image-downloader
+opencv-python>=4.8.0
+dvc>=3.0.0

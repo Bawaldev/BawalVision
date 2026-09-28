@@ -47,6 +47,14 @@ dvc-track dir="ml/AI1/dataset":
         exit 1
     fi
 
+setup-ml:
+    #!/usr/bin/env bash
+    if [ ! -d ".venv" ]; then
+        python3 -m venv .venv
+    fi
+    .venv/bin/pip install --upgrade pip
+    .venv/bin/pip install -r ml/requirements.txt
+
 dvc-status:
     #!/usr/bin/env bash
     if command -v dvc >/dev/null 2>&1; then
