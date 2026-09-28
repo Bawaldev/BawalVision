@@ -101,19 +101,33 @@ ml/AI1/dataset/
 *.tar.gz
 *.tar
 
-# DVC internals (cache and local configs)
-.dvc/cache/
-.dvc/tmp/
-.dvc/config.local
-
-# Always track DVC pointer files and DVC project configs
+# ==========================================
+# DVC Metadata Tracking (Wajib di Git)
+# ==========================================
 !*.dvc
 !.dvc/
 !.dvc/config
 !.dvc/.gitignore
 !.dvcignore
+
+# ==========================================
+# Dataset Structure Preservation (.gitkeep)
+# ==========================================
+# Pertahankan kerangka folder via .gitkeep
 !ml/dataset/**/.gitkeep
 !ml/AI1/dataset/**/.gitkeep
+
+# ==========================================
+# Abaikan Isi Dataset (Dikelola oleh DVC)
+# ==========================================
+# Abaikan seluruh file gambar/data tanpa memblokir pembacaan .gitkeep
+ml/dataset/**/*.jpg
+ml/dataset/**/*.jpeg
+ml/dataset/**/*.png
+
+ml/AI1/dataset/**/*.jpg
+ml/AI1/dataset/**/*.jpeg
+ml/AI1/dataset/**/*.png
 
 # -------------------------------------------------------------------------
 # Frontend (frontend/)
