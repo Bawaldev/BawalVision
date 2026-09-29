@@ -51,16 +51,33 @@ int main(int argc, char** argv) {
     const std::string backend_base_url = "http://" + backend_host + ":" + backend_port;
     std::string device_id = "";
 
+    auto sanitizeID = [](std::string id) -> std::string {
+        while (!id.empty() && (id.front() == ' ' || id.front() == '"' || id.front() == '\'' || id.front() == '*' || id.front() == '/')) {
+            id.erase(id.begin());
+        }
+        while (!id.empty() && (id.back() == ' ' || id.back() == '"' || id.back() == '\'' || id.back() == '*' || id.back() == '/')) {
+            id.pop_back();
+        }
+        if (id.find('/') != std::string::npos || id.find('\\') != std::string::npos || id.find('*') != std::string::npos || id == "UNKNOWN_DEVICE") {
+            return "";
+        }
+        return id;
+    };
+
     // 1. Priority 1: CLI Argument
     if (argc > 1 && std::string(argv[1]).length() > 0) {
-        device_id = argv[1];
-        std::cout << "[CONFIG] Device ID resolved from CLI Argument: " << device_id << "\n";
+        device_id = sanitizeID(argv[1]);
+        if (!device_id.empty()) {
+            std::cout << "[CONFIG] Device ID resolved from CLI Argument: " << device_id << "\n";
+        }
     } 
     // 2. Priority 2: Environment Variable
-    else if (const char* env_dev = std::getenv("DEVICE_ID")) {
-        if (std::string(env_dev).length() > 0) {
-            device_id = env_dev;
-            std::cout << "[CONFIG] Device ID resolved from Environment Variable: " << device_id << "\n";
+    if (device_id.empty()) {
+        if (const char* env_dev = std::getenv("DEVICE_ID")) {
+            device_id = sanitizeID(env_dev);
+            if (!device_id.empty()) {
+                std::cout << "[CONFIG] Device ID resolved from Environment Variable: " << device_id << "\n";
+            }
         }
     }
 
@@ -68,22 +85,17 @@ int main(int argc, char** argv) {
     if (device_id.empty()) {
         std::cout << "[INFO] No Device ID supplied. Querying backend for active streams...\n";
         device_id = discoverActiveDeviceID(curl, backend_base_url);
-        
         if (!device_id.empty()) {
             std::cout << "[SUCCESS] Auto-discovered active ESP32 device: " << device_id << "\n";
         }
     }
 
-    // 4. Priority 4: Dynamic Fallback Flag (If no active broadcast yet)
-    if (device_id.empty()) {
-        std::cout << "[WARN] Auto-discovery pending (no active broadcast yet). Entering wildcard listener mode.\n";
-        device_id = "UNKNOWN_DEVICE";
-    }
-
-    std::string stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
+    std::string stream_url = !device_id.empty() 
+        ? (backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw")
+        : (backend_base_url + "/api/v1/camera/latest/raw");
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
-    // 5. Initialize Inspection Pipeline Orchestrator
+    // 4. Initialize Inspection Pipeline Orchestrator
     std::string model_path = "ml/AI1/model/ai1_vision.onnx";
     if (const char* env_model = std::getenv("MODEL_PATH")) {
         model_path = env_model;
@@ -103,39 +115,55 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> raw_bytes;
     raw_bytes.reserve(256 * 1024);
     uint64_t frame_seq = 0;
+    int discovery_tick = 0;
 
     while (true) {
         bool frame_ok = false;
         InspectionOutput inspection;
 
-        // Re-discover device if still in wildcard mode
-        if (device_id == "UNKNOWN_DEVICE") {
+        // Periodically refresh active device ID and update stream URL
+        if (device_id.empty() || (discovery_tick++ % 30 == 0)) {
             const std::string discovered = discoverActiveDeviceID(curl, backend_base_url);
-            if (!discovered.empty()) {
+            if (!discovered.empty() && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
                 device_id = discovered;
                 stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
-                std::cout << "[SUCCESS] Connected to newly active device: " << device_id << "\n";
+                std::cout << "[SUCCESS] Active camera stream connected: " << device_id << "\n";
+                std::cout << "[INFO] Ingestion URL: " << stream_url << "\n";
             }
         }
 
-        if (device_id != "UNKNOWN_DEVICE") {
-            if (fetchLatestFrame(curl, stream_url, raw_bytes) && !raw_bytes.empty()) {
-                inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
+        // Attempt 1: Fetch from active stream URL
+        if (!fetchLatestFrame(curl, stream_url, raw_bytes) || raw_bytes.empty()) {
+            // Attempt 2: Check if device ID updated on backend
+            const std::string discovered = discoverActiveDeviceID(curl, backend_base_url);
+            if (!discovered.empty() && discovered != device_id) {
+                device_id = discovered;
+                stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
+                fetchLatestFrame(curl, stream_url, raw_bytes);
+            }
+            // Attempt 3: Generic latest endpoint
+            if (raw_bytes.empty()) {
+                std::string fallback_url = backend_base_url + "/api/v1/camera/latest/raw";
+                fetchLatestFrame(curl, fallback_url, raw_bytes);
+            }
+        }
+
+        if (!raw_bytes.empty()) {
+            inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
+            
+            // Execute End-to-End Pipeline
+            // [CameraReceiver] -> [Dewarp] -> [Segmenter] -> [AI1 Classifier]
+            if (pipeline.execute(raw_bytes, inspection)) {
+                frame_ok = true;
+                frame_seq++;
                 
-                // Execute End-to-End Pipeline
-                // [CameraReceiver] -> [Dewarp] -> [Segmenter] -> [AI1 Classifier]
-                if (pipeline.execute(raw_bytes, inspection)) {
-                    frame_ok = true;
-                    frame_seq++;
-                    
-                    if (frame_seq % 30 == 1) {
-                        std::cout << "[PIPELINE] Frame #" << frame_seq 
-                                  << " (" << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms) | Compartments: ";
-                        for (const auto& c : inspection.classifications) {
-                            std::cout << "[" << c.class_name << ": " << int(c.confidence * 100) << "%] ";
-                        }
-                        std::cout << "\n";
+                if (frame_seq % 30 == 1) {
+                    std::cout << "[PIPELINE] Frame #" << frame_seq 
+                              << " (" << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms) | Compartments: ";
+                    for (const auto& c : inspection.classifications) {
+                        std::cout << "[" << c.class_name << ": " << int(c.confidence * 100) << "%] ";
                     }
+                    std::cout << "\n";
                 }
             }
         }

@@ -45,8 +45,11 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		return c.JSON(fiber.Map{"device_id": activeID})
 	})
 
-	camGroup.Get("/latest/:device_id/raw", func(c *fiber.Ctx) error {
+	rawFrameHandler := func(c *fiber.Ctx) error {
 		deviceID := c.Params("device_id")
+		if deviceID == "" || deviceID == "latest" || deviceID == "raw" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*" {
+			deviceID = ""
+		}
 
 		rawBytes, exists := camera_handler.GlobalCameraStore.GetRawFrame(deviceID)
 		if !exists || len(rawBytes) == 0 {
@@ -58,5 +61,10 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		c.Set("Content-Type", "image/jpeg")
 		c.Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		return c.Status(http.StatusOK).Send(rawBytes)
-	})
+	}
+
+	camGroup.Get("/latest/raw", rawFrameHandler)
+	camGroup.Get("/latest/:device_id/raw", rawFrameHandler)
+	camGroup.Get("/latest", rawFrameHandler)
+	camGroup.Get("/raw", rawFrameHandler)
 }

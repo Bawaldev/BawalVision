@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <opencv2/core.hpp>
@@ -49,6 +50,7 @@ private:
     bool m_is_ready{false};
     cv::dnn::Net m_net;
     std::vector<std::string> m_class_names;
+    mutable std::mutex m_infer_mutex;
 };
 
 } // namespace bawal::vision

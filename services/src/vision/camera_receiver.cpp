@@ -147,7 +147,6 @@ bool CameraReceiver::decodeFromBinaryPacket(const uint8_t* packet_bytes, size_t 
     return decode(header, payload_ptr, payload_len, out_frame);
 }
 
-// Lightweight zero-dependency string extraction helper
 static std::string extractJsonString(const std::string& json, const std::string& key) {
     std::string pattern = "\"" + key + "\"";
     size_t pos = json.find(pattern);

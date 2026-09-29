@@ -1,0 +1,22 @@
+# ThreadSanitizer Suppressions for External Uninstrumented System GUI & Image Libraries
+# Used to isolate project-specific concurrency issues from third-party desktop backends (Qt5, GLib, DBus, GDAL)
+
+# Qt5 and Wayland event loop internals
+race:libQt5Core.so
+race:libQt5Gui.so
+race:libQt5Widgets.so
+race:libwayland-client.so
+race:WaylandEventThr
+
+# GLib / GObject / GIO / DBus desktop service threads
+race:libglib-2.0.so
+race:libgobject-2.0.so
+race:libgio-2.0.so
+race:libdbus-1.so
+deadlock:libdbus-1.so
+
+# GDAL plugin mutexes inside OpenCV imdecode
+race:libgdal.so
+deadlock:libgdal.so
+deadlock:CPLAcquireMutex
+deadlock:CPLCreateOrAcquireMutexEx

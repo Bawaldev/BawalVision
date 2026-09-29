@@ -12,28 +12,43 @@ FoodClassifier::FoodClassifier()
 
 bool FoodClassifier::init(const std::string& model_path, int thread_count) {
     (void)thread_count;
+    std::lock_guard<std::mutex> lock(m_infer_mutex);
     m_is_ready = false;
 
-    if (model_path.empty()) {
-        return false;
+    std::vector<std::string> candidate_paths;
+    if (!model_path.empty()) {
+        candidate_paths.push_back(model_path);
+    }
+    candidate_paths.push_back("ml/AI1/model/ai1_vision.onnx");
+    candidate_paths.push_back("../ml/AI1/model/ai1_vision.onnx");
+    candidate_paths.push_back("../../ml/AI1/model/ai1_vision.onnx");
+    candidate_paths.push_back("../../../ml/AI1/model/ai1_vision.onnx");
+
+    std::string resolved_path = "";
+    for (const auto& path : candidate_paths) {
+        std::ifstream f(path.c_str());
+        if (f.good()) {
+            resolved_path = path;
+            break;
+        }
     }
 
-    // Check if model file exists on disk
-    std::ifstream f(model_path.c_str());
-    if (!f.good()) {
+    if (resolved_path.empty()) {
+        std::cerr << "[FoodClassifier] Error: ONNX model file not found in search paths.\n";
         return false;
     }
 
     try {
-        m_net = cv::dnn::readNetFromONNX(model_path);
+        m_net = cv::dnn::readNetFromONNX(resolved_path);
         if (!m_net.empty()) {
             m_net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
             m_net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
             m_is_ready = true;
+            std::cout << "[FoodClassifier] Successfully loaded ONNX model from: " << resolved_path << "\n";
             return true;
         }
     } catch (const cv::Exception& e) {
-        std::cerr << "[FoodClassifier] OpenCV DNN error loading " << model_path << ": " << e.what() << "\n";
+        std::cerr << "[FoodClassifier] OpenCV DNN error loading " << resolved_path << ": " << e.what() << "\n";
     }
 
     return false;
@@ -44,21 +59,20 @@ bool FoodClassifier::predict(const cv::Mat& bgr_image, ClassificationResult& out
         return false;
     }
 
+    std::lock_guard<std::mutex> lock(m_infer_mutex);
+
     if (!m_is_ready || m_net.empty()) {
-        // Fallback placeholder classification when model file is not yet exported
-        out_result.class_id = 0;
-        out_result.class_name = "mbg_food";
-        out_result.confidence = 0.88f;
-        out_result.all_probabilities = {0.88f};
+        out_result.class_id = -1;
+        out_result.class_name = "no_model";
+        out_result.confidence = 0.0f;
+        out_result.all_probabilities.clear();
         return true;
     }
 
     try {
-        // ImageNet preprocessing: scale 1/255, size 224x224, swapRB=true (BGR->RGB)
-        // Mean subtraction: [0.485*255, 0.456*255, 0.406*255] = [123.675, 116.28, 103.53]
         cv::Mat blob = cv::dnn::blobFromImage(
             bgr_image,
-            1.0 / (255.0 * 0.226), // Approximate std scaling
+            1.0 / (255.0 * 0.226),
             cv::Size(224, 224),
             cv::Scalar(123.675, 116.28, 103.53),
             true, // swapRB
@@ -104,13 +118,20 @@ bool FoodClassifier::predict(const cv::Mat& bgr_image, ClassificationResult& out
             }
         }
 
-        out_result.class_id = best_id;
-        if (best_id < static_cast<int>(m_class_names.size())) {
-            out_result.class_name = m_class_names[best_id];
+        constexpr float MIN_CONFIDENCE_THRESHOLD = 0.42f;
+        if (max_prob < MIN_CONFIDENCE_THRESHOLD) {
+            out_result.class_id = -1;
+            out_result.class_name = "no_food";
+            out_result.confidence = max_prob;
         } else {
-            out_result.class_name = "class_" + std::to_string(best_id);
+            out_result.class_id = best_id;
+            if (best_id < static_cast<int>(m_class_names.size())) {
+                out_result.class_name = m_class_names[best_id];
+            } else {
+                out_result.class_name = "class_" + std::to_string(best_id);
+            }
+            out_result.confidence = max_prob;
         }
-        out_result.confidence = max_prob;
         out_result.all_probabilities = std::move(softmax_probs);
 
         return true;
@@ -120,4 +141,4 @@ bool FoodClassifier::predict(const cv::Mat& bgr_image, ClassificationResult& out
     }
 }
 
-} // namespace bawal::vision
+} // namespace bawal::vision    

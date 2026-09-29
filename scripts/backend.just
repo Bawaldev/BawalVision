@@ -16,8 +16,32 @@ build-vision target="Release":
 
 run-vision device_id=env_var_or_default("DEVICE_ID", ""):
     cd {{ justfile_directory() }} && if [ ! -f "services/build/bin/vision_service" ]; then just build-vision; fi
-    cd {{ justfile_directory() }} && DEVICE_ID="{{ device_id }}" ./services/build/bin/vision_service {{ device_id }}
-    
+    cd {{ justfile_directory() }} && DEVICE_ID="{{ device_id }}" ./services/build/bin/vision_service "{{ device_id }}"
+
+# --- RACE CONDITION DETECTION (ThreadSanitizer) ---
+
+configure-vision-tsan:
+    cd {{ justfile_directory() }} && cmake -B services/build-tsan -S services \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -O1" \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+build-vision-tsan:
+    cd {{ justfile_directory() }} && if [ ! -f "services/build-tsan/Makefile" ] && [ ! -f "services/build-tsan/build.ninja" ]; then just configure-vision-tsan; fi
+    cd {{ justfile_directory() }} && cmake --build services/build-tsan --parallel $(nproc)
+
+run-vision-tsan device_id=env_var_or_default("DEVICE_ID", ""):
+    #!/usr/bin/env bash
+    if [ ! -f "services/build-tsan/bin/vision_service" ]; then
+        just build-vision-tsan
+    fi
+    setarch $(uname -m) -R gdb \
+        -ex "set environment DEVICE_ID={{ device_id }}" \
+        -ex "set environment TSAN_OPTIONS=suppressions={{ justfile_directory() }}/services/tsan_suppressions.txt:ignore_noninstrumented_modules=1:second_deadlock_stack=1" \
+        -ex "run" \
+        --args ./services/build-tsan/bin/vision_service "{{ device_id }}"
+# ------------------------------------------------------
+
 build-gateway:
     cd {{ justfile_directory() }}/backend && go build -o bin/gateway cmd/server/main.go
 
@@ -32,7 +56,7 @@ test-backend:
     cd {{ justfile_directory() }}/backend && go test -v ./...
 
 clean:
-    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/backend/bin
+    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/services/build-tsan {{ justfile_directory() }}/backend/bin
 
 docker-build-vision:
     docker build -f deploy/Dockerfile.vision -t bawal-vision:latest .
