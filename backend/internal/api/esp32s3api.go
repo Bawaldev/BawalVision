@@ -260,4 +260,33 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 	router.Post("/inspections", inspectionIngressHandler)
 	router.Post("/inspections/ingress", inspectionIngressHandler)
 	router.Post("/inspection/ingress", inspectionIngressHandler)
+
+	// 3. GET Latest Environmental Telemetry
+	router.Get("/telemetry/latest", func(c *fiber.Ctx) error {
+		var record inspection.InspectionRecord
+		if err := db.Order("created_at DESC").First(&record).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "No telemetry data recorded"})
+		}
+		return c.JSON(fiber.Map{
+			"device_id":        record.DeviceID,
+			"firmware_version": record.FirmwareVersion,
+			"temperature":      record.Temperature,
+			"humidity":         record.Humidity,
+			"gas_voc":          record.GasVOC,
+			"pressure":         record.Pressure,
+			"cpu_load":         record.CPULoad,
+			"is_spoiled":       record.IsSpoiled,
+			"t_safe_hours":     record.TSafeHours,
+			"created_at":       record.CreatedAt,
+		})
+	})
+
+	// 4. GET Latest Inspection with Detections
+	router.Get("/inspections/latest", func(c *fiber.Ctx) error {
+		var record inspection.InspectionRecord
+		if err := db.Preload("InspectionFoods.FoodItem").Order("created_at DESC").First(&record).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "No inspection records found"})
+		}
+		return c.JSON(record)
+	})
 }

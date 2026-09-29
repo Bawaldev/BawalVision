@@ -56,7 +56,21 @@ test-backend:
     cd {{ justfile_directory() }}/backend && go test -v ./...
 
 clean:
-    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/services/build-tsan {{ justfile_directory() }}/backend/bin
+    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/services/build-tsan {{ justfile_directory() }}/backend/bin {{ justfile_directory() }}/frontend/.svelte-kit/output
+
+# --- FRONTEND (Svelte 5 + TypeScript) ---
+install-frontend:
+    cd {{ justfile_directory() }}/frontend && npm install
+
+run-frontend:
+    cd {{ justfile_directory() }}/frontend && npm run dev
+
+build-frontend:
+    cd {{ justfile_directory() }}/frontend && npm run build
+
+check-frontend:
+    cd {{ justfile_directory() }}/frontend && npm run check
+# ----------------------------------------
 
 docker-build-vision:
     docker build -f deploy/Dockerfile.vision -t bawal-vision:latest .

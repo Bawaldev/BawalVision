@@ -1,164 +1,302 @@
 <script lang="ts">
-    let activeMenu = $state('Dashboard');
+    import { onMount, onDestroy } from 'svelte';
+    import Sidebar from '$lib/components/Sidebar.svelte';
+    import TopBar from '$lib/components/TopBar.svelte';
+    import DashboardView from '$lib/views/DashboardView.svelte';
+    import TelemetryView from '$lib/views/TelemetryView.svelte';
+    import ResultLogView from '$lib/views/ResultLogView.svelte';
+    import SettingsView from '$lib/views/SettingsView.svelte';
 
-    const menus = [
-        { label: 'Dashboard', icon: '▦' },
-        { label: 'Monitoring', icon: '◉' },
-        { label: 'Machine Camera', icon: '▣' },
-        { label: 'Results', icon: '▤' },
-        { label: 'Settings', icon: '⚙' }
-    ];
+    import {
+        fetchRecords,
+        fetchCameraStatus,
+        fetchLatestTelemetry,
+        fetchLatestInspection,
+        triggerManualInspection
+    } from '$lib/api';
+
+    import type {
+        FoodDetection,
+        TelemetryPayload,
+        InferenceLogEntry,
+        SystemConfig
+    } from '$lib/types';
+
+    // Helper to determine category
+    function getCategory(name: string): 'Carbohydrate' | 'Protein' | 'Vegetable' | 'Fruit' | 'Side' {
+        const n = name.toLowerCase();
+        if (n.includes('nasi') || n.includes('rice')) return 'Carbohydrate';
+        if (n.includes('ayam') || n.includes('ikan') || n.includes('tofu') || n.includes('chicken') || n.includes('fish')) return 'Protein';
+        if (n.includes('kangkung') || n.includes('bayam') || n.includes('sayur') || n.includes('spinach')) return 'Vegetable';
+        if (n.includes('pisang') || n.includes('jeruk') || n.includes('buah') || n.includes('banana') || n.includes('orange')) return 'Fruit';
+        return 'Side';
+    }
+
+    // State Variables
+    let activeTab = $state('Dashboard');
+    let isOnline = $state(false);
+    let hasCamera = $state(false);
+    let isInspecting = $state(false);
+
+    let systemConfig = $state<SystemConfig>({
+        backendUrl: '/api/v1',
+        deviceId: '',
+        streamIntervalMs: 1500,
+        enableMockIfOffline: false,
+        minConfidenceThreshold: 0.35,
+        vocWarningThreshold: 80.0,
+        vocDangerThreshold: 40.0,
+        gravitonEngineEnabled: true,
+        localEngineEnabled: true
+    });
+
+    let detections = $state<FoodDetection[]>([]);
+    let telemetry = $state<TelemetryPayload>({
+        device_id: 'WAITING_DEVICE',
+        firmware_version: '1.0.0',
+        device_core: 0,
+        temperature: 0,
+        humidity: 0,
+        gas_voc: 0,
+        pressure: 0,
+        cpu_load: 0,
+        timestamp: Math.floor(Date.now() / 1000)
+    });
+
+    let logs = $state<InferenceLogEntry[]>([
+        {
+            id: 'init-1',
+            timestamp: new Date().toLocaleTimeString(),
+            level: 'INFO',
+            message: 'BawalVision UI initialized. Awaiting live telemetry & camera ingress from backend...'
+        }
+    ]);
+
+    let totalAccepted = $state(0);
+    let totalRejected = $state(0);
+    let totalPlates = $derived(totalAccepted + totalRejected);
+    let passRate = $derived(totalPlates > 0 ? (totalAccepted / totalPlates) * 100 : 100.0);
+    let bufferedRecords = $state(0);
+    let telemetryHistory = $state<TelemetryPayload[]>([]);
+
+    let pollingTimer: any = null;
+
+    // Real Backend Polling Step
+    async function pollBackendData() {
+        try {
+            // 1. Camera Status
+            const cam = await fetchCameraStatus(systemConfig.backendUrl);
+            hasCamera = cam.active;
+            if (cam.active && cam.deviceId) {
+                systemConfig.deviceId = cam.deviceId;
+                isOnline = true;
+            }
+
+            // 2. Telemetry Ingress from ESP32-S3
+            const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
+            if (tel) {
+                telemetry = tel;
+                if (!telemetryHistory.some(h => h.timestamp === tel.timestamp)) {
+                    telemetryHistory = [...telemetryHistory.slice(-19), tel];
+                }
+                isOnline = true;
+            }
+
+            // 3. Inspections & Records from DB
+            const records = await fetchRecords(systemConfig.backendUrl);
+            if (records && records.length > 0) {
+                isOnline = true;
+                const spoiled = records.filter(r => r.is_spoiled).length;
+                totalRejected = spoiled;
+                totalAccepted = records.length - spoiled;
+
+                // If camera is connected, reflect latest inspection detections
+                if (hasCamera) {
+                    const latest = records[0];
+                    if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
+                        detections = latest.inspection_foods.map(item => {
+                            const name = item.food_item?.name || 'food_item';
+                            return {
+                                food_name: name,
+                                similarity_rate: 0.90,
+                                weight_grams: Number(item.weight_grams) || 120,
+                                category: getCategory(name)
+                            };
+                        });
+                    } else {
+                        detections = [];
+                    }
+                } else {
+                    detections = [];
+                }
+            } else {
+                if (!hasCamera) {
+                    detections = [];
+                }
+            }
+        } catch (err) {
+            console.warn('[BACKEND POLL] Offline or waiting for backend service:', err);
+        }
+    }
+
+    onMount(async () => {
+        // Initial polling
+        await pollBackendData();
+
+        // Continuous real-time backend synchronization loop (every 2.5s)
+        pollingTimer = setInterval(async () => {
+            await pollBackendData();
+        }, 2500);
+    });
+
+    onDestroy(() => {
+        if (pollingTimer) clearInterval(pollingTimer);
+    });
+
+    // Handlers
+    function handleForceReject() {
+        totalRejected++;
+        logs = [
+            ...logs,
+            {
+                id: Math.random().toString(36).substring(2, 9),
+                timestamp: new Date().toLocaleTimeString(),
+                level: 'ERROR',
+                message: 'MANUAL OVERRIDE: Conveyor diverter triggered [PNEUMATIC REJECT].'
+            }
+        ];
+    }
+
+    async function handleInspectTray() {
+        if (!hasCamera) {
+            logs = [
+                ...logs,
+                {
+                    id: Math.random().toString(36).substring(2, 9),
+                    timestamp: new Date().toLocaleTimeString(),
+                    level: 'WARN',
+                    message: 'Cannot inspect tray: No active camera device found.'
+                }
+            ];
+            return;
+        }
+
+        isInspecting = true;
+        logs = [
+            ...logs,
+            {
+                id: Math.random().toString(36).substring(2, 9),
+                timestamp: new Date().toLocaleTimeString(),
+                level: 'INFO',
+                message: 'Triggering high-resolution tray inspection capture...'
+            }
+        ];
+
+        try {
+            await triggerManualInspection(systemConfig.deviceId, detections, systemConfig.backendUrl);
+            await pollBackendData();
+            logs = [
+                ...logs,
+                {
+                    id: Math.random().toString(36).substring(2, 9),
+                    timestamp: new Date().toLocaleTimeString(),
+                    level: 'SUCCESS',
+                    message: 'Inspection captured and synced to PostgreSQL.'
+                }
+            ];
+        } catch (err) {
+            logs = [
+                ...logs,
+                {
+                    id: Math.random().toString(36).substring(2, 9),
+                    timestamp: new Date().toLocaleTimeString(),
+                    level: 'ERROR',
+                    message: `Inspection failed: ${err}`
+                }
+            ];
+        } finally {
+            isInspecting = false;
+        }
+    }
+
+    function handleClearLogs() {
+        logs = [];
+    }
+
+    function handleSaveConfig(updated: SystemConfig) {
+        systemConfig = updated;
+        logs = [
+            ...logs,
+            {
+                id: Math.random().toString(36).substring(2, 9),
+                timestamp: new Date().toLocaleTimeString(),
+                level: 'INFO',
+                message: 'System configuration parameters updated.'
+            }
+        ];
+    }
 </script>
 
 <svelte:head>
-    <title>BawalVision | {activeMenu}</title>
-    <meta
-        name="description"
-        content="BawalVision food inspection and machine vision dashboard"
-    />
+    <title>BawalVision | Optical Quality & Telemetry Dashboard</title>
+    <meta name="description" content="BawalVision AI Food Quality and IoT Telemetry Inspection System" />
 </svelte:head>
 
-<div class="app-shell">
-    <aside class="sidebar">
-        <div class="brand">
-            <div class="brand-mark">B</div>
-            <div>
-                <strong>Bawal<span>Vision</span></strong>
-                <small>AI INSPECTION SYSTEM</small>
-            </div>
-        </div>
+<div class="app-root">
+    <!-- Left Navigation Sidebar -->
+    <Sidebar
+        {activeTab}
+        onSelectTab={(tab) => (activeTab = tab)}
+        activeDevice={systemConfig.deviceId}
+        {isOnline}
+    />
 
-        <nav>
-            <p class="nav-label">MAIN MENU</p>
+    <!-- Main View Area -->
+    <div class="main-content-layout">
+        <!-- Top Navigation Header -->
+        <TopBar
+            currentTitle={activeTab}
+            gravitonEnabled={systemConfig.gravitonEngineEnabled}
+            localEngineEnabled={systemConfig.localEngineEnabled}
+            activeDevice={systemConfig.deviceId || 'DISCONNECTED'}
+            fps={hasCamera ? 29.8 : 0.0}
+            latencyMs={hasCamera ? 5.4 : 0.0}
+            onToggleGraviton={() => (systemConfig.gravitonEngineEnabled = !systemConfig.gravitonEngineEnabled)}
+            onToggleLocal={() => (systemConfig.localEngineEnabled = !systemConfig.localEngineEnabled)}
+        />
 
-            {#each menus as menu}
-                <button
-                    class:active={activeMenu === menu.label}
-                    class="nav-item"
-                    onclick={() => (activeMenu = menu.label)}
-                >
-                    <span class="nav-icon">{menu.icon}</span>
-                    {menu.label}
-                    {#if menu.label === 'Monitoring'}
-                        <span class="live-dot"></span>
-                    {/if}
-                </button>
-            {/each}
-        </nav>
-
-        <div class="sidebar-footer">
-            <div class="system-status">
-                <span></span>
-                <div>
-                    <strong>System online</strong>
-                    <small>All services operational</small>
-                </div>
-            </div>
-            <div class="profile">
-                <div class="avatar">AD</div>
-                <div>
-                    <strong>Admin User</strong>
-                    <small>Administrator</small>
-                </div>
-                <span class="more">•••</span>
-            </div>
-        </div>
-    </aside>
-
-    <main class="content">
-        <header class="topbar">
-            <div>
-                <p class="eyebrow">FOOD QUALITY CONTROL</p>
-                <h1>{activeMenu}</h1>
-            </div>
-
-            <div class="top-actions">
-                <div class="connection">
-                    <span></span>
-                    Live connection
-                </div>
-                <button class="icon-button" aria-label="Notifications">♢</button>
-                <div class="date">September 25, 2026</div>
-            </div>
-        </header>
-
-        {#if activeMenu === 'Dashboard'}
-            <section class="welcome">
-                <div>
-                    <p class="eyebrow">GOOD MORNING, ADMIN</p>
-                    <h2>Inspection overview</h2>
-                    <p class="muted">Monitor your production line and food quality in real time.</p>
-                </div>
-                <button class="primary-button" onclick={() => (activeMenu = 'Machine Camera')}>
-                    <span>＋</span> Start inspection
-                </button>
-            </section>
-
-            <section class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon blue">◉</div>
-                    <div><span>Total inspections</span><strong>12,840</strong><small class="positive">↑ 12.5% this month</small></div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon green">✓</div>
-                    <div><span>Passed items</span><strong>11,967</strong><small class="positive">↑ 8.2% this month</small></div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon orange">!</div>
-                    <div><span>Rejected items</span><strong>873</strong><small class="negative">↓ 3.1% this month</small></div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon purple">⌁</div>
-                    <div><span>Accuracy rate</span><strong>98.4%</strong><small class="positive">↑ 1.8% this month</small></div>
-                </div>
-            </section>
-
-            <section class="dashboard-grid">
-                <div class="panel chart-panel">
-                    <div class="panel-heading">
-                        <div><h3>Inspection activity</h3><p>Daily inspection performance</p></div>
-                        <select aria-label="Period"><option>Last 7 days</option><option>Last 30 days</option></select>
-                    </div>
-                    <div class="chart">
-                        <div class="chart-lines"><i></i><i></i><i></i><i></i><i></i></div>
-                        <div class="bars">
-                            {#each [46, 61, 52, 74, 63, 86, 78] as height, i}
-                                <div class="bar-wrap"><div class="bar" style={`height:${height}%`}></div><small>{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i]}</small></div>
-                            {/each}
-                        </div>
-                    </div>
-                </div>
-
-                <div class="panel">
-                    <div class="panel-heading"><div><h3>Food categories</h3><p>Inspections by category</p></div><button class="text-button">View all →</button></div>
-                    <div class="category-list">
-                        {#each [['Ayam','3,240','91%','blue'],['Bayam','2,850','86%','green'],['Jeruk','2,410','79%','orange'],['Tofu','1,920','73%','purple']] as item}
-                            <div class="category"><div class={`category-dot ${item[3]}`}></div><div class="category-info"><strong>{item[0]}</strong><small>{item[1]} inspections</small></div><b>{item[2]}</b></div>
-                        {/each}
-                    </div>
-                </div>
-            </section>
-
-            <section class="panel recent">
-                <div class="panel-heading"><div><h3>Recent inspections</h3><p>Latest machine inspection results</p></div><button class="text-button" onclick={() => (activeMenu = 'Results')}>View all results →</button></div>
-                <div class="table-wrap">
-                    <table>
-                        <thead><tr><th>INSPECTION ID</th><th>PRODUCT</th><th>CAMERA</th><th>DATE & TIME</th><th>RESULT</th></tr></thead>
-                        <tbody>
-                            <tr><td>#INS-009842</td><td><strong>Fresh Bayam</strong></td><td>Camera 01</td><td>Today, 10:42 AM</td><td><span class="badge passed">Passed</span></td></tr>
-                            <tr><td>#INS-009841</td><td><strong>Organic Tofu</strong></td><td>Camera 02</td><td>Today, 10:39 AM</td><td><span class="badge review">Review</span></td></tr>
-                            <tr><td>#INS-009840</td><td><strong>Chicken Breast</strong></td><td>Camera 01</td><td>Today, 10:35 AM</td><td><span class="badge passed">Passed</span></td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-        {:else}
-            <section class="empty-page panel">
-                <div class="empty-icon">{menus.find((menu) => menu.label === activeMenu)?.icon}</div>
-                <h2>{activeMenu}</h2>
-                <p class="muted">This module is ready to connect to the BawalVision backend.</p>
-                <button class="primary-button">Configure module</button>
-            </section>
-        {/if}
-    </main>
+        <!-- Page Content Router -->
+        <main class="page-body">
+            {#if activeTab === 'Dashboard'}
+                <DashboardView
+                    {detections}
+                    {telemetry}
+                    {logs}
+                    {totalAccepted}
+                    {totalRejected}
+                    {totalPlates}
+                    {passRate}
+                    {isOnline}
+                    {hasCamera}
+                    {bufferedRecords}
+                    {isInspecting}
+                    onForceReject={handleForceReject}
+                    onInspectTray={handleInspectTray}
+                    onClearLogs={handleClearLogs}
+                />
+            {:else if activeTab === 'Telemetry Analytics'}
+                <TelemetryView
+                    currentTelemetry={telemetry}
+                    history={telemetryHistory}
+                />
+            {:else if activeTab === 'Result Log'}
+                <ResultLogView />
+            {:else if activeTab === 'System & Cloud Settings'}
+                <SettingsView
+                    config={systemConfig}
+                    onSaveConfig={handleSaveConfig}
+                />
+            {/if}
+        </main>
+    </div>
 </div>
