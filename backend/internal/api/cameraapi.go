@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/base64"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"bawal_vision_backend/internal/camera_handler"
 
@@ -14,6 +16,35 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 	camGroup := router.Group("/camera")
 
 	ingressHandler := func(c *fiber.Ctx) error {
+		body := c.Body()
+		if len(body) == 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Empty frame body"})
+		}
+
+		contentType := c.Get("Content-Type")
+		isJSON := strings.Contains(contentType, "application/json") || (len(body) > 0 && body[0] == '{')
+
+		if isJSON {
+			var payload camera_handler.FrameIngressPayload
+			if err := c.BodyParser(&payload); err == nil && payload.DeviceID != "" {
+				var imageBytes []byte
+				if payload.ImageBase64 != "" {
+					decoded, err := base64.StdEncoding.DecodeString(payload.ImageBase64)
+					if err == nil {
+						imageBytes = decoded
+					}
+				}
+				if len(imageBytes) > 0 {
+					camera_handler.GlobalCameraStore.StoreRawFrame(payload.DeviceID, payload.FrameID, imageBytes)
+				}
+				return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+					"status":    "success",
+					"device_id": payload.DeviceID,
+					"frame_id":  payload.FrameID,
+				})
+			}
+		}
+
 		deviceID := c.Get("X-Device-ID")
 		if deviceID == "" {
 			deviceID = "DEFAULT_CAMERA"
@@ -21,10 +52,6 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 
 		frameIDHeader := c.Get("X-Frame-ID", "0")
 		frameID, _ := strconv.ParseUint(frameIDHeader, 10, 32)
-		body := c.Body()
-		if len(body) == 0 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Empty frame body"})
-		}
 
 		imageBytes := make([]byte, len(body))
 		copy(imageBytes, body)
@@ -65,6 +92,9 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 
 	camGroup.Get("/latest/raw", rawFrameHandler)
 	camGroup.Get("/latest/:device_id/raw", rawFrameHandler)
+	camGroup.Get("/latest/:device_id", rawFrameHandler)
+	camGroup.Get("/:device_id/raw", rawFrameHandler)
+	camGroup.Get("/:device_id", rawFrameHandler)
 	camGroup.Get("/latest", rawFrameHandler)
 	camGroup.Get("/raw", rawFrameHandler)
 }

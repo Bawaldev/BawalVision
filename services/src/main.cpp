@@ -116,6 +116,7 @@ int main(int argc, char** argv) {
     raw_bytes.reserve(256 * 1024);
     uint64_t frame_seq = 0;
     int discovery_tick = 0;
+    auto last_dispatch_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     while (true) {
         bool frame_ok = false;
@@ -157,6 +158,14 @@ int main(int argc, char** argv) {
                 frame_ok = true;
                 frame_seq++;
                 
+                // Collect valid food detections
+                std::vector<std::pair<std::string, float>> detected_foods;
+                for (const auto& c : inspection.classifications) {
+                    if (c.class_id >= 0 && c.confidence >= 0.35f && c.class_name != "no_food" && c.class_name != "no_model") {
+                        detected_foods.emplace_back(c.class_name, c.confidence);
+                    }
+                }
+
                 if (frame_seq % 30 == 1) {
                     std::cout << "[PIPELINE] Frame #" << frame_seq 
                               << " (" << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms) | Compartments: ";
@@ -164,6 +173,33 @@ int main(int argc, char** argv) {
                         std::cout << "[" << c.class_name << ": " << int(c.confidence * 100) << "%] ";
                     }
                     std::cout << "\n";
+                }
+
+                // Periodic Inspection Ingress Dispatch to Backend & Database
+                const auto current_time = std::chrono::steady_clock::now();
+                const auto elapsed_since_dispatch = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_dispatch_time).count();
+
+                if (!detected_foods.empty() && elapsed_since_dispatch >= 2000 && !device_id.empty()) {
+                    std::ostringstream json_ss;
+                    json_ss << "{"
+                            << "\"device_id\":\"" << device_id << "\","
+                            << "\"detections\":[";
+                    for (size_t i = 0; i < detected_foods.size(); ++i) {
+                        if (i > 0) json_ss << ",";
+                        json_ss << "{"
+                                << "\"food_name\":\"" << detected_foods[i].first << "\","
+                                << "\"similarity_rate\":" << std::fixed << std::setprecision(4) << detected_foods[i].second << ","
+                                << "\"weight_grams\":120.0"
+                                << "}";
+                    }
+                    json_ss << "]}";
+
+                    const std::string payload_json = json_ss.str();
+                    if (bawal::server::postInspectionPayload(curl, backend_base_url, payload_json)) {
+                        last_dispatch_time = current_time;
+                        std::cout << "[DISPATCH] Inspection payload saved to PostgreSQL (" 
+                                  << detected_foods.size() << " detected foods)\n";
+                    }
                 }
             }
         }

@@ -32,6 +32,7 @@ func (h *Handler) GetRecords(c *fiber.Ctx) error {
 	var records []inspection.InspectionRecord
 
 	err := h.db.
+		Preload("InspectionFoods.FoodItem").
 		Order("created_at DESC").
 		Limit(100).
 		Find(&records).Error
@@ -49,7 +50,7 @@ func (h *Handler) GetRecordByID(c *fiber.Ctx) error {
 	id := c.Params("id")
 	var record inspection.InspectionRecord
 
-	if err := h.db.First(&record, "id = ?", id).Error; err != nil {
+	if err := h.db.Preload("InspectionFoods.FoodItem").First(&record, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return c.Status(http.StatusNotFound).JSON(fiber.Map{
 				"error": "Inspection record not found",

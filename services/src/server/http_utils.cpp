@@ -74,4 +74,41 @@ std::string discoverActiveDeviceID(CURL* curl, const std::string& backend_base_u
     return json_payload.substr(start_quote + 1, end_quote - start_quote - 1);
 }
 
+bool postInspectionPayload(CURL* curl, const std::string& backend_base_url, const std::string& json_payload) {
+    if (!curl || backend_base_url.empty() || json_payload.empty()) {
+        return false;
+    }
+
+    const std::string endpoint_url = backend_base_url + "/api/v1/inspections";
+    
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(json_payload.length()));
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1000L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+    std::vector<uint8_t> response_buffer;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
+
+    const CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
+    curl_easy_setopt(curl, CURLOPT_POST, 0L);
+
+    if (res != CURLE_OK) {
+        return false;
+    }
+
+    long http_status_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
+    return (http_status_code >= 200 && http_status_code < 300);
+}
+
 } // namespace bawal::server

@@ -29,5 +29,13 @@ bool fetchLatestFrame(CURL* curl, const std::string& url, std::vector<uint8_t>& 
  * @return Device ID string if discovered, empty string otherwise.
  */
 std::string discoverActiveDeviceID(CURL* curl, const std::string& backend_base_url);
+/**
+ * @brief Sends an inspection JSON payload with food detections to the backend service.
+ * @param curl Active libcurl handle.
+ * @param backend_base_url Base URL of the backend service (e.g. http://localhost:8080).
+ * @param json_payload JSON string containing device_id and detections array.
+ * @return true if backend returned HTTP 201 Created or HTTP 200 OK.
+ */
+bool postInspectionPayload(CURL* curl, const std::string& backend_base_url, const std::string& json_payload);
 
 } // namespace bawal::server

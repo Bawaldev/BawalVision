@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+var GlobalInspectionStore = NewInspectionStore()
+
 type InspectionStore struct {
 	sync.RWMutex
 	readings map[string]TelemetryIngressPayload
@@ -17,6 +19,19 @@ func NewInspectionStore() *InspectionStore {
 	return &InspectionStore{
 		readings: make(map[string]TelemetryIngressPayload),
 	}
+}
+
+func (s *InspectionStore) StoreTelemetry(payload TelemetryIngressPayload) {
+	if payload.DeviceID == "" {
+		return
+	}
+	if payload.Timestamp == 0 {
+		payload.Timestamp = time.Now().Unix()
+	}
+
+	s.Lock()
+	s.readings[payload.DeviceID] = payload
+	s.Unlock()
 }
 
 func (s *InspectionStore) ProcessTelemetry(r io.Reader) (*TelemetryIngressPayload, error) {
@@ -30,13 +45,7 @@ func (s *InspectionStore) ProcessTelemetry(r io.Reader) (*TelemetryIngressPayloa
 	if payload.DeviceID == "" {
 		return nil, fmt.Errorf("missing required field: device_id")
 	}
-	if payload.Timestamp == 0 {
-		payload.Timestamp = time.Now().Unix()
-	}
-
-	s.Lock()
-	s.readings[payload.DeviceID] = payload
-	s.Unlock()
+	s.StoreTelemetry(payload)
 
 	return &payload, nil
 }

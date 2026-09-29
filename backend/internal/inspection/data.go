@@ -54,3 +54,22 @@ type PredictionResult struct {
 	TotalGrams float64 `json:"total_grams"`
 	TSafeHours float64 `json:"t_safe_hours"`
 }
+
+type FoodDetection struct {
+	FoodName       string  `json:"food_name"`
+	SimilarityRate float64 `json:"similarity_rate"`
+	WeightGrams    float64 `json:"weight_grams,omitempty"`
+}
+
+type IngressInspectionRequest struct {
+	DeviceID        string          `json:"device_id"`
+	FirmwareVersion string          `json:"firmware_version,omitempty"`
+	UserID          *string         `json:"user_id,omitempty"`
+	Temperature     *float64        `json:"temperature,omitempty"`
+	Humidity        *float64        `json:"humidity,omitempty"`
+	GasVOC          *float64        `json:"gas_voc,omitempty"`
+	Pressure        *float64        `json:"pressure,omitempty"`
+	CPULoad         *uint8          `json:"cpu_load,omitempty"`
+	ImageS3URI      *string         `json:"image_s3_uri,omitempty"`
+	Detections      []FoodDetection `json:"detections"`
+}
