@@ -83,9 +83,6 @@ TELEMETRY_RESP=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/telemetry" \
     "firmware_version": "1.0.4-bench",
     "device_core": 2,
     "temperature": 4.35,
-    "humidity": 66.80,
-    "gas_voc": 110.20,
-    "pressure": 1013.25,
     "cpu_load": 15,
     "timestamp": 1758412800
   }')

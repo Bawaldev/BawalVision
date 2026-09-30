@@ -65,9 +65,6 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			FirmwareVersion: payload.FirmwareVersion,
 			CreatedAt:       now,
 			Temperature:     payload.Temperature,
-			Humidity:        payload.Humidity,
-			GasVOC:          payload.GasVOC,
-			Pressure:        payload.Pressure,
 			CPULoad:         payload.CurrentCPULoad,
 			IsSpoiled:       false,
 			TSafeHours:      0.0,
@@ -119,27 +116,6 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			temp = latestTelemetry.Temperature
 		}
 
-		hum := 60.0
-		if req.Humidity != nil {
-			hum = *req.Humidity
-		} else if hasCached && latestTelemetry.Humidity != 0 {
-			hum = latestTelemetry.Humidity
-		}
-
-		voc := 100.0
-		if req.GasVOC != nil {
-			voc = *req.GasVOC
-		} else if hasCached && latestTelemetry.GasVOC != 0 {
-			voc = latestTelemetry.GasVOC
-		}
-
-		pressure := 1013.25
-		if req.Pressure != nil {
-			pressure = *req.Pressure
-		} else if hasCached && latestTelemetry.Pressure != 0 {
-			pressure = latestTelemetry.Pressure
-		}
-
 		cpu := uint8(10)
 		if req.CPULoad != nil {
 			cpu = *req.CPULoad
@@ -183,9 +159,6 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				CreatedAt:       now,
 				ImageS3URI:      req.ImageS3URI,
 				Temperature:     temp,
-				Humidity:        hum,
-				GasVOC:          voc,
-				Pressure:        pressure,
 				CPULoad:         cpu,
 				IsSpoiled:       false,
 				TSafeHours:      0.0,
@@ -271,9 +244,6 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"device_id":        record.DeviceID,
 			"firmware_version": record.FirmwareVersion,
 			"temperature":      record.Temperature,
-			"humidity":         record.Humidity,
-			"gas_voc":          record.GasVOC,
-			"pressure":         record.Pressure,
 			"cpu_load":         record.CPULoad,
 			"is_spoiled":       record.IsSpoiled,
 			"t_safe_hours":     record.TSafeHours,

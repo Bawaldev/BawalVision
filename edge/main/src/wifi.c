@@ -256,9 +256,6 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     cJSON_AddStringToObject(root, "firmware_version", data->firmware_version);
     cJSON_AddNumberToObject(root, "timestamp", (double)data->timestamp);
     cJSON_AddNumberToObject(root, "temperature", data->temperature);
-    cJSON_AddNumberToObject(root, "humidity", data->humidity);
-    cJSON_AddNumberToObject(root, "gas_voc", data->gas_voc);
-    cJSON_AddNumberToObject(root, "pressure", data->pressure);
     cJSON_AddNumberToObject(root, "cpu_load", data->current_cpu_load);
     cJSON_AddStringToObject(root, "device_name", data->device_name);
     cJSON_AddNumberToObject(root, "device_core", data->device_core);

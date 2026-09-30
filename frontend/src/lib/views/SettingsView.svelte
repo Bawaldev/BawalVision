@@ -14,8 +14,7 @@
         streamIntervalMs: 1500,
         enableMockIfOffline: true,
         minConfidenceThreshold: 0.35,
-        vocWarningThreshold: 80.0,
-        vocDangerThreshold: 40.0,
+        tempWarningThreshold: 35.0,
         gravitonEngineEnabled: true,
         localEngineEnabled: true
     });
@@ -27,8 +26,7 @@
             formState.streamIntervalMs = config.streamIntervalMs;
             formState.enableMockIfOffline = config.enableMockIfOffline;
             formState.minConfidenceThreshold = config.minConfidenceThreshold;
-            formState.vocWarningThreshold = config.vocWarningThreshold;
-            formState.vocDangerThreshold = config.vocDangerThreshold;
+            formState.tempWarningThreshold = config.tempWarningThreshold;
             formState.gravitonEngineEnabled = config.gravitonEngineEnabled;
             formState.localEngineEnabled = config.localEngineEnabled;
         }
@@ -94,7 +92,7 @@
         <div class="settings-card">
             <div class="section-header">
                 <span class="section-icon">🎯</span>
-                <h3>Detection & Spoilage Thresholds</h3>
+                <h3>Detection & Thermal Warning Thresholds</h3>
             </div>
             <div class="form-grid">
                 <div class="form-group">
@@ -112,14 +110,14 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="vocThreshold">VOC Spoilage Warning Threshold ({formState.vocWarningThreshold} kΩ)</label>
+                    <label for="tempThreshold">Temperature Warning Cutoff ({formState.tempWarningThreshold} °C)</label>
                     <input
-                        id="vocThreshold"
+                        id="tempThreshold"
                         type="number"
-                        bind:value={formState.vocWarningThreshold}
+                        bind:value={formState.tempWarningThreshold}
                         class="form-input"
                     />
-                    <small>BME680 gas resistance cutoff for spoilage warnings</small>
+                    <small>Thermal cutoff threshold for food safety alerts</small>
                 </div>
             </div>
         </div>

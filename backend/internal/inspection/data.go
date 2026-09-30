@@ -25,9 +25,6 @@ type InspectionRecord struct {
 	CreatedAt       time.Time        `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:NOW()"`
 	ImageS3URI      *string          `json:"image_s3_uri,omitempty" gorm:"column:image_s3_uri;type:text"`
 	Temperature     float64          `json:"temperature" gorm:"column:temperature;type:numeric(5,2);not null"`
-	Humidity        float64          `json:"humidity" gorm:"column:humidity;type:numeric(5,2);not null"`
-	GasVOC          float64          `json:"gas_voc" gorm:"column:gas_voc;type:numeric(10,2);not null"`
-	Pressure        float64          `json:"pressure" gorm:"column:pressure;type:numeric(7,2);not null"`
 	CPULoad         uint8            `json:"cpu_load" gorm:"column:cpu_load;type:smallint;not null;default:0"`
 	IsSpoiled       bool             `json:"is_spoiled" gorm:"column:is_spoiled;not null;default:false"`
 	TSafeHours      float64          `json:"t_safe_hours" gorm:"column:t_safe_hours;type:numeric(5,2);not null;default:0.00"`
@@ -43,9 +40,6 @@ type TelemetryIngressPayload struct {
 	DeviceCore      uint8   `json:"device_core"`
 	Timestamp       int64   `json:"timestamp"`
 	Temperature     float64 `json:"temperature"`
-	Humidity        float64 `json:"humidity"`
-	GasVOC          float64 `json:"gas_voc"`
-	Pressure        float64 `json:"pressure"`
 	CurrentCPULoad  uint8   `json:"cpu_load"`
 }
 
@@ -66,9 +60,6 @@ type IngressInspectionRequest struct {
 	FirmwareVersion string          `json:"firmware_version,omitempty"`
 	UserID          *string         `json:"user_id,omitempty"`
 	Temperature     *float64        `json:"temperature,omitempty"`
-	Humidity        *float64        `json:"humidity,omitempty"`
-	GasVOC          *float64        `json:"gas_voc,omitempty"`
-	Pressure        *float64        `json:"pressure,omitempty"`
 	CPULoad         *uint8          `json:"cpu_load,omitempty"`
 	ImageS3URI      *string         `json:"image_s3_uri,omitempty"`
 	Detections      []FoodDetection `json:"detections"`

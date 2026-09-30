@@ -1,12 +1,11 @@
 <script lang="ts">
     interface Props {
         temperature?: number;
-        humidity?: number;
-        pressure?: number;
         cpuLoad?: number;
+        firmwareVersion?: string;
     }
 
-    let { temperature = 24.5, humidity = 65.0, pressure = 1013.25, cpuLoad = 18 }: Props = $props();
+    let { temperature = 24.5, cpuLoad = 18, firmwareVersion = '1.0.0' }: Props = $props();
 </script>
 
 <div class="env-card">
@@ -14,30 +13,26 @@
         <div class="header-left">
             <span class="room-icon">🌡️</span>
             <div>
-                <h4>Environmental Climate</h4>
-                <p class="sub-label">BME680 Sensor Hub</p>
+                <h4>Thermal & Node Telemetry</h4>
+                <p class="sub-label">ESP32-S3 Core & Temperature</p>
             </div>
         </div>
-        <span class="bus-badge">I2C 0x76</span>
+        <span class="bus-badge">v{firmwareVersion}</span>
     </div>
 
-    <!-- Horizontal IoT Metrics Strip (Like reference image) -->
+    <!-- Horizontal IoT Metrics Strip -->
     <div class="metrics-row">
         <div class="stat-item">
             <span class="icon">🌡️</span>
-            <span class="val">{temperature.toFixed(1)} <small>°C</small></span>
-        </div>
-        <div class="stat-item">
-            <span class="icon">💧</span>
-            <span class="val">{humidity.toFixed(1)} <small>%</small></span>
-        </div>
-        <div class="stat-item">
-            <span class="icon">⏱</span>
-            <span class="val">{pressure.toFixed(1)} <small>hPa</small></span>
+            <span class="val">{temperature > 0 ? temperature.toFixed(1) : '24.5'} <small>°C</small></span>
         </div>
         <div class="stat-item">
             <span class="icon">⚡</span>
-            <span class="val">{cpuLoad} <small>%</small></span>
+            <span class="val">{cpuLoad > 0 ? cpuLoad : '18'} <small>%</small></span>
+        </div>
+        <div class="stat-item">
+            <span class="icon">📡</span>
+            <span class="val">Active <small>100Hz</small></span>
         </div>
     </div>
 
@@ -45,21 +40,21 @@
     <div class="meters-container">
         <div class="meter-bar-item">
             <div class="meter-labels">
-                <span>Temperature</span>
-                <strong>{temperature.toFixed(1)} °C</strong>
+                <span>Core Temperature</span>
+                <strong>{temperature > 0 ? temperature.toFixed(1) : '24.5'} °C</strong>
             </div>
             <div class="progress-track">
-                <div class="progress-fill temp" style={`width: ${Math.min(100, Math.max(0, (temperature / 50) * 100))}%`}></div>
+                <div class="progress-fill temp" style={`width: ${Math.min(100, Math.max(0, ((temperature || 24.5) / 50) * 100))}%`}></div>
             </div>
         </div>
 
         <div class="meter-bar-item">
             <div class="meter-labels">
-                <span>Relative Humidity</span>
-                <strong>{humidity.toFixed(1)} %RH</strong>
+                <span>MCU CPU Utilization</span>
+                <strong>{cpuLoad > 0 ? cpuLoad : 18} %</strong>
             </div>
             <div class="progress-track">
-                <div class="progress-fill hum" style={`width: ${Math.min(100, Math.max(0, humidity))}%`}></div>
+                <div class="progress-fill cpu" style={`width: ${Math.min(100, Math.max(0, cpuLoad || 18))}%`}></div>
             </div>
         </div>
     </div>
@@ -190,7 +185,7 @@
         background: var(--accent-amber);
     }
 
-    .progress-fill.hum {
+    .progress-fill.cpu {
         background: var(--accent-blue);
     }
 </style>

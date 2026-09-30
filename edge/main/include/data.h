@@ -45,9 +45,6 @@ typedef struct __attribute__((__packed__)) {
     char firmware_version[FW_VERSION_MAX_LEN]; /**< Application version string */
     int64_t timestamp;                         /**< Millisecond epoch or uptime timestamp */
     float temperature;                         /**< Ambient temperature in Celsius */
-    float humidity;                            /**< Relative humidity percentage */
-    float gas_voc;                             /**< VOC gas sensor index or resistance */
-    float pressure;                            /**< Barometric pressure in hPa */
     uint8_t current_cpu_load;                  /**< CPU load percentage (0 - 100) */
     char device_name[DEVICE_NAME_MAX_CHAR];    /**< Project/Node identification name */
     uint8_t device_core;                       /**< Core ID running the telemetry task */

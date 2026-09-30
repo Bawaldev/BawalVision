@@ -54,6 +54,9 @@ func main() {
 		log.Fatalf("Database migration failed: %v", err)
 	}
 
+	// Clean up legacy columns if they exist in existing database volumes
+	_ = db.Exec("ALTER TABLE inspections DROP COLUMN IF EXISTS humidity, DROP COLUMN IF EXISTS gas_voc, DROP COLUMN IF EXISTS pressure")
+
 	app := fiber.New(fiber.Config{
 		ServerHeader: "Bawal-Vision-Backend",
 	})

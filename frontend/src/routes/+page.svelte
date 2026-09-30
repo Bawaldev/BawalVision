@@ -47,8 +47,7 @@
         streamIntervalMs: 1500,
         enableMockIfOffline: false,
         minConfidenceThreshold: 0.35,
-        vocWarningThreshold: 80.0,
-        vocDangerThreshold: 40.0,
+        tempWarningThreshold: 35.0,
         gravitonEngineEnabled: false,
         gravitonEngineAvailable: false,
         localEngineEnabled: true,
@@ -61,9 +60,6 @@
         firmware_version: '1.0.0',
         device_core: 0,
         temperature: 0,
-        humidity: 0,
-        gas_voc: 0,
-        pressure: 0,
         cpu_load: 0,
         timestamp: Math.floor(Date.now() / 1000)
     });

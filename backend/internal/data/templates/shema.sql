@@ -45,9 +45,6 @@ CREATE TABLE IF NOT EXISTS inspections (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     image_s3_uri TEXT,
     temperature NUMERIC(5, 2) NOT NULL,
-    humidity NUMERIC(5, 2) NOT NULL,
-    gas_voc NUMERIC(10, 2) NOT NULL,
-    pressure NUMERIC(7, 2) NOT NULL,
     cpu_load SMALLINT NOT NULL DEFAULT 0,
     is_spoiled BOOLEAN NOT NULL DEFAULT FALSE,
     t_safe_hours NUMERIC(5, 2) NOT NULL DEFAULT 0.00

@@ -76,19 +76,18 @@
             {totalRejected}
         />
 
-        <!-- 2. Chemical Spoilage Bar -->
+        <!-- 2. Chemical / Thermal Spoilage & Freshness Bar -->
         <ChemicalSpoilageBar
-            gasVoc={telemetry?.gas_voc}
-            isSpoiled={telemetry?.gas_voc < 40}
+            temperature={telemetry?.temperature}
+            isSpoiled={telemetry?.temperature > 40}
             tSafeHours={8.5}
         />
 
         <!-- 3. Physical Environmental Telemetry -->
         <EnvironmentalTelemetry
             temperature={telemetry?.temperature}
-            humidity={telemetry?.humidity}
-            pressure={telemetry?.pressure}
             cpuLoad={telemetry?.cpu_load}
+            firmwareVersion={telemetry?.firmware_version}
         />
 
         <!-- 4. Action & Trigger Bar -->

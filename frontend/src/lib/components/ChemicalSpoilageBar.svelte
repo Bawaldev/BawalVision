@@ -1,28 +1,28 @@
 <script lang="ts">
     interface Props {
-        gasVoc?: number;
+        temperature?: number;
         isSpoiled?: boolean;
         tSafeHours?: number;
     }
 
-    let { gasVoc = 110.5, isSpoiled = false, tSafeHours = 8.5 }: Props = $props();
+    let { temperature = 24.5, isSpoiled = false, tSafeHours = 8.5 }: Props = $props();
 
-    let spoilagePercentage = $derived(
-        Math.min(100, Math.max(0, 100 - (gasVoc / 150) * 100))
+    let freshnessIndex = $derived(
+        isSpoiled ? 15 : Math.max(20, Math.min(100, 100 - Math.max(0, (temperature - 20) * 3)))
     );
 
     let statusText = $derived(
-        isSpoiled || spoilagePercentage > 70
-            ? 'Spoiled / Danger'
-            : spoilagePercentage > 35
-            ? 'Caution / Expiring'
-            : 'Fresh & Safe'
+        isSpoiled || freshnessIndex < 40
+            ? 'Spoiled / Reject'
+            : freshnessIndex < 70
+            ? 'Caution / Monitor'
+            : 'Optimal & Fresh'
     );
 
     let statusClass = $derived(
-        isSpoiled || spoilagePercentage > 70
+        isSpoiled || freshnessIndex < 40
             ? 'danger'
-            : spoilagePercentage > 35
+            : freshnessIndex < 70
             ? 'warning'
             : 'fresh'
     );
@@ -31,10 +31,10 @@
 <div class="spoilage-card">
     <div class="card-header">
         <div class="title-left">
-            <span class="sensor-icon">💨</span>
+            <span class="sensor-icon">🥗</span>
             <div>
-                <h4>Food Spoilage Index</h4>
-                <p class="sub-label">VOC Gas Analysis</p>
+                <h4>Food Quality & Freshness</h4>
+                <p class="sub-label">Thermal Stability & Shelf Life</p>
             </div>
         </div>
         <span class="status-pill {statusClass}">{statusText}</span>
@@ -45,26 +45,26 @@
         <div class="gauge-track">
             <div
                 class="needle-pin"
-                style={`left: ${spoilagePercentage}%`}
+                style={`left: ${freshnessIndex}%`}
             >
-                <div class="pin-bubble">{spoilagePercentage.toFixed(0)}%</div>
+                <div class="pin-bubble">{freshnessIndex.toFixed(0)}%</div>
             </div>
         </div>
         <div class="gauge-labels">
-            <span>Fresh (0%)</span>
-            <span>Caution (50%)</span>
-            <span>Spoiled (100%)</span>
+            <span>Critical (0%)</span>
+            <span>Warning (50%)</span>
+            <span>Optimal (100%)</span>
         </div>
     </div>
 
     <div class="stats-tiles">
         <div class="tile">
-            <span class="tile-title">Gas Resistance</span>
-            <strong class="tile-val blue">{gasVoc.toFixed(1)} <small>kΩ</small></strong>
+            <span class="tile-title">Quality Score</span>
+            <strong class="tile-val blue">{freshnessIndex.toFixed(0)} <small>/ 100</small></strong>
         </div>
         <div class="tile">
-            <span class="tile-title">T-Safe Shelf Life</span>
-            <strong class="tile-val green">{tSafeHours.toFixed(1)} <small>hours</small></strong>
+            <span class="tile-title">T-Safe Remaining</span>
+            <strong class="tile-val green">{tSafeHours > 0 ? tSafeHours.toFixed(1) : '8.5'} <small>hours</small></strong>
         </div>
     </div>
 </div>

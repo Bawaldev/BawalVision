@@ -24,9 +24,6 @@ export interface InspectionRecord {
     created_at: string;
     image_s3_uri?: string;
     temperature: number;
-    humidity: number;
-    gas_voc: number;
-    pressure: number;
     cpu_load: number;
     is_spoiled: boolean;
     t_safe_hours: number;
@@ -48,9 +45,6 @@ export interface TelemetryPayload {
     firmware_version: string;
     device_core: number;
     temperature: number;
-    humidity: number;
-    gas_voc: number;
-    pressure: number;
     cpu_load: number;
     timestamp: number;
 }
@@ -87,8 +81,7 @@ export interface SystemConfig {
     streamIntervalMs: number;
     enableMockIfOffline: boolean;
     minConfidenceThreshold: number;
-    vocWarningThreshold: number;
-    vocDangerThreshold: number;
+    tempWarningThreshold: number;
     gravitonEngineEnabled: boolean;
     gravitonEngineAvailable?: boolean;
     localEngineEnabled: boolean;

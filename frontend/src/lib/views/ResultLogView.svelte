@@ -58,8 +58,8 @@
                     <th>Device</th>
                     <th>Timestamp</th>
                     <th>Detected Components</th>
-                    <th>Temp / Hum</th>
-                    <th>VOC Gas</th>
+                    <th>Temperature</th>
+                    <th>CPU Load</th>
                     <th>Status</th>
                     <th>Action</th>
                 </tr>
@@ -89,10 +89,10 @@
                                 {/if}
                             </td>
                             <td class="env-cell">
-                                <strong>{rec.temperature}°C</strong> / <small>{rec.humidity}%</small>
+                                <strong>{rec.temperature}°C</strong>
                             </td>
-                            <td class="voc-cell">
-                                <span class="voc-val">{rec.gas_voc} <small>kΩ</small></span>
+                            <td class="cpu-cell">
+                                <span class="cpu-val">{rec.cpu_load || 0}%</span>
                             </td>
                             <td class="status-cell">
                                 {#if rec.is_spoiled}
@@ -295,13 +295,10 @@
         color: var(--text-primary);
     }
 
-    .env-cell small {
-        color: var(--text-muted);
-    }
-
-    .voc-val {
+    .cpu-val {
         color: var(--accent-blue);
         font-weight: 700;
+        font-family: var(--font-mono);
     }
 
     .badge {

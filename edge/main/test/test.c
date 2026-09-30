@@ -26,9 +26,6 @@ void test_telemetry_producer_task(void *pvParameters) {
         time(&now);
         dummy_data.timestamp = (int64_t)now;
         dummy_data.temperature = temp_counter;
-        dummy_data.humidity = 60.5f;
-        dummy_data.gas_voc = 12500.0f;
-        dummy_data.pressure = 1013.25f;
         dummy_data.current_cpu_load = get_cpu_usage_percentage();
 
         ESP_LOGI(TAG, "Mendorong payload ke antrean [ID: %s, Temp: %.2f C, CPU: %d%%]...", 

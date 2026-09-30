@@ -39,9 +39,9 @@
                     <h3>Inspection Station 01</h3>
                     <div class="room-meta-strip">
                         <span class="stat-meta">🌡️ {currentTelemetry?.temperature != null && currentTelemetry.temperature > 0 ? currentTelemetry.temperature.toFixed(2) : '24.50'} °C</span>
-                        <span class="stat-meta">💧 {currentTelemetry?.humidity != null && currentTelemetry.humidity > 0 ? currentTelemetry.humidity.toFixed(2) : '60.50'} %</span>
-                        <span class="stat-meta">⏱ {currentTelemetry?.pressure != null && currentTelemetry.pressure > 0 ? currentTelemetry.pressure.toFixed(1) : '1013.2'} hPa</span>
-                        <span class="stat-meta">⚡ {currentTelemetry?.gas_voc != null && currentTelemetry.gas_voc > 0 ? (currentTelemetry.gas_voc * 3.2).toFixed(0) : '357'} W</span>
+                        <span class="stat-meta">⚡ {currentTelemetry?.cpu_load != null && currentTelemetry.cpu_load > 0 ? currentTelemetry.cpu_load : '18'} % CPU</span>
+                        <span class="stat-meta">📡 100 Hz Bus</span>
+                        <span class="stat-meta">🏷️ {currentTelemetry?.firmware_version || 'v1.0.0'}</span>
                     </div>
                 </div>
             </div>
@@ -57,7 +57,7 @@
             </div>
         </div>
 
-        <!-- Interactive Lovelace Mini Graph Area (Vertical bars for Humidity + Orange Curve for Temp) -->
+        <!-- Interactive Lovelace Mini Graph Area (Vertical bars for CPU Load + Orange Curve for Temp) -->
         <div class="graph-area-container">
             <!-- Floating Hover Tooltip (Matching reference image) -->
             {#if hoveredPoint}
@@ -65,13 +65,13 @@
                     <div class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleString()}</div>
                     <div class="tooltip-row">
                         <span class="tooltip-dot blue"></span>
-                        <span class="tooltip-label">Humidity:</span>
-                        <strong class="tooltip-val">{hoveredPoint.humidity.toFixed(1)} %</strong>
+                        <span class="tooltip-label">CPU Load:</span>
+                        <strong class="tooltip-val">{hoveredPoint.cpu_load || 18} %</strong>
                     </div>
                     <div class="tooltip-row">
                         <span class="tooltip-dot orange"></span>
                         <span class="tooltip-label">Temperature:</span>
-                        <strong class="tooltip-val">{hoveredPoint.temperature.toFixed(1)} °C</strong>
+                        <strong class="tooltip-val">{(hoveredPoint.temperature || 24.5).toFixed(1)} °C</strong>
                     </div>
                 </div>
             {/if}
@@ -79,10 +79,10 @@
             <div class="svg-viewport">
                 {#if history.length > 1}
                     <svg viewBox="0 0 600 160" class="mini-graph-svg" preserveAspectRatio="none">
-                        <!-- Vertical Blue Bars (Humidity) -->
+                        <!-- Vertical Blue Bars (CPU Load) -->
                         {#each history as pt, idx}
                             {@const barX = (idx / (history.length - 1)) * 580 + 10}
-                            {@const barHeight = Math.max(8, (pt.humidity / 100) * 110)}
+                            {@const barHeight = Math.max(8, ((pt.cpu_load || 18) / 100) * 110)}
                             {@const barY = 140 - barHeight}
                             <rect
                                 x={barX - 2.5}
@@ -113,7 +113,7 @@
                         <!-- Threshold Marker Dots & Badges (Matching Reference image) -->
                         {#each history as pt, idx}
                             {@const cx = (idx / (history.length - 1)) * 580 + 10}
-                            {@const norm = Math.max(0, Math.min(1, (pt.temperature - 15) / 30))}
+                            {@const norm = Math.max(0, Math.min(1, ((pt.temperature || 24.5) - 15) / 30))}
                             {@const cy = 140 - (norm * 110)}
                             {#if idx === 0 || idx === Math.floor(history.length / 2) || idx === history.length - 1}
                                 <circle cx={cx} cy={cy} r="4.5" fill="#f59e0b" stroke="#181c24" stroke-width="2" />
@@ -134,7 +134,7 @@
                     </div>
                 {:else}
                     <div class="empty-graph-state">
-                        <span>Awaiting continuous telemetry packets from BME680 sensor hub...</span>
+                        <span>Awaiting continuous telemetry packets from ESP32-S3 sensor hub...</span>
                     </div>
                 {/if}
             </div>
