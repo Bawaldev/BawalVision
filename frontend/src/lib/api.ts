@@ -1,6 +1,24 @@
-import type { InspectionRecord, TelemetryPayload, FoodDetection, InferenceLogEntry } from './types';
+import type { InspectionRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus } from './types';
 
 const BASE_URL = '/api/v1';
+
+export async function fetchEngineStatus(baseUrl = BASE_URL): Promise<EngineStatus> {
+    try {
+        const response = await fetch(`${baseUrl}/system/engines`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (response.ok) {
+            return await response.json();
+        }
+    } catch {
+        // offline or fallback
+    }
+    return {
+        arch: 'unknown',
+        graviton_available: false,
+        local_engine_available: true
+    };
+}
 
 export async function fetchRecords(baseUrl = BASE_URL): Promise<InspectionRecord[]> {
     try {

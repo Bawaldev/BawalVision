@@ -28,49 +28,52 @@
 </script>
 
 <div class="result-log-container">
-    <div class="view-header">
-        <div>
-            <h2>Result Log</h2>
-            <p class="muted">Historical Meal Inspection Records & Food Classifications Stored in PostgreSQL</p>
+    <div class="card-header-bar">
+        <div class="header-left">
+            <span class="view-icon">📜</span>
+            <div>
+                <h2>Inspection History & Database Archive</h2>
+                <p class="sub-label">Historical Records Stored in PostgreSQL</p>
+            </div>
         </div>
         <div class="header-controls">
             <input
                 type="text"
-                placeholder="Search ID, Device, or Food item..."
+                placeholder="Search Lot, Device, Food..."
                 bind:value={searchTerm}
                 class="search-input"
             />
-            <button type="button" class="refresh-btn" onclick={loadData}>
-                ↻ Refresh
+            <button type="button" class="refresh-chip-btn" onclick={loadData}>
+                ↻ Refresh DB
             </button>
         </div>
     </div>
 
-    <!-- Records Table -->
+    <!-- Records Table Card -->
     <div class="table-card">
         <table class="styled-table">
             <thead>
                 <tr>
-                    <th>INSPECTION ID</th>
-                    <th>DEVICE ID</th>
-                    <th>TIMESTAMP</th>
-                    <th>DETECTED FOODS</th>
-                    <th>TEMP / HUM</th>
-                    <th>VOC GAS</th>
-                    <th>STATUS</th>
-                    <th>ACTION</th>
+                    <th>Lot ID</th>
+                    <th>Device</th>
+                    <th>Timestamp</th>
+                    <th>Detected Components</th>
+                    <th>Temp / Hum</th>
+                    <th>VOC Gas</th>
+                    <th>Status</th>
+                    <th>Action</th>
                 </tr>
             </thead>
             <tbody>
                 {#if isLoading}
-                    <tr><td colspan="8" class="notice-cell">Loading PostgreSQL inspection logs...</td></tr>
+                    <tr><td colspan="8" class="notice-cell">Connecting to PostgreSQL database...</td></tr>
                 {:else if filteredRecords.length === 0}
-                    <tr><td colspan="8" class="notice-cell">No inspection records found.</td></tr>
+                    <tr><td colspan="8" class="notice-cell">No matching inspection records found in storage.</td></tr>
                 {:else}
                     {#each filteredRecords as rec}
                         <tr>
                             <td class="id-cell">
-                                <span class="id-tag">#{rec.id.slice(0, 8)}</span>
+                                <span class="id-tag">#{rec.id.slice(0, 8).toUpperCase()}</span>
                             </td>
                             <td class="device-cell">{rec.device_id}</td>
                             <td class="time-cell">{new Date(rec.created_at).toLocaleString()}</td>
@@ -89,18 +92,18 @@
                                 <strong>{rec.temperature}°C</strong> / <small>{rec.humidity}%</small>
                             </td>
                             <td class="voc-cell">
-                                <span class="voc-val">{rec.gas_voc} kΩ</span>
+                                <span class="voc-val">{rec.gas_voc} <small>kΩ</small></span>
                             </td>
                             <td class="status-cell">
                                 {#if rec.is_spoiled}
-                                    <span class="badge spoiled">REJECT</span>
+                                    <span class="badge spoiled">Reject</span>
                                 {:else}
-                                    <span class="badge passed">PASS</span>
+                                    <span class="badge passed">Pass</span>
                                 {/if}
                             </td>
                             <td class="action-cell">
                                 <button type="button" class="view-btn" onclick={() => (selectedRecord = rec)}>
-                                    View Details
+                                    Inspect JSON
                                 </button>
                             </td>
                         </tr>
@@ -110,7 +113,7 @@
         </table>
     </div>
 
-    <!-- Inspection Details Modal -->
+    <!-- Modal Viewer -->
     {#if selectedRecord}
         <div class="modal-backdrop" role="dialog" aria-modal="true">
             <button
@@ -121,7 +124,7 @@
             ></button>
             <div class="modal-content">
                 <div class="modal-header">
-                    <h3>Inspection Audit #{selectedRecord.id}</h3>
+                    <h3>Audit Record #{selectedRecord.id}</h3>
                     <button type="button" class="close-btn" onclick={() => (selectedRecord = null)}>✕</button>
                 </div>
                 <div class="modal-body">
@@ -139,26 +142,37 @@
         gap: 16px;
     }
 
-    .view-header {
+    .card-header-bar {
         display: flex;
         align-items: center;
         justify-content: space-between;
         padding-bottom: 12px;
-        border-bottom: 1px solid var(--border-color, #1f293d);
+        border-bottom: 1px solid var(--border-subtle);
         flex-wrap: wrap;
         gap: 12px;
     }
 
-    .view-header h2 {
-        margin: 0;
-        font-size: 1.3rem;
-        color: #ffffff;
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
     }
 
-    .muted {
-        margin: 4px 0 0;
-        font-size: 0.8rem;
-        color: #64748b;
+    .view-icon {
+        font-size: 1.5rem;
+    }
+
+    .header-left h2 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+
+    .sub-label {
+        margin: 2px 0 0;
+        font-size: 0.72rem;
+        color: var(--text-muted);
     }
 
     .header-controls {
@@ -168,31 +182,44 @@
     }
 
     .search-input {
-        background: #0b0f19;
-        border: 1px solid #1e293b;
-        color: #f1f5f9;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        color: var(--text-primary);
+        font-family: var(--font-sans);
         font-size: 0.8rem;
-        padding: 8px 12px;
-        border-radius: 6px;
+        padding: 8px 14px;
+        border-radius: var(--radius-pill);
         width: 240px;
+        outline: none;
     }
 
-    .refresh-btn {
-        background: #141b2d;
-        border: 1px solid #23304a;
-        color: #00f0ff;
+    .search-input:focus {
+        border-color: var(--accent-blue);
+    }
+
+    .refresh-chip-btn {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        color: var(--accent-blue);
         font-size: 0.8rem;
-        font-weight: 700;
-        padding: 8px 14px;
-        border-radius: 6px;
+        font-weight: 600;
+        padding: 8px 16px;
+        border-radius: var(--radius-pill);
         cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .refresh-chip-btn:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-highlight);
     }
 
     .table-card {
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
         overflow-x: auto;
+        box-shadow: var(--shadow-card);
     }
 
     .styled-table {
@@ -203,30 +230,46 @@
     }
 
     .styled-table th {
-        background: #0b0f19;
-        color: #64748b;
-        font-size: 0.65rem;
+        background: var(--bg-chip);
+        color: var(--text-secondary);
         font-weight: 700;
-        letter-spacing: 0.05em;
-        padding: 10px 14px;
-        border-bottom: 1px solid #1e293b;
+        font-size: 0.72rem;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border-subtle);
         white-space: nowrap;
     }
 
     .styled-table td {
-        padding: 12px 14px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border-subtle);
         white-space: nowrap;
         vertical-align: middle;
     }
 
+    .styled-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .styled-table tr:hover {
+        background: rgba(255, 255, 255, 0.02);
+    }
+
     .id-tag {
-        font-family: monospace;
+        font-family: var(--font-mono);
         font-weight: 700;
-        color: #00f0ff;
-        background: rgba(0, 240, 255, 0.1);
-        padding: 3px 6px;
-        border-radius: 4px;
+        color: var(--accent-blue);
+        background: var(--accent-blue-dim);
+        padding: 2px 8px;
+        border-radius: var(--radius-pill);
+    }
+
+    .device-cell {
+        color: var(--text-secondary);
+    }
+
+    .time-cell {
+        color: var(--text-muted);
+        font-size: 0.72rem;
     }
 
     .food-pill-group {
@@ -236,51 +279,71 @@
     }
 
     .food-pill {
-        font-size: 0.7rem;
-        padding: 2px 6px;
-        background: rgba(59, 130, 246, 0.15);
-        color: #93c5fd;
-        border-radius: 4px;
-        border: 1px solid rgba(59, 130, 246, 0.3);
+        font-size: 0.68rem;
+        padding: 2px 8px;
+        background: var(--bg-chip);
+        color: var(--text-primary);
+        border-radius: var(--radius-pill);
+    }
+
+    .muted-text {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+    }
+
+    .env-cell strong {
+        color: var(--text-primary);
+    }
+
+    .env-cell small {
+        color: var(--text-muted);
+    }
+
+    .voc-val {
+        color: var(--accent-blue);
+        font-weight: 700;
     }
 
     .badge {
-        font-size: 0.7rem;
-        font-weight: 800;
-        padding: 3px 8px;
-        border-radius: 4px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: var(--radius-pill);
     }
 
     .badge.passed {
-        background: #10b981;
-        color: #000;
+        background: var(--accent-green-dim);
+        color: var(--accent-green);
+        border: 1px solid rgba(34, 197, 94, 0.3);
     }
 
     .badge.spoiled {
-        background: #ef4444;
-        color: #ffffff;
+        background: var(--accent-red-dim);
+        color: var(--accent-red);
+        border: 1px solid rgba(244, 63, 94, 0.3);
     }
 
     .view-btn {
-        background: #141b2d;
-        border: 1px solid #23304a;
-        color: #cbd5e1;
-        font-size: 0.7rem;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
+        font-size: 0.72rem;
+        font-weight: 600;
         padding: 4px 10px;
-        border-radius: 4px;
+        border-radius: var(--radius-pill);
         cursor: pointer;
+        transition: all 0.15s ease;
     }
 
     .view-btn:hover {
-        background: #1e293b;
-        color: #ffffff;
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
     }
 
     .modal-backdrop {
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(4px);
+        background: rgba(0, 0, 0, 0.75);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -300,59 +363,64 @@
     .modal-content {
         position: relative;
         z-index: 101;
-        background: #0f172a;
-        border: 1px solid #334155;
-        border-radius: 8px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
         width: 600px;
         max-width: 90vw;
         max-height: 80vh;
         display: flex;
         flex-direction: column;
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.6);
     }
 
     .modal-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 14px 18px;
-        border-bottom: 1px solid #1e293b;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border-subtle);
     }
 
     .modal-header h3 {
         margin: 0;
         font-size: 0.95rem;
-        color: #f1f5f9;
-        font-family: monospace;
+        color: var(--text-primary);
+        font-weight: 700;
     }
 
     .close-btn {
         background: transparent;
         border: none;
-        color: #64748b;
+        color: var(--text-muted);
         font-size: 1.1rem;
         cursor: pointer;
     }
 
+    .close-btn:hover {
+        color: var(--text-primary);
+    }
+
     .modal-body {
-        padding: 16px;
+        padding: 16px 20px;
         overflow-y: auto;
     }
 
     .json-viewer {
-        background: #080c14;
-        border: 1px solid #1e293b;
-        border-radius: 6px;
-        padding: 12px;
-        color: #00f0ff;
-        font-family: monospace;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 14px;
+        color: var(--accent-blue);
+        font-family: var(--font-mono);
         font-size: 0.75rem;
         overflow-x: auto;
     }
 
     .notice-cell {
         text-align: center;
-        padding: 24px;
-        color: #64748b;
+        padding: 28px;
+        color: var(--text-muted);
+        font-size: 0.8rem;
     }
 </style>

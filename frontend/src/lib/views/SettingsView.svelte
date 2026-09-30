@@ -45,20 +45,26 @@
 </script>
 
 <div class="settings-view-container">
-    <div class="view-header">
-        <div>
-            <h2>System & Cloud Settings</h2>
-            <p class="muted">Configure Edge Microcontroller Links, Vision Model Parameters, and AWS Cloud Endpoints</p>
+    <div class="card-header-bar">
+        <div class="header-left">
+            <span class="view-icon">⚙️</span>
+            <div>
+                <h2>System & Hardware Settings</h2>
+                <p class="sub-label">Sensor Thresholds and Device Nodes</p>
+            </div>
         </div>
         {#if isSaved}
-            <span class="save-toast">✓ Settings Saved Successfully</span>
+            <span class="save-toast">✓ Settings Applied</span>
         {/if}
     </div>
 
     <form onsubmit={handleSubmit} class="settings-form">
         <!-- 1. Gateway & Connectivity -->
-        <div class="settings-section">
-            <h3>1. Backend Gateway & Hardware Links</h3>
+        <div class="settings-card">
+            <div class="section-header">
+                <span class="section-icon">🌐</span>
+                <h3>Gateway & Fieldbus Connectivity</h3>
+            </div>
             <div class="form-grid">
                 <div class="form-group">
                     <label for="backendUrl">Backend API Base URL</label>
@@ -68,28 +74,31 @@
                         bind:value={formState.backendUrl}
                         class="form-input"
                     />
-                    <small>Default: /api/v1 (proxies to Go Fiber Gateway :8080)</small>
+                    <small>Default: /api/v1 (Proxies to Go Fiber Gateway)</small>
                 </div>
 
                 <div class="form-group">
-                    <label for="deviceId">ESP32-S3 Camera Node ID</label>
+                    <label for="deviceId">ESP32-S3 Sensor Node ID</label>
                     <input
                         id="deviceId"
                         type="text"
                         bind:value={formState.deviceId}
                         class="form-input"
                     />
-                    <small>Active serial/MAC identifier broadcast by edge unit</small>
+                    <small>Active device identifier broadcast via telemetry</small>
                 </div>
             </div>
         </div>
 
-        <!-- 2. AI Inference & Spoilage Thresholds -->
-        <div class="settings-section">
-            <h3>2. AI Vision & Spoilage Thresholds</h3>
+        <!-- 2. Tolerance & Spoilage Thresholds -->
+        <div class="settings-card">
+            <div class="section-header">
+                <span class="section-icon">🎯</span>
+                <h3>Detection & Spoilage Thresholds</h3>
+            </div>
             <div class="form-grid">
                 <div class="form-group">
-                    <label for="minConf">Minimum Detection Confidence ({(formState.minConfidenceThreshold * 100).toFixed(0)}%)</label>
+                    <label for="minConf">Minimum Confidence Gate ({(formState.minConfidenceThreshold * 100).toFixed(0)}%)</label>
                     <input
                         id="minConf"
                         type="range"
@@ -99,47 +108,65 @@
                         bind:value={formState.minConfidenceThreshold}
                         class="form-range"
                     />
-                    <small>Compartment classification cutoff for MobileNetV3 ONNX</small>
+                    <small>Vision classification acceptance threshold</small>
                 </div>
 
                 <div class="form-group">
-                    <label for="vocThreshold">VOC Spoilage Alert Level ({formState.vocWarningThreshold} kΩ)</label>
+                    <label for="vocThreshold">VOC Spoilage Warning Threshold ({formState.vocWarningThreshold} kΩ)</label>
                     <input
                         id="vocThreshold"
                         type="number"
                         bind:value={formState.vocWarningThreshold}
                         class="form-input"
                     />
-                    <small>Gas resistance below this value triggers spoilage warning</small>
+                    <small>BME680 gas resistance cutoff for spoilage warnings</small>
                 </div>
             </div>
         </div>
 
         <!-- 3. Engine Hardware Accelerators -->
-        <div class="settings-section">
-            <h3>3. Compute Engine Acceleration</h3>
+        <div class="settings-card">
+            <div class="section-header">
+                <span class="section-icon">⚡</span>
+                <h3>Hardware Accelerators</h3>
+            </div>
             <div class="checkbox-list">
-                <label class="check-label">
-                    <input type="checkbox" bind:checked={formState.gravitonEngineEnabled} />
-                    <div>
-                        <strong>AWS Graviton3 (Neoverse-N1 SVE Acceleration)</strong>
-                        <small>Utilizes SIMD vector extensions on AWS Cloud instances</small>
+                <label class="check-item" class:disabled-label={!config.gravitonEngineAvailable}>
+                    <input
+                        type="checkbox"
+                        bind:checked={formState.gravitonEngineEnabled}
+                        disabled={!config.gravitonEngineAvailable}
+                    />
+                    <div class="check-text">
+                        <strong>
+                            AWS Graviton3 (Neoverse-N1 SVE Acceleration)
+                            {#if !config.gravitonEngineAvailable}
+                                <span class="unavail-badge">Unavailable</span>
+                            {/if}
+                        </strong>
+                        <small>
+                            {#if !config.gravitonEngineAvailable}
+                                Requires ARM64 Graviton3 cloud hardware instance
+                            {:else}
+                                Utilizes ARM SVE vector acceleration extensions
+                            {/if}
+                        </small>
                     </div>
                 </label>
 
-                <label class="check-label">
+                <label class="check-item">
                     <input type="checkbox" bind:checked={formState.localEngineEnabled} />
-                    <div>
-                        <strong>Local Engine (OpenMP SIMD C++20 Vision Service)</strong>
-                        <small>Enables on-premise zero-dependency inference pipeline</small>
+                    <div class="check-text">
+                        <strong>Local C++20 Vision Service (OpenMP SIMD)</strong>
+                        <small>Active on-premise zero-dependency machine vision pipeline</small>
                     </div>
                 </label>
             </div>
         </div>
 
         <div class="form-footer">
-            <button type="submit" class="save-btn">
-                Save & Apply Configuration
+            <button type="submit" class="save-chip-btn">
+                Save & Apply Settings
             </button>
         </div>
     </form>
@@ -150,35 +177,46 @@
         display: flex;
         flex-direction: column;
         gap: 16px;
-        max-width: 900px;
+        max-width: 800px;
     }
 
-    .view-header {
+    .card-header-bar {
         display: flex;
         align-items: center;
         justify-content: space-between;
         padding-bottom: 12px;
-        border-bottom: 1px solid var(--border-color, #1f293d);
+        border-bottom: 1px solid var(--border-subtle);
     }
 
-    .view-header h2 {
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .view-icon {
+        font-size: 1.5rem;
+    }
+
+    .header-left h2 {
         margin: 0;
-        font-size: 1.3rem;
-        color: #ffffff;
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: var(--text-primary);
     }
 
-    .muted {
-        margin: 4px 0 0;
-        font-size: 0.8rem;
-        color: #64748b;
+    .sub-label {
+        margin: 2px 0 0;
+        font-size: 0.72rem;
+        color: var(--text-muted);
     }
 
     .save-toast {
-        background: rgba(16, 185, 129, 0.2);
-        color: #10b981;
-        border: 1px solid rgba(16, 185, 129, 0.4);
-        padding: 6px 12px;
-        border-radius: 4px;
+        background: var(--accent-green-dim);
+        color: var(--accent-green);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        padding: 4px 12px;
+        border-radius: var(--radius-pill);
         font-size: 0.75rem;
         font-weight: 700;
     }
@@ -189,28 +227,40 @@
         gap: 16px;
     }
 
-    .settings-section {
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 16px;
+    .settings-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        padding: 18px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 14px;
+        box-shadow: var(--shadow-card);
     }
 
-    .settings-section h3 {
-        margin: 0;
-        font-size: 0.95rem;
-        color: #00f0ff;
-        border-bottom: 1px solid #1e293b;
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid var(--border-subtle);
         padding-bottom: 8px;
+    }
+
+    .section-icon {
+        font-size: 1.1rem;
+    }
+
+    .section-header h3 {
+        margin: 0;
+        font-size: 0.92rem;
+        font-weight: 700;
+        color: var(--text-primary);
     }
 
     .form-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 16px;
+        gap: 14px;
     }
 
     .form-group {
@@ -221,27 +271,33 @@
 
     .form-group label {
         font-size: 0.75rem;
-        font-weight: 700;
-        color: #cbd5e1;
+        font-weight: 600;
+        color: var(--text-secondary);
     }
 
     .form-input {
-        background: #0b0f19;
-        border: 1px solid #1e293b;
-        color: #ffffff;
-        font-size: 0.85rem;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-primary);
+        font-family: var(--font-sans);
+        font-size: 0.82rem;
         padding: 8px 12px;
-        border-radius: 6px;
+        border-radius: var(--radius-md);
+        outline: none;
+    }
+
+    .form-input:focus {
+        border-color: var(--accent-blue);
     }
 
     .form-range {
-        accent-color: #00f0ff;
+        accent-color: var(--accent-blue);
         cursor: pointer;
     }
 
     .form-group small {
-        font-size: 0.65rem;
-        color: #64748b;
+        font-size: 0.68rem;
+        color: var(--text-muted);
     }
 
     .checkbox-list {
@@ -250,53 +306,80 @@
         gap: 10px;
     }
 
-    .check-label {
+    .check-item {
         display: flex;
         align-items: center;
         gap: 12px;
-        background: #0b0f19;
-        border: 1px solid #1e293b;
-        border-radius: 6px;
-        padding: 12px;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 12px 14px;
         cursor: pointer;
+        transition: all 0.15s ease;
     }
 
-    .check-label input {
+    .check-item:hover:not(.disabled-label) {
+        background: var(--bg-card-hover);
+        border-color: var(--border-highlight);
+    }
+
+    .check-item.disabled-label {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .check-item input {
         width: 18px;
         height: 18px;
-        accent-color: #00f0ff;
+        accent-color: var(--accent-blue);
         cursor: pointer;
     }
 
-    .check-label strong {
-        display: block;
-        font-size: 0.85rem;
-        color: #f1f5f9;
+    .check-item.disabled-label input {
+        cursor: not-allowed;
     }
 
-    .check-label small {
+    .unavail-badge {
+        display: inline-block;
         font-size: 0.65rem;
-        color: #64748b;
+        font-weight: 700;
+        color: var(--accent-red);
+        background: var(--accent-red-dim);
+        border: 1px solid rgba(244, 63, 94, 0.3);
+        padding: 1px 6px;
+        border-radius: var(--radius-pill);
+        margin-left: 6px;
+    }
+
+    .check-text strong {
+        display: block;
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+
+    .check-text small {
+        font-size: 0.7rem;
+        color: var(--text-muted);
     }
 
     .form-footer {
         padding-top: 8px;
     }
 
-    .save-btn {
-        background: linear-gradient(90deg, #00f0ff, #3b82f6);
-        color: #000;
-        font-weight: 800;
+    .save-chip-btn {
+        background: var(--accent-blue);
+        color: #0f172a;
+        font-weight: 700;
         font-size: 0.85rem;
         padding: 10px 24px;
+        border-radius: var(--radius-pill);
         border: none;
-        border-radius: 6px;
         cursor: pointer;
-        transition: all 0.2s ease;
+        transition: opacity 0.15s ease;
     }
 
-    .save-btn:hover {
+    .save-chip-btn:hover {
         opacity: 0.9;
-        box-shadow: 0 0 16px rgba(0, 240, 255, 0.4);
     }
 </style>

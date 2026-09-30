@@ -18,24 +18,26 @@
     });
 </script>
 
-<div class="inference-log-wrapper">
-    <div class="log-header">
-        <div class="title-meta">
-            <span class="terminal-dot green"></span>
-            <h3>Inference log</h3>
-            <span class="stream-status">STREAM ACTIVE (100 Hz Ingress)</span>
+<div class="log-card">
+    <div class="card-header">
+        <div class="header-left">
+            <span class="card-icon">📋</span>
+            <div>
+                <h4>System & Inspection Events</h4>
+                <p class="sub-label">Live Event Stream</p>
+            </div>
         </div>
-        <div class="log-actions">
+        <div class="header-actions">
             <button
                 type="button"
-                class="action-btn"
+                class="chip-btn"
                 class:active={autoScroll}
                 onclick={() => (autoScroll = !autoScroll)}
             >
-                {autoScroll ? 'AUTOSCROLL: ON' : 'AUTOSCROLL: OFF'}
+                {autoScroll ? 'Autoscroll: On' : 'Autoscroll: Off'}
             </button>
-            <button type="button" class="action-btn" onclick={onClear}>
-                CLEAR
+            <button type="button" class="chip-btn" onclick={onClear}>
+                Clear
             </button>
         </div>
     </div>
@@ -43,13 +45,13 @@
     <div class="log-box" bind:this={logBoxEl}>
         {#if logs.length === 0}
             <div class="empty-log">
-                <span>[LOG] Waiting for ESP32 camera frames and AI1 inference triggers...</span>
+                <span>Standby: Awaiting live inspection and telemetry events...</span>
             </div>
         {:else}
             {#each logs as log (log.id)}
                 <div class="log-line {log.level.toLowerCase()}">
                     <span class="timestamp">[{log.timestamp}]</span>
-                    <span class="level-tag {log.level.toLowerCase()}">[{log.level}]</span>
+                    <span class="level-tag {log.level.toLowerCase()}">{log.level}</span>
                     <span class="message-body">{log.message}</span>
                     {#if log.latencyMs}
                         <span class="latency-badge">{log.latencyMs.toFixed(1)}ms</span>
@@ -61,155 +63,148 @@
 </div>
 
 <style>
-    .inference-log-wrapper {
-        background: var(--bg-panel, #0e131f);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 12px;
+    .log-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        padding: 16px;
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 12px;
+        box-shadow: var(--shadow-card);
     }
 
-    .log-header {
+    .card-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding-bottom: 8px;
-        border-bottom: 1px solid #1e293b;
     }
 
-    .title-meta {
+    .header-left {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
     }
 
-    .terminal-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #10b981;
-        box-shadow: 0 0 6px #10b981;
+    .card-icon {
+        font-size: 1.3rem;
     }
 
-    .title-meta h3 {
+    .header-left h4 {
         margin: 0;
-        font-size: 0.85rem;
+        font-size: 0.92rem;
         font-weight: 700;
-        color: #f1f5f9;
-        font-family: monospace;
+        color: var(--text-primary);
+        line-height: 1.2;
     }
 
-    .stream-status {
-        font-size: 0.65rem;
-        font-family: monospace;
-        color: #64748b;
-        background: #080c14;
-        padding: 2px 6px;
-        border-radius: 4px;
-        border: 1px solid #1e293b;
+    .sub-label {
+        margin: 0;
+        font-size: 0.68rem;
+        color: var(--text-muted);
     }
 
-    .log-actions {
+    .header-actions {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
     }
 
-    .action-btn {
-        background: #141b2d;
-        border: 1px solid #23304a;
-        color: #94a3b8;
-        font-size: 0.65rem;
-        font-family: monospace;
-        font-weight: 700;
-        padding: 4px 8px;
-        border-radius: 4px;
+    .chip-btn {
+        background: var(--bg-chip);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: var(--radius-pill);
         cursor: pointer;
-        transition: all 0.2s ease;
+        transition: all 0.12s ease;
     }
 
-    .action-btn:hover {
-        background: #1e293b;
-        color: #f1f5f9;
+    .chip-btn:hover {
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
     }
 
-    .action-btn.active {
-        background: rgba(0, 240, 255, 0.15);
-        border-color: rgba(0, 240, 255, 0.4);
-        color: #00f0ff;
+    .chip-btn.active {
+        background: var(--accent-blue-dim);
+        border-color: rgba(56, 189, 248, 0.4);
+        color: var(--accent-blue);
     }
 
     .log-box {
         height: 120px;
-        background: #070a10;
-        border: 1px solid #141b2d;
-        border-radius: 4px;
-        padding: 8px 10px;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 10px 12px;
         overflow-y: auto;
-        font-family: monospace;
-        font-size: 0.75rem;
-        line-height: 1.4;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        line-height: 1.5;
         display: flex;
         flex-direction: column;
-        gap: 3px;
+        gap: 4px;
     }
 
     .log-line {
         display: flex;
         align-items: baseline;
-        gap: 6px;
-        color: #94a3b8;
+        gap: 8px;
+        color: var(--text-secondary);
         word-break: break-all;
     }
 
     .timestamp {
-        color: #475569;
+        color: var(--text-muted);
         flex-shrink: 0;
     }
 
     .level-tag {
         font-weight: 700;
         flex-shrink: 0;
-    }
-
-    .level-tag.ai {
-        color: #00f0ff;
+        font-size: 0.65rem;
+        padding: 1px 6px;
+        border-radius: var(--radius-pill);
     }
 
     .level-tag.info {
-        color: #3b82f6;
+        color: var(--accent-blue);
+        background: var(--accent-blue-dim);
     }
 
     .level-tag.warn {
-        color: #f59e0b;
+        color: var(--accent-amber);
+        background: var(--accent-amber-dim);
     }
 
     .level-tag.error {
-        color: #ef4444;
+        color: var(--accent-red);
+        background: var(--accent-red-dim);
     }
 
     .level-tag.success {
-        color: #10b981;
+        color: var(--accent-green);
+        background: var(--accent-green-dim);
     }
 
     .message-body {
         flex: 1;
-        color: #cbd5e1;
+        color: var(--text-primary);
     }
 
     .latency-badge {
-        font-size: 0.65rem;
-        background: #1e293b;
-        color: #a855f7;
-        padding: 1px 4px;
-        border-radius: 3px;
+        font-size: 0.62rem;
+        background: var(--accent-purple-dim);
+        color: var(--accent-purple);
+        padding: 1px 6px;
+        border-radius: var(--radius-pill);
         flex-shrink: 0;
     }
 
     .empty-log {
-        color: #475569;
+        color: var(--text-muted);
         padding: 8px 0;
         font-style: italic;
     }

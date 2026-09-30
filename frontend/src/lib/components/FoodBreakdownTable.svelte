@@ -8,56 +8,59 @@
     let { detections = [] }: Props = $props();
 
     const compartmentDefaults = [
-        { slot: 'Slot #1 (Main)', defaultName: 'Carbohydrate (Nasi)', targetWeight: '150 - 200g' },
-        { slot: 'Slot #2 (Protein)', defaultName: 'Main Dish (Ayam/Ikan)', targetWeight: '100 - 130g' },
-        { slot: 'Slot #3 (Vegetable)', defaultName: 'Vegetable (Sayur)', targetWeight: '70 - 90g' },
-        { slot: 'Slot #4 (Fruit/Side)', defaultName: 'Fruit/Side (Buah)', targetWeight: '90 - 120g' }
+        { slot: 'Slot #1 (Main)', defaultName: 'Carbohydrate (Rice)', targetWeight: '150 - 200g', icon: '🍚' },
+        { slot: 'Slot #2 (Protein)', defaultName: 'Protein (Chicken/Tofu)', targetWeight: '100 - 130g', icon: '🍗' },
+        { slot: 'Slot #3 (Vegetable)', defaultName: 'Vegetable (Spinach)', targetWeight: '70 - 90g', icon: '🥬' },
+        { slot: 'Slot #4 (Fruit/Side)', defaultName: 'Fruit (Banana/Orange)', targetWeight: '90 - 120g', icon: '🍌' }
     ];
 </script>
 
-<div class="breakdown-table-wrapper">
-    <div class="table-header">
-        <div class="title-meta">
-            <h3>Food Breakdown & Compartments</h3>
-            <span class="sub-label">STANDARD 4-COMPARTMENT NUTRITIONAL TRAY</span>
+<div class="breakdown-card">
+    <div class="card-header">
+        <div class="header-left">
+            <span class="card-icon">🍱</span>
+            <div>
+                <h4>Meal Tray Compartments</h4>
+                <p class="sub-label">4-Slot Nutritional Verification</p>
+            </div>
         </div>
-        <div class="table-stats">
-            <span>TARGET CALORIES: <strong>~650 - 720 kcal</strong></span>
+        <div class="header-stats">
+            <span class="stat-pill">Tolerance: ±5g</span>
+            <span class="stat-pill">Target: ~520g</span>
         </div>
     </div>
 
-    <div class="table-scroll-container">
+    <div class="table-container">
         <table class="styled-table">
             <thead>
                 <tr>
-                    <th>COMPARTMENT</th>
-                    <th>DETECTED FOOD</th>
-                    <th>CATEGORY</th>
-                    <th>SIMILARITY RATE</th>
-                    <th>WEIGHT (G)</th>
-                    <th>QUALITY STATUS</th>
-                    <th>DECISION</th>
+                    <th>Compartment</th>
+                    <th>Item</th>
+                    <th>Category</th>
+                    <th>Match Confidence</th>
+                    <th>Weight</th>
+                    <th>Decision</th>
                 </tr>
             </thead>
             <tbody>
                 {#if detections.length === 0}
                     <tr>
-                        <td colspan="7" class="empty-row">
-                            <span class="muted-notice">Scanning camera feed for meal tray compartments...</span>
+                        <td colspan="6" class="empty-row">
+                            <span class="empty-msg">No active tray detected on optical camera sensor.</span>
                         </td>
                     </tr>
                 {:else}
                     {#each compartmentDefaults as comp, idx}
                         {@const det = detections[idx]}
-                        <tr class:has-food={!!det}>
+                        <tr class:has-item={!!det}>
                             <td class="slot-cell">
-                                <span class="slot-badge">{comp.slot}</span>
+                                <span class="slot-tag">{comp.icon} {comp.slot}</span>
                             </td>
                             <td class="food-cell">
                                 {#if det}
-                                    <strong class="food-name">{det.food_name.toUpperCase()}</strong>
+                                    <strong class="food-name">{det.food_name}</strong>
                                 {:else}
-                                    <span class="empty-slot">{comp.defaultName}</span>
+                                    <span class="empty-name">{comp.defaultName}</span>
                                 {/if}
                             </td>
                             <td class="cat-cell">
@@ -67,13 +70,13 @@
                                     <span class="muted-dash">—</span>
                                 {/if}
                             </td>
-                            <td class="similarity-cell">
+                            <td class="sim-cell">
                                 {#if det}
-                                    <div class="sim-bar-wrapper">
-                                        <div class="sim-meter">
+                                    <div class="sim-bar-box">
+                                        <div class="sim-track">
                                             <div class="sim-fill" style={`width: ${det.similarity_rate * 100}%`}></div>
                                         </div>
-                                        <span class="sim-val">{(det.similarity_rate * 100).toFixed(1)}%</span>
+                                        <span class="sim-num">{(det.similarity_rate * 100).toFixed(0)}%</span>
                                     </div>
                                 {:else}
                                     <span class="muted-dash">—</span>
@@ -81,29 +84,20 @@
                             </td>
                             <td class="weight-cell">
                                 {#if det}
-                                    <span class="weight-val">{det.weight_grams || 120} g</span>
+                                    <span class="weight-num">{det.weight_grams || 120} <small>g</small></span>
                                 {:else}
                                     <span class="muted-weight">{comp.targetWeight}</span>
                                 {/if}
                             </td>
-                            <td class="freshness-cell">
-                                {#if det}
-                                    <span class="freshness-badge fresh">
-                                        <span class="dot"></span> FRESH (98.2%)
-                                    </span>
-                                {:else}
-                                    <span class="muted-dash">—</span>
-                                {/if}
-                            </td>
-                            <td class="decision-cell">
+                            <td class="status-cell">
                                 {#if det}
                                     {#if det.similarity_rate >= 0.75}
-                                        <span class="status-badge pass">PASS</span>
+                                        <span class="badge pass">Accept</span>
                                     {:else}
-                                        <span class="status-badge review">REVIEW</span>
+                                        <span class="badge hold">Hold</span>
                                     {/if}
                                 {:else}
-                                    <span class="status-badge waiting">AWAITING</span>
+                                    <span class="badge idle">Standby</span>
                                 {/if}
                             </td>
                         </tr>
@@ -115,203 +109,201 @@
 </div>
 
 <style>
-    .breakdown-table-wrapper {
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 14px;
+    .breakdown-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        padding: 16px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 14px;
+        box-shadow: var(--shadow-card);
     }
 
-    .table-header {
+    .card-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding-bottom: 8px;
-        border-bottom: 1px solid #1e293b;
     }
 
-    .title-meta h3 {
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .card-icon {
+        font-size: 1.3rem;
+    }
+
+    .header-left h4 {
         margin: 0;
-        font-size: 0.95rem;
+        font-size: 0.92rem;
         font-weight: 700;
-        color: #f1f5f9;
+        color: var(--text-primary);
+        line-height: 1.2;
     }
 
     .sub-label {
-        font-size: 0.65rem;
+        margin: 0;
+        font-size: 0.68rem;
+        color: var(--text-muted);
+    }
+
+    .header-stats {
+        display: flex;
+        gap: 8px;
+    }
+
+    .stat-pill {
+        font-size: 0.68rem;
         font-weight: 600;
-        color: #64748b;
-        letter-spacing: 0.05em;
+        background: var(--bg-chip);
+        color: var(--text-secondary);
+        padding: 3px 8px;
+        border-radius: var(--radius-pill);
     }
 
-    .table-stats {
-        font-size: 0.75rem;
-        color: #94a3b8;
-    }
-
-    .table-stats strong {
-        color: #00f0ff;
-    }
-
-    .table-scroll-container {
+    .table-container {
         overflow-x: auto;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
     }
 
     .styled-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         text-align: left;
     }
 
     .styled-table th {
-        background: #0b0f19;
-        color: #64748b;
+        background: var(--bg-chip);
+        color: var(--text-secondary);
         font-weight: 700;
-        font-size: 0.65rem;
-        letter-spacing: 0.05em;
-        padding: 8px 12px;
-        border-bottom: 1px solid #1e293b;
+        font-size: 0.68rem;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-subtle);
         white-space: nowrap;
     }
 
     .styled-table td {
-        padding: 10px 12px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-subtle);
         vertical-align: middle;
         white-space: nowrap;
+    }
+
+    .styled-table tr:last-child td {
+        border-bottom: none;
     }
 
     .styled-table tr:hover {
         background: rgba(255, 255, 255, 0.02);
     }
 
-    .slot-badge {
-        display: inline-block;
-        font-size: 0.7rem;
-        font-family: monospace;
-        font-weight: 700;
-        color: #94a3b8;
-        background: #0f172a;
-        padding: 3px 8px;
-        border-radius: 4px;
-        border: 1px solid #1e293b;
+    .slot-tag {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: var(--text-secondary);
     }
 
     .food-name {
-        color: #ffffff;
-        letter-spacing: 0.02em;
+        color: var(--text-primary);
+        font-size: 0.82rem;
     }
 
-    .empty-slot {
-        color: #475569;
-        font-style: italic;
+    .empty-name {
+        color: var(--text-muted);
+        font-size: 0.75rem;
     }
 
     .cat-pill {
-        font-size: 0.7rem;
-        padding: 2px 8px;
-        background: rgba(59, 130, 246, 0.15);
-        color: #60a5fa;
-        border-radius: 12px;
+        font-size: 0.65rem;
         font-weight: 600;
+        padding: 2px 8px;
+        background: var(--accent-blue-dim);
+        color: var(--accent-blue);
+        border-radius: var(--radius-pill);
     }
 
-    .sim-bar-wrapper {
+    .sim-bar-box {
         display: flex;
         align-items: center;
         gap: 8px;
     }
 
-    .sim-meter {
+    .sim-track {
         width: 60px;
         height: 6px;
-        background: #1e293b;
-        border-radius: 3px;
+        background: var(--bg-chip);
+        border-radius: var(--radius-pill);
         overflow: hidden;
     }
 
     .sim-fill {
         height: 100%;
-        background: linear-gradient(90deg, #3b82f6, #00f0ff);
-        border-radius: 3px;
+        background: var(--accent-green);
+        border-radius: var(--radius-pill);
     }
 
-    .sim-val {
-        font-family: monospace;
-        font-weight: 700;
-        color: #f1f5f9;
+    .sim-num {
+        font-family: var(--font-mono);
         font-size: 0.75rem;
+        color: var(--text-primary);
+        font-weight: 700;
     }
 
-    .weight-val {
-        font-family: monospace;
+    .weight-num {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
         font-weight: 700;
-        color: #f8fafc;
+        color: var(--text-primary);
+    }
+
+    .weight-num small {
+        color: var(--text-muted);
+        font-weight: normal;
     }
 
     .muted-weight {
-        font-size: 0.7rem;
-        color: #475569;
+        font-size: 0.72rem;
+        color: var(--text-muted);
     }
 
-    .freshness-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 0.7rem;
+    .badge {
+        font-size: 0.68rem;
         font-weight: 700;
         padding: 3px 8px;
-        border-radius: 4px;
+        border-radius: var(--radius-pill);
     }
 
-    .freshness-badge.fresh {
-        background: rgba(16, 185, 129, 0.15);
-        color: #10b981;
-        border: 1px solid rgba(16, 185, 129, 0.3);
+    .badge.pass {
+        background: var(--accent-green-dim);
+        color: var(--accent-green);
+        border: 1px solid rgba(34, 197, 94, 0.3);
     }
 
-    .freshness-badge .dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: currentColor;
+    .badge.hold {
+        background: var(--accent-amber-dim);
+        color: var(--accent-amber);
+        border: 1px solid rgba(245, 158, 11, 0.3);
     }
 
-    .status-badge {
-        display: inline-block;
-        font-size: 0.7rem;
-        font-weight: 800;
-        padding: 3px 10px;
-        border-radius: 4px;
-        letter-spacing: 0.05em;
-    }
-
-    .status-badge.pass {
-        background: #10b981;
-        color: #000;
-    }
-
-    .status-badge.review {
-        background: #f59e0b;
-        color: #000;
-    }
-
-    .status-badge.waiting {
-        background: #1e293b;
-        color: #64748b;
+    .badge.idle {
+        background: var(--bg-chip);
+        color: var(--text-muted);
     }
 
     .empty-row {
         text-align: center;
         padding: 24px;
-        color: #64748b;
+        color: var(--text-muted);
+        font-size: 0.78rem;
     }
 
     .muted-dash {
-        color: #334155;
+        color: var(--text-muted);
     }
 </style>

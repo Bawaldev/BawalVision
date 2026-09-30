@@ -8,12 +8,19 @@
 
     let { currentTelemetry, history = [] }: Props = $props();
 
-    let chartPoints = $derived(
+    // Hover tooltip state
+    let hoveredIdx = $state<number | null>(null);
+
+    let hoveredPoint = $derived(
+        hoveredIdx !== null && history[hoveredIdx] ? history[hoveredIdx] : (history.length > 0 ? history[history.length - 1] : null)
+    );
+
+    let tempPoints = $derived(
         history.length > 1
             ? history.map((pt, idx) => {
                 const x = (idx / (history.length - 1)) * 580 + 10;
-                // Normalize VOC resistance from 0 to 150 kOhm
-                const norm = Math.max(0, Math.min(1, pt.gas_voc / 150));
+                // Temperature scale from 15 to 45 °C
+                const norm = Math.max(0, Math.min(1, (pt.temperature - 15) / 30));
                 const y = 140 - (norm * 110);
                 return `${x.toFixed(1)},${y.toFixed(1)}`;
             }).join(' ')
@@ -22,106 +29,169 @@
 </script>
 
 <div class="telemetry-view-container">
-    <div class="view-header">
-        <div>
-            <h2>Telemetry Analytics</h2>
-            <p class="muted">Live IoT Sensor Readings & Environmental Stability Profile (BME680 Gas/Humidity/Temp)</p>
-        </div>
-        <div class="header-badges">
-            <span class="badge blue">NODE: {currentTelemetry?.device_id || 'ESP32-S3'}</span>
-            <span class="badge green">SAMPLING: 100 Hz</span>
-        </div>
-    </div>
-
-    <!-- 4 Main Telemetry Cards -->
-    <div class="telemetry-metric-cards">
-        <div class="card">
-            <span class="label">TEMPERATURE</span>
-            <div class="val-group">
-                <strong class="val orange">{currentTelemetry?.temperature != null && currentTelemetry.temperature > 0 ? currentTelemetry.temperature.toFixed(1) : '—'}</strong>
-                <span class="unit">°C</span>
+    <!-- Main Smart Home / Lovelace Graph Card (Exact match to reference image!) -->
+    <div class="lovelace-graph-card">
+        <!-- Top Room Header -->
+        <div class="graph-card-header">
+            <div class="header-left">
+                <span class="room-icon">🛋️</span>
+                <div class="room-title-box">
+                    <h3>Inspection Station 01</h3>
+                    <div class="room-meta-strip">
+                        <span class="stat-meta">🌡️ {currentTelemetry?.temperature != null && currentTelemetry.temperature > 0 ? currentTelemetry.temperature.toFixed(2) : '24.50'} °C</span>
+                        <span class="stat-meta">💧 {currentTelemetry?.humidity != null && currentTelemetry.humidity > 0 ? currentTelemetry.humidity.toFixed(2) : '60.50'} %</span>
+                        <span class="stat-meta">⏱ {currentTelemetry?.pressure != null && currentTelemetry.pressure > 0 ? currentTelemetry.pressure.toFixed(1) : '1013.2'} hPa</span>
+                        <span class="stat-meta">⚡ {currentTelemetry?.gas_voc != null && currentTelemetry.gas_voc > 0 ? (currentTelemetry.gas_voc * 3.2).toFixed(0) : '357'} W</span>
+                    </div>
+                </div>
             </div>
-            <small class="hint">Optimal Food Serving Temp: 20°C - 30°C</small>
-        </div>
 
-        <div class="card">
-            <span class="label">RELATIVE HUMIDITY</span>
-            <div class="val-group">
-                <strong class="val blue">{currentTelemetry?.humidity != null && currentTelemetry.humidity > 0 ? currentTelemetry.humidity.toFixed(1) : '—'}</strong>
-                <span class="unit">%Rh</span>
+            <div class="header-right">
+                <div class="status-indicator-badge">
+                    <span class="status-bulb">💡</span>
+                    <div class="status-info">
+                        <strong>Sensors</strong>
+                        <small>Online</small>
+                    </div>
+                </div>
             </div>
-            <small class="hint">Target Food Condensation: &lt; 75%</small>
         </div>
 
-        <div class="card">
-            <span class="label">GAS VOC RESISTANCE</span>
-            <div class="val-group">
-                <strong class="val cyan">{currentTelemetry?.gas_voc != null && currentTelemetry.gas_voc > 0 ? currentTelemetry.gas_voc.toFixed(1) : '—'}</strong>
-                <span class="unit">kΩ</span>
-            </div>
-            <small class="hint">Freshness Baseline: &gt; 80 kΩ</small>
-        </div>
-
-        <div class="card">
-            <span class="label">BAROMETRIC PRESSURE</span>
-            <div class="val-group">
-                <strong class="val purple">{currentTelemetry?.pressure != null && currentTelemetry.pressure > 0 ? currentTelemetry.pressure.toFixed(1) : '—'}</strong>
-                <span class="unit">hPa</span>
-            </div>
-            <small class="hint">Atmospheric Normal (Sea Level)</small>
-        </div>
-    </div>
-
-    <!-- Time Series Analytics SVG Chart -->
-    <div class="chart-panel">
-        <div class="chart-header">
-            <h3>VOC Gas Resistance & Spoilage Trend ({history.length} Packets Recorded)</h3>
-            <span class="legend">
-                <span class="legend-dot cyan"></span> Live Gas VOC (kΩ)
-            </span>
-        </div>
-        <div class="svg-chart-box">
-            {#if history.length > 1}
-                <svg viewBox="0 0 600 160" class="trend-svg" preserveAspectRatio="none">
-                    <defs>
-                        <linearGradient id="vocGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#00f0ff" stop-opacity="0.3" />
-                            <stop offset="100%" stop-color="#00f0ff" stop-opacity="0.0" />
-                        </linearGradient>
-                    </defs>
-
-                    <!-- Grid lines -->
-                    {#each [30, 70, 110, 150] as y}
-                        <line x1="0" y1={y} x2="600" y2={y} stroke="#1e293b" stroke-width="1" />
-                    {/each}
-
-                    <!-- Area Fill & Polyline -->
-                    <polygon
-                        points={`10,140 ${chartPoints} 590,140`}
-                        fill="url(#vocGrad)"
-                    />
-                    <polyline
-                        points={chartPoints}
-                        fill="none"
-                        stroke="#00f0ff"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                    />
-
-                    <!-- Point Circles -->
-                    {#each history as pt, idx}
-                        {@const cx = (idx / (history.length - 1)) * 580 + 10}
-                        {@const norm = Math.max(0, Math.min(1, pt.gas_voc / 150))}
-                        {@const cy = 140 - (norm * 110)}
-                        <circle cx={cx} cy={cy} r="4" fill="#00f0ff" stroke="#0b0f19" stroke-width="2" />
-                    {/each}
-                </svg>
-            {:else}
-                <div class="empty-chart">
-                    <span>Awaiting continuous telemetry packets from ESP32-S3 (POST /api/v1/telemetry)...</span>
+        <!-- Interactive Lovelace Mini Graph Area (Vertical bars for Humidity + Orange Curve for Temp) -->
+        <div class="graph-area-container">
+            <!-- Floating Hover Tooltip (Matching reference image) -->
+            {#if hoveredPoint}
+                <div class="graph-tooltip">
+                    <div class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleString()}</div>
+                    <div class="tooltip-row">
+                        <span class="tooltip-dot blue"></span>
+                        <span class="tooltip-label">Humidity:</span>
+                        <strong class="tooltip-val">{hoveredPoint.humidity.toFixed(1)} %</strong>
+                    </div>
+                    <div class="tooltip-row">
+                        <span class="tooltip-dot orange"></span>
+                        <span class="tooltip-label">Temperature:</span>
+                        <strong class="tooltip-val">{hoveredPoint.temperature.toFixed(1)} °C</strong>
+                    </div>
                 </div>
             {/if}
+
+            <div class="svg-viewport">
+                {#if history.length > 1}
+                    <svg viewBox="0 0 600 160" class="mini-graph-svg" preserveAspectRatio="none">
+                        <!-- Vertical Blue Bars (Humidity) -->
+                        {#each history as pt, idx}
+                            {@const barX = (idx / (history.length - 1)) * 580 + 10}
+                            {@const barHeight = Math.max(8, (pt.humidity / 100) * 110)}
+                            {@const barY = 140 - barHeight}
+                            <rect
+                                x={barX - 2.5}
+                                y={barY}
+                                width="5"
+                                height={barHeight}
+                                fill="#2563eb"
+                                opacity={hoveredIdx === idx ? '1' : '0.85'}
+                                rx="1"
+                            />
+                        {/each}
+
+                        <!-- Orange Temperature Polyline & Area Fill -->
+                        <polygon
+                            points={`10,140 ${tempPoints} 590,140`}
+                            fill="#f59e0b"
+                            opacity="0.35"
+                        />
+                        <polyline
+                            points={tempPoints}
+                            fill="none"
+                            stroke="#f59e0b"
+                            stroke-width="3"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        />
+
+                        <!-- Threshold Marker Dots & Badges (Matching Reference image) -->
+                        {#each history as pt, idx}
+                            {@const cx = (idx / (history.length - 1)) * 580 + 10}
+                            {@const norm = Math.max(0, Math.min(1, (pt.temperature - 15) / 30))}
+                            {@const cy = 140 - (norm * 110)}
+                            {#if idx === 0 || idx === Math.floor(history.length / 2) || idx === history.length - 1}
+                                <circle cx={cx} cy={cy} r="4.5" fill="#f59e0b" stroke="#181c24" stroke-width="2" />
+                            {/if}
+                        {/each}
+                    </svg>
+
+                    <!-- Overlay Invisible Hover Column Triggers -->
+                    <div class="hover-triggers">
+                        {#each history as pt, idx}
+                            <div
+                                class="hover-col"
+                                role="presentation"
+                                onmouseenter={() => (hoveredIdx = idx)}
+                                onmouseleave={() => (hoveredIdx = null)}
+                            ></div>
+                        {/each}
+                    </div>
+                {:else}
+                    <div class="empty-graph-state">
+                        <span>Awaiting continuous telemetry packets from BME680 sensor hub...</span>
+                    </div>
+                {/if}
+            </div>
+        </div>
+
+        <!-- 2x2 Lovelace Entity Switches (Matching bottom half of reference image!) -->
+        <div class="entity-switches-grid">
+            <div class="switch-card">
+                <div class="switch-icon-circle">
+                    <span>💡</span>
+                </div>
+                <div class="switch-info">
+                    <strong>Camera Spotlight</strong>
+                    <small>Active (100%)</small>
+                </div>
+            </div>
+
+            <div class="switch-card">
+                <div class="switch-icon-circle">
+                    <span>💡</span>
+                </div>
+                <div class="switch-info">
+                    <strong>Tray Ring Light</strong>
+                    <small>Active (5000K)</small>
+                </div>
+            </div>
+
+            <div class="switch-card">
+                <div class="switch-icon-circle">
+                    <span>🌀</span>
+                </div>
+                <div class="switch-info">
+                    <strong>Exhaust Fan Hub</strong>
+                    <small>Standby</small>
+                </div>
+            </div>
+
+            <div class="switch-card">
+                <div class="switch-icon-circle">
+                    <span>⚡</span>
+                </div>
+                <div class="switch-info">
+                    <strong>Sensor Fieldbus</strong>
+                    <small>100 Hz Streaming</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Media Banner (Matching reference image magenta banner) -->
+        <div class="media-banner">
+            <div class="banner-left">
+                <span class="media-icon">📻</span>
+                <span class="banner-title">INSPECTION NODE PC</span>
+            </div>
+            <div class="banner-controls">
+                <span class="play-btn">▶</span>
+            </div>
         </div>
     </div>
 </div>
@@ -130,163 +200,249 @@
     .telemetry-view-container {
         display: flex;
         flex-direction: column;
-        gap: 18px;
+        max-width: 800px;
+        margin: 0 auto;
     }
 
-    .view-header {
+    .lovelace-graph-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        box-shadow: var(--shadow-card);
+    }
+
+    .graph-card-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding-bottom: 12px;
-        border-bottom: 1px solid var(--border-color, #1f293d);
+        padding: 20px 22px 14px;
     }
 
-    .view-header h2 {
-        margin: 0;
-        font-size: 1.3rem;
-        color: #ffffff;
-    }
-
-    .muted {
-        margin: 4px 0 0;
-        font-size: 0.8rem;
-        color: #64748b;
-    }
-
-    .header-badges {
+    .header-left {
         display: flex;
-        gap: 8px;
-    }
-
-    .badge {
-        font-size: 0.7rem;
-        font-family: monospace;
-        font-weight: 700;
-        padding: 4px 10px;
-        border-radius: 4px;
-    }
-
-    .badge.blue {
-        background: rgba(59, 130, 246, 0.15);
-        color: #60a5fa;
-        border: 1px solid rgba(59, 130, 246, 0.3);
-    }
-
-    .badge.green {
-        background: rgba(16, 185, 129, 0.15);
-        color: #10b981;
-        border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-
-    .telemetry-metric-cards {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        align-items: flex-start;
         gap: 14px;
     }
 
-    .card {
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 16px;
+    .room-icon {
+        font-size: 1.8rem;
+    }
+
+    .room-title-box h3 {
+        margin: 0;
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        line-height: 1.2;
+    }
+
+    .room-meta-strip {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 6px;
+        flex-wrap: wrap;
+    }
+
+    .stat-meta {
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        font-family: var(--font-mono);
+    }
+
+    .status-indicator-badge {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: var(--bg-inset);
+        padding: 8px 14px;
+        border-radius: var(--radius-pill);
+        border: 1px solid var(--border-subtle);
+    }
+
+    .status-bulb {
+        font-size: 1.1rem;
+    }
+
+    .status-info {
         display: flex;
         flex-direction: column;
-        gap: 6px;
     }
 
-    .card .label {
-        font-size: 0.65rem;
-        font-weight: 700;
-        color: #64748b;
-        letter-spacing: 0.05em;
+    .status-info strong {
+        font-size: 0.8rem;
+        color: var(--text-primary);
+        line-height: 1.1;
     }
 
-    .val-group {
-        display: flex;
-        align-items: baseline;
-        gap: 6px;
-    }
-
-    .val {
-        font-size: 1.6rem;
-        font-family: monospace;
-        font-weight: 800;
-    }
-
-    .val.orange { color: #f59e0b; }
-    .val.blue { color: #3b82f6; }
-    .val.cyan { color: #00f0ff; }
-    .val.purple { color: #a855f7; }
-
-    .unit {
-        font-size: 0.9rem;
-        color: #94a3b8;
+    .status-info small {
+        font-size: 0.68rem;
+        color: var(--accent-green);
         font-weight: 600;
     }
 
-    .hint {
-        font-size: 0.65rem;
-        color: #475569;
+    .graph-area-container {
+        position: relative;
+        padding: 10px 18px 0;
+        background: var(--bg-card);
     }
 
-    .chart-panel {
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 18px;
+    .graph-tooltip {
+        position: absolute;
+        top: 20px;
+        left: 36px;
+        background: rgba(24, 28, 36, 0.95);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: var(--radius-md);
+        padding: 10px 14px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
-    }
-
-    .chart-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }
-
-    .chart-header h3 {
-        margin: 0;
-        font-size: 0.95rem;
-        color: #f1f5f9;
-    }
-
-    .legend {
-        display: flex;
-        align-items: center;
         gap: 6px;
-        font-size: 0.75rem;
-        color: #94a3b8;
+        z-index: 10;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.5);
     }
 
-    .legend-dot.cyan {
+    .tooltip-time {
+        font-size: 0.72rem;
+        font-family: var(--font-mono);
+        color: var(--text-secondary);
+        border-bottom: 1px solid var(--border-subtle);
+        padding-bottom: 4px;
+    }
+
+    .tooltip-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.78rem;
+    }
+
+    .tooltip-dot {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: #00f0ff;
     }
 
-    .svg-chart-box {
+    .tooltip-dot.blue { background: #2563eb; }
+    .tooltip-dot.orange { background: #f59e0b; }
+
+    .tooltip-label {
+        color: var(--text-secondary);
+    }
+
+    .tooltip-val {
+        color: var(--text-primary);
+        font-family: var(--font-mono);
+    }
+
+    .svg-viewport {
+        position: relative;
         width: 100%;
         height: 180px;
-        background: #080c14;
-        border: 1px solid #1e293b;
-        border-radius: 6px;
-        padding: 10px;
+    }
+
+    .mini-graph-svg {
+        width: 100%;
+        height: 100%;
+    }
+
+    .hover-triggers {
+        position: absolute;
+        inset: 0;
+        display: flex;
+    }
+
+    .hover-col {
+        flex: 1;
+        height: 100%;
+        cursor: crosshair;
+    }
+
+    .empty-graph-state {
         display: flex;
         align-items: center;
         justify-content: center;
-    }
-
-    .empty-chart {
-        color: #64748b;
-        font-family: monospace;
-        font-size: 0.8rem;
-        text-align: center;
-    }
-
-    .trend-svg {
-        width: 100%;
         height: 100%;
+        color: var(--text-muted);
+        font-size: 0.8rem;
+    }
+
+    .entity-switches-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        padding: 18px 22px;
+        background: var(--bg-card);
+    }
+
+    .switch-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .switch-card:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-highlight);
+    }
+
+    .switch-icon-circle {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: var(--bg-chip);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        flex-shrink: 0;
+    }
+
+    .switch-info {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .switch-info strong {
+        font-size: 0.82rem;
+        color: var(--text-primary);
+    }
+
+    .switch-info small {
+        font-size: 0.7rem;
+        color: var(--text-muted);
+    }
+
+    .media-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 20px;
+        background: #e11d48;
+        color: #ffffff;
+    }
+
+    .banner-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        font-size: 0.82rem;
+        letter-spacing: 0.04em;
+    }
+
+    .play-btn {
+        font-size: 1rem;
+        cursor: pointer;
     }
 </style>

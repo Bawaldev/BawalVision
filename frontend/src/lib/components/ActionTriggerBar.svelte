@@ -8,166 +8,179 @@
     let { onForceReject, onInspectTray, isInspecting = false }: Props = $props();
 </script>
 
-<div class="action-trigger-wrapper">
-    <div class="panel-header">
-        <h3>Action & Trigger bar</h3>
-        <span class="control-tag">CONVEYOR PLC INTERLOCK</span>
+<div class="actions-card">
+    <div class="card-header">
+        <div class="header-left">
+            <span class="card-icon">⚡</span>
+            <div>
+                <h4>Manual Controls</h4>
+                <p class="sub-label">Actuator Triggers</p>
+            </div>
+        </div>
+        <span class="armed-pill">Armed</span>
     </div>
 
-    <div class="trigger-buttons-grid">
+    <div class="buttons-grid">
         <!-- Force Reject Button -->
         <button
             type="button"
-            class="trigger-btn reject-btn"
+            class="action-btn reject"
             onclick={onForceReject}
         >
-            <div class="btn-icon">⛔</div>
+            <div class="btn-icon-circle red">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </div>
             <div class="btn-text">
                 <strong>Force Reject</strong>
-                <small>Trigger Pneumatic Ejector</small>
+                <small>Diverter Valve</small>
             </div>
         </button>
 
         <!-- Inspect Tray Button -->
         <button
             type="button"
-            class="trigger-btn inspect-btn"
+            class="action-btn inspect"
             class:loading={isInspecting}
             disabled={isInspecting}
             onclick={onInspectTray}
         >
-            <div class="btn-icon">
-                {#if isInspecting}
-                    <span class="spin">◌</span>
-                {:else}
-                    🔍
-                {/if}
+            <div class="btn-icon-circle green">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
             </div>
             <div class="btn-text">
-                <strong>{isInspecting ? 'Inspecting...' : 'Inspect Tray'}</strong>
-                <small>Trigger Optical Camera + AI1</small>
+                <strong>{isInspecting ? 'Running...' : 'Inspect Tray'}</strong>
+                <small>Optical Trigger</small>
             </div>
         </button>
     </div>
 </div>
 
 <style>
-    .action-trigger-wrapper {
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 12px 14px;
+    .actions-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        padding: 16px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 14px;
+        box-shadow: var(--shadow-card);
     }
 
-    .panel-header {
+    .card-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding-bottom: 6px;
-        border-bottom: 1px solid #1e293b;
     }
 
-    .panel-header h3 {
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .card-icon {
+        font-size: 1.3rem;
+    }
+
+    .header-left h4 {
         margin: 0;
-        font-size: 0.85rem;
+        font-size: 0.92rem;
         font-weight: 700;
-        color: #f1f5f9;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+        color: var(--text-primary);
+        line-height: 1.2;
     }
 
-    .control-tag {
-        font-size: 0.6rem;
-        font-family: monospace;
-        color: #64748b;
-        background: #080c14;
-        padding: 2px 6px;
-        border-radius: 4px;
-        border: 1px solid #1e293b;
+    .sub-label {
+        margin: 0;
+        font-size: 0.68rem;
+        color: var(--text-muted);
     }
 
-    .trigger-buttons-grid {
+    .armed-pill {
+        font-size: 0.68rem;
+        font-weight: 600;
+        background: var(--accent-amber-dim);
+        color: var(--accent-amber);
+        padding: 2px 8px;
+        border-radius: var(--radius-pill);
+    }
+
+    .buttons-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 10px;
     }
 
-    .trigger-btn {
+    .action-btn {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 12px;
-        border-radius: 6px;
+        padding: 10px 12px;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
         cursor: pointer;
         text-align: left;
-        border: 1px solid transparent;
-        transition: all 0.2s ease;
+        transition: all 0.15s ease;
     }
 
-    .trigger-btn:active {
-        transform: translateY(1px);
+    .action-btn:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-highlight);
     }
 
-    .reject-btn {
-        background: rgba(239, 68, 68, 0.12);
-        border-color: rgba(239, 68, 68, 0.35);
-        color: #fca5a5;
-    }
-
-    .reject-btn:hover {
-        background: rgba(239, 68, 68, 0.22);
-        border-color: #ef4444;
-        color: #ffffff;
-        box-shadow: 0 0 12px rgba(239, 68, 68, 0.2);
-    }
-
-    .inspect-btn {
-        background: rgba(0, 240, 255, 0.12);
-        border-color: rgba(0, 240, 255, 0.35);
-        color: #a5f3fc;
-    }
-
-    .inspect-btn:hover:not(:disabled) {
-        background: rgba(0, 240, 255, 0.22);
-        border-color: #00f0ff;
-        color: #ffffff;
-        box-shadow: 0 0 12px rgba(0, 240, 255, 0.2);
-    }
-
-    .inspect-btn:disabled {
-        opacity: 0.6;
+    .action-btn:disabled {
+        opacity: 0.5;
         cursor: not-allowed;
     }
 
-    .btn-icon {
-        font-size: 1.3rem;
-        line-height: 1;
+    .btn-icon-circle {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         flex-shrink: 0;
     }
 
+    .btn-icon-circle.red {
+        background: var(--accent-red-dim);
+        color: var(--accent-red);
+    }
+
+    .btn-icon-circle.green {
+        background: var(--accent-green-dim);
+        color: var(--accent-green);
+    }
+
+    .btn-svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .btn-text {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
     .btn-text strong {
-        display: block;
-        font-size: 0.85rem;
-        font-weight: 800;
-        line-height: 1.1;
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        white-space: nowrap;
     }
 
     .btn-text small {
-        font-size: 0.6rem;
-        color: #94a3b8;
-        display: block;
-        margin-top: 2px;
-    }
-
-    .spin {
-        display: inline-block;
-        animation: rotate 1s linear infinite;
-    }
-
-    @keyframes rotate {
-        100% { transform: rotate(360deg); }
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        white-space: nowrap;
     }
 </style>

@@ -1,31 +1,49 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 :root {
-    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
 
-    /* High-tech Dark Palette */
-    --bg-main: #070b12;
-    --bg-sidebar: #0e1422;
-    --bg-topbar: #0a0f1d;
-    --bg-panel: #111827;
-    --bg-subpanel: #090d16;
+    /* Modern Smart IoT / Home Assistant Lovelace Dark Matte Palette */
+    --bg-main: #14171d;
+    --bg-sidebar: #181c24;
+    --bg-card: #202530;
+    --bg-card-hover: #262c39;
+    --bg-inset: #181c24;
+    --bg-chip: #2a3140;
+
+    /* Clean Borders */
+    --border-card: #2d3444;
+    --border-subtle: #242a37;
+    --border-highlight: #3b4458;
     
-    --border-color: #1e293b;
-    --border-highlight: #334155;
+    /* Rounded Lovelace Radius */
+    --radius-lg: 16px;
+    --radius-md: 12px;
+    --radius-sm: 8px;
+    --radius-pill: 9999px;
 
-    /* Accent & Status Colors */
-    --accent-cyan: #00f0ff;
-    --accent-blue: #3b82f6;
-    --accent-amber: #ffb703;
-    --status-green: #10b981;
-    --status-orange: #f59e0b;
-    --status-red: #ef4444;
-    --status-purple: #a855f7;
+    /* Modern IoT Accents */
+    --accent-blue: #38bdf8;
+    --accent-blue-dim: rgba(56, 189, 248, 0.15);
+    --accent-amber: #f59e0b;
+    --accent-amber-dim: rgba(245, 158, 11, 0.15);
+    --accent-green: #22c55e;
+    --accent-green-dim: rgba(34, 197, 94, 0.15);
+    --accent-red: #f43f5e;
+    --accent-red-dim: rgba(244, 63, 94, 0.15);
+    --accent-purple: #c084fc;
+    --accent-purple-dim: rgba(192, 132, 252, 0.15);
 
+    /* Text Hierarchy */
     --text-primary: #f8fafc;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
+    --text-dim: #475569;
+
+    /* Card Shadows */
+    --shadow-card: 0 4px 14px rgba(0, 0, 0, 0.25);
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
 * {
@@ -36,41 +54,41 @@
 
 body {
     font-family: var(--font-sans);
-    background: var(--bg-main);
+    background-color: var(--bg-main);
     color: var(--text-primary);
     min-height: 100vh;
     overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
 }
 
 button, input, select, textarea {
     font-family: inherit;
 }
 
-/* Custom Dark Scrollbars */
+/* Lovelace Custom Scrollbars */
 ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-    background: #080c14;
+    background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #1e293b;
-    border-radius: 3px;
+    background: #334155;
+    border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #334155;
+    background: #475569;
 }
 
 .app-root {
     display: flex;
     min-height: 100vh;
     width: 100vw;
+    background: var(--bg-main);
 }
 
 .main-content-layout {
@@ -83,6 +101,6 @@ button, input, select, textarea {
 
 .page-body {
     flex: 1;
-    padding: 16px 24px 32px;
+    padding: 18px 22px 28px;
     overflow-y: auto;
 }

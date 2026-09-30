@@ -3,6 +3,8 @@ package api
 import (
 	"errors"
 	"net/http"
+	"os"
+	"runtime"
 	"time"
 
 	"bawal_vision_backend/internal/inspection"
@@ -26,6 +28,7 @@ func RegisterFrontendRoutes(router fiber.Router, db *gorm.DB) {
 
 	router.Get("/records", h.GetRecords)
 	router.Get("/records/:id", h.GetRecordByID)
+	router.Get("/system/engines", h.GetEngineStatus)
 }
 
 func (h *Handler) GetRecords(c *fiber.Ctx) error {
@@ -44,6 +47,18 @@ func (h *Handler) GetRecords(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(records)
+}
+
+func (h *Handler) GetEngineStatus(c *fiber.Ctx) error {
+	arch := runtime.GOARCH
+	gravitonEnv := os.Getenv("AWS_GRAVITON_AVAILABLE") == "true" || os.Getenv("ENABLE_GRAVITON") == "true"
+	isGraviton := (arch == "arm64" || gravitonEnv)
+
+	return c.JSON(fiber.Map{
+		"arch":                   arch,
+		"graviton_available":     isGraviton,
+		"local_engine_available": true,
+	})
 }
 
 func (h *Handler) GetRecordByID(c *fiber.Ctx) error {

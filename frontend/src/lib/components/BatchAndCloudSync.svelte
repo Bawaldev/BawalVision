@@ -10,57 +10,50 @@
 </script>
 
 <div class="batch-cloud-grid">
-    <!-- Batch Summary (Wireframe: Batch Summary) -->
-    <div class="summary-card">
+    <!-- Batch Production Summary Card -->
+    <div class="entity-card">
         <div class="card-header">
-            <h4>Batch Summary</h4>
-            <span class="batch-id">BATCH #2026-A</span>
-        </div>
-        <div class="summary-rows">
-            <div class="sum-row">
-                <span class="sum-label">Total</span>
-                <div class="sum-box">
-                    <strong class="sum-val">{totalPlates.toLocaleString()}</strong>
-                    <span class="sum-unit">Plate</span>
-                </div>
+            <div class="header-left">
+                <span class="icon">📦</span>
+                <h4>Batch Summary</h4>
             </div>
-
-            <div class="sum-row">
-                <span class="sum-label">Pass rate</span>
-                <div class="sum-box">
-                    <strong class="sum-val green">{passRate.toFixed(1)}</strong>
-                    <span class="sum-unit">%</span>
-                </div>
+            <span class="lot-pill">Lot #2026-A</span>
+        </div>
+        <div class="stats-rows">
+            <div class="stat-row">
+                <span class="row-label">Total Inspected</span>
+                <strong class="row-val">{totalPlates.toLocaleString()} <small>units</small></strong>
+            </div>
+            <div class="stat-row">
+                <span class="row-label">Pass Rate</span>
+                <strong class="row-val green">{passRate.toFixed(1)}%</strong>
             </div>
         </div>
     </div>
 
-    <!-- Cloud Sync Status (Wireframe: Cloud Sync Status) -->
-    <div class="sync-card">
+    <!-- Telemetry Cloud Sync Status Card -->
+    <div class="entity-card">
         <div class="card-header">
-            <h4>Cloud Sync Status</h4>
-            <span class="sync-ping">24ms AWS RDS</span>
+            <div class="header-left">
+                <span class="icon">☁️</span>
+                <h4>Database Sync</h4>
+            </div>
+            <span class="ping-pill">24ms AWS RDS</span>
         </div>
-        <div class="sync-rows">
-            <!-- Offline Buffer Status -->
-            <div class="sync-item" class:active={bufferedRecords > 0}>
-                <div class="check-box" class:checked={bufferedRecords > 0}>
-                    {#if bufferedRecords > 0}✓{/if}
-                </div>
+        <div class="sync-items-list">
+            <div class="sync-item">
+                <div class="status-circle" class:active={bufferedRecords > 0}></div>
                 <div class="sync-info">
-                    <span class="sync-label">Offline Buffer</span>
-                    <small>{bufferedRecords} Records Queued</small>
+                    <span class="sync-title">Local Buffer</span>
+                    <small>{bufferedRecords} queued</small>
                 </div>
             </div>
 
-            <!-- Online Sync Status -->
-            <div class="sync-item" class:active={isOnline}>
-                <div class="check-box" class:checked={isOnline}>
-                    {#if isOnline}✓{/if}
-                </div>
+            <div class="sync-item">
+                <div class="status-circle" class:active={isOnline}></div>
                 <div class="sync-info">
-                    <span class="sync-label">Online Sync</span>
-                    <small>PostgreSQL RDS Connected</small>
+                    <span class="sync-title">PostgreSQL RDS</span>
+                    <small>{isOnline ? 'Connected' : 'Offline'}</small>
                 </div>
             </div>
         </div>
@@ -74,120 +67,110 @@
         gap: 12px;
     }
 
-    .summary-card, .sync-card {
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 12px;
+    .entity-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        padding: 16px;
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 12px;
+        box-shadow: var(--shadow-card);
     }
 
     .card-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding-bottom: 6px;
-        border-bottom: 1px solid #1e293b;
     }
 
-    .card-header h4 {
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .header-left .icon {
+        font-size: 1.1rem;
+    }
+
+    .header-left h4 {
         margin: 0;
-        font-size: 0.8rem;
+        font-size: 0.88rem;
         font-weight: 700;
-        color: #f1f5f9;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+        color: var(--text-primary);
     }
 
-    .batch-id, .sync-ping {
-        font-size: 0.6rem;
-        font-family: monospace;
-        color: #64748b;
-        background: #080c14;
-        padding: 2px 5px;
-        border-radius: 4px;
-        border: 1px solid #1e293b;
+    .lot-pill, .ping-pill {
+        font-size: 0.65rem;
+        font-weight: 600;
+        background: var(--bg-chip);
+        color: var(--text-secondary);
+        padding: 2px 8px;
+        border-radius: var(--radius-pill);
     }
 
-    .summary-rows, .sync-rows {
+    .stats-rows {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .stat-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: var(--bg-inset);
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+    }
+
+    .row-label {
+        font-size: 0.72rem;
+        color: var(--text-secondary);
+    }
+
+    .row-val {
+        font-size: 0.85rem;
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+    }
+
+    .row-val.green {
+        color: var(--accent-green);
+    }
+
+    .row-val small {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        font-weight: normal;
+    }
+
+    .sync-items-list {
         display: flex;
         flex-direction: column;
         gap: 6px;
-    }
-
-    .sum-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }
-
-    .sum-label {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #94a3b8;
-    }
-
-    .sum-box {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        background: #080c14;
-        border: 1px solid #1e293b;
-        border-radius: 4px;
-        padding: 4px 8px;
-    }
-
-    .sum-val {
-        font-size: 0.85rem;
-        font-family: monospace;
-        color: #f8fafc;
-    }
-
-    .sum-val.green {
-        color: #10b981;
-    }
-
-    .sum-unit {
-        font-size: 0.65rem;
-        font-weight: 700;
-        color: #64748b;
     }
 
     .sync-item {
         display: flex;
         align-items: center;
         gap: 8px;
-        background: #080c14;
-        border: 1px solid #1e293b;
-        border-radius: 5px;
-        padding: 6px 8px;
+        background: var(--bg-inset);
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
     }
 
-    .sync-item.active {
-        border-color: rgba(0, 240, 255, 0.3);
-        background: rgba(0, 240, 255, 0.04);
+    .status-circle {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--text-muted);
     }
 
-    .check-box {
-        width: 16px;
-        height: 16px;
-        border-radius: 3px;
-        border: 1.5px solid #334155;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.7rem;
-        font-weight: 900;
-        color: #000;
-        background: transparent;
-        flex-shrink: 0;
-    }
-
-    .check-box.checked {
-        background: #00f0ff;
-        border-color: #00f0ff;
+    .status-circle.active {
+        background: var(--accent-blue);
+        box-shadow: 0 0 6px var(--accent-blue);
     }
 
     .sync-info {
@@ -195,15 +178,15 @@
         flex-direction: column;
     }
 
-    .sync-label {
-        font-size: 0.75rem;
-        font-weight: 700;
-        color: #cbd5e1;
+    .sync-title {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: var(--text-primary);
         line-height: 1.1;
     }
 
     .sync-info small {
-        font-size: 0.6rem;
-        color: #64748b;
+        font-size: 0.62rem;
+        color: var(--text-muted);
     }
 </style>

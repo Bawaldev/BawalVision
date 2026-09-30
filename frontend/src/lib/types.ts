@@ -75,6 +75,12 @@ export interface DashboardStats {
     bufferedRecords: number;
 }
 
+export interface EngineStatus {
+    arch: string;
+    graviton_available: boolean;
+    local_engine_available: boolean;
+}
+
 export interface SystemConfig {
     backendUrl: string;
     deviceId: string;
@@ -84,5 +90,7 @@ export interface SystemConfig {
     vocWarningThreshold: number;
     vocDangerThreshold: number;
     gravitonEngineEnabled: boolean;
+    gravitonEngineAvailable?: boolean;
     localEngineEnabled: boolean;
+    localEngineAvailable?: boolean;
 }

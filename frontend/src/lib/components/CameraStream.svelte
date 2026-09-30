@@ -19,14 +19,14 @@
     }: Props = $props();
 
     const standardFoodItems = [
-        { id: 'nasi', label: 'Rice (Nasi)' },
-        { id: 'ayam', label: 'Chicken (Ayam)' },
-        { id: 'tofu', label: 'Tofu (Tahu)' },
-        { id: 'pisang', label: 'Banana (Pisang)' },
-        { id: 'jeruk', label: 'Orange (Jeruk)' },
-        { id: 'bayam', label: 'Spinach (Bayam)' },
-        { id: 'kangkung', label: 'Water Spinach' },
-        { id: 'others', label: 'Others' }
+        { id: 'nasi', label: 'Rice (Nasi)', icon: '🍚' },
+        { id: 'ayam', label: 'Chicken (Ayam)', icon: '🍗' },
+        { id: 'tofu', label: 'Tofu (Tahu)', icon: '🧊' },
+        { id: 'pisang', label: 'Banana (Pisang)', icon: '🍌' },
+        { id: 'jeruk', label: 'Orange (Jeruk)', icon: '🍊' },
+        { id: 'bayam', label: 'Spinach (Bayam)', icon: '🥬' },
+        { id: 'kangkung', label: 'Water Spinach', icon: '🌱' },
+        { id: 'others', label: 'Side Dish', icon: '🍱' }
     ];
 
     let canvasEl = $state<HTMLCanvasElement | null>(null);
@@ -71,7 +71,6 @@
     }
 
     $effect(() => {
-        // Track reactive dependencies
         const _d = detections;
         const _c = hasCamera;
         const _id = deviceId;
@@ -86,16 +85,13 @@
         const w = canvasEl.width;
         const h = canvasEl.height;
 
-        // Dark Industrial Canvas Background
-        ctx.fillStyle = '#05070e';
+        ctx.fillStyle = '#14171d';
         ctx.fillRect(0, 0, w, h);
 
         if (!hasCamera) {
-            // ==========================================
-            // NO CAMERA STREAM / OFFLINE STANDBY STATE
-            // ==========================================
+            // Standby state
             ctx.save();
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
             ctx.lineWidth = 1;
             for (let x = 40; x < w; x += 40) {
                 ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
@@ -104,48 +100,46 @@
                 ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
             }
 
-            const boxW = 380;
-            const boxH = 130;
+            const boxW = 340;
+            const boxH = 120;
             const boxX = (w - boxW) / 2;
             const boxY = (h - boxH) / 2;
 
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-            ctx.strokeStyle = '#334155';
+            ctx.fillStyle = '#202530';
+            ctx.strokeStyle = '#2d3444';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.roundRect(boxX, boxY, boxW, boxH, 8);
+            ctx.roundRect(boxX, boxY, boxW, boxH, 12);
             ctx.fill();
             ctx.stroke();
 
             ctx.fillStyle = '#f59e0b';
-            ctx.font = 'bold 22px sans-serif';
+            ctx.font = 'bold 24px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('⚠', w / 2, boxY + 36);
+            ctx.fillText('📷', w / 2, boxY + 36);
 
             ctx.fillStyle = '#f8fafc';
-            ctx.font = 'bold 13px monospace';
-            ctx.fillText('NO CAMERA STREAM DETECTED', w / 2, boxY + 62);
+            ctx.font = 'bold 13px sans-serif';
+            ctx.fillText('No Camera Stream Connected', w / 2, boxY + 66);
 
-            ctx.fillStyle = '#64748b';
-            ctx.font = '11px monospace';
-            ctx.fillText('Awaiting ESP32-S3 / USB Camera Ingress Feed', w / 2, boxY + 84);
-            ctx.fillText('Status: Standby (0 FPS) | Vision Service Idle', w / 2, boxY + 104);
+            ctx.fillStyle = '#94a3b8';
+            ctx.font = '11px sans-serif';
+            ctx.fillText('Awaiting ESP32-S3 Camera Feed on /api/v1/camera', w / 2, boxY + 88);
 
             ctx.textAlign = 'left';
             ctx.restore();
             return;
         }
 
-        // 1. Draw Live Camera Video Frame
+        // Draw Camera Frame
         if (cameraImg && cameraImg.complete && cameraImg.naturalWidth > 0 && !imageLoadFailed) {
             ctx.drawImage(cameraImg, 0, 0, w, h);
         } else {
-            // Camera connected but waiting for first frame
-            ctx.fillStyle = '#060911';
+            ctx.fillStyle = '#181c24';
             ctx.fillRect(0, 0, w, h);
         }
 
-        // 2. Define Standard Tray Compartment Coordinates for Bounding Boxes
+        // Draw Compartment Overlays
         const trayX = 35;
         const trayY = 32;
         const trayW = w - 70;
@@ -162,7 +156,7 @@
                 y: trayY + compPad,
                 w: (midX - trayX) - (compPad * 1.5),
                 h: trayH - (compPad * 2),
-                color: '#00f0ff'
+                color: '#38bdf8'
             },
             {
                 id: 'protein',
@@ -180,7 +174,7 @@
                 y: midY + (compPad * 0.5),
                 w: ((trayX + trayW - midX) - (compPad * 2.5)) / 2,
                 h: (trayY + trayH - midY) - (compPad * 1.5),
-                color: '#10b981'
+                color: '#22c55e'
             },
             {
                 id: 'fruit',
@@ -189,11 +183,10 @@
                 y: midY + (compPad * 0.5),
                 w: ((trayX + trayW - midX) - (compPad * 2.5)) / 2,
                 h: (trayY + trayH - midY) - (compPad * 1.5),
-                color: '#a855f7'
+                color: '#c084fc'
             }
         ];
 
-        // 3. Draw AI Detection Bounding Boxes (Transparent - ONLY when foods are detected!)
         if (detections.length > 0) {
             compLayouts.forEach((comp, slotIdx) => {
                 let det = detections.find(d => {
@@ -218,14 +211,12 @@
                 const bl = 12;
 
                 ctx.save();
-                // Bounding Box Outline (Transparent fill)
                 ctx.strokeStyle = comp.color;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.roundRect(bx, by, bw, bh, 6);
+                ctx.roundRect(bx, by, bw, bh, 8);
                 ctx.stroke();
 
-                // Corner Brackets
                 ctx.lineWidth = 3.5;
                 ctx.beginPath();
                 ctx.moveTo(bx, by + bl); ctx.lineTo(bx, by); ctx.lineTo(bx + bl, by);
@@ -234,43 +225,34 @@
                 ctx.moveTo(bx + bw - bl, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - bl);
                 ctx.stroke();
 
-                // Detection Badge
-                const labelText = `${det.food_name.toUpperCase()} ${(det.similarity_rate * 100).toFixed(0)}%`;
-                ctx.font = 'bold 11px monospace';
+                const labelText = `${det.food_name} ${(det.similarity_rate * 100).toFixed(0)}%`;
+                ctx.font = 'bold 11px sans-serif';
                 const metrics = ctx.measureText(labelText);
-                const badgeW = metrics.width + 14;
-                const badgeH = 20;
+                const badgeW = metrics.width + 16;
+                const badgeH = 22;
 
                 ctx.fillStyle = comp.color;
                 ctx.beginPath();
-                ctx.roundRect(bx, by - badgeH + 2, badgeW, badgeH, [4, 4, 0, 0]);
+                ctx.roundRect(bx, by - badgeH + 2, badgeW, badgeH, [6, 6, 0, 0]);
                 ctx.fill();
 
-                ctx.fillStyle = '#05070d';
-                ctx.fillText(labelText, bx + 7, by - 6);
+                ctx.fillStyle = '#0f172a';
+                ctx.fillText(labelText, bx + 8, by - 6);
                 ctx.restore();
             });
         }
-
-        // 4. Subtle Industrial HUD Overlay (Transparent)
-        ctx.save();
-        ctx.fillStyle = 'rgba(0, 240, 255, 0.9)';
-        ctx.font = '600 10px monospace';
-        ctx.fillText(`CAM_FEED: ${deviceId || 'LIVE'} | STREAM: OV5640_HQ`, 16, 18);
-        ctx.fillText(`C++ ENGINE: MOBILENETV3_ONNX`, w - 190, 18);
-        ctx.restore();
     }
 </script>
 
 <div class="camera-stream-wrapper">
-    <!-- Main Camera Viewport -->
-    <div class="viewport-box">
+    <!-- Camera Viewport Card -->
+    <div class="viewport-card">
         <div class="viewport-header">
-            <div class="live-indicator">
-                <span class="pulse-dot" class:offline={!hasCamera}></span>
-                <strong>OPTICAL INSPECTION POD</strong>
+            <div class="header-left">
+                <span class="live-dot" class:offline={!hasCamera}></span>
+                <strong>Live Inspection View</strong>
             </div>
-            <div class="resolution-tag">{hasCamera ? '640 × 480 @ 30FPS' : 'OFFLINE - NO SIGNAL'}</div>
+            <span class="pill-badge">{hasCamera ? '640 × 480 @ 30 FPS' : 'Standby'}</span>
         </div>
 
         <div class="canvas-container">
@@ -280,37 +262,35 @@
                 height="480"
                 class="feed-canvas"
             ></canvas>
-
-            <!-- Crosshair Center Overlay -->
-            <div class="hud-reticle"></div>
         </div>
 
         <div class="viewport-footer">
-            <span>PERSPECTIVE: {hasCamera ? 'DEWARPED (HOMOGRAPHY CALIBRATED)' : 'STANDBY'}</span>
-            <span>AI ENGINE: MOBILENETV3_ONNX</span>
+            <span>📷 Device: {deviceId || 'ESP32S3_CAM'}</span>
+            <span>⚡ Engine: C++ SIMD</span>
         </div>
     </div>
 
-    <!-- Detected Objects Checklist (Wireframe: Detected Object Panel) -->
-    <div class="detected-objects-panel">
+    <!-- Lovelace Entity Chips Grid (Like Home Assistant Switch Chips) -->
+    <div class="entities-panel">
         <div class="panel-header">
-            <h3>Detected Object</h3>
-            <span class="count-badge">{detections.length} Active</span>
+            <div class="panel-title-group">
+                <span class="entity-group-icon">🍱</span>
+                <h3>Detected Items</h3>
+            </div>
+            <span class="active-count">{detections.length} Active</span>
         </div>
 
-        <div class="food-checklist">
+        <div class="entity-chips-grid">
             {#each standardFoodItems as item}
                 {@const check = isDetected(item.id)}
-                <div class="food-check-row" class:active={check.found}>
-                    <div class="check-box" class:checked={check.found}>
-                        {#if check.found}
-                            ✓
-                        {/if}
+                <div class="entity-item" class:on={check.found}>
+                    <div class="entity-icon-circle">
+                        <span>{item.icon}</span>
                     </div>
-                    <span class="food-label">{item.label}</span>
-                    {#if check.found}
-                        <span class="conf-badge">{(check.confidence * 100).toFixed(0)}%</span>
-                    {/if}
+                    <div class="entity-info">
+                        <span class="entity-name">{item.label}</span>
+                        <span class="entity-state">{check.found ? `${(check.confidence * 100).toFixed(0)}% Match` : 'Off'}</span>
+                    </div>
                 </div>
             {/each}
         </div>
@@ -320,75 +300,64 @@
 <style>
     .camera-stream-wrapper {
         display: grid;
-        grid-template-columns: 1fr 220px;
+        grid-template-columns: 1fr 260px;
         gap: 16px;
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 14px;
     }
 
-    .viewport-box {
+    .viewport-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
         display: flex;
         flex-direction: column;
-        background: #080c14;
-        border: 1px solid #1e293b;
-        border-radius: 6px;
-        overflow: hidden;
+        box-shadow: var(--shadow-card);
     }
 
     .viewport-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 8px 12px;
-        background: rgba(0, 0, 0, 0.4);
-        border-bottom: 1px solid #1e293b;
+        padding: 12px 16px;
+        background: var(--bg-card);
+        border-bottom: 1px solid var(--border-subtle);
     }
 
-    .live-indicator {
+    .header-left {
         display: flex;
         align-items: center;
         gap: 8px;
-        font-size: 0.75rem;
-        color: #f8fafc;
-        letter-spacing: 0.05em;
+        font-size: 0.88rem;
+        font-weight: 700;
+        color: var(--text-primary);
     }
 
-    .pulse-dot {
+    .live-dot {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: #10b981;
-        box-shadow: 0 0 8px #10b981;
-        animation: blink 1.5s infinite;
+        background: var(--accent-green);
+        box-shadow: 0 0 8px var(--accent-green);
     }
 
-    .pulse-dot.offline {
-        background: #64748b;
+    .live-dot.offline {
+        background: var(--text-muted);
         box-shadow: none;
-        animation: none;
     }
 
-    @keyframes blink {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.3; }
-    }
-
-    .resolution-tag {
-        font-size: 0.65rem;
-        font-family: monospace;
-        color: #64748b;
-        background: #0f172a;
-        padding: 2px 6px;
-        border-radius: 4px;
-        border: 1px solid #1e293b;
+    .pill-badge {
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: var(--bg-chip);
+        color: var(--text-secondary);
+        padding: 3px 10px;
+        border-radius: var(--radius-pill);
     }
 
     .canvas-container {
         position: relative;
         width: 100%;
-        background: #000;
+        background: #14171d;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -404,21 +373,22 @@
     .viewport-footer {
         display: flex;
         justify-content: space-between;
-        padding: 6px 12px;
-        font-size: 0.65rem;
-        color: #475569;
-        font-family: monospace;
-        background: rgba(0, 0, 0, 0.3);
-        border-top: 1px solid #1e293b;
+        padding: 10px 16px;
+        font-size: 0.72rem;
+        color: var(--text-muted);
+        background: var(--bg-card);
+        border-top: 1px solid var(--border-subtle);
     }
 
-    .detected-objects-panel {
+    .entities-panel {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        padding: 16px;
         display: flex;
         flex-direction: column;
-        background: #0b0f19;
-        border: 1px solid #1e293b;
-        border-radius: 6px;
-        padding: 12px;
+        gap: 12px;
+        box-shadow: var(--shadow-card);
     }
 
     .panel-header {
@@ -426,86 +396,102 @@
         align-items: center;
         justify-content: space-between;
         padding-bottom: 10px;
-        border-bottom: 1px solid #1e293b;
-        margin-bottom: 10px;
+        border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .panel-title-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .entity-group-icon {
+        font-size: 1.1rem;
     }
 
     .panel-header h3 {
         margin: 0;
-        font-size: 0.9rem;
+        font-size: 0.92rem;
         font-weight: 700;
-        color: #f1f5f9;
-        letter-spacing: -0.01em;
+        color: var(--text-primary);
     }
 
-    .count-badge {
-        font-size: 0.65rem;
-        font-weight: 700;
-        padding: 2px 6px;
-        background: rgba(0, 240, 255, 0.15);
-        color: #00f0ff;
-        border-radius: 4px;
-        border: 1px solid rgba(0, 240, 255, 0.3);
+    .active-count {
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: var(--accent-blue-dim);
+        color: var(--accent-blue);
+        padding: 2px 8px;
+        border-radius: var(--radius-pill);
     }
 
-    .food-checklist {
+    .entity-chips-grid {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        flex: 1;
+        overflow-y: auto;
     }
 
-    .food-check-row {
+    .entity-item {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 7px 10px;
-        background: rgba(255, 255, 255, 0.02);
-        border: 1px solid rgba(255, 255, 255, 0.04);
-        border-radius: 6px;
-        transition: all 0.2s ease;
+        padding: 8px 10px;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        transition: all 0.15s ease;
     }
 
-    .food-check-row.active {
-        background: rgba(0, 240, 255, 0.08);
-        border-color: rgba(0, 240, 255, 0.35);
+    .entity-item.on {
+        background: rgba(56, 189, 248, 0.08);
+        border-color: rgba(56, 189, 248, 0.4);
     }
 
-    .check-box {
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
-        border: 1.5px solid #334155;
+    .entity-icon-circle {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--bg-chip);
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.75rem;
-        font-weight: 900;
-        color: #000;
-        background: transparent;
+        font-size: 0.95rem;
         flex-shrink: 0;
+        transition: all 0.15s ease;
     }
 
-    .check-box.checked {
-        background: #00f0ff;
-        border-color: #00f0ff;
+    .entity-item.on .entity-icon-circle {
+        background: var(--accent-blue);
     }
 
-    .food-label {
-        font-size: 0.8rem;
+    .entity-info {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .entity-name {
+        font-size: 0.78rem;
         font-weight: 600;
-        color: #94a3b8;
-        flex: 1;
+        color: var(--text-secondary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
-    .food-check-row.active .food-label {
-        color: #ffffff;
-    }
-
-    .conf-badge {
-        font-size: 0.7rem;
-        font-family: monospace;
+    .entity-item.on .entity-name {
+        color: var(--text-primary);
         font-weight: 700;
-        color: #10b981;
+    }
+
+    .entity-state {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+    }
+
+    .entity-item.on .entity-state {
+        color: var(--accent-blue);
+        font-weight: 600;
     }
 </style>

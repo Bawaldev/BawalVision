@@ -12,6 +12,7 @@
         fetchCameraStatus,
         fetchLatestTelemetry,
         fetchLatestInspection,
+        fetchEngineStatus,
         triggerManualInspection
     } from '$lib/api';
 
@@ -37,6 +38,8 @@
     let isOnline = $state(false);
     let hasCamera = $state(false);
     let isInspecting = $state(false);
+    let gravitonAvailable = $state(false);
+    let localEngineAvailable = $state(true);
 
     let systemConfig = $state<SystemConfig>({
         backendUrl: '/api/v1',
@@ -46,8 +49,10 @@
         minConfidenceThreshold: 0.35,
         vocWarningThreshold: 80.0,
         vocDangerThreshold: 40.0,
-        gravitonEngineEnabled: true,
-        localEngineEnabled: true
+        gravitonEngineEnabled: false,
+        gravitonEngineAvailable: false,
+        localEngineEnabled: true,
+        localEngineAvailable: true
     });
 
     let detections = $state<FoodDetection[]>([]);
@@ -84,7 +89,17 @@
     // Real Backend Polling Step
     async function pollBackendData() {
         try {
-            // 1. Camera Status
+            // 1. Hardware Engine Status
+            const engines = await fetchEngineStatus(systemConfig.backendUrl);
+            gravitonAvailable = engines.graviton_available;
+            localEngineAvailable = engines.local_engine_available;
+            systemConfig.gravitonEngineAvailable = engines.graviton_available;
+            systemConfig.localEngineAvailable = engines.local_engine_available;
+            if (!gravitonAvailable && systemConfig.gravitonEngineEnabled) {
+                systemConfig.gravitonEngineEnabled = false;
+            }
+
+            // 2. Camera Status
             const cam = await fetchCameraStatus(systemConfig.backendUrl);
             hasCamera = cam.active;
             if (cam.active && cam.deviceId) {
@@ -92,7 +107,7 @@
                 isOnline = true;
             }
 
-            // 2. Telemetry Ingress from ESP32-S3
+            // 3. Telemetry Ingress from ESP32-S3
             const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
             if (tel) {
                 telemetry = tel;
@@ -102,7 +117,7 @@
                 isOnline = true;
             }
 
-            // 3. Inspections & Records from DB
+            // 4. Inspections & Records from DB
             const records = await fetchRecords(systemConfig.backendUrl);
             if (records && records.length > 0) {
                 isOnline = true;
@@ -238,8 +253,8 @@
 </script>
 
 <svelte:head>
-    <title>BawalVision | Optical Quality & Telemetry Dashboard</title>
-    <meta name="description" content="BawalVision AI Food Quality and IoT Telemetry Inspection System" />
+    <title>BawalVision | Industrial Vision & SCADA HMI</title>
+    <meta name="description" content="BawalVision Machine Vision & Industrial SCADA Telemetry Quality Control System" />
 </svelte:head>
 
 <div class="app-root">
@@ -257,12 +272,22 @@
         <TopBar
             currentTitle={activeTab}
             gravitonEnabled={systemConfig.gravitonEngineEnabled}
+            gravitonAvailable={gravitonAvailable}
             localEngineEnabled={systemConfig.localEngineEnabled}
+            localEngineAvailable={localEngineAvailable}
             activeDevice={systemConfig.deviceId || 'DISCONNECTED'}
             fps={hasCamera ? 29.8 : 0.0}
             latencyMs={hasCamera ? 5.4 : 0.0}
-            onToggleGraviton={() => (systemConfig.gravitonEngineEnabled = !systemConfig.gravitonEngineEnabled)}
-            onToggleLocal={() => (systemConfig.localEngineEnabled = !systemConfig.localEngineEnabled)}
+            onToggleGraviton={() => {
+                if (gravitonAvailable) {
+                    systemConfig.gravitonEngineEnabled = !systemConfig.gravitonEngineEnabled;
+                }
+            }}
+            onToggleLocal={() => {
+                if (localEngineAvailable) {
+                    systemConfig.localEngineEnabled = !systemConfig.localEngineEnabled;
+                }
+            }}
         />
 
         <!-- Page Content Router -->

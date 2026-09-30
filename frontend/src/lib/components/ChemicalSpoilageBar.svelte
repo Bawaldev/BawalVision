@@ -7,20 +7,16 @@
 
     let { gasVoc = 110.5, isSpoiled = false, tSafeHours = 8.5 }: Props = $props();
 
-    // Spoilage calculation based on VOC gas resistance (kOhm):
-    // > 80 kOhm: High resistance = Low VOC emission = Fresh food (0 - 30% spoilage index)
-    // 40 - 80 kOhm: Moderate VOC = Caution (30 - 70%)
-    // < 40 kOhm: High VOC = Spoiled (> 70%)
     let spoilagePercentage = $derived(
         Math.min(100, Math.max(0, 100 - (gasVoc / 150) * 100))
     );
 
     let statusText = $derived(
         isSpoiled || spoilagePercentage > 70
-            ? 'SPOILED / DANGER'
+            ? 'Spoiled / Danger'
             : spoilagePercentage > 35
-            ? 'CAUTION / EXPIRING'
-            : 'FRESH & SAFE'
+            ? 'Caution / Expiring'
+            : 'Fresh & Safe'
     );
 
     let statusClass = $derived(
@@ -32,123 +28,129 @@
     );
 </script>
 
-<div class="spoilage-panel-wrapper">
-    <div class="panel-header">
-        <div class="title-group">
-            <h3>Chemical Spoilage Bar</h3>
-            <span class="sub-tag">BME680 VOC SENSOR</span>
-        </div>
-        <span class="spoilage-state-badge {statusClass}">{statusText}</span>
-    </div>
-
-    <!-- Visual Linear Spoilage Bar (Wireframe: Chemical Spoilage Bar) -->
-    <div class="bar-container">
-        <div class="gradient-track">
-            <!-- Animated Needle Indicator -->
-            <div
-                class="needle-pointer"
-                style={`left: ${spoilagePercentage}%`}
-            >
-                <div class="needle-tip"></div>
-                <div class="needle-val">{spoilagePercentage.toFixed(0)}%</div>
+<div class="spoilage-card">
+    <div class="card-header">
+        <div class="title-left">
+            <span class="sensor-icon">💨</span>
+            <div>
+                <h4>Food Spoilage Index</h4>
+                <p class="sub-label">VOC Gas Analysis</p>
             </div>
         </div>
-        <div class="scale-labels">
-            <span>0% (FRESH)</span>
-            <span>50% (MODERATE)</span>
-            <span>100% (SPOILED)</span>
+        <span class="status-pill {statusClass}">{statusText}</span>
+    </div>
+
+    <!-- Lovelace Smooth Gradient Bar -->
+    <div class="gradient-gauge-container">
+        <div class="gauge-track">
+            <div
+                class="needle-pin"
+                style={`left: ${spoilagePercentage}%`}
+            >
+                <div class="pin-bubble">{spoilagePercentage.toFixed(0)}%</div>
+            </div>
+        </div>
+        <div class="gauge-labels">
+            <span>Fresh (0%)</span>
+            <span>Caution (50%)</span>
+            <span>Spoiled (100%)</span>
         </div>
     </div>
 
-    <div class="metrics-row">
-        <div class="metric-pill">
-            <span class="label">GAS RESISTANCE</span>
-            <strong class="val cyan">{gasVoc.toFixed(1)} kΩ</strong>
+    <div class="stats-tiles">
+        <div class="tile">
+            <span class="tile-title">Gas Resistance</span>
+            <strong class="tile-val blue">{gasVoc.toFixed(1)} <small>kΩ</small></strong>
         </div>
-        <div class="metric-pill">
-            <span class="label">T-SAFE PREDICTION</span>
-            <strong class="val green">{tSafeHours.toFixed(1)} Hours</strong>
+        <div class="tile">
+            <span class="tile-title">T-Safe Shelf Life</span>
+            <strong class="tile-val green">{tSafeHours.toFixed(1)} <small>hours</small></strong>
         </div>
     </div>
 </div>
 
 <style>
-    .spoilage-panel-wrapper {
-        background: var(--bg-panel, #121824);
-        border: 1px solid var(--border-color, #1f293d);
-        border-radius: 8px;
-        padding: 12px 14px;
+    .spoilage-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        padding: 16px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 14px;
+        box-shadow: var(--shadow-card);
     }
 
-    .panel-header {
+    .card-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding-bottom: 6px;
-        border-bottom: 1px solid #1e293b;
     }
 
-    .title-group h3 {
+    .title-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .sensor-icon {
+        font-size: 1.3rem;
+    }
+
+    .title-left h4 {
         margin: 0;
-        font-size: 0.85rem;
+        font-size: 0.92rem;
         font-weight: 700;
-        color: #f1f5f9;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+        color: var(--text-primary);
+        line-height: 1.2;
     }
 
-    .sub-tag {
-        font-size: 0.6rem;
-        color: #64748b;
-        letter-spacing: 0.05em;
-        font-family: monospace;
+    .sub-label {
+        margin: 0;
+        font-size: 0.68rem;
+        color: var(--text-muted);
     }
 
-    .spoilage-state-badge {
-        font-size: 0.65rem;
-        font-weight: 800;
-        padding: 3px 8px;
-        border-radius: 4px;
-        letter-spacing: 0.05em;
+    .status-pill {
+        font-size: 0.68rem;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: var(--radius-pill);
     }
 
-    .spoilage-state-badge.fresh {
-        background: rgba(16, 185, 129, 0.2);
-        color: #10b981;
-        border: 1px solid rgba(16, 185, 129, 0.4);
+    .status-pill.fresh {
+        background: var(--accent-green-dim);
+        color: var(--accent-green);
+        border: 1px solid rgba(34, 197, 94, 0.3);
     }
 
-    .spoilage-state-badge.warning {
-        background: rgba(245, 158, 11, 0.2);
-        color: #f59e0b;
-        border: 1px solid rgba(245, 158, 11, 0.4);
+    .status-pill.warning {
+        background: var(--accent-amber-dim);
+        color: var(--accent-amber);
+        border: 1px solid rgba(245, 158, 11, 0.3);
     }
 
-    .spoilage-state-badge.danger {
-        background: rgba(239, 68, 68, 0.2);
-        color: #ef4444;
-        border: 1px solid rgba(239, 68, 68, 0.4);
+    .status-pill.danger {
+        background: var(--accent-red-dim);
+        color: var(--accent-red);
+        border: 1px solid rgba(244, 63, 94, 0.3);
     }
 
-    .bar-container {
+    .gradient-gauge-container {
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        padding: 6px 0;
+        gap: 8px;
+        padding: 4px 0;
     }
 
-    .gradient-track {
+    .gauge-track {
         position: relative;
-        height: 14px;
-        background: linear-gradient(90deg, #10b981 0%, #f59e0b 50%, #ef4444 100%);
-        border-radius: 7px;
-        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+        height: 10px;
+        background: linear-gradient(90deg, #22c55e 0%, #eab308 50%, #f43f5e 100%);
+        border-radius: var(--radius-pill);
     }
 
-    .needle-pointer {
+    .needle-pin {
         position: absolute;
         top: -6px;
         transform: translateX(-50%);
@@ -158,66 +160,65 @@
         transition: left 0.4s ease;
     }
 
-    .needle-tip {
-        width: 4px;
-        height: 26px;
-        background: #ffffff;
-        border-radius: 2px;
-        box-shadow: 0 0 8px rgba(0, 0, 0, 0.8), 0 0 4px #00f0ff;
-    }
-
-    .needle-val {
-        font-size: 0.6rem;
-        font-family: monospace;
-        font-weight: 800;
+    .pin-bubble {
+        font-size: 0.62rem;
+        font-family: var(--font-mono);
+        font-weight: 700;
         color: #ffffff;
-        background: #0b0f19;
-        padding: 1px 4px;
-        border-radius: 3px;
+        background: #0f172a;
+        padding: 2px 6px;
+        border-radius: var(--radius-pill);
         border: 1px solid #334155;
-        margin-top: 2px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     }
 
-    .scale-labels {
+    .gauge-labels {
         display: flex;
         justify-content: space-between;
-        font-size: 0.6rem;
-        color: #64748b;
-        font-family: monospace;
+        font-size: 0.68rem;
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+
+    .stats-tiles {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    .tile {
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 8px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .tile-title {
+        font-size: 0.65rem;
+        color: var(--text-muted);
         font-weight: 600;
     }
 
-    .metrics-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-    }
-
-    .metric-pill {
-        background: #0b0f19;
-        border: 1px solid #1e293b;
-        border-radius: 6px;
-        padding: 6px 10px;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .metric-pill .label {
-        font-size: 0.6rem;
-        color: #64748b;
+    .tile-val {
+        font-size: 0.95rem;
+        font-family: var(--font-mono);
         font-weight: 700;
     }
 
-    .metric-pill .val {
-        font-size: 0.9rem;
-        font-family: monospace;
+    .tile-val.blue {
+        color: var(--accent-blue);
     }
 
-    .metric-pill .val.cyan {
-        color: #00f0ff;
+    .tile-val.green {
+        color: var(--accent-green);
     }
 
-    .metric-pill .val.green {
-        color: #10b981;
+    .tile-val small {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        font-weight: normal;
     }
 </style>
