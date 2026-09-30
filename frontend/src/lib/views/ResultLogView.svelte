@@ -11,46 +11,6 @@
     async function loadData() {
         isLoading = true;
         records = await fetchRecords();
-        if (records.length === 0) {
-            // Provide realistic sample fallback if backend is not yet populated
-            records = [
-                {
-                    id: 'fc75bac3-d0fa-48df-a7f8-979155ddbf5e',
-                    device_id: 'ESP32S3_441BF6C95678',
-                    firmware_version: '1.0.4-prod',
-                    created_at: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
-                    temperature: 24.8,
-                    humidity: 64.2,
-                    gas_voc: 110.5,
-                    pressure: 1013.25,
-                    cpu_load: 18,
-                    is_spoiled: false,
-                    t_safe_hours: 8.5,
-                    inspection_foods: [
-                        { id: '1', inspection_id: 'fc75bac3', food_item_id: 1, weight_grams: 160, food_item: { id: 1, name: 'nasi' } },
-                        { id: '2', inspection_id: 'fc75bac3', food_item_id: 2, weight_grams: 115, food_item: { id: 2, name: 'ayam' } },
-                        { id: '3', inspection_id: 'fc75bac3', food_item_id: 3, weight_grams: 80, food_item: { id: 3, name: 'bayam' } }
-                    ]
-                },
-                {
-                    id: '2d83482a-c69b-4ef2-a90e-a586115d5a9c',
-                    device_id: 'ESP32S3_441BF6C95678',
-                    firmware_version: '1.0.4-prod',
-                    created_at: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
-                    temperature: 25.1,
-                    humidity: 65.0,
-                    gas_voc: 108.2,
-                    pressure: 1013.20,
-                    cpu_load: 20,
-                    is_spoiled: false,
-                    t_safe_hours: 8.0,
-                    inspection_foods: [
-                        { id: '4', inspection_id: '2d83482a', food_item_id: 1, weight_grams: 155, food_item: { id: 1, name: 'nasi' } },
-                        { id: '5', inspection_id: '2d83482a', food_item_id: 5, weight_grams: 120, food_item: { id: 5, name: 'pisang' } }
-                    ]
-                }
-            ];
-        }
         isLoading = false;
     }
 
