@@ -87,7 +87,7 @@ esp_err_t camera_task_init(void) {
       .pixel_format = PIXFORMAT_JPEG,
       .frame_size = FRAMESIZE_VGA, // 640x480
 
-      .jpeg_quality = 18, // 0-63 (18 provides optimal high compression speed & clarity)
+      .jpeg_quality = 24, // 0-63 (18 provides optimal high compression speed & clarity)
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -112,38 +112,25 @@ esp_err_t camera_task_init(void) {
 }
 
 esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
-  if (out_frame == NULL) return ESP_ERR_INVALID_ARG;
+  if (out_frame == NULL || out_frame->data == NULL) return ESP_ERR_INVALID_ARG;
 
-  if (!camera_lock_frame(pdMS_TO_TICKS(100))) {
+  if (!camera_lock_frame(pdMS_TO_TICKS(50))) {
     return ESP_ERR_TIMEOUT;
   }
 
   if (s_shared_frame.header.buffer_len > 0 && s_shared_frame.data != NULL) {
-    memcpy(&out_frame->header, &s_shared_frame.header, sizeof(camera_frame_header_t));
-
-    if (out_frame->capacity < s_shared_frame.header.buffer_len) {
-      uint8_t *new_buf = (uint8_t *)heap_caps_realloc(
-          out_frame->data, s_shared_frame.header.buffer_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-      if (new_buf == NULL) {
-        camera_unlock_frame();
-        return ESP_ERR_NO_MEM;
-      }
-      out_frame->data = new_buf;
-      out_frame->capacity = s_shared_frame.header.buffer_len;
+    uint32_t copy_len = s_shared_frame.header.buffer_len;
+    if (copy_len > out_frame->capacity) {
+      copy_len = out_frame->capacity;
     }
-    memcpy(out_frame->data, s_shared_frame.data, s_shared_frame.header.buffer_len);
+
+    memcpy(&out_frame->header, &s_shared_frame.header, sizeof(camera_frame_header_t));
+    memcpy(out_frame->data, s_shared_frame.data, copy_len);
+    out_frame->header.buffer_len = copy_len;
   } else {
     uint32_t fallback_len = sizeof(s_fallback_jpeg);
-
-    if (out_frame->capacity < fallback_len) {
-      uint8_t *new_buf = (uint8_t *)heap_caps_realloc(
-          out_frame->data, fallback_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-      if (new_buf == NULL) {
-        camera_unlock_frame();
-        return ESP_ERR_NO_MEM;
-      }
-      out_frame->data = new_buf;
-      out_frame->capacity = fallback_len;
+    if (fallback_len > out_frame->capacity) {
+      fallback_len = out_frame->capacity;
     }
 
     out_frame->header.buffer_len = fallback_len;
@@ -161,7 +148,6 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
   camera_unlock_frame();
   return ESP_OK;
 }
-
 void Camera_Capture_Task(void *pvParameters) {
   (void)pvParameters;
   ESP_LOGI(TAG, "OV5640 CSP Frame Ingestion Task running");
@@ -344,7 +330,7 @@ void http_stream_sender_task(void *pvParameters) {
     if (elapsed_ticks < frame_interval_ticks) {
       vTaskDelay(frame_interval_ticks - elapsed_ticks);
     } else {
-      vTaskDelay(pdMS_TO_TICKS(2));
+      taskYIELD();
     }
   }
 
