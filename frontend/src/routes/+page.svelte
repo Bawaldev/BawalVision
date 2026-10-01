@@ -76,7 +76,7 @@
     let totalAccepted = $state(0);
     let totalRejected = $state(0);
     let totalPlates = $derived(totalAccepted + totalRejected);
-    let passRate = $derived(totalPlates > 0 ? (totalAccepted / totalPlates) * 100 : 100.0);
+    let passRate = $derived(totalPlates > 0 ? (totalAccepted / totalPlates) * 100 : 0.0);
     let bufferedRecords = $state(0);
     let telemetryHistory = $state<TelemetryPayload[]>([]);
 
@@ -113,37 +113,39 @@
                 isOnline = true;
             }
 
-            // 4. Inspections & Records from DB
-            const records = await fetchRecords(systemConfig.backendUrl);
-            if (records && records.length > 0) {
-                isOnline = true;
-                const spoiled = records.filter(r => r.is_spoiled).length;
-                totalRejected = spoiled;
-                totalAccepted = records.length - spoiled;
+            // 4. Inspections & Records from DB (Only count actual meals with scanned food items!)
+            const allRecords = await fetchRecords(systemConfig.backendUrl);
+            const validRecords = (allRecords || []).filter(
+                r => r.inspection_foods && r.inspection_foods.length > 0
+            );
 
-                // If camera is connected, reflect latest inspection detections
-                if (hasCamera) {
-                    const latest = records[0];
-                    if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
-                        detections = latest.inspection_foods.map(item => {
-                            const name = item.food_item?.name || 'food_item';
-                            return {
-                                food_name: name,
-                                similarity_rate: 0.90,
-                                weight_grams: Number(item.weight_grams) || 120,
-                                category: getCategory(name)
-                            };
-                        });
-                    } else {
-                        detections = [];
-                    }
+            if (validRecords.length > 0) {
+                isOnline = true;
+                const spoiled = validRecords.filter(r => r.is_spoiled).length;
+                totalRejected = spoiled;
+                totalAccepted = validRecords.length - spoiled;
+
+                const latest = validRecords[0];
+                if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
+                    detections = latest.inspection_foods.map(item => {
+                        const name = item.food_item?.name || 'food_item';
+                        return {
+                            food_name: name,
+                            similarity_rate: Number(item.similarity_rate) || 0.0,
+                            weight_grams: Number(item.weight_grams) || 0,
+                            temperature: Number(item.temperature) || Number(latest.food_temperature) || Number(latest.temperature) || 25,
+                            spoilage_score: Number(item.spoilage_score) || 0,
+                            status: (item.status as 'PASS' | 'REVIEW' | 'REJECT') || 'PASS',
+                            category: getCategory(name)
+                        };
+                    });
                 } else {
                     detections = [];
                 }
             } else {
-                if (!hasCamera) {
-                    detections = [];
-                }
+                totalAccepted = 0;
+                totalRejected = 0;
+                detections = [];
             }
         } catch (err) {
             console.warn('[BACKEND POLL] Offline or waiting for backend service:', err);

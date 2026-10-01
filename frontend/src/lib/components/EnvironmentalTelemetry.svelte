@@ -1,11 +1,33 @@
 <script lang="ts">
     interface Props {
+        foodTemperature?: number;
+        cpuTemperature?: number;
         temperature?: number;
         cpuLoad?: number;
         firmwareVersion?: string;
     }
 
-    let { temperature = 24.5, cpuLoad = 18, firmwareVersion = '1.0.0' }: Props = $props();
+    let {
+        foodTemperature,
+        cpuTemperature = 36.5,
+        temperature,
+        cpuLoad = 18,
+        firmwareVersion = '1.0.0'
+    }: Props = $props();
+
+    let displayFoodTemp = $derived(
+        foodTemperature != null && foodTemperature > 0
+            ? foodTemperature
+            : temperature != null && temperature > 0
+            ? temperature
+            : 24.5
+    );
+
+    let displayCpuTemp = $derived(
+        cpuTemperature != null && cpuTemperature > 0
+            ? cpuTemperature
+            : 36.5
+    );
 </script>
 
 <div class="env-card">
@@ -13,8 +35,8 @@
         <div class="header-left">
             <span class="room-icon">🌡️</span>
             <div>
-                <h4>Thermal & Node Telemetry</h4>
-                <p class="sub-label">ESP32-S3 Core & Temperature</p>
+                <h4>Thermal & Hardware Telemetry</h4>
+                <p class="sub-label">Food Surface vs ESP32-S3 Core</p>
             </div>
         </div>
         <span class="bus-badge">v{firmwareVersion}</span>
@@ -23,16 +45,25 @@
     <!-- Horizontal IoT Metrics Strip -->
     <div class="metrics-row">
         <div class="stat-item">
-            <span class="icon">🌡️</span>
-            <span class="val">{temperature > 0 ? temperature.toFixed(1) : '24.5'} <small>°C</small></span>
+            <span class="icon">🥗</span>
+            <div class="stat-text">
+                <span class="val">{displayFoodTemp.toFixed(1)} <small>°C</small></span>
+                <span class="stat-tag">Food</span>
+            </div>
+        </div>
+        <div class="stat-item">
+            <span class="icon">💻</span>
+            <div class="stat-text">
+                <span class="val">{displayCpuTemp.toFixed(1)} <small>°C</small></span>
+                <span class="stat-tag">MCU</span>
+            </div>
         </div>
         <div class="stat-item">
             <span class="icon">⚡</span>
-            <span class="val">{cpuLoad > 0 ? cpuLoad : '18'} <small>%</small></span>
-        </div>
-        <div class="stat-item">
-            <span class="icon">📡</span>
-            <span class="val">Active <small>100Hz</small></span>
+            <div class="stat-text">
+                <span class="val">{cpuLoad > 0 ? cpuLoad : '18'} <small>%</small></span>
+                <span class="stat-tag">Load</span>
+            </div>
         </div>
     </div>
 
@@ -40,17 +71,27 @@
     <div class="meters-container">
         <div class="meter-bar-item">
             <div class="meter-labels">
-                <span>Core Temperature</span>
-                <strong>{temperature > 0 ? temperature.toFixed(1) : '24.5'} °C</strong>
+                <span>Food Surface Temperature</span>
+                <strong>{displayFoodTemp.toFixed(1)} °C</strong>
             </div>
             <div class="progress-track">
-                <div class="progress-fill temp" style={`width: ${Math.min(100, Math.max(0, ((temperature || 24.5) / 50) * 100))}%`}></div>
+                <div class="progress-fill food-temp" style={`width: ${Math.min(100, Math.max(0, (displayFoodTemp / 50) * 100))}%`}></div>
             </div>
         </div>
 
         <div class="meter-bar-item">
             <div class="meter-labels">
-                <span>MCU CPU Utilization</span>
+                <span>ESP32-S3 CPU Temperature</span>
+                <strong>{displayCpuTemp.toFixed(1)} °C</strong>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill cpu-temp" style={`width: ${Math.min(100, Math.max(0, (displayCpuTemp / 80) * 100))}%`}></div>
+            </div>
+        </div>
+
+        <div class="meter-bar-item">
+            <div class="meter-labels">
+                <span>Core CPU Utilization</span>
                 <strong>{cpuLoad > 0 ? cpuLoad : 18} %</strong>
             </div>
             <div class="progress-track">
@@ -144,6 +185,18 @@
         font-weight: 500;
     }
 
+    .stat-text {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .stat-tag {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        font-weight: 600;
+    }
+
     .meters-container {
         display: flex;
         flex-direction: column;
@@ -181,8 +234,12 @@
         transition: width 0.4s ease;
     }
 
-    .progress-fill.temp {
+    .progress-fill.food-temp {
         background: var(--accent-amber);
+    }
+
+    .progress-fill.cpu-temp {
+        background: #ec4899;
     }
 
     .progress-fill.cpu {

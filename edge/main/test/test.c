@@ -25,11 +25,13 @@ void test_telemetry_producer_task(void *pvParameters) {
         time_t now;
         time(&now);
         dummy_data.timestamp = (int64_t)now;
+        dummy_data.food_temperature = temp_counter;
+        dummy_data.cpu_temperature = temp_counter + 10.5f;
         dummy_data.temperature = temp_counter;
         dummy_data.current_cpu_load = get_cpu_usage_percentage();
 
-        ESP_LOGI(TAG, "Mendorong payload ke antrean [ID: %s, Temp: %.2f C, CPU: %d%%]...", 
-                 dummy_data.device_id, dummy_data.temperature, dummy_data.current_cpu_load);
+        ESP_LOGI(TAG, "Mendorong payload ke antrean [ID: %s, FoodTemp: %.2f C, CPUTemp: %.2f C, CPU: %d%%]...", 
+                 dummy_data.device_id, dummy_data.food_temperature, dummy_data.cpu_temperature, dummy_data.current_cpu_load);
 
         if (xQueueSend(data_queue, &dummy_data, pdMS_TO_TICKS(1000)) != pdTRUE) {
             ESP_LOGW(TAG, "Antrean penuh, payload dilewati.");

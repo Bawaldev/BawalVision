@@ -3,16 +3,23 @@
         temperature?: number;
         isSpoiled?: boolean;
         tSafeHours?: number;
+        hasFood?: boolean;
     }
 
-    let { temperature = 24.5, isSpoiled = false, tSafeHours = 8.5 }: Props = $props();
+    let { temperature = 24.5, isSpoiled = false, tSafeHours = 0, hasFood = false }: Props = $props();
 
     let freshnessIndex = $derived(
-        isSpoiled ? 15 : Math.max(20, Math.min(100, 100 - Math.max(0, (temperature - 20) * 3)))
+        !hasFood
+            ? 0
+            : isSpoiled
+            ? 15
+            : Math.max(20, Math.min(100, 100 - Math.max(0, (temperature - 20) * 3)))
     );
 
     let statusText = $derived(
-        isSpoiled || freshnessIndex < 40
+        !hasFood
+            ? 'Awaiting Food Scan'
+            : isSpoiled || freshnessIndex < 40
             ? 'Spoiled / Reject'
             : freshnessIndex < 70
             ? 'Caution / Monitor'
@@ -20,7 +27,9 @@
     );
 
     let statusClass = $derived(
-        isSpoiled || freshnessIndex < 40
+        !hasFood
+            ? 'standby'
+            : isSpoiled || freshnessIndex < 40
             ? 'danger'
             : freshnessIndex < 70
             ? 'warning'
@@ -122,6 +131,12 @@
         background: var(--accent-green-dim);
         color: var(--accent-green);
         border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .status-pill.standby {
+        background: var(--bg-chip);
+        color: var(--text-muted);
+        border: 1px solid var(--border-subtle);
     }
 
     .status-pill.warning {

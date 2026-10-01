@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS inspections (
     firmware_version VARCHAR(32) NOT NULL DEFAULT '1.0.0',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     image_s3_uri TEXT,
-    temperature NUMERIC(5, 2) NOT NULL,
+    food_temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00,
+    cpu_temperature NUMERIC(5, 2) NOT NULL DEFAULT 35.00,
+    temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00,
     cpu_load SMALLINT NOT NULL DEFAULT 0,
     is_spoiled BOOLEAN NOT NULL DEFAULT FALSE,
     t_safe_hours NUMERIC(5, 2) NOT NULL DEFAULT 0.00
@@ -53,6 +55,9 @@ CREATE TABLE IF NOT EXISTS inspections (
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS firmware_version VARCHAR(32) NOT NULL DEFAULT '1.0.0';
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS image_s3_uri TEXT;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS food_temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS cpu_temperature NUMERIC(5, 2) NOT NULL DEFAULT 35.00;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS cpu_load SMALLINT NOT NULL DEFAULT 0;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS is_spoiled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS t_safe_hours NUMERIC(5, 2) NOT NULL DEFAULT 0.00;
@@ -67,8 +72,19 @@ CREATE TABLE IF NOT EXISTS inspection_foods (
     inspection_id UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
     food_item_id INT NOT NULL REFERENCES food_items(id) ON DELETE RESTRICT,
     weight_grams NUMERIC(7, 2) NOT NULL DEFAULT 0.00,
+    temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00,
+    similarity_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0000,
+    spoilage_score NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
+    status VARCHAR(16) NOT NULL DEFAULT 'PASS',
     CONSTRAINT uq_inspection_food UNIQUE (inspection_id, food_item_id)
 );
 
+ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS weight_grams NUMERIC(7, 2) NOT NULL DEFAULT 0.00;
+ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00;
+ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS similarity_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0000;
+ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS spoilage_score NUMERIC(5, 2) NOT NULL DEFAULT 0.00;
+ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'PASS';
+
 CREATE INDEX IF NOT EXISTS idx_inspection_foods_inspection ON inspection_foods(inspection_id);
 CREATE INDEX IF NOT EXISTS idx_inspection_foods_item ON inspection_foods(food_item_id);
+CREATE INDEX IF NOT EXISTS idx_inspection_foods_status ON inspection_foods(status);

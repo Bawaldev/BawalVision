@@ -78,13 +78,16 @@
 
         <!-- 2. Chemical / Thermal Spoilage & Freshness Bar -->
         <ChemicalSpoilageBar
-            temperature={telemetry?.temperature}
-            isSpoiled={telemetry?.temperature > 40}
-            tSafeHours={8.5}
+            temperature={telemetry?.food_temperature || telemetry?.temperature}
+            isSpoiled={(telemetry?.food_temperature || telemetry?.temperature || 0) > 40 || (detections && detections.some(d => d.status === 'REJECT'))}
+            tSafeHours={detections && detections.length > 0 ? (telemetry?.food_temperature && telemetry.food_temperature > 20 ? 8.0 * (1.0 / (1.0 + 0.05 * (telemetry.food_temperature - 20))) : 8.0) : 0}
+            hasFood={detections && detections.length > 0}
         />
 
         <!-- 3. Physical Environmental Telemetry -->
         <EnvironmentalTelemetry
+            foodTemperature={telemetry?.food_temperature || telemetry?.temperature}
+            cpuTemperature={telemetry?.cpu_temperature}
             temperature={telemetry?.temperature}
             cpuLoad={telemetry?.cpu_load}
             firmwareVersion={telemetry?.firmware_version}

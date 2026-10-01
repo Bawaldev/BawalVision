@@ -61,7 +61,9 @@ export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<Telemetr
                 device_id: data.device_id || '',
                 firmware_version: data.firmware_version || '1.0.0',
                 device_core: data.device_core || 2,
-                temperature: data.temperature || 0,
+                food_temperature: data.food_temperature || data.temperature || 24.5,
+                cpu_temperature: data.cpu_temperature || 36.5,
+                temperature: data.temperature || data.food_temperature || 24.5,
                 cpu_load: data.cpu_load || 0,
                 timestamp: data.created_at ? Math.floor(new Date(data.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000)
             };

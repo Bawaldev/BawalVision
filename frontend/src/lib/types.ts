@@ -2,6 +2,9 @@ export interface FoodDetection {
     food_name: string;
     similarity_rate: number;
     weight_grams?: number;
+    temperature?: number;
+    spoilage_score?: number;
+    status?: 'PASS' | 'REVIEW' | 'REJECT';
     box?: [number, number, number, number]; // [x, y, width, height]
     category?: 'Carbohydrate' | 'Protein' | 'Vegetable' | 'Fruit' | 'Side';
 }
@@ -12,6 +15,7 @@ export interface FoodCompartmentItem {
     detectedFood: string;
     similarityRate: number;
     weightGrams: number;
+    temperature: number;
     spoilageIndex: number;
     status: 'PASS' | 'REVIEW' | 'REJECT';
 }
@@ -23,6 +27,8 @@ export interface InspectionRecord {
     firmware_version: string;
     created_at: string;
     image_s3_uri?: string;
+    food_temperature?: number;
+    cpu_temperature?: number;
     temperature: number;
     cpu_load: number;
     is_spoiled: boolean;
@@ -32,6 +38,10 @@ export interface InspectionRecord {
         inspection_id: string;
         food_item_id: number;
         weight_grams: number;
+        temperature: number;
+        similarity_rate: number;
+        spoilage_score: number;
+        status: 'PASS' | 'REVIEW' | 'REJECT';
         food_item?: {
             id: number;
             name: string;
@@ -44,6 +54,8 @@ export interface TelemetryPayload {
     device_name?: string;
     firmware_version: string;
     device_core: number;
+    food_temperature?: number;
+    cpu_temperature?: number;
     temperature: number;
     cpu_load: number;
     timestamp: number;

@@ -59,27 +59,10 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
-		record := inspection.InspectionRecord{
-			ID:              uuid.New().String(),
-			DeviceID:        payload.DeviceID,
-			FirmwareVersion: payload.FirmwareVersion,
-			CreatedAt:       now,
-			Temperature:     payload.Temperature,
-			CPULoad:         payload.CurrentCPULoad,
-			IsSpoiled:       false,
-			TSafeHours:      0.0,
-		}
-
-		if err := db.Create(&record).Error; err != nil {
-			log.Printf("[ERROR] Failed to insert inspection record: %v", err)
-			return c.Status(500).JSON(fiber.Map{
-				"error": "Failed to save data to database",
-			})
-		}
-
-		return c.Status(201).JSON(fiber.Map{
-			"status": "success",
-			"id":     record.ID,
+		return c.Status(200).JSON(fiber.Map{
+			"status":    "success",
+			"device_id": payload.DeviceID,
+			"message":   "Telemetry heartbeat recorded",
 		})
 	})
 
@@ -109,11 +92,24 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		// Retrieve latest telemetry cache for this device as fallback for missing sensor values
 		latestTelemetry, hasCached := inspection.GlobalInspectionStore.GetLatestTelemetry(req.DeviceID)
 
-		temp := 25.0
-		if req.Temperature != nil {
-			temp = *req.Temperature
-		} else if hasCached && latestTelemetry.Temperature != 0 {
-			temp = latestTelemetry.Temperature
+		foodTemp := 25.0
+		if req.FoodTemperature != nil {
+			foodTemp = *req.FoodTemperature
+		} else if req.Temperature != nil {
+			foodTemp = *req.Temperature
+		} else if hasCached {
+			if latestTelemetry.FoodTemperature > 0 {
+				foodTemp = latestTelemetry.FoodTemperature
+			} else if latestTelemetry.Temperature > 0 {
+				foodTemp = latestTelemetry.Temperature
+			}
+		}
+
+		cpuTemp := 36.5
+		if req.CPUTemperature != nil {
+			cpuTemp = *req.CPUTemperature
+		} else if hasCached && latestTelemetry.CPUTemperature > 0 {
+			cpuTemp = latestTelemetry.CPUTemperature
 		}
 
 		cpu := uint8(10)
@@ -132,6 +128,43 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 		now := time.Now()
 		recordID := uuid.New().String()
+
+		// CV + ML Quality & Spoilage Evaluation
+		anySpoiled := false
+		maxSpoilageScore := 0.0
+
+		for _, det := range req.Detections {
+			conf := det.SimilarityRate
+			if conf <= 0 {
+				conf = 0.85
+			}
+			spoilage := det.SpoilageScore
+			if spoilage <= 0 {
+				// Food science thermal & confidence decay model
+				spoilage = (1.0 - conf) * 30.0
+				if foodTemp > 28.0 {
+					spoilage += (foodTemp - 28.0) * 2.2
+				}
+				if spoilage > 100.0 {
+					spoilage = 100.0
+				}
+			}
+			if spoilage > maxSpoilageScore {
+				maxSpoilageScore = spoilage
+			}
+			if det.Status == "REJECT" || spoilage >= 55.0 || conf < 0.35 {
+				anySpoiled = true
+			}
+		}
+
+		// Calculate remaining safe shelf life based on thermal index
+		tSafeHours := 8.0
+		if foodTemp > 20.0 {
+			tSafeHours = 8.0 * (1.0 / (1.0 + 0.05*(foodTemp-20.0)))
+		}
+		if anySpoiled {
+			tSafeHours = 0.0
+		}
 
 		err := db.Transaction(func(tx *gorm.DB) error {
 			// Auto-provision device if not exists
@@ -158,16 +191,18 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				FirmwareVersion: fwVer,
 				CreatedAt:       now,
 				ImageS3URI:      req.ImageS3URI,
-				Temperature:     temp,
+				FoodTemperature: foodTemp,
+				CPUTemperature:  cpuTemp,
+				Temperature:     foodTemp,
 				CPULoad:         cpu,
-				IsSpoiled:       false,
-				TSafeHours:      0.0,
+				IsSpoiled:       anySpoiled,
+				TSafeHours:      tSafeHours,
 			}
 			if err := tx.Create(&record).Error; err != nil {
 				return err
 			}
 
-			// Insert detected food items into food_items and inspection_foods
+			// Insert detected food items into food_items and inspection_foods with CV+ML quality analytics
 			insertedFoodMap := make(map[int]bool)
 			for _, det := range req.Detections {
 				foodName := strings.TrimSpace(strings.ToLower(det.FoodName))
@@ -196,16 +231,29 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				}
 				insertedFoodMap[foodItem.ID] = true
 
-				weight := det.WeightGrams
-				if weight <= 0 {
-					weight = 100.0 // Baseline nominal weight if depth estimation unavailable
+				itemTemp := foodTemp
+				if det.Temperature > 0 {
+					itemTemp = det.Temperature
 				}
 
+				conf, spoilage, evaluatedTemp, evaluatedWeight, itemStatus := EvaluateFoodQuality(
+					foodName,
+					det.SimilarityRate,
+					det.SpoilageScore,
+					itemTemp,
+					det.WeightGrams,
+					det.Status,
+				)
+
 				inspFood := inspection.InspectionFood{
-					ID:           uuid.New().String(),
-					InspectionID: recordID,
-					FoodItemID:   foodItem.ID,
-					WeightGrams:  weight,
+					ID:             uuid.New().String(),
+					InspectionID:   recordID,
+					FoodItemID:     foodItem.ID,
+					WeightGrams:    evaluatedWeight,
+					Temperature:    evaluatedTemp,
+					SimilarityRate: conf,
+					SpoilageScore:  spoilage,
+					Status:         itemStatus,
 				}
 				if err := tx.Create(&inspFood).Error; err != nil {
 					return err
@@ -226,6 +274,8 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"status":               "success",
 			"id":                   recordID,
 			"device_id":            req.DeviceID,
+			"is_spoiled":           anySpoiled,
+			"t_safe_hours":         tSafeHours,
 			"detected_foods_count": len(req.Detections),
 		})
 	}
@@ -236,6 +286,29 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 	// 3. GET Latest Environmental Telemetry
 	router.Get("/telemetry/latest", func(c *fiber.Ctx) error {
+		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok {
+			foodT := live.FoodTemperature
+			if foodT <= 0 {
+				foodT = live.Temperature
+			}
+			if foodT <= 0 {
+				foodT = 24.5
+			}
+			cpuT := live.CPUTemperature
+			if cpuT <= 0 {
+				cpuT = 36.5
+			}
+			return c.JSON(fiber.Map{
+				"device_id":        live.DeviceID,
+				"firmware_version": live.FirmwareVersion,
+				"food_temperature": foodT,
+				"cpu_temperature":  cpuT,
+				"temperature":      foodT,
+				"cpu_load":         live.CurrentCPULoad,
+				"timestamp":        live.Timestamp,
+			})
+		}
+
 		var record inspection.InspectionRecord
 		if err := db.Order("created_at DESC").First(&record).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "No telemetry data recorded"})
@@ -243,6 +316,8 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		return c.JSON(fiber.Map{
 			"device_id":        record.DeviceID,
 			"firmware_version": record.FirmwareVersion,
+			"food_temperature": record.FoodTemperature,
+			"cpu_temperature":  record.CPUTemperature,
 			"temperature":      record.Temperature,
 			"cpu_load":         record.CPULoad,
 			"is_spoiled":       record.IsSpoiled,
@@ -260,3 +335,60 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		return c.JSON(record)
 	})
 }
+
+// EvaluateFoodQuality applies multi-sensor quality & food safety rules combining:
+// 1. Computer Vision: Classification similarity & object integrity
+// 2. Machine Learning: Visual decomposition & spoilage scoring
+// 3. Sensor Suhu Makanan: Food surface temperature (danger zone > 28°C acceleration)
+// 4. Sensor Berat (Load Cell): Portion weight verification against dietary gram standards
+func EvaluateFoodQuality(foodName string, cvConf float64, mlSpoilage float64, foodTemp float64, weightGrams float64, requestedStatus string) (float64, float64, float64, float64, string) {
+	targetMin := 80.0
+	targetMax := 220.0
+	fn := strings.ToLower(foodName)
+	if strings.Contains(fn, "nasi") || strings.Contains(fn, "rice") {
+		targetMin = 140.0
+		targetMax = 220.0
+	} else if strings.Contains(fn, "ayam") || strings.Contains(fn, "tofu") || strings.Contains(fn, "ikan") || strings.Contains(fn, "chicken") {
+		targetMin = 90.0
+		targetMax = 150.0
+	} else if strings.Contains(fn, "sayur") || strings.Contains(fn, "bayam") || strings.Contains(fn, "kangkung") || strings.Contains(fn, "spinach") {
+		targetMin = 60.0
+		targetMax = 110.0
+	} else if strings.Contains(fn, "buah") || strings.Contains(fn, "pisang") || strings.Contains(fn, "banana") || strings.Contains(fn, "jeruk") {
+		targetMin = 80.0
+		targetMax = 140.0
+	}
+
+	if weightGrams <= 0 {
+		weightGrams = (targetMin + targetMax) / 2.0
+	}
+	if foodTemp <= 0 {
+		foodTemp = 25.0
+	}
+	if cvConf <= 0 {
+		cvConf = 0.88
+	}
+
+	// Dynamic ML Spoilage Model from CV features + Thermal decay
+	if mlSpoilage <= 0 {
+		mlSpoilage = (1.0 - cvConf) * 25.0
+		if foodTemp > 28.0 {
+			mlSpoilage += (foodTemp - 28.0) * 2.2
+		}
+		if mlSpoilage > 100.0 {
+			mlSpoilage = 100.0
+		}
+	}
+
+	status := "PASS"
+	if requestedStatus != "" {
+		status = requestedStatus
+	} else if cvConf < 0.35 || mlSpoilage >= 55.0 || weightGrams < (targetMin*0.5) || (foodTemp > 42.0 && mlSpoilage >= 40.0) {
+		status = "REJECT"
+	} else if cvConf < 0.60 || mlSpoilage >= 35.0 || weightGrams < targetMin || weightGrams > (targetMax*1.25) || foodTemp > 38.0 {
+		status = "REVIEW"
+	}
+
+	return cvConf, mlSpoilage, foodTemp, weightGrams, status
+}
+

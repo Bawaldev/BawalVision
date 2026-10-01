@@ -82,7 +82,9 @@ TELEMETRY_RESP=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/telemetry" \
     "device_name": "Automated Benchmark Pod",
     "firmware_version": "1.0.4-bench",
     "device_core": 2,
-    "temperature": 4.35,
+    "food_temperature": 28.50,
+    "cpu_temperature": 39.20,
+    "temperature": 28.50,
     "cpu_load": 15,
     "timestamp": 1758412800
   }')

@@ -54,8 +54,15 @@ func main() {
 		log.Fatalf("Database migration failed: %v", err)
 	}
 
-	// Clean up legacy columns if they exist in existing database volumes
+	// Clean up legacy columns if they exist in existing database volumes and ensure new sensor columns exist
 	_ = db.Exec("ALTER TABLE inspections DROP COLUMN IF EXISTS humidity, DROP COLUMN IF EXISTS gas_voc, DROP COLUMN IF EXISTS pressure")
+	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS food_temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00")
+	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS cpu_temperature NUMERIC(5, 2) NOT NULL DEFAULT 35.00")
+	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00")
+	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS similarity_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0000")
+	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS spoilage_score NUMERIC(5, 2) NOT NULL DEFAULT 0.00")
+	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'PASS'")
+	_ = db.Exec("DELETE FROM inspections WHERE id NOT IN (SELECT DISTINCT inspection_id FROM inspection_foods)")
 
 	app := fiber.New(fiber.Config{
 		ServerHeader: "Bawal-Vision-Backend",

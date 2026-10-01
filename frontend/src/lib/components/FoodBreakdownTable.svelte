@@ -36,16 +36,17 @@
                 <tr>
                     <th>Compartment</th>
                     <th>Item</th>
-                    <th>Category</th>
-                    <th>Match Confidence</th>
                     <th>Weight</th>
+                    <th>Food Temp</th>
+                    <th>CV Match</th>
+                    <th>ML Spoilage</th>
                     <th>Decision</th>
                 </tr>
             </thead>
             <tbody>
                 {#if detections.length === 0}
                     <tr>
-                        <td colspan="6" class="empty-row">
+                        <td colspan="7" class="empty-row">
                             <span class="empty-msg">No active tray detected on optical camera sensor.</span>
                         </td>
                     </tr>
@@ -59,13 +60,33 @@
                             <td class="food-cell">
                                 {#if det}
                                     <strong class="food-name">{det.food_name}</strong>
+                                    <small class="cat-label">{det.category || 'Food'}</small>
                                 {:else}
                                     <span class="empty-name">{comp.defaultName}</span>
                                 {/if}
                             </td>
-                            <td class="cat-cell">
+                            <td class="weight-cell">
                                 {#if det}
-                                    <span class="cat-pill">{det.category || 'Nutrient'}</span>
+                                    <span
+                                        class="weight-num"
+                                        class:warn={(det.weight_grams || 0) < 80 || (det.weight_grams || 0) > 220}
+                                        class:danger={(det.weight_grams || 0) < 50}
+                                    >
+                                        {det.weight_grams || 120} <small>g</small>
+                                    </span>
+                                {:else}
+                                    <span class="muted-weight">{comp.targetWeight}</span>
+                                {/if}
+                            </td>
+                            <td class="temp-cell">
+                                {#if det}
+                                    <span
+                                        class="temp-num"
+                                        class:warn={(det.temperature || 25) > 35}
+                                        class:danger={(det.temperature || 25) > 42}
+                                    >
+                                        {det.temperature ? det.temperature.toFixed(1) : '24.5'} <small>°C</small>
+                                    </span>
                                 {:else}
                                     <span class="muted-dash">—</span>
                                 {/if}
@@ -82,19 +103,23 @@
                                     <span class="muted-dash">—</span>
                                 {/if}
                             </td>
-                            <td class="weight-cell">
+                            <td class="spoilage-cell">
                                 {#if det}
-                                    <span class="weight-num">{det.weight_grams || 120} <small>g</small></span>
+                                    <span class="spoilage-num" class:danger={(det.spoilage_score || 0) >= 55}>
+                                        {(det.spoilage_score || 0).toFixed(0)}%
+                                    </span>
                                 {:else}
-                                    <span class="muted-weight">{comp.targetWeight}</span>
+                                    <span class="muted-dash">—</span>
                                 {/if}
                             </td>
                             <td class="status-cell">
                                 {#if det}
-                                    {#if det.similarity_rate >= 0.75}
-                                        <span class="badge pass">Accept</span>
+                                    {#if det.status === 'REJECT' || (det.spoilage_score || 0) >= 55 || det.similarity_rate < 0.35}
+                                        <span class="badge reject">Reject</span>
+                                    {:else if det.status === 'REVIEW' || (det.spoilage_score || 0) >= 35 || det.similarity_rate < 0.60}
+                                        <span class="badge hold">Review</span>
                                     {:else}
-                                        <span class="badge hold">Hold</span>
+                                        <span class="badge pass">Pass</span>
                                     {/if}
                                 {:else}
                                     <span class="badge idle">Standby</span>
@@ -219,15 +244,6 @@
         font-size: 0.75rem;
     }
 
-    .cat-pill {
-        font-size: 0.65rem;
-        font-weight: 600;
-        padding: 2px 8px;
-        background: var(--accent-blue-dim);
-        color: var(--accent-blue);
-        border-radius: var(--radius-pill);
-    }
-
     .sim-bar-box {
         display: flex;
         align-items: center;
@@ -277,6 +293,49 @@
         font-weight: 700;
         padding: 3px 8px;
         border-radius: var(--radius-pill);
+    }
+
+    .food-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .cat-label {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .temp-num, .spoilage-num {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+
+    .weight-num.warn, .temp-num.warn {
+        color: var(--accent-amber);
+    }
+
+    .weight-num.danger, .temp-num.danger {
+        color: var(--accent-red);
+    }
+
+    .temp-num small {
+        color: var(--text-muted);
+        font-weight: normal;
+    }
+
+    .spoilage-num.danger {
+        color: var(--accent-red);
+    }
+
+    .badge.reject {
+        background: var(--accent-red-dim);
+        color: var(--accent-red);
+        border: 1px solid rgba(244, 63, 94, 0.3);
     }
 
     .badge.pass {

@@ -58,7 +58,8 @@
                     <th>Device</th>
                     <th>Timestamp</th>
                     <th>Detected Components</th>
-                    <th>Temperature</th>
+                    <th>Food Temp</th>
+                    <th>MCU Temp</th>
                     <th>CPU Load</th>
                     <th>Status</th>
                     <th>Action</th>
@@ -66,9 +67,9 @@
             </thead>
             <tbody>
                 {#if isLoading}
-                    <tr><td colspan="8" class="notice-cell">Connecting to PostgreSQL database...</td></tr>
+                    <tr><td colspan="9" class="notice-cell">Connecting to PostgreSQL database...</td></tr>
                 {:else if filteredRecords.length === 0}
-                    <tr><td colspan="8" class="notice-cell">No matching inspection records found in storage.</td></tr>
+                    <tr><td colspan="9" class="notice-cell">No matching inspection records found in storage.</td></tr>
                 {:else}
                     {#each filteredRecords as rec}
                         <tr>
@@ -81,7 +82,9 @@
                                 {#if rec.inspection_foods && rec.inspection_foods.length > 0}
                                     <div class="food-pill-group">
                                         {#each rec.inspection_foods as f}
-                                            <span class="food-pill">{f.food_item?.name || 'Food'} ({f.weight_grams}g)</span>
+                                            <span class="food-pill" class:pass={f.status === 'PASS'} class:review={f.status === 'REVIEW'} class:reject={f.status === 'REJECT'}>
+                                                {f.food_item?.name || 'Food'} ({f.weight_grams}g, {((f.similarity_rate || 0.9) * 100).toFixed(0)}%)
+                                            </span>
                                         {/each}
                                     </div>
                                 {:else}
@@ -89,7 +92,10 @@
                                 {/if}
                             </td>
                             <td class="env-cell">
-                                <strong>{rec.temperature}°C</strong>
+                                <strong>{(rec.food_temperature || rec.temperature || 24.5).toFixed(1)}°C</strong>
+                            </td>
+                            <td class="env-cell">
+                                <span class="mcu-temp">{(rec.cpu_temperature || 36.5).toFixed(1)}°C</span>
                             </td>
                             <td class="cpu-cell">
                                 <span class="cpu-val">{rec.cpu_load || 0}%</span>
@@ -284,6 +290,25 @@
         background: var(--bg-chip);
         color: var(--text-primary);
         border-radius: var(--radius-pill);
+        border: 1px solid var(--border-subtle);
+    }
+
+    .food-pill.pass {
+        border-color: rgba(34, 197, 94, 0.4);
+        background: rgba(34, 197, 94, 0.1);
+        color: var(--accent-green);
+    }
+
+    .food-pill.review {
+        border-color: rgba(245, 158, 11, 0.4);
+        background: rgba(245, 158, 11, 0.1);
+        color: var(--accent-amber);
+    }
+
+    .food-pill.reject {
+        border-color: rgba(244, 63, 94, 0.4);
+        background: rgba(244, 63, 94, 0.1);
+        color: var(--accent-red);
     }
 
     .muted-text {
@@ -293,6 +318,12 @@
 
     .env-cell strong {
         color: var(--text-primary);
+    }
+
+    .mcu-temp {
+        color: #ec4899;
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
     }
 
     .cpu-val {

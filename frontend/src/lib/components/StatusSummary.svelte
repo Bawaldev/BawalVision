@@ -4,10 +4,10 @@
         totalRejected: number;
     }
 
-    let { totalAccepted = 1248, totalRejected = 49 }: Props = $props();
+    let { totalAccepted = 0, totalRejected = 0 }: Props = $props();
 
     let total = $derived(totalAccepted + totalRejected);
-    let passRate = $derived(total > 0 ? (totalAccepted / total) * 100 : 100);
+    let passRate = $derived(total > 0 ? (totalAccepted / total) * 100 : 0);
 </script>
 
 <div class="summary-card">
@@ -19,7 +19,11 @@
                 <p class="sub-label">Production Statistics</p>
             </div>
         </div>
-        <span class="yield-tag">{passRate.toFixed(1)}% Pass</span>
+        {#if total > 0}
+            <span class="yield-tag" class:warn={passRate < 80}>{passRate.toFixed(1)}% Pass</span>
+        {:else}
+            <span class="yield-tag standby">Awaiting Scan</span>
+        {/if}
     </div>
 
     <div class="gauge-and-counters">
@@ -27,22 +31,24 @@
         <div class="gauge-box">
             <svg viewBox="0 0 100 100" class="ring-svg">
                 <circle cx="50" cy="50" r="40" fill="none" stroke="#2a3140" stroke-width="8" />
-                <circle
-                    cx="50"
-                    cy="50"
-                    r="40"
-                    fill="none"
-                    stroke="#22c55e"
-                    stroke-width="8"
-                    stroke-dasharray="251.2"
-                    stroke-dashoffset={251.2 * (1 - passRate / 100)}
-                    stroke-linecap="round"
-                    transform="rotate(-90 50 50)"
-                />
+                {#if total > 0}
+                    <circle
+                        cx="50"
+                        cy="50"
+                        r="40"
+                        fill="none"
+                        stroke={passRate >= 80 ? '#22c55e' : '#f43f5e'}
+                        stroke-width="8"
+                        stroke-dasharray="251.2"
+                        stroke-dashoffset={251.2 * (1 - passRate / 100)}
+                        stroke-linecap="round"
+                        transform="rotate(-90 50 50)"
+                    />
+                {/if}
             </svg>
             <div class="gauge-center">
-                <strong>{passRate.toFixed(0)}%</strong>
-                <small>Yield</small>
+                <strong>{total > 0 ? `${passRate.toFixed(0)}%` : '0%'}</strong>
+                <small>{total > 0 ? 'Yield' : 'Standby'}</small>
             </div>
         </div>
 
@@ -117,6 +123,18 @@
         padding: 3px 10px;
         border-radius: var(--radius-pill);
         border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .yield-tag.standby {
+        background: var(--bg-chip);
+        color: var(--text-muted);
+        border-color: var(--border-subtle);
+    }
+
+    .yield-tag.warn {
+        background: var(--accent-red-dim);
+        color: var(--accent-red);
+        border-color: rgba(244, 63, 94, 0.3);
     }
 
     .gauge-and-counters {

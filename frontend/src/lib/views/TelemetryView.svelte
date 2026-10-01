@@ -38,8 +38,9 @@
                 <div class="room-title-box">
                     <h3>Inspection Station 01</h3>
                     <div class="room-meta-strip">
-                        <span class="stat-meta">🌡️ {currentTelemetry?.temperature != null && currentTelemetry.temperature > 0 ? currentTelemetry.temperature.toFixed(2) : '24.50'} °C</span>
-                        <span class="stat-meta">⚡ {currentTelemetry?.cpu_load != null && currentTelemetry.cpu_load > 0 ? currentTelemetry.cpu_load : '18'} % CPU</span>
+                        <span class="stat-meta">🥗 Food: {currentTelemetry?.food_temperature != null && currentTelemetry.food_temperature > 0 ? currentTelemetry.food_temperature.toFixed(1) : (currentTelemetry?.temperature != null && currentTelemetry.temperature > 0 ? currentTelemetry.temperature.toFixed(1) : '24.5')} °C</span>
+                        <span class="stat-meta">💻 MCU: {currentTelemetry?.cpu_temperature != null && currentTelemetry.cpu_temperature > 0 ? currentTelemetry.cpu_temperature.toFixed(1) : '36.5'} °C</span>
+                        <span class="stat-meta">⚡ {currentTelemetry?.cpu_load != null && currentTelemetry.cpu_load > 0 ? currentTelemetry.cpu_load : '18'} % Load</span>
                         <span class="stat-meta">📡 100 Hz Bus</span>
                         <span class="stat-meta">🏷️ {currentTelemetry?.firmware_version || 'v1.0.0'}</span>
                     </div>
@@ -50,8 +51,8 @@
                 <div class="status-indicator-badge">
                     <span class="status-bulb">💡</span>
                     <div class="status-info">
-                        <strong>Sensors</strong>
-                        <small>Online</small>
+                        <strong>Dual Thermals</strong>
+                        <small>Calibrated</small>
                     </div>
                 </div>
             </div>
@@ -70,8 +71,13 @@
                     </div>
                     <div class="tooltip-row">
                         <span class="tooltip-dot orange"></span>
-                        <span class="tooltip-label">Temperature:</span>
-                        <strong class="tooltip-val">{(hoveredPoint.temperature || 24.5).toFixed(1)} °C</strong>
+                        <span class="tooltip-label">Food Temp:</span>
+                        <strong class="tooltip-val">{(hoveredPoint.food_temperature || hoveredPoint.temperature || 24.5).toFixed(1)} °C</strong>
+                    </div>
+                    <div class="tooltip-row">
+                        <span class="tooltip-dot pink"></span>
+                        <span class="tooltip-label">MCU Temp:</span>
+                        <strong class="tooltip-val">{(hoveredPoint.cpu_temperature || 36.5).toFixed(1)} °C</strong>
                     </div>
                 </div>
             {/if}
@@ -329,6 +335,7 @@
 
     .tooltip-dot.blue { background: #2563eb; }
     .tooltip-dot.orange { background: #f59e0b; }
+    .tooltip-dot.pink { background: #ec4899; }
 
     .tooltip-label {
         color: var(--text-secondary);

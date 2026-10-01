@@ -56,3 +56,20 @@ func (s *InspectionStore) GetLatestTelemetry(deviceID string) (TelemetryIngressP
 	data, exists := s.readings[deviceID]
 	return data, exists
 }
+
+func (s *InspectionStore) GetAnyLatestTelemetry() (TelemetryIngressPayload, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	var latest TelemetryIngressPayload
+	var maxTs int64 = -1
+	for _, reading := range s.readings {
+		if reading.Timestamp >= maxTs {
+			maxTs = reading.Timestamp
+			latest = reading
+		}
+	}
+	if maxTs >= 0 {
+		return latest, true
+	}
+	return latest, false
+}
