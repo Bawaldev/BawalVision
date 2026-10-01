@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bufio"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -71,6 +73,57 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		}
 		return c.JSON(fiber.Map{"device_id": activeID})
 	})
+
+	mjpegStreamHandler := func(c *fiber.Ctx) error {
+		deviceID := c.Params("device_id")
+		if deviceID == "" || deviceID == "latest" || deviceID == "raw" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*" {
+			deviceID = ""
+		}
+
+		c.Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+		c.Set("Cache-Control", "no-cache, no-store, must-revalidate, pre-check=0, post-check=0, max-age=0")
+		c.Set("Pragma", "no-cache")
+		c.Set("Connection", "close")
+
+		c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+			frameChan, unsubscribe := camera_handler.GlobalCameraStore.Subscribe(deviceID)
+			defer unsubscribe()
+
+			// Send current frame immediately if available
+			if initialFrame, ok := camera_handler.GlobalCameraStore.GetRawFrame(deviceID); ok && len(initialFrame) > 0 {
+				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(initialFrame)); err == nil {
+					_, _ = w.Write(initialFrame)
+					_, _ = w.WriteString("\r\n")
+					_ = w.Flush()
+				}
+			}
+
+			for frame := range frameChan {
+				if len(frame) == 0 {
+					continue
+				}
+				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame)); err != nil {
+					break
+				}
+				if _, err := w.Write(frame); err != nil {
+					break
+				}
+				if _, err := w.WriteString("\r\n"); err != nil {
+					break
+				}
+				if err := w.Flush(); err != nil {
+					break
+				}
+			}
+		})
+
+		return nil
+	}
+
+	camGroup.Get("/mjpeg", mjpegStreamHandler)
+	camGroup.Get("/mjpeg/:device_id", mjpegStreamHandler)
+	camGroup.Get("/stream", mjpegStreamHandler)
+	camGroup.Get("/stream/:device_id", mjpegStreamHandler)
 
 	rawFrameHandler := func(c *fiber.Ctx) error {
 		deviceID := c.Params("device_id")

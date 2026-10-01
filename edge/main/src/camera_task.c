@@ -87,7 +87,7 @@ esp_err_t camera_task_init(void) {
       .pixel_format = PIXFORMAT_JPEG,
       .frame_size = FRAMESIZE_VGA, // 640x480
 
-      .jpeg_quality = 14, // 0-63 (lower means higher quality)
+      .jpeg_quality = 18, // 0-63 (18 provides optimal high compression speed & clarity)
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -252,22 +252,50 @@ void http_stream_sender_task(void *pvParameters) {
 
   char device_id[32] = {0};
   get_internal_device_id(device_id, sizeof(device_id));
+  if (g_wifi_event_group != NULL) {
+    xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+  }
 
   char backend_ip[64] = {0};
   char full_url[URL_BUFFER_SIZE] = {0};
+  if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
+    strncpy(backend_ip, CONFIG_BACKEND_IP, sizeof(backend_ip) - 1);
+  }
+  snprintf(full_url, sizeof(full_url), "http://%s:%s%s", backend_ip, CONFIG_BACKEND_PORT, CAMERA_FRAME_ENDPOINT);
+
+  esp_http_client_config_t config = {
+      .url = full_url,
+      .method = HTTP_METHOD_POST,
+      .timeout_ms = 1000,
+      .buffer_size_tx = 8192,
+      .buffer_size = 512,
+      .keep_alive_enable = true,
+  };
+
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  if (client == NULL) {
+    ESP_LOGE(TAG, "Failed to initialize HTTP client");
+    if (local_frame.data) free(local_frame.data);
+    vTaskDelete(NULL);
+    return;
+  }
+
+  esp_http_client_set_header(client, "Connection", "keep-alive");
+  esp_http_client_set_header(client, "X-Device-ID", device_id);
+
   uint32_t last_sent_frame_id = 0;
   char frame_id_str[16];
   const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
 
-  ESP_LOGI(TAG, "HTTP Stream sender task started for device: %s", device_id);
+  ESP_LOGI(TAG, "HTTP Stream sender started (Persistent Keep-Alive) for: %s", full_url);
 
   for (;;) {
     TickType_t start_tick = xTaskGetTickCount();
 
     if (g_wifi_event_group != NULL) {
-      EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(100));
+      EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, 0);
       if (!(bits & WIFI_CONNECTED_BIT)) {
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(200));
         continue;
       }
     }
@@ -277,68 +305,50 @@ void http_stream_sender_task(void *pvParameters) {
       if (local_frame.header.buffer_len > 0 && local_frame.header.frame_id != last_sent_frame_id) {
         last_sent_frame_id = local_frame.header.frame_id;
 
-        if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
-          strncpy(backend_ip, CONFIG_BACKEND_IP, sizeof(backend_ip) - 1);
+        // Set dynamic headers per frame
+        snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)local_frame.header.frame_id);
+        esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
+
+        if (local_frame.header.format == FRAME_FORMAT_JPEG) {
+          esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+        } else {
+          esp_http_client_set_header(client, "Content-Type", "application/octet-stream");
+          esp_http_client_set_header(client, "X-Pixel-Format", "YUYV");
         }
 
-        snprintf(full_url, sizeof(full_url), "http://%s:%s%s", backend_ip, CONFIG_BACKEND_PORT, CAMERA_FRAME_ENDPOINT);
+        // Attach binary payload directly
+        esp_http_client_set_post_field(client, (const char *)local_frame.data, local_frame.header.buffer_len);
 
-        esp_http_client_config_t config = {
-            .url = full_url,
-            .method = HTTP_METHOD_POST,
-            .timeout_ms = 4000,
-            .buffer_size_tx = 4096,
-            .buffer_size = 1024,
-        };
-
-        esp_http_client_handle_t client = esp_http_client_init(&config);
-        if (client != NULL) {
-          snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)local_frame.header.frame_id);
-          char content_len_str[16];
-          snprintf(content_len_str, sizeof(content_len_str), "%u", (unsigned int)local_frame.header.buffer_len);
-          
-          if (local_frame.header.format == FRAME_FORMAT_JPEG) {
-            esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+        // Perform HTTP POST over the established TCP socket
+        esp_err_t err = esp_http_client_perform(client);
+        if (err == ESP_OK) {
+          int status_code = esp_http_client_get_status_code(client);
+          if (status_code == 200 || status_code == 201 || status_code == 202) {
+            ESP_LOGD(TAG, "Frame #%lu sent (%u bytes, HTTP %d)", 
+                     (unsigned long)last_sent_frame_id, (unsigned)local_frame.header.buffer_len, status_code);
           } else {
-            esp_http_client_set_header(client, "Content-Type", "application/octet-stream");
-            esp_http_client_set_header(client, "X-Pixel-Format", "YUYV");
+            ESP_LOGW(TAG, "Frame #%lu rejected with HTTP %d", 
+                     (unsigned long)last_sent_frame_id, status_code);
           }
-
-          esp_http_client_set_header(client, "Content-Length", content_len_str);
-          esp_http_client_set_header(client, "Connection", "close");
-          esp_http_client_set_header(client, "X-Device-ID", device_id);
-          esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
-          esp_http_client_set_post_field(client, (const char *)local_frame.data, local_frame.header.buffer_len);
-
-          esp_err_t err = esp_http_client_perform(client);
-          if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Frame dispatch failed: %s (url: %s, size: %u)", 
-                     esp_err_to_name(err), full_url, (unsigned)local_frame.header.buffer_len);
-          } else {
-            int status_code = esp_http_client_get_status_code(client);
-            if (status_code == 200 || status_code == 201) {
-              ESP_LOGI(TAG, "Frame #%lu dispatched (%u bytes, Status: %d)", 
-                       (unsigned long)last_sent_frame_id, (unsigned)local_frame.header.buffer_len, status_code);
-            } else {
-              ESP_LOGW(TAG, "Frame #%lu rejected by backend with HTTP %d", 
-                       (unsigned long)last_sent_frame_id, status_code);
-            }
-          }
-          esp_http_client_cleanup(client);
+        } else {
+          ESP_LOGW(TAG, "Transmission failed (%s), closing socket for reconnection...", esp_err_to_name(err));
+          // Reset the underlying socket on failure so the next perform reconnects cleanly
+          esp_http_client_close(client);
         }
       }
     } else {
-      ESP_LOGW(TAG, "Failed to copy frame from camera buffer: %s", esp_err_to_name(copy_status));
+      ESP_LOGW(TAG, "Failed to copy frame: %s", esp_err_to_name(copy_status));
     }
 
     TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
     if (elapsed_ticks < frame_interval_ticks) {
       vTaskDelay(frame_interval_ticks - elapsed_ticks);
     } else {
-      vTaskDelay(pdMS_TO_TICKS(10));
+      vTaskDelay(pdMS_TO_TICKS(2));
     }
   }
 
+  esp_http_client_cleanup(client);
   if (local_frame.data) free(local_frame.data);
   vTaskDelete(NULL);
 }

@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
     import type { FoodDetection } from '../types';
 
     interface Props {
@@ -29,34 +28,11 @@
         { id: 'others', label: 'Side Dish', icon: '🍱' }
     ];
 
-    let canvasEl = $state<HTMLCanvasElement | null>(null);
-    let cameraImg: HTMLImageElement | null = null;
-    let imageLoadFailed = $state(false);
+    let streamError = $state(false);
 
-    onMount(() => {
-        cameraImg = new Image();
-        cameraImg.crossOrigin = 'anonymous';
-
-        cameraImg.onload = () => {
-            imageLoadFailed = false;
-            renderCanvas();
-        };
-
-        cameraImg.onerror = () => {
-            imageLoadFailed = true;
-        };
-
-        const frameTimer = setInterval(() => {
-            if (hasCamera && cameraImg) {
-                const url = streamUrl || (deviceId ? `/api/v1/camera/${deviceId}/raw` : '/api/v1/camera/latest/raw');
-                cameraImg.src = `${url}?t=${Date.now()}`;
-            }
-        }, 500);
-
-        return () => {
-            clearInterval(frameTimer);
-        };
-    });
+    let activeStreamUrl = $derived(
+        streamUrl || (deviceId ? `/api/v1/camera/stream/${deviceId}` : '/api/v1/camera/stream')
+    );
 
     function isDetected(id: string): { found: boolean; confidence: number } {
         if (!hasCamera || detections.length === 0) {
@@ -70,177 +46,27 @@
         return { found: !!item, confidence: item ? item.similarity_rate : 0 };
     }
 
-    $effect(() => {
-        const _d = detections;
-        const _c = hasCamera;
-        const _id = deviceId;
-        renderCanvas();
-    });
+    const compartments = [
+        { id: 'carb', name: 'SLOT 1: CARBOHYDRATE', x: 45, y: 42, w: 220, h: 396, color: '#38bdf8' },
+        { id: 'protein', name: 'SLOT 2: PROTEIN', x: 275, y: 42, w: 320, h: 190, color: '#f43f5e' },
+        { id: 'veggie', name: 'SLOT 3: VEGETABLE', x: 275, y: 242, w: 155, h: 196, color: '#22c55e' },
+        { id: 'fruit', name: 'SLOT 4: FRUIT / SIDE', x: 440, y: 242, w: 155, h: 196, color: '#c084fc' }
+    ];
 
-    function renderCanvas() {
-        if (!canvasEl) return;
-        const ctx = canvasEl.getContext('2d');
-        if (!ctx) return;
-
-        const w = canvasEl.width;
-        const h = canvasEl.height;
-
-        ctx.fillStyle = '#14171d';
-        ctx.fillRect(0, 0, w, h);
-
-        if (!hasCamera) {
-            // Standby state
-            ctx.save();
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
-            ctx.lineWidth = 1;
-            for (let x = 40; x < w; x += 40) {
-                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-            }
-            for (let y = 40; y < h; y += 40) {
-                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-            }
-
-            const boxW = 340;
-            const boxH = 120;
-            const boxX = (w - boxW) / 2;
-            const boxY = (h - boxH) / 2;
-
-            ctx.fillStyle = '#202530';
-            ctx.strokeStyle = '#2d3444';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.roundRect(boxX, boxY, boxW, boxH, 12);
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.fillStyle = '#f59e0b';
-            ctx.font = 'bold 24px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText('📷', w / 2, boxY + 36);
-
-            ctx.fillStyle = '#f8fafc';
-            ctx.font = 'bold 13px sans-serif';
-            ctx.fillText('No Camera Stream Connected', w / 2, boxY + 66);
-
-            ctx.fillStyle = '#94a3b8';
-            ctx.font = '11px sans-serif';
-            ctx.fillText('Awaiting ESP32-S3 Camera Feed on /api/v1/camera', w / 2, boxY + 88);
-
-            ctx.textAlign = 'left';
-            ctx.restore();
-            return;
+    function getMatchedDetection(compId: string, slotIdx: number): FoodDetection | null {
+        if (detections.length === 0) return null;
+        let det = detections.find(d => {
+            const name = d.food_name.toLowerCase();
+            if (compId === 'carb' && (name.includes('nasi') || name.includes('rice') || d.category === 'Carbohydrate')) return true;
+            if (compId === 'protein' && (name.includes('ayam') || name.includes('chicken') || name.includes('tofu') || d.category === 'Protein')) return true;
+            if (compId === 'veggie' && (name.includes('kangkung') || name.includes('bayam') || name.includes('spinach') || d.category === 'Vegetable')) return true;
+            if (compId === 'fruit' && (name.includes('pisang') || name.includes('jeruk') || name.includes('banana') || name.includes('orange') || d.category === 'Fruit')) return true;
+            return false;
+        });
+        if (!det && detections[slotIdx]) {
+            return detections[slotIdx];
         }
-
-        // Draw Camera Frame
-        if (cameraImg && cameraImg.complete && cameraImg.naturalWidth > 0 && !imageLoadFailed) {
-            ctx.drawImage(cameraImg, 0, 0, w, h);
-        } else {
-            ctx.fillStyle = '#181c24';
-            ctx.fillRect(0, 0, w, h);
-        }
-
-        // Draw Compartment Overlays
-        const trayX = 35;
-        const trayY = 32;
-        const trayW = w - 70;
-        const trayH = h - 64;
-        const compPad = 10;
-        const midX = trayX + (trayW * 0.46);
-        const midY = trayY + (trayH * 0.50);
-
-        const compLayouts = [
-            {
-                id: 'carb',
-                name: 'SLOT 1: CARBOHYDRATE',
-                x: trayX + compPad,
-                y: trayY + compPad,
-                w: (midX - trayX) - (compPad * 1.5),
-                h: trayH - (compPad * 2),
-                color: '#38bdf8'
-            },
-            {
-                id: 'protein',
-                name: 'SLOT 2: PROTEIN',
-                x: midX + (compPad * 0.5),
-                y: trayY + compPad,
-                w: (trayX + trayW - midX) - (compPad * 1.5),
-                h: (midY - trayY) - (compPad * 1.5),
-                color: '#f43f5e'
-            },
-            {
-                id: 'veggie',
-                name: 'SLOT 3: VEGETABLE',
-                x: midX + (compPad * 0.5),
-                y: midY + (compPad * 0.5),
-                w: ((trayX + trayW - midX) - (compPad * 2.5)) / 2,
-                h: (trayY + trayH - midY) - (compPad * 1.5),
-                color: '#22c55e'
-            },
-            {
-                id: 'fruit',
-                name: 'SLOT 4: FRUIT / SIDE',
-                x: midX + (compPad * 0.5) + (((trayX + trayW - midX) - (compPad * 2.5)) / 2) + compPad,
-                y: midY + (compPad * 0.5),
-                w: ((trayX + trayW - midX) - (compPad * 2.5)) / 2,
-                h: (trayY + trayH - midY) - (compPad * 1.5),
-                color: '#c084fc'
-            }
-        ];
-
-        if (detections.length > 0) {
-            compLayouts.forEach((comp, slotIdx) => {
-                let det = detections.find(d => {
-                    const name = d.food_name.toLowerCase();
-                    if (comp.id === 'carb' && (name.includes('nasi') || name.includes('rice') || d.category === 'Carbohydrate')) return true;
-                    if (comp.id === 'protein' && (name.includes('ayam') || name.includes('chicken') || name.includes('tofu') || d.category === 'Protein')) return true;
-                    if (comp.id === 'veggie' && (name.includes('kangkung') || name.includes('bayam') || name.includes('spinach') || d.category === 'Vegetable')) return true;
-                    if (comp.id === 'fruit' && (name.includes('pisang') || name.includes('jeruk') || name.includes('banana') || name.includes('orange') || d.category === 'Fruit')) return true;
-                    return false;
-                });
-
-                if (!det && detections[slotIdx]) {
-                    det = detections[slotIdx];
-                }
-
-                if (!det) return;
-
-                const bx = comp.x + 4;
-                const by = comp.y + 4;
-                const bw = comp.w - 8;
-                const bh = comp.h - 8;
-                const bl = 12;
-
-                ctx.save();
-                ctx.strokeStyle = comp.color;
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.roundRect(bx, by, bw, bh, 8);
-                ctx.stroke();
-
-                ctx.lineWidth = 3.5;
-                ctx.beginPath();
-                ctx.moveTo(bx, by + bl); ctx.lineTo(bx, by); ctx.lineTo(bx + bl, by);
-                ctx.moveTo(bx + bw - bl, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + bl);
-                ctx.moveTo(bx, by + bh - bl); ctx.lineTo(bx, by + bh); ctx.lineTo(bx + bl, by + bh);
-                ctx.moveTo(bx + bw - bl, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - bl);
-                ctx.stroke();
-
-                const labelText = `${det.food_name} ${(det.similarity_rate * 100).toFixed(0)}%`;
-                ctx.font = 'bold 11px sans-serif';
-                const metrics = ctx.measureText(labelText);
-                const badgeW = metrics.width + 16;
-                const badgeH = 22;
-
-                ctx.fillStyle = comp.color;
-                ctx.beginPath();
-                ctx.roundRect(bx, by - badgeH + 2, badgeW, badgeH, [6, 6, 0, 0]);
-                ctx.fill();
-
-                ctx.fillStyle = '#0f172a';
-                ctx.fillText(labelText, bx + 8, by - 6);
-                ctx.restore();
-            });
-        }
+        return det || null;
     }
 </script>
 
@@ -249,24 +75,94 @@
     <div class="viewport-card">
         <div class="viewport-header">
             <div class="header-left">
-                <span class="live-dot" class:offline={!hasCamera}></span>
+                <span class="live-dot" class:offline={!hasCamera || streamError}></span>
                 <strong>Live Inspection View</strong>
             </div>
-            <span class="pill-badge">{hasCamera ? '640 × 480 @ 30 FPS' : 'Standby'}</span>
+            <span class="pill-badge">{hasCamera && !streamError ? 'MJPEG Stream (Zero Lag)' : 'Standby'}</span>
         </div>
 
         <div class="canvas-container">
-            <canvas
-                bind:this={canvasEl}
-                width="640"
-                height="480"
-                class="feed-canvas"
-            ></canvas>
+            {#if hasCamera && !streamError}
+                <!-- Native Browser MJPEG Stream for Zero Delay Hardware Rendering -->
+                <img
+                    src={activeStreamUrl}
+                    alt="Live Video Stream"
+                    class="feed-video"
+                    onerror={() => (streamError = true)}
+                />
+
+                <!-- Crisp Vector Overlay for Food Detection Compartments -->
+                <svg class="detection-svg-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
+                    {#each compartments as comp, idx}
+                        {@const det = getMatchedDetection(comp.id, idx)}
+                        {#if det}
+                            <!-- Outer Bounding Box -->
+                            <rect
+                                x={comp.x}
+                                y={comp.y}
+                                width={comp.w}
+                                height={comp.h}
+                                rx="8"
+                                fill="none"
+                                stroke={comp.color}
+                                stroke-width="2"
+                                opacity="0.9"
+                            />
+
+                            <!-- Tech Corner Accents -->
+                            <path
+                                d={`M ${comp.x} ${comp.y + 16} L ${comp.x} ${comp.y} L ${comp.x + 16} ${comp.y}
+                                    M ${comp.x + comp.w - 16} ${comp.y} L ${comp.x + comp.w} ${comp.y} L ${comp.x + comp.w} ${comp.y + 16}
+                                    M ${comp.x} ${comp.y + comp.h - 16} L ${comp.x} ${comp.y + comp.h} L ${comp.x + 16} ${comp.y + comp.h}
+                                    M ${comp.x + comp.w - 16} ${comp.y + comp.h} L ${comp.x + comp.w} ${comp.y + comp.h} L ${comp.x + comp.w} ${comp.y + comp.h - 16}`}
+                                fill="none"
+                                stroke={comp.color}
+                                stroke-width="3.5"
+                                stroke-linecap="round"
+                            />
+
+                            <!-- Classification Label Pill -->
+                            <g transform={`translate(${comp.x}, ${comp.y - 20})`}>
+                                <rect
+                                    x="0"
+                                    y="0"
+                                    width={det.food_name.length * 8 + 60}
+                                    height="20"
+                                    rx="4"
+                                    fill={comp.color}
+                                />
+                                <text
+                                    x="8"
+                                    y="14"
+                                    fill="#0f172a"
+                                    font-size="11"
+                                    font-weight="bold"
+                                    font-family="sans-serif"
+                                >
+                                    {det.food_name.toUpperCase()} {(det.similarity_rate * 100).toFixed(0)}%
+                                </text>
+                            </g>
+                        {/if}
+                    {/each}
+                </svg>
+            {:else}
+                <!-- Standby State -->
+                <div class="standby-box">
+                    <span class="standby-icon">📷</span>
+                    <h4>No Camera Stream Connected</h4>
+                    <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
+                    {#if streamError}
+                        <button type="button" class="retry-btn" onclick={() => (streamError = false)}>
+                            ↻ Reconnect Stream
+                        </button>
+                    {/if}
+                </div>
+            {/if}
         </div>
 
         <div class="viewport-footer">
             <span>📷 Device: {deviceId || 'ESP32S3_CAM'}</span>
-            <span>⚡ Engine: C++ SIMD</span>
+            <span>⚡ Stream: MJPEG Multipart Push</span>
         </div>
     </div>
 
@@ -362,12 +258,71 @@
         align-items: center;
         justify-content: center;
         aspect-ratio: 4 / 3;
+        overflow: hidden;
     }
 
-    .feed-canvas {
+    .feed-video {
         width: 100%;
         height: 100%;
-        object-fit: contain;
+        object-fit: cover;
+        display: block;
+    }
+
+    .detection-svg-overlay {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 5;
+    }
+
+    .standby-box {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 30px 20px;
+        background: #181c24;
+        border: 1px dashed var(--border-subtle);
+        border-radius: var(--radius-lg);
+        width: 80%;
+        gap: 8px;
+    }
+
+    .standby-icon {
+        font-size: 2.2rem;
+    }
+
+    .standby-box h4 {
+        margin: 0;
+        font-size: 0.95rem;
+        color: var(--text-primary);
+        font-weight: 700;
+    }
+
+    .standby-box p {
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--text-muted);
+    }
+
+    .retry-btn {
+        margin-top: 8px;
+        background: var(--accent-blue);
+        color: #0f172a;
+        font-weight: 700;
+        font-size: 0.75rem;
+        border: none;
+        padding: 6px 14px;
+        border-radius: var(--radius-pill);
+        cursor: pointer;
+        transition: opacity 0.15s ease;
+    }
+
+    .retry-btn:hover {
+        opacity: 0.9;
     }
 
     .viewport-footer {
