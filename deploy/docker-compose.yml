@@ -1,34 +1,43 @@
+# ==============================================================================
+# BawalVision Microservices Orchestration (Local & Edge Industrial Stack)
+# Services: PostgreSQL, Go Gateway, C++ Vision Engine, SvelteKit HMI, Python ML
+# ==============================================================================
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: postgres
+    container_name: bawal_postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: bawal_vision
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-bawal_vision}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     networks:
       - bawal-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d bawal_vision"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-bawal_vision}"]
       interval: 3s
       timeout: 5s
       retries: 5
 
   backend:
     build:
-      context: ../backend
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
     container_name: bawal_backend
+    restart: unless-stopped
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     environment:
       - PORT=8080
       - DB_HOST=postgres
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DB_NAME=bawal_vision
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - DB_NAME=${POSTGRES_DB:-bawal_vision}
       - DB_PORT=5432
       - DB_SSLMODE=disable
     networks:
@@ -42,6 +51,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.vision
     container_name: bawal_vision
+    restart: unless-stopped
     ports:
       - "${VISION_PORT:-8081}:8080"
     environment:
@@ -49,6 +59,10 @@ services:
       - QT_QPA_PLATFORM=offscreen
       - BACKEND_URL=http://backend:8080
       - OMP_NUM_THREADS=4
+      - OMP_SCHEDULE=static
+      - OMP_PROC_BIND=true
+    volumes:
+      - ../ml/AI1/model:/app/ml/AI1/model:ro
     networks:
       - bawal-net
     depends_on:
@@ -56,9 +70,10 @@ services:
 
   frontend:
     build:
-      context: ../frontend
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
     container_name: bawal_frontend
+    restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-3001}:3000"
     environment:
@@ -69,6 +84,23 @@ services:
       - bawal-net
     depends_on:
       - backend
+
+  ml:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.ml
+    container_name: bawal_ml
+    profiles:
+      - ml
+      - training
+    volumes:
+      - ../ml:/app/ml
+    networks:
+      - bawal-net
+
+volumes:
+  postgres_data:
+    driver: local
 
 networks:
   bawal-net:

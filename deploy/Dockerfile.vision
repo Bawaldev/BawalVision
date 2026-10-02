@@ -1,9 +1,19 @@
-# ==========================================
-# Builder C++ & Vision Service Compiler
-# ==========================================
-FROM debian:bookworm-slim AS builder
+# syntax=docker/dockerfile:1.4
+# ==============================================================================
+# BawalVision Machine Vision & ONNX ML Inference Engine
+# Language: C++20 (OpenCV, OpenMP, CMake, Ninja, POSIX HTTP Client)
+# Target OS: Ubuntu 24.04 LTS
+# ==============================================================================
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# --- Stage 1: Build Environment ---
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Use BuildKit cache mounts for APT to accelerate rebuilds
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     ninja-build \
@@ -12,45 +22,56 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev \
     libomp-dev \
     nlohmann-json3-dev \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates
 
-WORKDIR /app
+WORKDIR /src
 
-# Copy C++ source files
-COPY services/ /app/services/
+# Separate CMake configuration files to cache dependency configuration layer
+COPY services/CMakeLists.txt /src/services/
+COPY services/ /src/services/
 
-# Build vision_service binary
-RUN cmake -B services/build -S services \
+# Configure CMake with BuildKit compiler/CCache support hooks
+RUN --mount=type=cache,target=/root/.cache/cmake \
+    cmake -B /src/services/build -S /src/services -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && \
-    cmake --build services/build --parallel $(nproc)
+    cmake --build /src/services/build --parallel $(nproc)
 
-# ==========================================
-# Runtime Production Image
-# ==========================================
-FROM debian:bookworm-slim AS runner
+# --- Stage 2: Hardened Production Runtime ---
+FROM ubuntu:24.04 AS runner
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libopencv-core406 \
-    libopencv-imgproc406 \
-    libopencv-highgui406 \
-    libopencv-calib3d406 \
-    libopencv-imgcodecs406 \
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Ubuntu 24.04 OpenCV 4.x runtime shared libraries & create non-root user
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    libopencv-core4.6d \
+    libopencv-imgproc4.6d \
+    libopencv-highgui4.6d \
+    libopencv-calib3d4.6d \
+    libopencv-imgcodecs4.6d \
     libcurl4 \
     libgomp1 \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && useradd -m -s /bin/bash -u 1001 visionuser
 
 WORKDIR /app
 
-# Copy compiled binary from builder
-COPY --from=builder /app/services/build/bin/vision_service /usr/local/bin/vision_service
+# Copy compiled executable binary from builder
+COPY --from=builder /src/services/build/bin/vision_service /usr/local/bin/vision_service
 
-# Concurrency & CPU pinning optimization
+# Create model runtime directory and set non-root ownership
+RUN mkdir -p /app/ml/AI1/model && chown -R visionuser:visionuser /app
+
+# Concurrency & CPU Pinning parameters for OpenMP Vision Pipeline
 ENV OMP_NUM_THREADS=4 \
     OMP_SCHEDULE=static \
-    OMP_PROC_BIND=true
+    OMP_PROC_BIND=true \
+    HEADLESS=1 \
+    QT_QPA_PLATFORM=offscreen
+
+USER visionuser
 
 EXPOSE 8080
 

@@ -1,0 +1,44 @@
+# ==============================================================================
+# BawalVision SCADA & Machine Vision HMI Frontend
+# Stack: SvelteKit 5 + TypeScript + Vite + Node.js 22 Alpine
+# ==============================================================================
+
+# --- Stage 1: Build Environment ---
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+# Copy dependency manifests for optimal layer caching
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+# Copy frontend source code
+COPY frontend/ ./
+
+# Compile SvelteKit production build
+RUN npm run build
+
+# --- Stage 2: Hardened Production Runtime ---
+FROM node:22-alpine AS runner
+
+WORKDIR /app
+
+# Copy required package files & built artifacts
+COPY --from=builder /app/package.json /app/package-lock.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.svelte-kit ./.svelte-kit
+COPY --from=builder /app/static ./static
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/vite.config.ts /app/tsconfig.json ./
+
+# Set environment variables for Vite Preview / Production server
+ENV HOST=0.0.0.0 \
+    PORT=3000 \
+    NODE_ENV=production
+
+# Switch to built-in unprivileged node user
+USER node
+
+EXPOSE 3000
+
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "3000"]
