@@ -236,12 +236,11 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					itemTemp = det.Temperature
 				}
 
-				conf, spoilage, evaluatedTemp, evaluatedWeight, itemStatus := EvaluateFoodQuality(
+				conf, spoilage, evaluatedTemp, itemStatus := EvaluateFoodQuality(
 					foodName,
 					det.SimilarityRate,
 					det.SpoilageScore,
 					itemTemp,
-					det.WeightGrams,
 					det.Status,
 				)
 
@@ -249,7 +248,6 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					ID:             uuid.New().String(),
 					InspectionID:   recordID,
 					FoodItemID:     foodItem.ID,
-					WeightGrams:    evaluatedWeight,
 					Temperature:    evaluatedTemp,
 					SimilarityRate: conf,
 					SpoilageScore:  spoilage,
@@ -337,31 +335,10 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 }
 
 // EvaluateFoodQuality applies multi-sensor quality & food safety rules combining:
-// 1. Computer Vision: Classification similarity & object integrity
-// 2. Machine Learning: Visual decomposition & spoilage scoring
+// 1. Computer Vision: Classification similarity & object integrity (Hue/color degradation detection)
+// 2. Machine Learning: Visual decomposition & spoilage scoring (ONNX model inference)
 // 3. Sensor Suhu Makanan: Food surface temperature (danger zone > 28°C acceleration)
-// 4. Sensor Berat (Load Cell): Portion weight verification against dietary gram standards
-func EvaluateFoodQuality(foodName string, cvConf float64, mlSpoilage float64, foodTemp float64, weightGrams float64, requestedStatus string) (float64, float64, float64, float64, string) {
-	targetMin := 80.0
-	targetMax := 220.0
-	fn := strings.ToLower(foodName)
-	if strings.Contains(fn, "nasi") || strings.Contains(fn, "rice") {
-		targetMin = 140.0
-		targetMax = 220.0
-	} else if strings.Contains(fn, "ayam") || strings.Contains(fn, "tofu") || strings.Contains(fn, "ikan") || strings.Contains(fn, "chicken") {
-		targetMin = 90.0
-		targetMax = 150.0
-	} else if strings.Contains(fn, "sayur") || strings.Contains(fn, "bayam") || strings.Contains(fn, "kangkung") || strings.Contains(fn, "spinach") {
-		targetMin = 60.0
-		targetMax = 110.0
-	} else if strings.Contains(fn, "buah") || strings.Contains(fn, "pisang") || strings.Contains(fn, "banana") || strings.Contains(fn, "jeruk") {
-		targetMin = 80.0
-		targetMax = 140.0
-	}
-
-	if weightGrams <= 0 {
-		weightGrams = (targetMin + targetMax) / 2.0
-	}
+func EvaluateFoodQuality(foodName string, cvConf float64, mlSpoilage float64, foodTemp float64, requestedStatus string) (float64, float64, float64, string) {
 	if foodTemp <= 0 {
 		foodTemp = 25.0
 	}
@@ -383,12 +360,12 @@ func EvaluateFoodQuality(foodName string, cvConf float64, mlSpoilage float64, fo
 	status := "PASS"
 	if requestedStatus != "" {
 		status = requestedStatus
-	} else if cvConf < 0.35 || mlSpoilage >= 55.0 || weightGrams < (targetMin*0.5) || (foodTemp > 42.0 && mlSpoilage >= 40.0) {
+	} else if cvConf < 0.35 || mlSpoilage >= 55.0 || (foodTemp > 42.0 && mlSpoilage >= 40.0) {
 		status = "REJECT"
-	} else if cvConf < 0.60 || mlSpoilage >= 35.0 || weightGrams < targetMin || weightGrams > (targetMax*1.25) || foodTemp > 38.0 {
+	} else if cvConf < 0.60 || mlSpoilage >= 35.0 || foodTemp > 38.0 {
 		status = "REVIEW"
 	}
 
-	return cvConf, mlSpoilage, foodTemp, weightGrams, status
+	return cvConf, mlSpoilage, foodTemp, status
 }
 

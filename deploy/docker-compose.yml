@@ -1,6 +1,8 @@
 # ==============================================================================
-# BawalVision Microservices Orchestration (Local & Edge Industrial Stack)
-# Services: PostgreSQL, Go Gateway, C++ Vision Engine, SvelteKit HMI, Python ML
+# BawalVision Production Container Stack (Ubuntu 24.04 + Native AVX2/SIMD)
+# Active Containers: PostgreSQL, Go Fiber Gateway, C++ Vision Engine, SvelteKit HMI
+# Note: ML Training runs directly on Host OS (.venv + NVIDIA RTX 3050 GPU)
+#       Edge Firmware runs bare-metal on ESP32-S3 (FreeRTOS)
 # ==============================================================================
 
 services:
@@ -25,6 +27,7 @@ services:
       retries: 5
 
   backend:
+    image: bawal-backend:latest
     build:
       context: ..
       dockerfile: deploy/Dockerfile.backend
@@ -47,6 +50,7 @@ services:
         condition: service_healthy
 
   vision:
+    image: bawal-vision:latest
     build:
       context: ..
       dockerfile: deploy/Dockerfile.vision
@@ -62,6 +66,7 @@ services:
       - OMP_SCHEDULE=static
       - OMP_PROC_BIND=true
     volumes:
+      # Mount ONNX model trained on Host GPU into container runtime
       - ../ml/AI1/model:/app/ml/AI1/model:ro
     networks:
       - bawal-net
@@ -69,6 +74,7 @@ services:
       - backend
 
   frontend:
+    image: bawal-frontend:latest
     build:
       context: ..
       dockerfile: deploy/Dockerfile.frontend
@@ -84,19 +90,6 @@ services:
       - bawal-net
     depends_on:
       - backend
-
-  ml:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.ml
-    container_name: bawal_ml
-    profiles:
-      - ml
-      - training
-    volumes:
-      - ../ml:/app/ml
-    networks:
-      - bawal-net
 
 volumes:
   postgres_data:

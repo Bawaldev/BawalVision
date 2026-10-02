@@ -132,7 +132,6 @@
                         return {
                             food_name: name,
                             similarity_rate: Number(item.similarity_rate) || 0.0,
-                            weight_grams: Number(item.weight_grams) || 0,
                             temperature: Number(item.temperature) || Number(latest.food_temperature) || Number(latest.temperature) || 25,
                             spoilage_score: Number(item.spoilage_score) || 0,
                             status: (item.status as 'PASS' | 'REVIEW' | 'REJECT') || 'PASS',

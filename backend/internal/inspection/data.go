@@ -11,7 +11,6 @@ type InspectionFood struct {
 	ID             string         `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	InspectionID   string         `json:"inspection_id" gorm:"type:uuid;not null;index"`
 	FoodItemID     int            `json:"food_item_id" gorm:"type:int;not null;index"`
-	WeightGrams    float64        `json:"weight_grams" gorm:"column:weight_grams;type:numeric(7,2);not null;default:0.00"`
 	Temperature    float64        `json:"temperature" gorm:"column:temperature;type:numeric(5,2);not null;default:25.00"`
 	SimilarityRate float64        `json:"similarity_rate" gorm:"column:similarity_rate;type:numeric(5,4);not null;default:0.0000"`
 	SpoilageScore  float64        `json:"spoilage_score" gorm:"column:spoilage_score;type:numeric(5,2);not null;default:0.00"`
@@ -53,14 +52,12 @@ type TelemetryIngressPayload struct {
 
 type PredictionResult struct {
 	IsSpoiled  bool    `json:"is_spoiled"`
-	TotalGrams float64 `json:"total_grams"`
 	TSafeHours float64 `json:"t_safe_hours"`
 }
 
 type FoodDetection struct {
 	FoodName       string  `json:"food_name"`
 	SimilarityRate float64 `json:"similarity_rate"`
-	WeightGrams    float64 `json:"weight_grams,omitempty"`
 	Temperature    float64 `json:"temperature,omitempty"`
 	SpoilageScore  float64 `json:"spoilage_score,omitempty"`
 	Status         string  `json:"status,omitempty"`

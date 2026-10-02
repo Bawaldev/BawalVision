@@ -1,7 +1,6 @@
 export interface FoodDetection {
     food_name: string;
     similarity_rate: number;
-    weight_grams?: number;
     temperature?: number;
     spoilage_score?: number;
     status?: 'PASS' | 'REVIEW' | 'REJECT';
@@ -14,7 +13,6 @@ export interface FoodCompartmentItem {
     name: string;
     detectedFood: string;
     similarityRate: number;
-    weightGrams: number;
     temperature: number;
     spoilageIndex: number;
     status: 'PASS' | 'REVIEW' | 'REJECT';
@@ -37,7 +35,6 @@ export interface InspectionRecord {
         id: string;
         inspection_id: string;
         food_item_id: number;
-        weight_grams: number;
         temperature: number;
         similarity_rate: number;
         spoilage_score: number;

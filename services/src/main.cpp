@@ -188,8 +188,7 @@ int main(int argc, char** argv) {
                         if (i > 0) json_ss << ",";
                         json_ss << "{"
                                 << "\"food_name\":\"" << detected_foods[i].first << "\","
-                                << "\"similarity_rate\":" << std::fixed << std::setprecision(4) << detected_foods[i].second << ","
-                                << "\"weight_grams\":120.0"
+                                << "\"similarity_rate\":" << std::fixed << std::setprecision(4) << detected_foods[i].second
                                 << "}";
                     }
                     json_ss << "]}";

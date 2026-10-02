@@ -58,6 +58,7 @@ func main() {
 	_ = db.Exec("ALTER TABLE inspections DROP COLUMN IF EXISTS humidity, DROP COLUMN IF EXISTS gas_voc, DROP COLUMN IF EXISTS pressure")
 	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS food_temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00")
 	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS cpu_temperature NUMERIC(5, 2) NOT NULL DEFAULT 35.00")
+	_ = db.Exec("ALTER TABLE inspection_foods DROP COLUMN IF EXISTS weight_grams")
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00")
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS similarity_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0000")
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS spoilage_score NUMERIC(5, 2) NOT NULL DEFAULT 0.00")

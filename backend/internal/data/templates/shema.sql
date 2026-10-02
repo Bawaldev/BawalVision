@@ -71,7 +71,6 @@ CREATE TABLE IF NOT EXISTS inspection_foods (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     inspection_id UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
     food_item_id INT NOT NULL REFERENCES food_items(id) ON DELETE RESTRICT,
-    weight_grams NUMERIC(7, 2) NOT NULL DEFAULT 0.00,
     temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00,
     similarity_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0000,
     spoilage_score NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
@@ -79,7 +78,7 @@ CREATE TABLE IF NOT EXISTS inspection_foods (
     CONSTRAINT uq_inspection_food UNIQUE (inspection_id, food_item_id)
 );
 
-ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS weight_grams NUMERIC(7, 2) NOT NULL DEFAULT 0.00;
+ALTER TABLE inspection_foods DROP COLUMN IF EXISTS weight_grams;
 ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00;
 ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS similarity_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0000;
 ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS spoilage_score NUMERIC(5, 2) NOT NULL DEFAULT 0.00;

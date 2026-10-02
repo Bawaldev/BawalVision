@@ -2,7 +2,7 @@
 # ==============================================================================
 # BawalVision Machine Vision & ONNX ML Inference Engine
 # Language: C++20 (OpenCV, OpenMP, CMake, Ninja, POSIX HTTP Client)
-# Target OS: Ubuntu 24.04 LTS
+# Target OS: Ubuntu 24.04 LTS (Optimized with AVX2 & OpenMP Multithreading)
 # ==============================================================================
 
 # --- Stage 1: Build Environment ---
@@ -26,14 +26,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /src
 
-# Separate CMake configuration files to cache dependency configuration layer
-COPY services/CMakeLists.txt /src/services/
+# Copy C++ computer vision service source
 COPY services/ /src/services/
 
-# Configure CMake with BuildKit compiler/CCache support hooks
+# Compile optimized release binary with SIMD/AVX2/FMA and OpenMP instructions
 RUN --mount=type=cache,target=/root/.cache/cmake \
     cmake -B /src/services/build -S /src/services -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS="-O3 -mavx2 -mfma -fopenmp" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && \
     cmake --build /src/services/build --parallel $(nproc)
 
@@ -42,15 +42,11 @@ FROM ubuntu:24.04 AS runner
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Ubuntu 24.04 OpenCV 4.x runtime shared libraries & create non-root user
+# Install Ubuntu 24.04 runtime shared libraries & create non-root user
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-    libopencv-core4.6d \
-    libopencv-imgproc4.6d \
-    libopencv-highgui4.6d \
-    libopencv-calib3d4.6d \
-    libopencv-imgcodecs4.6d \
+    libopencv-dev \
     libcurl4 \
     libgomp1 \
     ca-certificates \
@@ -65,6 +61,7 @@ COPY --from=builder /src/services/build/bin/vision_service /usr/local/bin/vision
 RUN mkdir -p /app/ml/AI1/model && chown -R visionuser:visionuser /app
 
 # Concurrency & CPU Pinning parameters for OpenMP Vision Pipeline
+# Register CPU pass-through (AVX2/FMA) runs natively on host CPU
 ENV OMP_NUM_THREADS=4 \
     OMP_SCHEDULE=static \
     OMP_PROC_BIND=true \

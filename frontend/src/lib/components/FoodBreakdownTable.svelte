@@ -8,10 +8,10 @@
     let { detections = [] }: Props = $props();
 
     const compartmentDefaults = [
-        { slot: 'Slot #1 (Main)', defaultName: 'Carbohydrate (Rice)', targetWeight: '150 - 200g', icon: '🍚' },
-        { slot: 'Slot #2 (Protein)', defaultName: 'Protein (Chicken/Tofu)', targetWeight: '100 - 130g', icon: '🍗' },
-        { slot: 'Slot #3 (Vegetable)', defaultName: 'Vegetable (Spinach)', targetWeight: '70 - 90g', icon: '🥬' },
-        { slot: 'Slot #4 (Fruit/Side)', defaultName: 'Fruit (Banana/Orange)', targetWeight: '90 - 120g', icon: '🍌' }
+        { slot: 'Slot #1 (Main)', defaultName: 'Carbohydrate (Rice)', icon: '🍚' },
+        { slot: 'Slot #2 (Protein)', defaultName: 'Protein (Chicken/Tofu)', icon: '🍗' },
+        { slot: 'Slot #3 (Vegetable)', defaultName: 'Vegetable (Spinach)', icon: '🥬' },
+        { slot: 'Slot #4 (Fruit/Side)', defaultName: 'Fruit (Banana/Orange)', icon: '🍌' }
     ];
 </script>
 
@@ -21,12 +21,12 @@
             <span class="card-icon">🍱</span>
             <div>
                 <h4>Meal Tray Compartments</h4>
-                <p class="sub-label">4-Slot Nutritional Verification</p>
+                <p class="sub-label">4-Slot Optical & Thermal Safety Inspection</p>
             </div>
         </div>
         <div class="header-stats">
-            <span class="stat-pill">Tolerance: ±5g</span>
-            <span class="stat-pill">Target: ~520g</span>
+            <span class="stat-pill">Thermal Limit: ≤38°C</span>
+            <span class="stat-pill">CV Threshold: ≥60%</span>
         </div>
     </div>
 
@@ -35,8 +35,7 @@
             <thead>
                 <tr>
                     <th>Compartment</th>
-                    <th>Item</th>
-                    <th>Weight</th>
+                    <th>Detected Item</th>
                     <th>Food Temp</th>
                     <th>CV Match</th>
                     <th>ML Spoilage</th>
@@ -46,7 +45,7 @@
             <tbody>
                 {#if detections.length === 0}
                     <tr>
-                        <td colspan="7" class="empty-row">
+                        <td colspan="6" class="empty-row">
                             <span class="empty-msg">No active tray detected on optical camera sensor.</span>
                         </td>
                     </tr>
@@ -63,19 +62,6 @@
                                     <small class="cat-label">{det.category || 'Food'}</small>
                                 {:else}
                                     <span class="empty-name">{comp.defaultName}</span>
-                                {/if}
-                            </td>
-                            <td class="weight-cell">
-                                {#if det}
-                                    <span
-                                        class="weight-num"
-                                        class:warn={(det.weight_grams || 0) < 80 || (det.weight_grams || 0) > 220}
-                                        class:danger={(det.weight_grams || 0) < 50}
-                                    >
-                                        {det.weight_grams || 120} <small>g</small>
-                                    </span>
-                                {:else}
-                                    <span class="muted-weight">{comp.targetWeight}</span>
                                 {/if}
                             </td>
                             <td class="temp-cell">
@@ -271,23 +257,6 @@
         font-weight: 700;
     }
 
-    .weight-num {
-        font-family: var(--font-mono);
-        font-size: 0.8rem;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-
-    .weight-num small {
-        color: var(--text-muted);
-        font-weight: normal;
-    }
-
-    .muted-weight {
-        font-size: 0.72rem;
-        color: var(--text-muted);
-    }
-
     .badge {
         font-size: 0.68rem;
         font-weight: 700;
@@ -315,11 +284,11 @@
         color: var(--text-primary);
     }
 
-    .weight-num.warn, .temp-num.warn {
+    .temp-num.warn {
         color: var(--accent-amber);
     }
 
-    .weight-num.danger, .temp-num.danger {
+    .temp-num.danger {
         color: var(--accent-red);
     }
 

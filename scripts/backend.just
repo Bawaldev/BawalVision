@@ -1,4 +1,4 @@
-COMPOSE_FILE := "deploy/docker-compose.yml"
+COMPOSE_FILE := justfile_directory() + "/deploy/docker-compose.yml"
 
 setup-deps:
     sudo apt update
@@ -74,51 +74,42 @@ check-frontend:
 
 # --- CONTAINER & DOCKER ORCHESTRATION ---
 docker-build-backend:
-    docker build -f deploy/Dockerfile.backend -t bawal-backend:latest .
+    cd {{ justfile_directory() }} && docker build -f deploy/Dockerfile.backend -t bawal-backend:latest .
 
 docker-build-vision:
-    docker build -f deploy/Dockerfile.vision -t bawal-vision:latest .
+    cd {{ justfile_directory() }} && docker build -f deploy/Dockerfile.vision -t bawal-vision:latest .
 
 docker-build-frontend:
-    docker build -f deploy/Dockerfile.frontend -t bawal-frontend:latest .
+    cd {{ justfile_directory() }} && docker build -f deploy/Dockerfile.frontend -t bawal-frontend:latest .
 
-docker-build-ml:
-    docker build -f deploy/Dockerfile.ml -t bawal-ml:latest .
-
-docker-build-all: docker-build-backend docker-build-vision docker-build-frontend docker-build-ml
+docker-build-all: docker-build-backend docker-build-vision docker-build-frontend
 
 docker-run-vision:
     docker run --rm -it -p 8080:8080 bawal-vision:latest
 
 compose-up service="":
-    docker compose -f {{ COMPOSE_FILE }} up --build {{ service }}
-
-compose-up-all:
-    docker compose -f {{ COMPOSE_FILE }} --profile ml up --build
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} up {{ service }}
 
 compose-up-d service="":
-    docker compose -f {{ COMPOSE_FILE }} up -d --build {{ service }}
-
-compose-up-d-all:
-    docker compose -f {{ COMPOSE_FILE }} --profile ml up -d --build
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} up -d {{ service }}
 
 compose-backend:
-    docker compose -f {{ COMPOSE_FILE }} up --build backend
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} up backend
 
 compose-down:
-    docker compose -f {{ COMPOSE_FILE }} down
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} down
 
 compose-down-v:
-    docker compose -f {{ COMPOSE_FILE }} down -v
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} down -v
 
 compose-logs service="":
-    docker compose -f {{ COMPOSE_FILE }} logs -f {{ service }}
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} logs -f {{ service }}
 
 compose-ps:
-    docker compose -f {{ COMPOSE_FILE }} ps
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} ps
 
 compose-restart service="":
-    docker compose -f {{ COMPOSE_FILE }} restart {{ service }}
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} restart {{ service }}
 
 allow-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
     #!/usr/bin/env bash

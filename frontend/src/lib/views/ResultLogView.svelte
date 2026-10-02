@@ -83,7 +83,7 @@
                                     <div class="food-pill-group">
                                         {#each rec.inspection_foods as f}
                                             <span class="food-pill" class:pass={f.status === 'PASS'} class:review={f.status === 'REVIEW'} class:reject={f.status === 'REJECT'}>
-                                                {f.food_item?.name || 'Food'} ({f.weight_grams}g, {((f.similarity_rate || 0.9) * 100).toFixed(0)}%)
+                                                {f.food_item?.name || 'Food'} ({((f.similarity_rate || 0.9) * 100).toFixed(0)}%)
                                             </span>
                                         {/each}
                                     </div>
