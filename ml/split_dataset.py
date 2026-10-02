@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-BawalVision Leak-Free Dataset Splitter
-=====================================
+BawalVision Leak-Free Dataset Splitter (Cross-Platform: Linux, macOS, Windows)
+=============================================================================
 Partitions raw image datasets into Train (70%), Validation (15%), and Test (15%)
 with built-in Perceptual dHash & MD5 deduplication to guarantee zero Data Leakage.
+Supports execution on Windows (cmd, PowerShell, Git Bash) and Linux/macOS.
 """
 
 import argparse
@@ -11,15 +12,33 @@ import hashlib
 import os
 import random
 import shutil
+import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
 from PIL import Image
 
+# Ensure UTF-8 output on Windows terminals
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # Determine Project Root & Script Directory
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name == "ml" else SCRIPT_DIR
+
+
+def remove_readonly(func, path, exc_info):
+    """Handles Windows permission errors during shutil.rmtree on read-only files."""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except Exception:
+        pass
 
 
 def calculate_dhash(image: Image.Image, hash_size: int = 8) -> int:
@@ -55,35 +74,51 @@ def calculate_md5(file_path: str) -> str:
     return hasher.hexdigest()
 
 
-def collect_clean_images(category_dir: str, min_size: tuple, hamming_threshold: int = 4):
-    """Scans, validates, and deduplicates images within a category."""
+def collect_clean_images(category_dir: Path, min_size: tuple, hamming_threshold: int = 4):
+    """Scans, validates, and deduplicates images within a category with Windows file-lock safety."""
     valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+    ignored_names = {"thumbs.db", "desktop.ini", ".ds_store"}
     min_w, min_h = min_size
     
     seen_md5 = set()
     seen_dhashes = []
     clean_files = []
 
-    files = sorted(os.listdir(category_dir))
-    for file in files:
-        ext = os.path.splitext(file)[1].lower()
+    try:
+        entries = sorted(category_dir.iterdir(), key=lambda p: p.name)
+    except Exception as e:
+        print(f"[WARN] Failed to read directory {category_dir}: {e}")
+        return clean_files
+
+    for file_path in entries:
+        if not file_path.is_file():
+            continue
+        
+        name_lower = file_path.name.lower()
+        if name_lower in ignored_names or name_lower.startswith("."):
+            continue
+
+        ext = file_path.suffix.lower()
         if ext not in valid_exts:
             continue
         
-        file_path = os.path.join(category_dir, file)
-        if not os.path.isfile(file_path) or os.path.getsize(file_path) == 0:
+        try:
+            if file_path.stat().st_size == 0:
+                continue
+        except Exception:
             continue
 
-        # Verify integrity, format, and resolution in a single pass
+        # Single-pass decoding with explicit memory loading to release Windows file handles
         try:
-            with Image.open(file_path) as img:
+            with Image.open(str(file_path)) as img:
                 img_rgb = img.convert("RGB")
+                img_rgb.load()  # Force memory load so file handle is closed on Windows
                 w, h = img_rgb.size
                 if w < min_w or h < min_h:
                     continue
 
                 # 1. Exact MD5 deduplication
-                md5_val = calculate_md5(file_path)
+                md5_val = calculate_md5(str(file_path))
                 if md5_val in seen_md5:
                     continue
 
@@ -100,7 +135,7 @@ def collect_clean_images(category_dir: str, min_size: tuple, hamming_threshold: 
 
                 seen_md5.add(md5_val)
                 seen_dhashes.append(img_dhash)
-                clean_files.append(file_path)
+                clean_files.append(str(file_path))
         except Exception:
             continue
 
@@ -108,37 +143,40 @@ def collect_clean_images(category_dir: str, min_size: tuple, hamming_threshold: 
 
 
 def resolve_source_dir(source_arg: str) -> Path:
-    """Intelligently resolves the source dataset directory across execution contexts."""
+    """Intelligently resolves the source dataset directory across Linux, macOS, and Windows."""
+    src_path = Path(source_arg).expanduser()
     candidates = [
-        Path(source_arg),
+        src_path,
         PROJECT_ROOT / source_arg,
         PROJECT_ROOT / "ml" / "dataset" / "dataset_mbg_matang",
         PROJECT_ROOT / "dataset" / "dataset_mbg_matang",
         PROJECT_ROOT / "ml" / "dataset",
         SCRIPT_DIR / "dataset" / "dataset_mbg_matang",
+        SCRIPT_DIR / "dataset",
         Path.cwd() / source_arg,
     ]
     for c in candidates:
         if c.exists() and c.is_dir():
-            # Ensure it contains subdirectories
-            subdirs = [d for d in c.iterdir() if d.is_dir()]
+            subdirs = [d for d in c.iterdir() if d.is_dir() and not d.name.startswith(".")]
             if subdirs:
                 return c.resolve()
-    return Path(source_arg).resolve()
+    return src_path.resolve()
 
 
 def resolve_output_dir(output_arg: str) -> Path:
     """Intelligently resolves the target output dataset directory."""
+    out_path = Path(output_arg).expanduser()
+    if out_path.is_absolute():
+        return out_path
     candidates = [
-        Path(output_arg),
+        Path.cwd() / output_arg,
         PROJECT_ROOT / output_arg,
         PROJECT_ROOT / "ml" / "AI1" / "dataset",
     ]
-    if Path(output_arg).is_absolute():
-        return Path(output_arg)
-    if (PROJECT_ROOT / output_arg).parent.exists():
-        return (PROJECT_ROOT / output_arg).resolve()
-    return Path(output_arg).resolve()
+    for c in candidates:
+        if c.parent.exists():
+            return c.resolve()
+    return out_path.resolve()
 
 
 def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
@@ -158,36 +196,43 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
 
     start_time = time.time()
     print(f"\n{'='*70}")
-    print(f" [DATASET SPLITTER] Anti-Leak Stratified Partition")
+    print(f" [DATASET SPLITTER] Anti-Leak Stratified Partition (Cross-Platform)")
     print(f" Source : {src_path}")
     print(f" Output : {out_path}")
     print(f" Ratios : {train_ratio*100:.0f}% Train | {val_ratio*100:.0f}% Val | {test_ratio*100:.0f}% Test")
     print(f"{'='*70}\n")
 
     # Discover categories
-    categories = [d.name for d in sorted(src_path.iterdir()) if d.is_dir() and not d.name.startswith(".")]
+    ignored_names = {"thumbs.db", "desktop.ini", ".ds_store"}
+    categories = [
+        d.name for d in sorted(src_path.iterdir(), key=lambda p: p.name)
+        if d.is_dir() and not d.name.startswith(".") and d.name.lower() not in ignored_names
+    ]
     
     if not categories:
         print(f"[ERROR] No category folders found inside '{src_path}'.")
         sys.exit(1)
 
-    # Clean & initialize destination directories
+    # Clean & initialize destination directories with Windows permission error handling
     for subset in ["train", "val", "test"]:
         for cat in categories:
             cat_dest = out_path / subset / cat
             if cat_dest.exists():
-                shutil.rmtree(cat_dest)
+                shutil.rmtree(str(cat_dest), onerror=remove_readonly)
             cat_dest.mkdir(parents=True, exist_ok=True)
 
     summary_stats = {"train": 0, "val": 0, "test": 0, "total_raw": 0, "total_clean": 0}
 
     for cat in categories:
         cat_src = src_path / cat
-        all_raw_files = [f for f in cat_src.iterdir() if f.is_file() and not f.name.startswith(".")]
+        all_raw_files = [
+            f for f in cat_src.iterdir()
+            if f.is_file() and not f.name.startswith(".") and f.name.lower() not in ignored_names
+        ]
         summary_stats["total_raw"] += len(all_raw_files)
 
         # Sanitize and deduplicate
-        clean_files = collect_clean_images(str(cat_src), min_size=min_size)
+        clean_files = collect_clean_images(cat_src, min_size=min_size)
         summary_stats["total_clean"] += len(clean_files)
 
         random.shuffle(clean_files)
@@ -206,7 +251,7 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
             for idx, file_src_str in enumerate(file_list, 1):
                 ext = Path(file_src_str).suffix.lower()
                 dest_file = dest_dir / f"{cat}_{idx:05d}{ext}"
-                shutil.copy2(file_src_str, dest_file)
+                shutil.copy2(file_src_str, str(dest_file))
             summary_stats[subset] += len(file_list)
 
         dropped = len(all_raw_files) - n_clean
@@ -224,14 +269,21 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
 
 
 def track_with_dvc(output_dir: str):
-    """Tracks the output split directory with DVC if available."""
+    """Tracks the output split directory with DVC if installed across OS platforms."""
     out_path = resolve_output_dir(output_dir)
-    dvc_bin = shutil.which("dvc") or os.path.expanduser("~/.local/bin/dvc")
-    if not (shutil.which("dvc") or os.path.exists(dvc_bin)):
+    dvc_bin = (
+        shutil.which("dvc") or
+        shutil.which("dvc.exe") or
+        shutil.which("dvc.cmd") or
+        (PROJECT_ROOT / ".venv" / "Scripts" / "dvc.exe" if sys.platform == "win32" else None) or
+        (PROJECT_ROOT / ".venv" / "bin" / "dvc" if sys.platform != "win32" else None) or
+        os.path.expanduser("~/.local/bin/dvc")
+    )
+    if not dvc_bin or (isinstance(dvc_bin, Path) and not dvc_bin.exists()):
         return
     try:
-        cmd = [dvc_bin, "add", str(out_path)]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        cmd = [str(dvc_bin), "add", str(out_path)]
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
         dvc_file = f"{out_path}.dvc"
         print(f"\n[SUCCESS] Split dataset tracked in DVC: {dvc_file}")
         print(f"[HINT] Run: git add {dvc_file} .gitignore && git commit -m \"chore(data): track train/val/test split\"")
@@ -241,7 +293,7 @@ def track_with_dvc(output_dir: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="BawalVision Leak-Free Dataset Splitter (Train / Val / Test)"
+        description="BawalVision Leak-Free Dataset Splitter (Train / Val / Test) - Cross-Platform"
     )
     parser.add_argument(
         "--source-dir", "-s",
