@@ -13,8 +13,13 @@ import random
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from PIL import Image
+
+# Determine Project Root & Script Directory
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name == "ml" else SCRIPT_DIR
 
 
 def calculate_dhash(image: Image.Image, hash_size: int = 8) -> int:
@@ -34,8 +39,11 @@ def calculate_dhash(image: Image.Image, hash_size: int = 8) -> int:
 
 
 def hamming_distance(h1: int, h2: int) -> int:
-    """Calculates differing bits between two 64-bit hashes."""
-    return bin(h1 ^ h2).count("1")
+    """Calculates differing bits between two 64-bit hashes using fast bit_count."""
+    xor_val = h1 ^ h2
+    if hasattr(xor_val, "bit_count"):
+        return xor_val.bit_count()
+    return bin(xor_val).count("1")
 
 
 def calculate_md5(file_path: str) -> str:
@@ -48,7 +56,7 @@ def calculate_md5(file_path: str) -> str:
 
 
 def collect_clean_images(category_dir: str, min_size: tuple, hamming_threshold: int = 4):
-    """Scans, validates with PIL, and deduplicates images within a category."""
+    """Scans, validates, and deduplicates images within a category."""
     valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
     min_w, min_h = min_size
     
@@ -66,23 +74,20 @@ def collect_clean_images(category_dir: str, min_size: tuple, hamming_threshold: 
         if not os.path.isfile(file_path) or os.path.getsize(file_path) == 0:
             continue
 
-        # Verify integrity & format
+        # Verify integrity, format, and resolution in a single pass
         try:
-            with Image.open(file_path) as img:
-                img.verify()
-            
             with Image.open(file_path) as img:
                 img_rgb = img.convert("RGB")
                 w, h = img_rgb.size
                 if w < min_w or h < min_h:
                     continue
 
-                # MD5 deduplication
+                # 1. Exact MD5 deduplication
                 md5_val = calculate_md5(file_path)
                 if md5_val in seen_md5:
                     continue
 
-                # Perceptual dHash deduplication (near-duplicates)
+                # 2. Perceptual dHash deduplication (near-duplicates)
                 img_dhash = calculate_dhash(img_rgb)
                 is_near_dup = False
                 for existing_hash in seen_dhashes:
@@ -102,6 +107,40 @@ def collect_clean_images(category_dir: str, min_size: tuple, hamming_threshold: 
     return clean_files
 
 
+def resolve_source_dir(source_arg: str) -> Path:
+    """Intelligently resolves the source dataset directory across execution contexts."""
+    candidates = [
+        Path(source_arg),
+        PROJECT_ROOT / source_arg,
+        PROJECT_ROOT / "ml" / "dataset" / "dataset_mbg_matang",
+        PROJECT_ROOT / "dataset" / "dataset_mbg_matang",
+        PROJECT_ROOT / "ml" / "dataset",
+        SCRIPT_DIR / "dataset" / "dataset_mbg_matang",
+        Path.cwd() / source_arg,
+    ]
+    for c in candidates:
+        if c.exists() and c.is_dir():
+            # Ensure it contains subdirectories
+            subdirs = [d for d in c.iterdir() if d.is_dir()]
+            if subdirs:
+                return c.resolve()
+    return Path(source_arg).resolve()
+
+
+def resolve_output_dir(output_arg: str) -> Path:
+    """Intelligently resolves the target output dataset directory."""
+    candidates = [
+        Path(output_arg),
+        PROJECT_ROOT / output_arg,
+        PROJECT_ROOT / "ml" / "AI1" / "dataset",
+    ]
+    if Path(output_arg).is_absolute():
+        return Path(output_arg)
+    if (PROJECT_ROOT / output_arg).parent.exists():
+        return (PROJECT_ROOT / output_arg).resolve()
+    return Path(output_arg).resolve()
+
+
 def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
                   val_ratio: float = 0.15, test_ratio: float = 0.15,
                   min_size: tuple = (200, 200), seed: int = 42):
@@ -109,39 +148,46 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
     Splits images from source_dir into output_dir/train, output_dir/val, output_dir/test.
     """
     random.seed(seed)
+    src_path = resolve_source_dir(source_dir)
+    out_path = resolve_output_dir(output_dir)
     
-    if not os.path.exists(source_dir):
-        print(f"[ERROR] Source dataset directory '{source_dir}' does not exist.")
+    if not src_path.exists() or not src_path.is_dir():
+        print(f"[ERROR] Source dataset directory '{src_path}' does not exist.")
+        print(f"[HINT] Place your raw categories under: '{PROJECT_ROOT / 'ml' / 'dataset' / 'dataset_mbg_matang'}'")
         sys.exit(1)
 
+    start_time = time.time()
     print(f"\n{'='*70}")
     print(f" [DATASET SPLITTER] Anti-Leak Stratified Partition")
-    print(f" Source: {source_dir}")
-    print(f" Output: {output_dir}")
-    print(f" Ratios: {train_ratio*100:.0f}% Train | {val_ratio*100:.0f}% Val | {test_ratio*100:.0f}% Test")
+    print(f" Source : {src_path}")
+    print(f" Output : {out_path}")
+    print(f" Ratios : {train_ratio*100:.0f}% Train | {val_ratio*100:.0f}% Val | {test_ratio*100:.0f}% Test")
     print(f"{'='*70}\n")
 
     # Discover categories
-    categories = [d for d in sorted(os.listdir(source_dir)) if os.path.isdir(os.path.join(source_dir, d))]
+    categories = [d.name for d in sorted(src_path.iterdir()) if d.is_dir() and not d.name.startswith(".")]
     
     if not categories:
-        print(f"[ERROR] No category folders found inside '{source_dir}'.")
+        print(f"[ERROR] No category folders found inside '{src_path}'.")
         sys.exit(1)
 
-    # Initialize destination directories
+    # Clean & initialize destination directories
     for subset in ["train", "val", "test"]:
         for cat in categories:
-            os.makedirs(os.path.join(output_dir, subset, cat), exist_ok=True)
+            cat_dest = out_path / subset / cat
+            if cat_dest.exists():
+                shutil.rmtree(cat_dest)
+            cat_dest.mkdir(parents=True, exist_ok=True)
 
     summary_stats = {"train": 0, "val": 0, "test": 0, "total_raw": 0, "total_clean": 0}
 
     for cat in categories:
-        cat_src = os.path.join(source_dir, cat)
-        all_raw_files = [f for f in os.listdir(cat_src) if os.path.isfile(os.path.join(cat_src, f))]
+        cat_src = src_path / cat
+        all_raw_files = [f for f in cat_src.iterdir() if f.is_file() and not f.name.startswith(".")]
         summary_stats["total_raw"] += len(all_raw_files)
 
         # Sanitize and deduplicate
-        clean_files = collect_clean_images(cat_src, min_size=min_size)
+        clean_files = collect_clean_images(str(cat_src), min_size=min_size)
         summary_stats["total_clean"] += len(clean_files)
 
         random.shuffle(clean_files)
@@ -156,18 +202,19 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
 
         # Copy images with standardized names
         for subset, file_list in [("train", train_list), ("val", val_list), ("test", test_list)]:
-            dest_dir = os.path.join(output_dir, subset, cat)
-            for idx, src_path in enumerate(file_list, 1):
-                ext = os.path.splitext(src_path)[1].lower()
-                dest_file = os.path.join(dest_dir, f"{cat}_{idx:05d}{ext}")
-                shutil.copy2(src_path, dest_file)
+            dest_dir = out_path / subset / cat
+            for idx, file_src_str in enumerate(file_list, 1):
+                ext = Path(file_src_str).suffix.lower()
+                dest_file = dest_dir / f"{cat}_{idx:05d}{ext}"
+                shutil.copy2(file_src_str, dest_file)
             summary_stats[subset] += len(file_list)
 
         dropped = len(all_raw_files) - n_clean
-        print(f"  * {cat:18s}: Clean={n_clean:4d} (Dropped={dropped:3d}) -> Train={len(train_list):4d} | Val={len(val_list):4d} | Test={len(test_list):4d}")
+        print(f"  * {cat:18s}: Raw={len(all_raw_files):4d} | Clean={n_clean:4d} (Dropped={dropped:3d}) -> Train={len(train_list):4d} | Val={len(val_list):4d} | Test={len(test_list):4d}")
 
+    elapsed = time.time() - start_time
     print(f"\n{'='*70}")
-    print(f" [SPLIT SUMMARY]")
+    print(f" [SPLIT SUMMARY] (Completed in {elapsed:.2f}s)")
     print(f"  Total Raw Scanned : {summary_stats['total_raw']:5d}")
     print(f"  Total Clean Saved : {summary_stats['total_clean']:5d}")
     print(f"  -> Train Set      : {summary_stats['train']:5d} images ({summary_stats['train']/max(1, summary_stats['total_clean'])*100:.1f}%)")
@@ -177,16 +224,19 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
 
 
 def track_with_dvc(output_dir: str):
-    """Tracks the output split directory with DVC."""
+    """Tracks the output split directory with DVC if available."""
+    out_path = resolve_output_dir(output_dir)
     dvc_bin = shutil.which("dvc") or os.path.expanduser("~/.local/bin/dvc")
+    if not (shutil.which("dvc") or os.path.exists(dvc_bin)):
+        return
     try:
-        cmd = [dvc_bin, "add", output_dir]
+        cmd = [dvc_bin, "add", str(out_path)]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        dvc_file = f"{output_dir}.dvc"
+        dvc_file = f"{out_path}.dvc"
         print(f"\n[SUCCESS] Split dataset tracked in DVC: {dvc_file}")
         print(f"[HINT] Run: git add {dvc_file} .gitignore && git commit -m \"chore(data): track train/val/test split\"")
-    except Exception as e:
-        print(f"[NOTE] DVC tracking manual command: dvc add {output_dir}")
+    except Exception:
+        print(f"[NOTE] DVC tracking manual command: dvc add {out_path}")
 
 
 def main():
@@ -195,8 +245,8 @@ def main():
     )
     parser.add_argument(
         "--source-dir", "-s",
-        default="dataset_mbg_matang",
-        help="Source directory containing category folders of images"
+        default="ml/dataset/dataset_mbg_matang",
+        help="Source directory containing category folders of images (default: ml/dataset/dataset_mbg_matang)"
     )
     parser.add_argument(
         "--output-dir", "-o",
@@ -223,9 +273,9 @@ def main():
     )
     parser.add_argument(
         "--dvc-track",
-        action="store_true",
-        default=True,
-        help="Automatically track split directory with DVC (default: True)"
+        action=argparse.BooleanOptionalAction if hasattr(argparse, "BooleanOptionalAction") else "store_true",
+        default=False,
+        help="Track split directory with DVC (default: False)"
     )
 
     args = parser.parse_args()
