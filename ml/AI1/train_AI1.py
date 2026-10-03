@@ -1,209 +1,146 @@
 import os
+import shutil
 import time
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import datasets, models, transforms
-import onnxruntime as ort
+from pathlib import Path
 import numpy as np
+import onnxruntime as ort
+import torch
+from ultralytics import YOLO
+
+# ==============================================================================
+# PIPELINE CONFIGURATION & HYPERPARAMETERS
+# ==============================================================================
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+YAML_CONFIG = SCRIPT_DIR / "yolo_dataset" / "dataset.yaml"
+WEIGHTS_DIR = SCRIPT_DIR / "weights"
+MODEL_DIR = SCRIPT_DIR / "model"
+
+FINAL_PT_TARGET = WEIGHTS_DIR / "best.pt"
+FINAL_ONNX_TARGET = MODEL_DIR / "ai1_vision.onnx"
+
+# Ultralytics training hyperparameters
+MODEL_ARCH = "yolov8n.pt"  # Pretrained YOLOv8 Nano Object Detection backbone
+INPUT_RESOLUTION = 640     # Fixed 640x640 frame resolution
+BATCH_SIZE = 16            # Recommended for 6GB VRAM (NVIDIA RTX 3050)
+MAX_EPOCHS = 50
+EARLY_STOP_PATIENCE = 8    # Training halts if validation mAP50-95 stops improving
+ONNX_OPSET = 17            # Verified opset for ONNX Runtime CPU Execution Provider
 
 
+def main() -> None:
+    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-# 1. DIRECTORY CONFIGURATION & HYPERPARAMETERS
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-DATA_DIR = os.path.join(BASE_DIR, "dataset")
-WEIGHTS_DIR = os.path.join(BASE_DIR, "weights")
-MODEL_DIR = os.path.join(BASE_DIR, "model")
-
-for folder in [DATA_DIR, WEIGHTS_DIR, MODEL_DIR]:
-    os.makedirs(folder, exist_ok=True)
-
-PTH_PATH = os.path.join(WEIGHTS_DIR, "best_mobilenetv3.pth")
-ONNX_PATH = os.path.join(MODEL_DIR, "ai1_vision.onnx")
-
-BATCH_SIZE = 32
-EPOCHS = 40
-PATIENCE = 6  # Early stopping counter
-NUM_CLASSES = 7
-
-def main():
-    os.makedirs(WEIGHTS_DIR, exist_ok=True)
-    os.makedirs(MODEL_DIR, exist_ok=True)
-
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
-    print(f"[+] Active hardware: {device}")
-
-    # 2. PREPROCESSING PIPELINE
-    data_transforms = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-
-    # 3. DATA LOADER
-    train_dataset = datasets.ImageFolder(
-        os.path.join(DATA_DIR, "train"), transform=data_transforms
-    )
-    val_dataset = datasets.ImageFolder(
-        os.path.join(DATA_DIR, "val"), transform=data_transforms
-    )
-
-    workers = 2 if os.name != "nt" else 0
-    
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=workers,
-        pin_memory=use_cuda,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=workers,
-        pin_memory=use_cuda,
-    )
-
-    print(f"[+] Classes ({len(train_dataset.classes)}): {train_dataset.classes}")
-    print(f"[+] Total Samples -> Train: {len(train_dataset)} | Val: {len(val_dataset)}")
-
-    # 4. MODEL ARCHITECTURE (MobileNetV3-Small)
-    model = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
-    model.classifier[2] = nn.Dropout(p=0.5, inplace=True)
-    in_features = model.classifier[3].in_features
-    model.classifier[3] = nn.Linear(in_features, NUM_CLASSES)
-    model = model.to(device)
-
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-3)
-    scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
-
-    # 5. TRAINING & EARLY STOPPING LOOP
-    best_val_acc = 0.0
-    epochs_no_improve = 0
-    print("\n=== Starting Training ===")
-    
-    start_time = time.time()
-
-    for epoch in range(EPOCHS):
-        model.train()
-        running_loss, correct_train, total_train = 0.0, 0, 0
-
-        # Training Phase
-        for inputs, labels in train_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-
-            with torch.amp.autocast("cuda", enabled=use_cuda):
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-
-            running_loss += loss.item() * inputs.size(0)
-            _, preds = torch.max(outputs, 1)
-            correct_train += torch.sum(preds == labels.data).item()
-            total_train += labels.size(0)
-
-        # Evaluation Phase (Validation)
-        model.eval()
-        correct_val, total_val = 0, 0
-        with torch.no_grad():
-            for inputs, labels in val_loader:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = model(inputs)
-                _, preds = torch.max(outputs, 1)
-                correct_val += torch.sum(preds == labels.data).item()
-                total_val += labels.size(0)
-
-        # Metric Computation
-        train_acc = correct_train / total_train
-        val_acc = correct_val / total_val
-
-        print(
-            f"Epoch [{epoch+1:02d}/{EPOCHS}] Loss: {running_loss/total_train:.4f} | "
-            f"Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}"
+    if not YAML_CONFIG.exists():
+        raise FileNotFoundError(
+            f"Specification not found: {YAML_CONFIG}. Run prepare_yolo_dataset.py first!"
         )
 
-        # Early Stopping Evaluation
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            epochs_no_improve = 0
-            torch.save(model.state_dict(), PTH_PATH)
-            print(f"    -> Best weights saved to: {PTH_PATH} (Acc: {best_val_acc:.4f})")
-        else:
-            epochs_no_improve += 1
-            print(f"    -> Early stopping counter: {epochs_no_improve}/{PATIENCE}")
+    device_id = "0" if torch.cuda.is_available() else "cpu"
+    print(f"[+] Compute Hardware : {'NVIDIA CUDA (GPU:0)' if device_id == '0' else 'Host CPU'}")
+    print(f"[+] Dataset Metadata : {YAML_CONFIG}")
 
-        if epochs_no_improve >= PATIENCE:
-            print(f"\n[!] Early stopping triggered at epoch {epoch+1}. Halting training.")
-            break
+    # ==============================================================================
+    # 1. INITIALIZE BACKBONE & TRAIN
+    # ==============================================================================
+    print(f"\n[+] Loading Detection Base: {MODEL_ARCH}...")
+    model = YOLO(MODEL_ARCH)
 
-        time_elapsed = time.time() - start_time
-    print(f"\n[⏱️] Total Training Duration: {int(time_elapsed // 60)} min {int(time_elapsed % 60)} sec")
+    print("\n=== Commencing YOLOv8n Object Detection Training ===")
+    start_timestamp = time.time()
 
-    # 6. EXPORT MODEL TO ONNX
-    print("\n=== Exporting Best Weights to ONNX ===")
-    export_model = models.mobilenet_v3_small()
-    export_model.classifier[2] = nn.Dropout(p=0.5, inplace=True)
-    export_model.classifier[3] = nn.Linear(in_features, NUM_CLASSES)
-    
-    export_model.load_state_dict(torch.load(PTH_PATH, map_location="cpu", weights_only=True))
-    export_model.eval()
-
-    dummy_input = torch.randn(1, 3, 224, 224, requires_grad=False)
-    
-    torch.onnx.export(
-        export_model,
-        dummy_input,
-        ONNX_PATH,
-        export_params=True,
-        opset_version=17,
-        do_constant_folding=True,
-        input_names=["input"],
-        output_names=["output"],
-        dynamic_axes=None, 
+    train_job = model.train(
+        data=str(YAML_CONFIG),
+        epochs=MAX_EPOCHS,
+        patience=EARLY_STOP_PATIENCE,
+        batch=BATCH_SIZE,
+        imgsz=INPUT_RESOLUTION,
+        device=device_id,
+        workers=2 if os.name != "nt" else 0,
+        project=str(SCRIPT_DIR / "runs"),
+        name="ai1_yolov8n_det",
+        exist_ok=True,
+        verbose=True,
     )
-    print(f"[✓] ONNX model (FP32 execution-ready) saved to: {ONNX_PATH}")
 
-    # 7. SANITY CHECK (PyTorch vs ONNX Runtime)
-    print("\n=== Running Numerical Sanity Check ===")
-    
-    # 7.1. Native PyTorch Inference
+    elapsed_seconds = time.time() - start_timestamp
+    print(f"\n[⏱️] Total Training Runtime: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
+
+    # Locate and copy the optimal PyTorch weights checkpoint
+    checkpoint_best = Path(train_job.save_dir) / "weights" / "best.pt"
+    if checkpoint_best.exists():
+        shutil.copy2(checkpoint_best, FINAL_PT_TARGET)
+        print(f"[✓] Optimal PyTorch weights saved to: {FINAL_PT_TARGET}")
+    else:
+        raise FileNotFoundError(f"Missing checkpoint at: {checkpoint_best}")
+
+    # ==============================================================================
+    # 2. FIXED-DIMENSION ONNX EXPORT ([1, 3, 640, 640])
+    # ==============================================================================
+    print("\n=== Exporting PyTorch Checkpoint to Static ONNX ===")
+    detection_engine = YOLO(str(FINAL_PT_TARGET))
+
+    # Disable dynamic axes to eliminate memory re-allocation inside C++ services/vision
+    exported_onnx = detection_engine.export(
+        format="onnx",
+        imgsz=INPUT_RESOLUTION,
+        dynamic=False,
+        opset=ONNX_OPSET,
+        simplify=True,
+    )
+
+    if os.path.exists(exported_onnx):
+        shutil.move(exported_onnx, FINAL_ONNX_TARGET)
+        print(f"[✓] Static ONNX binary deployed to: {FINAL_ONNX_TARGET}")
+
+    # ==============================================================================
+    # 3. NUMERICAL SANITY CHECK (PyTorch vs ONNX Runtime CPU)
+    # ==============================================================================
+    print("\n=== Executing Parity Sanity Check ===")
+
+    # Synthetic input tensor: [Batch=1, Channels=3, Height=640, Width=640]
+    synthetic_frame = torch.randn(
+        1, 3, INPUT_RESOLUTION, INPUT_RESOLUTION, dtype=torch.float32, device="cpu"
+    )
+
+    # 1. Native PyTorch inference
+    torch_eval_model = detection_engine.model.to("cpu").eval()
     with torch.no_grad():
-        torch_output = export_model(dummy_input).cpu().numpy()
+        torch_raw = torch_eval_model(synthetic_frame)
+        if isinstance(torch_raw, (list, tuple)):
+            torch_raw = torch_raw[0]
+        torch_tensor = torch_raw.cpu().numpy()
 
-    # 7.2. ONNX Runtime Inference
-    ort_session = ort.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
-    ort_inputs = {ort_session.get_inputs()[0].name: dummy_input.cpu().numpy()}
-    onnx_output = ort_session.run(None, ort_inputs)[0]
+    # 2. ONNX Runtime CPU inference
+    ort_session = ort.InferenceSession(
+        str(FINAL_ONNX_TARGET), providers=["CPUExecutionProvider"]
+    )
+    ort_in_name = ort_session.get_inputs()[0].name
+    onnx_tensor = ort_session.run(None, {ort_in_name: synthetic_frame.numpy()})[0]
 
-    # 7.3. Calculate Maximum & Mean Absolute Difference
-    max_diff = np.max(np.abs(torch_output - onnx_output))
-    mean_diff = np.mean(np.abs(torch_output - onnx_output))
+    # Calculate absolute numerical divergence
+    peak_diff = np.max(np.abs(torch_tensor - onnx_tensor))
+    mean_diff = np.mean(np.abs(torch_tensor - onnx_tensor))
 
-    print(f" -> PyTorch Output Shape : {torch_output.shape}")
-    print(f" -> ONNX Output Shape    : {onnx_output.shape}")
-    print(f" -> Max Absolute Diff    : {max_diff:.8f}")
-    print(f" -> Mean Absolute Diff   : {mean_diff:.8f}")
-    print("-" * 50)
-    print("Sample 7 Raw Logits (PyTorch) :", np.round(torch_output[0], 4))
-    print("Sample 7 Raw Logits (ONNX)    :", np.round(onnx_output[0], 4))
-    print("-" * 50)
+    print(f" -> PyTorch Output Shape : {torch_tensor.shape}")
+    print(f" -> ONNX Output Shape    : {onnx_tensor.shape}")
+    print(f" -> Peak Absolute Delta  : {peak_diff:.8f}")
+    print(f" -> Mean Absolute Delta  : {mean_diff:.8f}")
+
+    # Validate output tensor shape: [1, 4 + num_classes, 8400] -> [1, 13, 8400] for 9 classes
+    expected_dim = 4 + len(CLASS_MAPPING)
+    assert onnx_tensor.shape == (1, expected_dim, 8400), (
+        f"Unexpected output shape: {onnx_tensor.shape}. Expected: (1, {expected_dim}, 8400)"
+    )
 
     try:
-        np.testing.assert_allclose(torch_output, onnx_output, rtol=1e-03, atol=1e-05)
-        print("[✓] Sanity check passed! ONNX graph produces identical predictions to PyTorch within tolerance.")
-    except AssertionError as e:
-        print("[!] Warning: Discrepancy detected between PyTorch and ONNX outputs.")
-        print(e)    
+        np.testing.assert_allclose(torch_tensor, onnx_tensor, rtol=1e-03, atol=1e-04)
+        print("\n[✓] Sanity check PASSED! Model is fully compliant for C++ deployment.")
+    except AssertionError as err:
+        print("\n[!] Warning: Numerical divergence detected between engines:")
+        print(err)
+
 
 if __name__ == "__main__":
     main()
