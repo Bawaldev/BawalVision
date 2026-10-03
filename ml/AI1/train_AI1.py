@@ -1,3 +1,4 @@
+import argparse
 import os
 import shutil
 import time
@@ -26,9 +27,39 @@ BATCH_SIZE = 16            # Recommended for 6GB VRAM (NVIDIA RTX 3050)
 MAX_EPOCHS = 50
 EARLY_STOP_PATIENCE = 8    # Training halts if validation mAP50-95 stops improving
 ONNX_OPSET = 17            # Verified opset for ONNX Runtime CPU Execution Provider
+NUM_CLASSES = 9            # 9 classes (banana, chicken, egg, orange, rice, spinach, tempeh, tofu, water_spinach)
 
 
 def main() -> None:
+    default_workers = min(8, max(2, (os.cpu_count() or 4)))
+    parser = argparse.ArgumentParser(
+        description="BawalVision Parallel YOLOv8n Training & Static ONNX Export"
+    )
+    parser.add_argument(
+        "--epochs", "-e",
+        type=int,
+        default=MAX_EPOCHS,
+        help=f"Number of training epochs (default: {MAX_EPOCHS})"
+    )
+    parser.add_argument(
+        "--batch-size", "-b",
+        type=int,
+        default=BATCH_SIZE,
+        help=f"Training batch size (default: {BATCH_SIZE})"
+    )
+    parser.add_argument(
+        "--workers", "-w",
+        type=int,
+        default=default_workers,
+        help=f"DataLoader parallel worker processes (default: {default_workers})"
+    )
+
+    args = parser.parse_args()
+
+    # Configure PyTorch CPU parallel execution threads
+    cpu_cores = os.cpu_count() or 4
+    torch.set_num_threads(cpu_cores)
+
     WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -38,11 +69,12 @@ def main() -> None:
         )
 
     device_id = "0" if torch.cuda.is_available() else "cpu"
-    print(f"[+] Compute Hardware : {'NVIDIA CUDA (GPU:0)' if device_id == '0' else 'Host CPU'}")
-    print(f"[+] Dataset Metadata : {YAML_CONFIG}")
+    print(f"[+] Compute Hardware    : {'NVIDIA CUDA (GPU:0)' if device_id == '0' else 'Host CPU'}")
+    print(f"[+] DataLoader Workers  : {args.workers} parallel workers | CPU Threads: {cpu_cores}")
+    print(f"[+] Dataset Metadata    : {YAML_CONFIG}")
 
     # ==============================================================================
-    # 1. INITIALIZE BACKBONE & TRAIN
+    # 1. INITIALIZE BACKBONE & TRAIN (PARALLEL DATALOADER)
     # ==============================================================================
     print(f"\n[+] Loading Detection Base: {MODEL_ARCH}...")
     model = YOLO(MODEL_ARCH)
@@ -52,12 +84,12 @@ def main() -> None:
 
     train_job = model.train(
         data=str(YAML_CONFIG),
-        epochs=MAX_EPOCHS,
+        epochs=args.epochs,
         patience=EARLY_STOP_PATIENCE,
-        batch=BATCH_SIZE,
+        batch=args.batch_size,
         imgsz=INPUT_RESOLUTION,
         device=device_id,
-        workers=2 if os.name != "nt" else 0,
+        workers=args.workers,
         project=str(SCRIPT_DIR / "runs"),
         name="ai1_yolov8n_det",
         exist_ok=True,
@@ -81,7 +113,6 @@ def main() -> None:
     print("\n=== Exporting PyTorch Checkpoint to Static ONNX ===")
     detection_engine = YOLO(str(FINAL_PT_TARGET))
 
-    # Disable dynamic axes to eliminate memory re-allocation inside C++ services/vision
     exported_onnx = detection_engine.export(
         format="onnx",
         imgsz=INPUT_RESOLUTION,
@@ -95,11 +126,10 @@ def main() -> None:
         print(f"[✓] Static ONNX binary deployed to: {FINAL_ONNX_TARGET}")
 
     # ==============================================================================
-    # 3. NUMERICAL SANITY CHECK (PyTorch vs ONNX Runtime CPU)
+    # 3. NUMERICAL SANITY CHECK (PyTorch vs ONNX Runtime Multi-Threaded CPU)
     # ==============================================================================
     print("\n=== Executing Parity Sanity Check ===")
 
-    # Synthetic input tensor: [Batch=1, Channels=3, Height=640, Width=640]
     synthetic_frame = torch.randn(
         1, 3, INPUT_RESOLUTION, INPUT_RESOLUTION, dtype=torch.float32, device="cpu"
     )
@@ -112,14 +142,19 @@ def main() -> None:
             torch_raw = torch_raw[0]
         torch_tensor = torch_raw.cpu().numpy()
 
-    # 2. ONNX Runtime CPU inference
+    # 2. ONNX Runtime Multi-Threaded CPU inference
+    sess_options = ort.SessionOptions()
+    sess_options.intra_op_num_threads = cpu_cores
+    sess_options.inter_op_num_threads = cpu_cores
+    sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
     ort_session = ort.InferenceSession(
-        str(FINAL_ONNX_TARGET), providers=["CPUExecutionProvider"]
+        str(FINAL_ONNX_TARGET), sess_options, providers=["CPUExecutionProvider"]
     )
     ort_in_name = ort_session.get_inputs()[0].name
     onnx_tensor = ort_session.run(None, {ort_in_name: synthetic_frame.numpy()})[0]
 
-    # Calculate absolute numerical divergence
     peak_diff = np.max(np.abs(torch_tensor - onnx_tensor))
     mean_diff = np.mean(np.abs(torch_tensor - onnx_tensor))
 
@@ -128,8 +163,7 @@ def main() -> None:
     print(f" -> Peak Absolute Delta  : {peak_diff:.8f}")
     print(f" -> Mean Absolute Delta  : {mean_diff:.8f}")
 
-    # Validate output tensor shape: [1, 4 + num_classes, 8400] -> [1, 13, 8400] for 9 classes
-    expected_dim = 4 + len(CLASS_MAPPING)
+    expected_dim = 4 + NUM_CLASSES
     assert onnx_tensor.shape == (1, expected_dim, 8400), (
         f"Unexpected output shape: {onnx_tensor.shape}. Expected: (1, {expected_dim}, 8400)"
     )

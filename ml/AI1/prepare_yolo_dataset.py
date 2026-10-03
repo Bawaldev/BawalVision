@@ -1,7 +1,10 @@
+import argparse
+import concurrent.futures
 import os
 import shutil
 from pathlib import Path
 from typing import Dict, List
+import torch
 import yaml
 from tqdm import tqdm
 from ultralytics import YOLOWorld
@@ -56,9 +59,85 @@ def build_dataset_yaml() -> Path:
     return yaml_target
 
 
+def _copy_task(args: tuple):
+    src, dest = args
+    if not dest.exists():
+        shutil.copy2(src, dest)
+
+
+def process_class_batch(annotator: YOLOWorld, images: List[Path], split: str,
+                        folder_name: str, class_id: int, prompt: str,
+                        batch_size: int, device_id: any, num_workers: int):
+    """Processes a category's images using parallel copy & batched YOLO-World inference."""
+    annotator.set_classes([prompt])
+
+    # 1. Parallel copy to YOLO images folder
+    dest_images = [OUTPUT_YOLO_DIR / "images" / split / img.name for img in images]
+    copy_tasks = [(src, dst) for src, dst in zip(images, dest_images)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        list(executor.map(_copy_task, copy_tasks))
+
+    # 2. Batched zero-shot bounding box inference
+    for i in tqdm(range(0, len(dest_images), batch_size),
+                 desc=f"  Generating labels for {folder_name}", unit="batch"):
+        batch_slice = dest_images[i:i + batch_size]
+        batch_paths_str = [str(p) for p in batch_slice]
+
+        predictions = annotator.predict(
+            batch_paths_str,
+            batch=len(batch_paths_str),
+            conf=0.15,
+            verbose=False,
+            device=device_id
+        )
+
+        for dest_img, pred in zip(batch_slice, predictions):
+            dest_label = OUTPUT_YOLO_DIR / "labels" / split / f"{dest_img.stem}.txt"
+            detected_boxes = pred.boxes
+            label_rows = []
+
+            if len(detected_boxes) > 0:
+                for box in detected_boxes:
+                    xywhn = box.xywhn[0].tolist()
+                    label_rows.append(
+                        f"{class_id} {xywhn[0]:.6f} {xywhn[1]:.6f} {xywhn[2]:.6f} {xywhn[3]:.6f}\n"
+                    )
+            else:
+                # Fallback: Assign default central bounding box (85% coverage)
+                label_rows.append(
+                    f"{class_id} 0.500000 0.500000 0.850000 0.850000\n"
+                )
+
+            with open(dest_label, "w", encoding="utf-8") as lf:
+                lf.writelines(label_rows)
+
+
 def main() -> None:
+    default_workers = max(1, os.cpu_count() or 4)
+    parser = argparse.ArgumentParser(
+        description="BawalVision Parallel Zero-Shot YOLO Dataset Generator"
+    )
+    parser.add_argument(
+        "--batch-size", "-b",
+        type=int,
+        default=16,
+        help="Inference batch size for YOLO-World (default: 16)"
+    )
+    parser.add_argument(
+        "--workers", "-w",
+        type=int,
+        default=default_workers,
+        help=f"Number of parallel file I/O workers (default: {default_workers})"
+    )
+
+    args = parser.parse_args()
+
     initialize_yolo_layout()
 
+    device_id = 0 if torch.cuda.is_available() else "cpu"
+    device_name = "NVIDIA CUDA (GPU:0)" if device_id == 0 else "Host CPU"
+    print(f"[+] Compute Hardware : {device_name}")
+    print(f"[+] Parallel Workers : {args.workers} threads | Batch Size: {args.batch_size}")
     print("[+] Initializing Zero-Shot Foundation Model: yolov8s-worldv2.pt...")
     annotator = YOLOWorld("yolov8s-worldv2.pt")
 
@@ -77,59 +156,33 @@ def main() -> None:
             class_id = meta["id"]
             prompt = meta["prompt"]
 
-            # Narrow model vocabulary strictly to the current category
-            annotator.set_classes([prompt])
-
             images: List[Path] = [
-                img
-                for img in class_folder.iterdir()
+                img for img in class_folder.iterdir()
                 if img.suffix.lower() in VALID_IMAGE_EXTS
             ]
+
+            if not images:
+                continue
 
             print(
                 f" -> Class [{folder_name}] (ID: {class_id}) | Found: {len(images)} images"
             )
 
-            for img_path in tqdm(
-                images, desc=f"  Generating labels for {folder_name}", unit="img"
-            ):
-                dest_image = OUTPUT_YOLO_DIR / "images" / split / img_path.name
-                dest_label = (
-                    OUTPUT_YOLO_DIR
-                    / "labels"
-                    / split
-                    / f"{img_path.stem}.txt"
-                )
-
-                if not dest_image.exists():
-                    shutil.copy2(img_path, dest_image)
-
-                # Execute bounding box inference (GPU Device 0 if available)
-                predictions = annotator.predict(
-                    str(dest_image), conf=0.15, verbose=False, device=0
-                )
-                detected_boxes = predictions[0].boxes
-
-                label_rows = []
-                if len(detected_boxes) > 0:
-                    for box in detected_boxes:
-                        # Normalized center x, center y, width, height: [0.0 - 1.0]
-                        xywhn = box.xywhn[0].tolist()
-                        label_rows.append(
-                            f"{class_id} {xywhn[0]:.6f} {xywhn[1]:.6f} {xywhn[2]:.6f} {xywhn[3]:.6f}\n"
-                        )
-                else:
-                    # Fallback: Assign default central bounding box (85% coverage)
-                    label_rows.append(
-                        f"{class_id} 0.500000 0.500000 0.850000 0.850000\n"
-                    )
-
-                with open(dest_label, "w", encoding="utf-8") as lf:
-                    lf.writelines(label_rows)
+            process_class_batch(
+                annotator=annotator,
+                images=images,
+                split=split,
+                folder_name=folder_name,
+                class_id=class_id,
+                prompt=prompt,
+                batch_size=args.batch_size,
+                device_id=device_id,
+                num_workers=args.workers
+            )
 
     build_dataset_yaml()
     print(
-        "\n[✓] Dataset conversion complete. Output available at ml/AI1/yolo_dataset/"
+        "\n[✓] Parallel dataset conversion complete. Output available at ml/AI1/yolo_dataset/"
     )
 
 

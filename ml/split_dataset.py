@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-BawalVision Leak-Free Dataset Splitter (Cross-Platform: Linux, macOS, Windows)
-=============================================================================
+BawalVision Parallel Leak-Free Dataset Splitter (Cross-Platform: Linux, macOS, Windows)
+======================================================================================
 Partitions raw image datasets into Train (70%), Validation (15%), and Test (15%)
-with built-in Perceptual dHash & MD5 deduplication to guarantee zero Data Leakage.
+with built-in multi-core parallel Perceptual dHash & MD5 deduplication to guarantee zero Data Leakage.
 Supports execution on Windows (cmd, PowerShell, Git Bash) and Linux/macOS.
 """
 
 import argparse
+import concurrent.futures
 import hashlib
 import os
 import random
@@ -93,6 +94,37 @@ def calculate_md5(file_path: Path) -> str:
     return hasher.hexdigest()
 
 
+def _inspect_image_entry(args: tuple):
+    """Worker function untuk validasi, MD5, dan dHash parallel."""
+    file_path, min_size = args
+    min_w, min_h = min_size
+    try:
+        if file_path.stat().st_size == 0:
+            return None
+        with Image.open(str(file_path)) as img:
+            img_rgb = img.convert("RGB")
+            img_rgb.load()
+            w, h = img_rgb.size
+            if w < min_w or h < min_h:
+                return None
+            md5_val = calculate_md5(file_path)
+            dhash_val = calculate_dhash(img_rgb)
+            return (file_path, md5_val, dhash_val)
+    except Exception:
+        return None
+
+
+def _copy_file_task(args: tuple):
+    """Worker function untuk penyalinan file parallel."""
+    src, dest = args
+    try:
+        shutil.copy2(str(src), str(dest))
+        return True
+    except Exception as e:
+        print(f"[!] Copy failed {src} -> {dest}: {e}")
+        return False
+
+
 def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
     """
     Mendeteksi kategori dan mengumpulkan berkas citra secara cerdas:
@@ -137,14 +169,12 @@ def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
         print(f" [INFO] Terdeteksi struktur bersarang partisi ({partition_list_str}).")
         print(f"        Mengumpulkan seluruh citra dari subfolder kelas ke pool konsolidasi...\n")
         
-        # Ekstrak dari folder partisi (misal: test/banana, test/chicken, dll)
         for part in partition_dirs:
             for cat_dir in part.iterdir():
                 if cat_dir.is_dir() and not cat_dir.name.startswith(".") and cat_dir.name.lower() not in ignored_names:
                     cat_name = cat_dir.name.lower().strip()
                     category_files_map.setdefault(cat_name, []).extend(extract_images_from_dir(cat_dir))
 
-        # Ekstrak jika ada folder kelas tambahan di luar partisi
         for other_dir in subdirs:
             if other_dir.name.lower() not in partition_keywords:
                 cat_name = other_dir.name.lower().strip()
@@ -155,7 +185,6 @@ def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
             cat_name = cat_dir.name.lower().strip()
             category_files_map[cat_name] = extract_images_from_dir(cat_dir)
 
-    # Hilangkan duplikasi referensi berkas dan urutkan
     consolidated_map: dict[str, list[Path]] = {}
     for cat_name in sorted(category_files_map.keys()):
         seen_resolved = set()
@@ -171,45 +200,29 @@ def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
     return consolidated_map
 
 
-def collect_clean_images(raw_files: list[Path], min_size: tuple = (100, 100), hamming_threshold: int = 4) -> list[Path]:
-    """Menyaring citra rusak, dimensi terlalu kecil, dan menghapus duplikat (MD5 + dHash)."""
-    min_w, min_h = min_size
+def collect_clean_images_parallel(raw_files: list[Path], min_size: tuple = (100, 100),
+                                  hamming_threshold: int = 4, num_workers: int = 4) -> list[Path]:
+    """Menyaring citra rusak, dimensi terlalu kecil, dan menghapus duplikat (MD5 + dHash) secara paralel."""
+    tasks = [(f, min_size) for f in raw_files]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        results = list(executor.map(_inspect_image_entry, tasks))
+
     seen_md5 = set()
     seen_dhashes = []
     clean_files = []
 
-    for file_path in raw_files:
-        try:
-            if file_path.stat().st_size == 0:
-                continue
-        except Exception:
+    for item in results:
+        if item is None:
+            continue
+        file_path, md5_val, dhash_val = item
+        if md5_val in seen_md5:
+            continue
+        if any(hamming_distance(dhash_val, h_exist) <= hamming_threshold for h_exist in seen_dhashes):
             continue
 
-        try:
-            with Image.open(str(file_path)) as img:
-                img_rgb = img.convert("RGB")
-                img_rgb.load()  # Membaca ke RAM agar handle file Windows segera dilepas
-                w, h = img_rgb.size
-                if w < min_w or h < min_h:
-                    continue
-
-                # 1. Exact MD5 Deduplication
-                md5_val = calculate_md5(file_path)
-                if md5_val in seen_md5:
-                    continue
-
-                # 2. Perceptual dHash Deduplication
-                img_dhash = calculate_dhash(img_rgb)
-                is_near_dup = any(hamming_distance(img_dhash, h_exist) <= hamming_threshold for h_exist in seen_dhashes)
-
-                if is_near_dup:
-                    continue
-
-                seen_md5.add(md5_val)
-                seen_dhashes.append(img_dhash)
-                clean_files.append(file_path)
-        except Exception:
-            continue
+        seen_md5.add(md5_val)
+        seen_dhashes.append(dhash_val)
+        clean_files.append(file_path)
 
     return clean_files
 
@@ -262,8 +275,9 @@ def resolve_output_dir(output_arg: str) -> Path:
 
 def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
                   val_ratio: float = 0.15, test_ratio: float = 0.15,
-                  min_size: tuple = (100, 100), seed: int = 42):
-    """Membagi citra secara acak berstrata ke train, val, dan test."""
+                  min_size: tuple = (100, 100), seed: int = 42,
+                  num_workers: int = 4):
+    """Membagi citra secara acak berstrata ke train, val, dan test menggunakan multi-worker parallelism."""
     random.seed(seed)
     src_path = resolve_source_dir(source_dir)
     out_path = resolve_output_dir(output_dir)
@@ -278,13 +292,13 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
 
     start_time = time.time()
     print(f"\n{'='*70}")
-    print(f" [DATASET SPLITTER] Anti-Leak Stratified Partition (Cross-Platform)")
-    print(f" Source : {src_path}")
-    print(f" Output : {out_path}")
-    print(f" Ratios : {train_ratio*100:.0f}% Train | {val_ratio*100:.0f}% Val | {test_ratio*100:.0f}% Test")
+    print(f" [DATASET SPLITTER] Anti-Leak Parallel Stratified Partition")
+    print(f" Source  : {src_path}")
+    print(f" Output  : {out_path}")
+    print(f" Ratios  : {train_ratio*100:.0f}% Train | {val_ratio*100:.0f}% Val | {test_ratio*100:.0f}% Test")
+    print(f" Workers : {num_workers} parallel CPU threads")
     print(f"{'='*70}\n")
 
-    # Temukan kategori & file gambar (menangani kasus gambar menumpuk di test)
     category_files_map = discover_categories_and_files(src_path)
     categories = list(category_files_map.keys())
 
@@ -302,6 +316,7 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
             cat_dest.mkdir(parents=True, exist_ok=True)
 
     summary_stats = {"train": 0, "val": 0, "test": 0, "total_raw": 0, "total_clean": 0}
+    copy_tasks = []
 
     # Proses partisi per kategori kelas
     for cat in categories:
@@ -309,8 +324,9 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
         n_raw = len(raw_files)
         summary_stats["total_raw"] += n_raw
 
-        # Deduplikasi & Validasi
-        clean_files = collect_clean_images(raw_files, min_size=min_size)
+        clean_files = collect_clean_images_parallel(
+            raw_files, min_size=min_size, num_workers=num_workers
+        )
         n_clean = len(clean_files)
         summary_stats["total_clean"] += n_clean
 
@@ -327,17 +343,21 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
         val_list = clean_files[n_train:n_train + n_val]
         test_list = clean_files[n_train + n_val:]
 
-        # Salin file dengan penamaan terstandar (contoh: banana_00001.jpg)
         for subset, file_list in [("train", train_list), ("val", val_list), ("test", test_list)]:
             dest_dir = out_path / subset / cat
             for idx, file_src in enumerate(file_list, 1):
                 ext = file_src.suffix.lower()
                 dest_file = dest_dir / f"{cat}_{idx:05d}{ext}"
-                shutil.copy2(str(file_src), str(dest_file))
+                copy_tasks.append((file_src, dest_file))
             summary_stats[subset] += len(file_list)
 
         dropped = n_raw - n_clean
         print(f"  * {cat:18s}: Raw={n_raw:4d} | Clean={n_clean:4d} (Dropped={dropped:3d}) -> Train={len(train_list):4d} | Val={len(val_list):4d} | Test={len(test_list):4d}")
+
+    # Eksekusi salin file secara paralel
+    print(f"\n[+] Executing parallel copy ({len(copy_tasks)} files across {num_workers} workers)...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        list(executor.map(_copy_file_task, copy_tasks))
 
     elapsed = time.time() - start_time
     total_clean = max(1, summary_stats["total_clean"])
@@ -374,8 +394,9 @@ def track_with_dvc(output_dir: str):
 
 
 def main():
+    default_workers = max(1, os.cpu_count() or 4)
     parser = argparse.ArgumentParser(
-        description="BawalVision Leak-Free Dataset Splitter (Train / Val / Test) - Cross-Platform"
+        description="BawalVision Parallel Leak-Free Dataset Splitter (Train / Val / Test)"
     )
     parser.add_argument(
         "--source-dir", "-s",
@@ -406,6 +427,12 @@ def main():
         help="Rasio Test set (default: 0.15)"
     )
     parser.add_argument(
+        "--workers", "-w",
+        type=int,
+        default=default_workers,
+        help=f"Jumlah worker thread paralel (default: {default_workers})"
+    )
+    parser.add_argument(
         "--dvc-track",
         action=argparse.BooleanOptionalAction if hasattr(argparse, "BooleanOptionalAction") else "store_true",
         default=False,
@@ -419,7 +446,8 @@ def main():
         output_dir=args.output_dir,
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
-        test_ratio=args.test_ratio
+        test_ratio=args.test_ratio,
+        num_workers=args.workers
     )
 
     if args.dvc_track:
