@@ -87,7 +87,7 @@ ml/models/*.engine
 !ml/models/.gitkeep
 ml/AI1/runs/ai1_yolov8n_det
 !ml/AI1/runs/ai1_yolov8n_det/weights/
-
+!ml/AI1/runs/ai1_yolov8n_det/args.yaml
 
 # -------------------------------------------------------------------------
 # Datasets & DVC (Data Version Control)
