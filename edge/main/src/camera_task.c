@@ -210,14 +210,18 @@ void Camera_Capture_Task(void *pvParameters) {
   }
 }
 
+#define CAM_TASK_STACK_SIZE 4096
+static StaticTask_t s_cam_task_buffer;
+static StackType_t s_cam_task_stack[CAM_TASK_STACK_SIZE];
+
 TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id) {
   if (!s_is_initialized) {
     if (camera_task_init() != ESP_OK) return NULL;
   }
 
-  TaskHandle_t handle = NULL;
-  xTaskCreatePinnedToCore(Camera_Capture_Task, "Cam_Capture_Task", 4096, NULL, priority, &handle, core_id);
-  return handle;
+  return xTaskCreateStaticPinnedToCore(Camera_Capture_Task, "Cam_Capture_Task",
+                                       CAM_TASK_STACK_SIZE, NULL, priority,
+                                       s_cam_task_stack, &s_cam_task_buffer, core_id);
 }
 
 void http_stream_sender_task(void *pvParameters) {

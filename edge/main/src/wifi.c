@@ -17,6 +17,7 @@
 
 #include "data.h"
 #include "wifi.h"
+#include "lcd_task.h"
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -31,27 +32,35 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
         ESP_LOGI(TAG_WIFI, "Connecting to AP...");
+        lcd_update_http_status("WIFI CONNECTING...", false);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
         ESP_LOGI(TAG_WIFI, "Associated with AP '%s'. Requesting IP via DHCP...", g_wifi_ssid);
+        lcd_update_http_status("DHCP REQUEST...", false);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* dis = (wifi_event_sta_disconnected_t*) event_data;
         ESP_LOGW(TAG_WIFI, "Connection lost (Reason code: %d)", dis->reason);
         if (g_wifi_event_group != NULL) {
             xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
         }
+        lcd_update_wifi_status(false, NULL);
+        lcd_update_http_status("WIFI LOST", true);
 
         g_wifi_retry_num++;
         ESP_LOGW(TAG_WIFI, "Reconnecting to AP '%s' (attempt %d)...", g_wifi_ssid, g_wifi_retry_num);
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG_WIFI, "Obtained IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        char ip_str[24];
+        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG_WIFI, "Obtained IP: %s", ip_str);
         ESP_LOGI(TAG_WIFI, "Gateway IP: " IPSTR, IP2STR(&event->ip_info.gw));
         g_wifi_retry_num = 0;
         if (g_wifi_event_group != NULL) {
             xEventGroupClearBits(g_wifi_event_group, WIFI_FAIL_BIT);
             xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
         }
+        lcd_update_wifi_status(true, ip_str);
+        lcd_update_http_status("WIFI READY", false);
     }
 }
 
@@ -284,13 +293,20 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, json_string, strlen(json_string));
 
+    lcd_update_http_status("POST TELEMETRY...", false);
+    lcd_update_telemetry_display(data->food_temperature, data->cpu_temperature, data->current_cpu_load);
+
     ESP_LOGI(TAG, "Dispatching telemetry to: %s (CPU Load: %u%%)", url, data->current_cpu_load);
     esp_err_t err = esp_http_client_perform(client);
     if (err == ESP_OK) {
         int status_code = esp_http_client_get_status_code(client);
         ESP_LOGI(TAG, "Ingest completed. Status = %d", status_code);
+        char status_buf[32];
+        snprintf(status_buf, sizeof(status_buf), "HTTP %d (OK)", status_code);
+        lcd_update_http_status(status_buf, false);
     } else {
         ESP_LOGE(TAG, "Ingest failed: %s", esp_err_to_name(err));
+        lcd_update_http_status("HTTP: TIMEOUT", true);
     }
 
     esp_http_client_cleanup(client);
@@ -348,12 +364,17 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     ESP_LOGI(TAG, "Dispatching Logitech camera frame to: %s (Device: %s, Frame ID: %lu, Size: %u bytes)", 
              url, device_id, (unsigned long)local_frame.header.frame_id, (unsigned int)local_frame.header.buffer_len);
 
+    lcd_update_http_status("STREAM JPEG...", false);
     esp_err_t err = esp_http_client_perform(client);
     if (err == ESP_OK) {
         int status_code = esp_http_client_get_status_code(client);
         ESP_LOGI(TAG, "Camera frame ingest completed. Status = %d", status_code);
+        char status_buf[32];
+        snprintf(status_buf, sizeof(status_buf), "STREAM %d OK", status_code);
+        lcd_update_http_status(status_buf, false);
     } else {
         ESP_LOGE(TAG, "Camera frame ingest failed: %s", esp_err_to_name(err));
+        lcd_update_http_status("STREAM: ERR", true);
     }
 
     esp_http_client_cleanup(client);
