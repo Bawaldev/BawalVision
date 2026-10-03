@@ -104,7 +104,7 @@ ml/AI1/dataset/
 *.tar.gz
 *.tar
 ml/AI1/yolo_dataset/
-
+ml/AI1/.dvc
 # ==========================================
 # DVC Metadata Tracking (Wajib di Git)
 # ==========================================
