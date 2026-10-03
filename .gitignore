@@ -89,6 +89,7 @@ ml/AI1/runs/ai1_yolov8n_det
 !ml/AI1/model/
 !ml/AI1/runs/ai1_yolov8n_det/args.yaml
 weights/
+ml/AI1/weights/
 # -------------------------------------------------------------------------
 # Datasets & DVC (Data Version Control)
 # -------------------------------------------------------------------------
