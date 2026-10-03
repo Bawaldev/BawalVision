@@ -34,11 +34,11 @@
 /** @brief Backlight control pin (-1: BLK tied directly to 3V3 in schematic). */
 #define LCD_PIN_BCKL            -1
 
-/** @brief Horizontal resolution in pixels. */
-#define LCD_H_RES               240
+/** @brief Horizontal resolution in pixels (128x160 SPI TFT). */
+#define LCD_H_RES               128
 
-/** @brief Vertical resolution in pixels. */
-#define LCD_V_RES               240
+/** @brief Vertical resolution in pixels (128x160 SPI TFT). */
+#define LCD_V_RES               160
 
 /** @brief SPI pixel clock frequency in Hertz (20 MHz). */
 #define LCD_PIXEL_CLOCK_HZ      (20 * 1000 * 1000)
