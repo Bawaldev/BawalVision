@@ -20,20 +20,20 @@ setup-ml:
     fi
     echo "[✓] ML environment configured successfully."
 
-# Multi-engine high-volume web image scraper with dHash deduplication
-scrap-dataset category="all" target="1000" engine="all":
+# Multi-engine high-volume web image scraper with dHash deduplication (workers=0: auto-detect max cores)
+scrap-dataset category="all" target="1000" engine="all" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     if [ -f .venv/bin/python3 ]; then
-        .venv/bin/python3 ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset
+        .venv/bin/python3 ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset --threads {{ workers }}
     elif [ -f .venv/Scripts/python.exe ]; then
-        .venv/Scripts/python.exe ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset
+        .venv/Scripts/python.exe ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset --threads {{ workers }}
     else
-        python3 ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset || python ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset
+        python3 ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset --threads {{ workers }} || python ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset --threads {{ workers }}
     fi
 
-# Stratified Train/Val/Test dataset splitter with multi-core parallel hashing & deduplication
-split-dataset source="ml/dataset/dataset_mbg_matang" output="ml/AI1/dataset" workers="4":
+# Stratified Train/Val/Test dataset splitter with multi-core parallel hashing & deduplication (workers=0: auto-detect max cores)
+split-dataset source="ml/dataset/dataset_mbg_matang" output="ml/AI1/dataset" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     if [ -f .venv/bin/python3 ]; then
@@ -44,8 +44,8 @@ split-dataset source="ml/dataset/dataset_mbg_matang" output="ml/AI1/dataset" wor
         python3 ml/split_dataset.py --source-dir {{ source }} --output-dir {{ output }} --workers {{ workers }} || python ml/split_dataset.py --source-dir {{ source }} --output-dir {{ output }} --workers {{ workers }}
     fi
 
-# Multi-threaded parallel domain-specific image augmentation applied exclusively to train set
-augment-train target="500" dir="ml/AI1/dataset/train" workers="4":
+# Multi-threaded parallel domain-specific image augmentation applied exclusively to train set (workers=0: auto-detect max cores)
+augment-train target="500" dir="ml/AI1/dataset/train" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     if [ -f .venv/bin/python3 ]; then
@@ -56,8 +56,8 @@ augment-train target="500" dir="ml/AI1/dataset/train" workers="4":
         python3 ml/augment_data.py --train-dir {{ dir }} --target-count {{ target }} --workers {{ workers }} || python ml/augment_data.py --train-dir {{ dir }} --target-count {{ target }} --workers {{ workers }}
     fi
 
-# Batched zero-shot YOLO annotation generator with parallel file I/O
-prepare-yolo-ai1 batch="16" workers="4":
+# Batched zero-shot YOLO annotation generator with parallel file I/O (workers=0: auto-detect max cores)
+prepare-yolo-ai1 batch="16" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     if [ -f .venv/bin/python3 ]; then
@@ -68,8 +68,8 @@ prepare-yolo-ai1 batch="16" workers="4":
         python3 ml/AI1/prepare_yolo_dataset.py --batch-size {{ batch }} --workers {{ workers }} || python ml/AI1/prepare_yolo_dataset.py --batch-size {{ batch }} --workers {{ workers }}
     fi
 
-# Train YOLOv8n detector with multi-core DataLoader workers & multi-threaded ONNX parity verification
-train-ai1 epochs="50" batch="16" workers="4":
+# Train YOLOv8n detector with multi-core DataLoader workers & multi-threaded ONNX parity verification (workers=0: auto-detect max cores)
+train-ai1 epochs="50" batch="16" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     if [ -f .venv/bin/python3 ]; then
@@ -85,18 +85,22 @@ train-ai1 epochs="50" batch="16" workers="4":
 # ------------------------------------------------------------------------------
 
 # Train any YOLO model backbone via Ultralytics CLI / Module
-yolo-train model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="50" batch="16" imgsz="640" device="0" workers="4":
+yolo-train model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="50" batch="16" imgsz="640" device="0" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Starting Ultralytics YOLO Training: model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }}"
+    W_ARG="{{ workers }}"
+    if [ "$W_ARG" = "0" ]; then
+        W_ARG=$(python3 ml/cpu_utils.py 2>/dev/null | grep -o '[0-9]\+' || nproc 2>/dev/null || echo 4)
+    fi
     if [ -f .venv/bin/yolo ]; then
-        .venv/bin/yolo detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers={{ workers }} project=ml/AI1/runs name=yolo_train exist_ok=True
+        .venv/bin/yolo detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers=$W_ARG project=ml/AI1/runs name=yolo_train exist_ok=True
     elif [ -f .venv/bin/python3 ]; then
-        .venv/bin/python3 -m ultralytics detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers={{ workers }} project=ml/AI1/runs name=yolo_train exist_ok=True
+        .venv/bin/python3 -m ultralytics detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers=$W_ARG project=ml/AI1/runs name=yolo_train exist_ok=True
     elif [ -f .venv/Scripts/yolo.exe ]; then
-        .venv/Scripts/yolo.exe detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers={{ workers }} project=ml/AI1/runs name=yolo_train exist_ok=True
+        .venv/Scripts/yolo.exe detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers=$W_ARG project=ml/AI1/runs name=yolo_train exist_ok=True
     else
-        yolo detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers={{ workers }} project=ml/AI1/runs name=yolo_train exist_ok=True || python3 -m ultralytics detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers={{ workers }} project=ml/AI1/runs name=yolo_train exist_ok=True
+        yolo detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers=$W_ARG project=ml/AI1/runs name=yolo_train exist_ok=True || python3 -m ultralytics detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers=$W_ARG project=ml/AI1/runs name=yolo_train exist_ok=True
     fi
 
 # Validate and compute mAP50 / mAP50-95 metrics on validation set
@@ -159,8 +163,8 @@ yolo-tune model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="30"
         yolo detect tune model={{ model }} data={{ data }} epochs={{ epochs }} iterations={{ iterations }} device={{ device }} || python3 -m ultralytics detect tune model={{ model }} data={{ data }} epochs={{ epochs }} iterations={{ iterations }} device={{ device }}
     fi
 
-# End-to-end autonomous parallel pipeline: split -> augment -> prepare annotations -> train & export ONNX -> DVC track
-pipeline-ai1 workers="4" batch="16" epochs="50":
+# End-to-end autonomous parallel pipeline: split -> augment -> prepare annotations -> train & export ONNX -> DVC track (workers=0: auto-detect max cores)
+pipeline-ai1 workers="0" batch="16" epochs="50":
     @echo "=== [1/5] Parallel Splitting Dataset (Train/Val/Test) ==="
     just split-dataset "ml/dataset/dataset_mbg_matang" "ml/AI1/dataset" "{{ workers }}"
     @echo "=== [2/5] Parallel Augmenting Training Set Safely ==="

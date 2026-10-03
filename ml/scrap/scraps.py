@@ -298,7 +298,8 @@ def validate_and_deduplicate(staging_dir: str, target_category_dir: str, categor
 
 
 def crawl_category(category: str, queries: list, target_dir: str, target_total: int,
-                   engine: str, min_size: tuple, staging_root: str, deduplicator: GlobalDeduplicator):
+                   engine: str, min_size: tuple, staging_root: str, deduplicator: GlobalDeduplicator,
+                   threads: int = 8):
     """
     Crawls queries across selected search engines until target_total unique clean images are gathered.
     """
@@ -307,7 +308,7 @@ def crawl_category(category: str, queries: list, target_dir: str, target_total: 
     
     current_count = len([f for f in os.listdir(category_dir) if os.path.isfile(os.path.join(category_dir, f))])
     print(f"\n{'='*70}")
-    print(f" [CATEGORY] '{category.upper()}' | Current Clean: {current_count} | Target: {target_total}")
+    print(f" [CATEGORY] '{category.upper()}' | Current Clean: {current_count} | Target: {target_total} | Workers: {threads}")
     print(f"{'='*70}")
 
     if current_count >= target_total:
@@ -341,15 +342,15 @@ def crawl_category(category: str, queries: list, target_dir: str, target_total: 
                 shutil.rmtree(staging_cat_dir, ignore_errors=True)
             os.makedirs(staging_cat_dir, exist_ok=True)
 
-            print(f"\n[{term_idx}/{num_queries}] Engine: {eng.upper()} | Query: '{term}' (Targeting up to {max_per_query} imgs)")
+            print(f"\n[{term_idx}/{num_queries}] Engine: {eng.upper()} | Query: '{term}' (Targeting up to {max_per_query} imgs | Threads: {threads})")
 
             try:
                 if eng == "bing":
-                    crawler = BingImageCrawler(downloader_threads=8, storage={"root_dir": staging_cat_dir}, log_level=30)
+                    crawler = BingImageCrawler(downloader_threads=threads, storage={"root_dir": staging_cat_dir}, log_level=30)
                 elif eng == "google":
-                    crawler = GoogleImageCrawler(downloader_threads=8, storage={"root_dir": staging_cat_dir}, log_level=30)
+                    crawler = GoogleImageCrawler(downloader_threads=threads, storage={"root_dir": staging_cat_dir}, log_level=30)
                 elif eng == "baidu":
-                    crawler = BaiduImageCrawler(downloader_threads=8, storage={"root_dir": staging_cat_dir}, log_level=30)
+                    crawler = BaiduImageCrawler(downloader_threads=threads, storage={"root_dir": staging_cat_dir}, log_level=30)
                 else:
                     continue
 
@@ -508,8 +509,26 @@ def main():
         default=True,
         help="Automatically track dataset with DVC after scraping (default: True)"
     )
+    parser.add_argument(
+        "--threads", "-w",
+        type=int,
+        default=0,
+        help="Number of concurrent crawler download threads (0 = auto-detect max threads)"
+    )
 
     args = parser.parse_args()
+
+    try:
+        from ml.cpu_utils import get_optimal_workers
+    except ImportError:
+        try:
+            from cpu_utils import get_optimal_workers
+        except ImportError:
+            def get_optimal_workers(reserve_cores=0):
+                return max(1, (hasattr(os, "sched_getaffinity") and len(os.sched_getaffinity(0))) or os.cpu_count() or 4)
+
+    if args.threads <= 0:
+        args.threads = max(4, get_optimal_workers())
 
     if args.category == "all":
         selected_categories = list(LARGE_DATASET_QUERIES.keys())
@@ -522,6 +541,7 @@ def main():
     print(f"Categories: {selected_categories}")
     print(f"Target Images per Category: {args.target_count}")
     print(f"Engine Mode: {args.engine.upper()}")
+    print(f"Crawler Threads: {args.threads}")
     print(f"Output Directory: {args.output_dir}")
     print(f"Anti-Leak Filter: Perceptual dHash (Hamming Dist <= 4) + MD5")
     print(f"Split Generation: {args.split} -> {args.split_output}")
@@ -548,7 +568,8 @@ def main():
             engine=args.engine,
             min_size=(args.min_width, args.min_height),
             staging_root=args.staging_dir,
-            deduplicator=deduplicator
+            deduplicator=deduplicator,
+            threads=args.threads
         )
         category_summary[cat] = final_count
 

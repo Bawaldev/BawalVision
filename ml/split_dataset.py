@@ -394,7 +394,16 @@ def track_with_dvc(output_dir: str):
 
 
 def main():
-    default_workers = max(1, os.cpu_count() or 4)
+    try:
+        from ml.cpu_utils import get_optimal_workers
+    except ImportError:
+        try:
+            from cpu_utils import get_optimal_workers
+        except ImportError:
+            def get_optimal_workers(reserve_cores=0):
+                return max(1, (hasattr(os, "sched_getaffinity") and len(os.sched_getaffinity(0))) or os.cpu_count() or 4)
+
+    default_workers = get_optimal_workers()
     parser = argparse.ArgumentParser(
         description="BawalVision Parallel Leak-Free Dataset Splitter (Train / Val / Test)"
     )
@@ -429,8 +438,8 @@ def main():
     parser.add_argument(
         "--workers", "-w",
         type=int,
-        default=default_workers,
-        help=f"Jumlah worker thread paralel (default: {default_workers})"
+        default=0,
+        help=f"Jumlah worker thread paralel (0 = auto-detect max threads: {default_workers})"
     )
     parser.add_argument(
         "--dvc-track",
@@ -440,6 +449,8 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.workers <= 0:
+        args.workers = default_workers
 
     split_dataset(
         source_dir=args.source_dir,

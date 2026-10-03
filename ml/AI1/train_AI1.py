@@ -31,7 +31,18 @@ NUM_CLASSES = 9            # 9 classes (banana, chicken, egg, orange, rice, spin
 
 
 def main() -> None:
-    default_workers = min(8, max(2, (os.cpu_count() or 4)))
+    try:
+        from ml.cpu_utils import get_optimal_workers
+    except ImportError:
+        try:
+            from cpu_utils import get_optimal_workers
+        except ImportError:
+            def get_optimal_workers(reserve_cores=0):
+                return max(1, (hasattr(os, "sched_getaffinity") and len(os.sched_getaffinity(0))) or os.cpu_count() or 4)
+
+    system_cores = get_optimal_workers()
+    default_dataloader_workers = min(8, max(2, system_cores))
+
     parser = argparse.ArgumentParser(
         description="BawalVision Parallel YOLOv8n Training & Static ONNX Export"
     )
@@ -50,15 +61,16 @@ def main() -> None:
     parser.add_argument(
         "--workers", "-w",
         type=int,
-        default=default_workers,
-        help=f"DataLoader parallel worker processes (default: {default_workers})"
+        default=0,
+        help=f"DataLoader parallel worker processes (0 = auto-detect: {default_dataloader_workers})"
     )
 
     args = parser.parse_args()
+    if args.workers <= 0:
+        args.workers = default_dataloader_workers
 
     # Configure PyTorch CPU parallel execution threads
-    cpu_cores = os.cpu_count() or 4
-    torch.set_num_threads(cpu_cores)
+    torch.set_num_threads(system_cores)
 
     WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -70,7 +82,7 @@ def main() -> None:
 
     device_id = "0" if torch.cuda.is_available() else "cpu"
     print(f"[+] Compute Hardware    : {'NVIDIA CUDA (GPU:0)' if device_id == '0' else 'Host CPU'}")
-    print(f"[+] DataLoader Workers  : {args.workers} parallel workers | CPU Threads: {cpu_cores}")
+    print(f"[+] DataLoader Workers  : {args.workers} parallel workers | CPU Threads: {system_cores}")
     print(f"[+] Dataset Metadata    : {YAML_CONFIG}")
 
     # ==============================================================================
