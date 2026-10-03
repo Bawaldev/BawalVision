@@ -80,14 +80,12 @@ htmlcov/
 .ipynb_checkpoints/
 
 # Model checkpoints berukuran besar (disimpan di cloud / AWS S3 / DVC)
-ml/models/*.pt
-ml/models/*.pth
-ml/models/*.onnx
-ml/models/*.engine
-!ml/models/.gitkeep
+ml/model/*.pt
+ml/model/*.pth
+ml/model/*.onnx
+ml/model/*.engine
+!ml/model/.gitkeep
 ml/AI1/runs/ai1_yolov8n_det
-!ml/AI1/model/
-!ml/AI1/runs/ai1_yolov8n_det/args.yaml
 weights/
 ml/AI1/weights/
 # -------------------------------------------------------------------------
