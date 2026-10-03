@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from PIL import Image
 
-# 1. Konfigurasi UTF-8 untuk Terminal Windows (PowerShell / CMD)
+# 1. Configure UTF-8 for Windows Terminal (PowerShell / CMD)
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -28,13 +28,13 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# 2. Lokasi Direktori Kerja
+# 2. Working Directory Paths
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name == "ml" else SCRIPT_DIR
 
 
 def remove_readonly(func, path, exc_info):
-    """Menangani error izin Read-Only di Windows saat shutil.rmtree dijalankan."""
+    """Handles Read-Only permission errors on Windows during shutil.rmtree execution."""
     try:
         os.chmod(path, stat.S_IWRITE)
         func(path)
@@ -43,7 +43,7 @@ def remove_readonly(func, path, exc_info):
 
 
 def safe_rmtree(target_dir: Path):
-    """Menghapus folder secara rekursif dengan aman lintas OS."""
+    """Safely and recursively removes directories across platforms."""
     if not target_dir.exists():
         return
     try:
@@ -55,13 +55,13 @@ def safe_rmtree(target_dir: Path):
         else:
             shutil.rmtree(str(target_dir), onerror=remove_readonly)
     except Exception as e:
-        print(f"[WARN] Tidak dapat menghapus folder {target_dir}: {e}")
+        print(f"[WARN] Unable to remove directory {target_dir}: {e}")
 
 
 def calculate_dhash(image: Image.Image, hash_size: int = 8) -> int:
     """
-    Menghitung 64-bit difference hash (dHash) untuk perbandingan gradien visual.
-    Menggunakan tobytes() agar tidak memicu DeprecationWarning pada Pillow 10-14.
+    Computes 64-bit difference hash (dHash) for visual gradient comparison.
+    Uses tobytes() to avoid DeprecationWarning on Pillow 10+.
     """
     resized = image.convert("L").resize((hash_size + 1, hash_size), Image.Resampling.LANCZOS)
     pixels = list(resized.tobytes())
@@ -78,7 +78,7 @@ def calculate_dhash(image: Image.Image, hash_size: int = 8) -> int:
 
 
 def hamming_distance(h1: int, h2: int) -> int:
-    """Menghitung bit yang berbeda antara dua hash 64-bit (Hamming Distance)."""
+    """Computes differing bits between two 64-bit hashes (Hamming Distance)."""
     xor_val = h1 ^ h2
     if hasattr(xor_val, "bit_count"):
         return xor_val.bit_count()
@@ -86,7 +86,7 @@ def hamming_distance(h1: int, h2: int) -> int:
 
 
 def calculate_md5(file_path: Path) -> str:
-    """Menghitung hash MD5 biner file citra."""
+    """Computes binary MD5 checksum of an image file."""
     hasher = hashlib.md5()
     with open(file_path, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
@@ -95,7 +95,7 @@ def calculate_md5(file_path: Path) -> str:
 
 
 def _inspect_image_entry(args: tuple):
-    """Worker function untuk validasi, MD5, dan dHash parallel."""
+    """Worker function for parallel validation, MD5, and dHash computation."""
     file_path, min_size = args
     min_w, min_h = min_size
     try:
@@ -115,7 +115,7 @@ def _inspect_image_entry(args: tuple):
 
 
 def _copy_file_task(args: tuple):
-    """Worker function untuk penyalinan file parallel."""
+    """Worker function for parallel file copying."""
     src, dest = args
     try:
         shutil.copy2(str(src), str(dest))
@@ -127,9 +127,9 @@ def _copy_file_task(args: tuple):
 
 def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
     """
-    Mendeteksi kategori dan mengumpulkan berkas citra secara cerdas:
-    1. Jika data bersarang di dalam partisi (test/, train/, val/) -> menggabungkan subfoldernya.
-    2. Jika data sudah flat (langsung folder kelas di root sumber).
+    Intelligently discovers categories and collects image files:
+    1. If data is nested inside partitions (test/, train/, val/) -> merges subfolders.
+    2. If data is flat (class folders directly at root source).
     """
     ignored_names = {"thumbs.db", "desktop.ini", ".ds_store"}
     valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -140,7 +140,7 @@ def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
         if d.is_dir() and not d.name.startswith(".") and d.name.lower() not in ignored_names
     ]
 
-    # Cek apakah folder sumber berisi folder partisi (train, val, test)
+    # Check whether source folder contains partition subfolders (train, val, test)
     partition_dirs = [d for d in subdirs if d.name.lower() in partition_keywords]
     
     is_partitioned = False
@@ -166,8 +166,8 @@ def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
 
     if is_partitioned:
         partition_list_str = ", ".join(d.name for d in partition_dirs)
-        print(f" [INFO] Terdeteksi struktur bersarang partisi ({partition_list_str}).")
-        print(f"        Mengumpulkan seluruh citra dari subfolder kelas ke pool konsolidasi...\n")
+        print(f" [INFO] Detected partitioned nested structure ({partition_list_str}).")
+        print(f"        Consolidating all class images into unified pool...\n")
         
         for part in partition_dirs:
             for cat_dir in part.iterdir():
@@ -180,7 +180,7 @@ def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
                 cat_name = other_dir.name.lower().strip()
                 category_files_map.setdefault(cat_name, []).extend(extract_images_from_dir(other_dir))
     else:
-        print(f" [INFO] Terdeteksi struktur flat (folder kelas langsung di root sumber).\n")
+        print(f" [INFO] Detected flat structure (class folders directly at source root).\n")
         for cat_dir in subdirs:
             cat_name = cat_dir.name.lower().strip()
             category_files_map[cat_name] = extract_images_from_dir(cat_dir)
@@ -202,7 +202,7 @@ def discover_categories_and_files(src_path: Path) -> dict[str, list[Path]]:
 
 def collect_clean_images_parallel(raw_files: list[Path], min_size: tuple = (100, 100),
                                   hamming_threshold: int = 4, num_workers: int = 4) -> list[Path]:
-    """Menyaring citra rusak, dimensi terlalu kecil, dan menghapus duplikat (MD5 + dHash) secara paralel."""
+    """Filters corrupted images, too small dimensions, and removes duplicates (MD5 + dHash) in parallel."""
     tasks = [(f, min_size) for f in raw_files]
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         results = list(executor.map(_inspect_image_entry, tasks))
@@ -228,7 +228,7 @@ def collect_clean_images_parallel(raw_files: list[Path], min_size: tuple = (100,
 
 
 def resolve_source_dir(source_arg: str) -> Path:
-    """Mendeteksi direktori sumber secara adaptif lintas OS dan struktur kerja."""
+    """Detects source directory adaptively across operating systems and workspace layouts."""
     src_path = Path(source_arg).expanduser()
     if src_path.is_absolute() and src_path.exists():
         return src_path.resolve()
@@ -252,7 +252,7 @@ def resolve_source_dir(source_arg: str) -> Path:
 
 
 def resolve_output_dir(output_arg: str) -> Path:
-    """Mendeteksi direktori target penyimpanan dataset."""
+    """Resolves output target directory for partitioned dataset."""
     out_path = Path(output_arg).expanduser()
     if out_path.is_absolute():
         return out_path
@@ -277,17 +277,17 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
                   val_ratio: float = 0.15, test_ratio: float = 0.15,
                   min_size: tuple = (100, 100), seed: int = 42,
                   num_workers: int = 4):
-    """Membagi citra secara acak berstrata ke train, val, dan test menggunakan multi-worker parallelism."""
+    """Partitions images with stratified random sampling into train, val, and test using multi-worker parallelism."""
     random.seed(seed)
     src_path = resolve_source_dir(source_dir)
     out_path = resolve_output_dir(output_dir)
 
     if not src_path.exists() or not src_path.is_dir():
-        print(f"[ERROR] Direktori dataset sumber '{src_path}' tidak ditemukan.")
+        print(f"[ERROR] Source dataset directory '{src_path}' not found.")
         sys.exit(1)
 
     if src_path == out_path:
-        print(f"[ERROR] Direktori sumber dan output tidak boleh sama: '{src_path}'")
+        print(f"[ERROR] Source and output directories cannot be the same: '{src_path}'")
         sys.exit(1)
 
     start_time = time.time()
@@ -303,10 +303,10 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
     categories = list(category_files_map.keys())
 
     if not categories:
-        print(f"[ERROR] Tidak ditemukan folder kategori atau berkas citra di dalam '{src_path}'.")
+        print(f"[ERROR] No category folders or image files found inside '{src_path}'.")
         sys.exit(1)
 
-    # Inisialisasi folder target output
+    # Initialize target output directories
     for subset in ["train", "val", "test"]:
         subset_dir = out_path / subset
         subset_dir.mkdir(parents=True, exist_ok=True)
@@ -318,7 +318,7 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
     summary_stats = {"train": 0, "val": 0, "test": 0, "total_raw": 0, "total_clean": 0}
     copy_tasks = []
 
-    # Proses partisi per kategori kelas
+    # Process partitioning per class category
     for cat in categories:
         raw_files = category_files_map[cat]
         n_raw = len(raw_files)
@@ -331,7 +331,7 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
         summary_stats["total_clean"] += n_clean
 
         if n_clean == 0:
-            print(f"  * {cat:18s}: Raw={n_raw:4d} | Clean=   0 (Dilewati - Tidak ada gambar valid)")
+            print(f"  * {cat:18s}: Raw={n_raw:4d} | Clean=   0 (Skipped - No valid images)")
             continue
 
         random.shuffle(clean_files)
@@ -354,7 +354,7 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
         dropped = n_raw - n_clean
         print(f"  * {cat:18s}: Raw={n_raw:4d} | Clean={n_clean:4d} (Dropped={dropped:3d}) -> Train={len(train_list):4d} | Val={len(val_list):4d} | Test={len(test_list):4d}")
 
-    # Eksekusi salin file secara paralel
+    # Execute parallel file copying
     print(f"\n[+] Executing parallel copy ({len(copy_tasks)} files across {num_workers} workers)...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         list(executor.map(_copy_file_task, copy_tasks))
@@ -372,7 +372,7 @@ def split_dataset(source_dir: str, output_dir: str, train_ratio: float = 0.70,
 
 
 def track_with_dvc(output_dir: str):
-    """Menghubungkan direktori partisi ke pelacakan DVC jika terpasang."""
+    """Tracks partitioned dataset directory with DVC if installed."""
     out_path = resolve_output_dir(output_dir)
     dvc_bin = (
         shutil.which("dvc") or
@@ -390,7 +390,7 @@ def track_with_dvc(output_dir: str):
         dvc_file = f"{out_path}.dvc"
         print(f"[SUCCESS] Split dataset tracked in DVC: {dvc_file}")
     except Exception:
-        print(f"[NOTE] DVC tracking manual: dvc add {out_path}")
+        print(f"[NOTE] Manual DVC tracking: dvc add {out_path}")
 
 
 def main():
@@ -410,42 +410,42 @@ def main():
     parser.add_argument(
         "--source-dir", "-s",
         default="ml/dataset/dataset_mbg_matang",
-        help="Direktori sumber dataset (default: ml/dataset/dataset_mbg_matang)"
+        help="Source dataset directory (default: ml/dataset/dataset_mbg_matang)"
     )
     parser.add_argument(
         "--output-dir", "-o",
         default="ml/AI1/dataset",
-        help="Direktori tujuan penyimpanan partisi (default: ml/AI1/dataset)"
+        help="Target partitioned dataset output directory (default: ml/AI1/dataset)"
     )
     parser.add_argument(
         "--train-ratio",
         type=float,
         default=0.70,
-        help="Rasio Training set (default: 0.70)"
+        help="Training set split ratio (default: 0.70)"
     )
     parser.add_argument(
         "--val-ratio",
         type=float,
         default=0.15,
-        help="Rasio Validation set (default: 0.15)"
+        help="Validation set split ratio (default: 0.15)"
     )
     parser.add_argument(
         "--test-ratio",
         type=float,
         default=0.15,
-        help="Rasio Test set (default: 0.15)"
+        help="Test set split ratio (default: 0.15)"
     )
     parser.add_argument(
         "--workers", "-w",
         type=int,
         default=0,
-        help=f"Jumlah worker thread paralel (0 = auto-detect max threads: {default_workers})"
+        help=f"Number of parallel worker threads (0 = auto-detect max threads: {default_workers})"
     )
     parser.add_argument(
         "--dvc-track",
         action=argparse.BooleanOptionalAction if hasattr(argparse, "BooleanOptionalAction") else "store_true",
         default=False,
-        help="Lacak output menggunakan DVC (default: False)"
+        help="Track output directory with DVC (default: False)"
     )
 
     args = parser.parse_args()

@@ -54,7 +54,7 @@ if(EXISTS "${ENV_FILE}")
     endforeach()
 endif()
 
-# Definisi kompilasi dari file .env
+# Compile definitions loaded from .env file
 if(DEFINED CONFIG_ESP_WIFI_SSID)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_ESP_WIFI_SSID="${CONFIG_ESP_WIFI_SSID}")
 endif()
@@ -71,11 +71,11 @@ if(DEFINED CONFIG_BACKEND_PORT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_BACKEND_PORT="${CONFIG_BACKEND_PORT}")
 endif()
 
-# Aktifkan level log DEBUG untuk komponen ini (Level 4 = DEBUG)
+# Enable DEBUG log level for this component (Level 4 = DEBUG)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE 
     LOG_LOCAL_LEVEL=ESP_LOG_DEBUG
 )
 
-# Standar C dan flag debug
+# C standards and debug flags
 target_compile_features(${COMPONENT_LIB} PRIVATE c_std_17)
 target_compile_options(${COMPONENT_LIB} PRIVATE "-ggdb3" "-Og")

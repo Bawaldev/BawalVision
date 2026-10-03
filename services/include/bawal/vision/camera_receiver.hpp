@@ -72,7 +72,7 @@ public:
      * @param out_frame Destination DecodedFrame
      * @return true on successful decode, false on error.
      */
-    bool decodeFromJson(const std::string& json_str, DecodedFrame& out_frame);
+    bool decodeFromJson(std::string_view json_str, DecodedFrame& out_frame);
 
     /**
      * @brief Decode raw MJPEG / JPEG buffer from HTTP stream with automatic header repair.
@@ -95,7 +95,7 @@ private:
     ReceiverMetrics m_metrics;
     std::vector<uint8_t> m_scratch_buffer; ///< Reusable internal scratch buffer to avoid per-frame allocation
 
-    void decodeBase64ToScratch(const std::string& in);
+    void decodeBase64ToScratch(std::string_view in);
 };
 
 } // namespace bawal::vision

@@ -13,13 +13,14 @@ static size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb, void*
     return total_bytes;
 }
 
-bool fetchLatestFrame(CURL* curl, const std::string& url, std::vector<uint8_t>& buffer) {
+bool fetchLatestFrame(CURL* curl, std::string_view url, std::vector<uint8_t>& buffer) {
     if (!curl || url.empty()) {
         return false;
     }
 
+    const std::string url_str(url);
     buffer.clear();
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, url_str.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);
@@ -36,57 +37,57 @@ bool fetchLatestFrame(CURL* curl, const std::string& url, std::vector<uint8_t>& 
     return (http_status_code == 200 && !buffer.empty());
 }
 
-std::string discoverActiveDeviceID(CURL* curl, const std::string& backend_base_url) {
+std::string discoverActiveDeviceID(CURL* curl, std::string_view backend_base_url) {
     if (!curl || backend_base_url.empty()) {
         return "";
     }
 
-    const std::string discovery_url = backend_base_url + "/api/v1/camera/active";
+    const std::string discovery_url = std::string(backend_base_url) + "/api/v1/camera/active";
     std::vector<uint8_t> response_buffer;
 
     if (!fetchLatestFrame(curl, discovery_url, response_buffer)) {
         return "";
     }
 
-    const std::string json_payload(response_buffer.begin(), response_buffer.end());
+    const std::string_view json_payload(reinterpret_cast<const char*>(response_buffer.data()), response_buffer.size());
 
-    const std::string key = "\"device_id\"";
+    constexpr std::string_view key = "\"device_id\"";
     const size_t key_pos = json_payload.find(key);
-    if (key_pos == std::string::npos) {
+    if (key_pos == std::string_view::npos) {
         return "";
     }
 
     const size_t colon_pos = json_payload.find(':', key_pos + key.length());
-    if (colon_pos == std::string::npos) {
+    if (colon_pos == std::string_view::npos) {
         return "";
     }
 
     const size_t start_quote = json_payload.find('"', colon_pos + 1);
-    if (start_quote == std::string::npos) {
+    if (start_quote == std::string_view::npos) {
         return "";
     }
 
     const size_t end_quote = json_payload.find('"', start_quote + 1);
-    if (end_quote == std::string::npos) {
+    if (end_quote == std::string_view::npos) {
         return "";
     }
 
-    return json_payload.substr(start_quote + 1, end_quote - start_quote - 1);
+    return std::string(json_payload.substr(start_quote + 1, end_quote - start_quote - 1));
 }
 
-bool postInspectionPayload(CURL* curl, const std::string& backend_base_url, const std::string& json_payload) {
+bool postInspectionPayload(CURL* curl, std::string_view backend_base_url, std::string_view json_payload) {
     if (!curl || backend_base_url.empty() || json_payload.empty()) {
         return false;
     }
 
-    const std::string endpoint_url = backend_base_url + "/api/v1/inspections";
+    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/inspections";
     
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
     curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload.data());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(json_payload.length()));
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);

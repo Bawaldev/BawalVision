@@ -11,7 +11,6 @@
 #include "bawal/vision/camera_receiver.hpp"
 #include "bawal/vision/classifier.hpp"
 #include "bawal/vision/dewarp.hpp"
-#include "bawal/vision/segmenter.hpp"
 #include "bawal/vision/types.hpp"
 
 namespace bawal::vision {
@@ -25,14 +24,13 @@ struct InspectionOutput {
     cv::Mat raw_image;
     cv::Mat dewarped_image;
     cv::Mat annotated_image;
-    std::vector<TrayCompartment> compartments;
-    std::vector<ClassificationResult> classifications;
+    std::vector<DetectionResult> detections;
     double processing_time_ms{0.0};
 };
 
 /**
  * @brief Master Orchestrator Pipeline:
- * [CameraReceiver] -> [Calibration & Dewarp] -> [Segmenter] -> [FoodClassifier/AI1]
+ * [CameraReceiver] -> [Calibration & Dewarp] -> [YOLOv8 Classifier + SIMD Food Evaluator]
  */
 class InspectionPipeline {
 public:
@@ -40,14 +38,14 @@ public:
     ~InspectionPipeline() = default;
 
     /**
-     * @brief Initialize all pipeline stages (dewarper, segmenter grid, and AI1 classifier).
+     * @brief Initialize all pipeline stages (dewarper and AI1 YOLOv8 classifier).
      * 
      * @param model_path Path to ONNX model (optional, falls back to heuristic if empty/missing)
      * @param target_width Processing resolution width (default: 640)
      * @param target_height Processing resolution height (default: 480)
      * @return true on successful initialization.
      */
-    [[nodiscard]] bool initialize(const std::string& model_path = "", 
+    [[nodiscard]] bool initialize(std::string_view model_path = "", 
                                   int target_width = 640, 
                                   int target_height = 480);
 
@@ -71,7 +69,7 @@ public:
     [[nodiscard]] bool execute(const cv::Mat& frame, InspectionOutput& out_inspection);
 
     /**
-     * @brief Renders visual bounding boxes, compartment labels, and confidence overlays on image.
+     * @brief Renders visual bounding boxes, food class badges, and spoilage indicators on image.
      * 
      * @param inspection Output struct from execute()
      * @param out_display Destination visual HUD matrix
@@ -81,13 +79,11 @@ public:
     // Component accessors
     [[nodiscard]] CameraReceiver& getReceiver() noexcept { return m_receiver; }
     [[nodiscard]] DewarpEngine& getDewarper() noexcept { return m_dewarper; }
-    [[nodiscard]] Segmenter& getSegmenter() noexcept { return m_segmenter; }
     [[nodiscard]] FoodClassifier& getClassifier() noexcept { return m_classifier; }
 
 private:
     CameraReceiver m_receiver;
     DewarpEngine m_dewarper;
-    Segmenter m_segmenter;
     FoodClassifier m_classifier;
     int m_width{640};
     int m_height{480};

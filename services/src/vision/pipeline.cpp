@@ -3,11 +3,12 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <algorithm>
 #include <opencv2/imgproc.hpp>
 
 namespace bawal::vision {
 
-bool InspectionPipeline::initialize(const std::string& model_path, int target_width, int target_height) {
+bool InspectionPipeline::initialize(std::string_view model_path, int target_width, int target_height) {
     m_width = target_width;
     m_height = target_height;
 
@@ -16,17 +17,12 @@ bool InspectionPipeline::initialize(const std::string& model_path, int target_wi
         std::cerr << "[Pipeline] Warning: Camera calibration initialization failed.\n";
     }
 
-    if (!m_segmenter.initStandardTrayLayout(m_width, m_height)) {
-        std::cerr << "[Pipeline] Failed to initialize tray compartment layout.\n";
-        return false;
-    }
-
-    // 3. Initialize AI1 Inference Model (Optional, safe fallback if model file is not yet exported)
+    // Initialize YOLOv8 Inference Model & SIMD Evaluator
     if (!model_path.empty()) {
         if (m_classifier.init(model_path, 2)) {
-            std::cout << "[Pipeline] AI1 ONNX Runtime model loaded: " << model_path << "\n";
+            std::cout << "[Pipeline] AI1 YOLOv8 ONNX model loaded: " << model_path << "\n";
         } else {
-            std::cout << "[Pipeline] Model file not ready. Running in heuristic fallback mode.\n";
+            std::cout << "[Pipeline] Model file not ready. Running in fallback mode.\n";
         }
     }
 
@@ -68,35 +64,15 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     }
     out_inspection.dewarped_image = dewarped;
 
-    // 2. Tray Dynamic Food Segmentation
-    out_inspection.compartments.clear();
-    if (!m_segmenter.extractCompartments(dewarped, out_inspection.compartments)) {
-        return false;
-    }
-
-    // 3. Compartment Classification (AI1 Inference)
-    const int num_compartments = static_cast<int>(out_inspection.compartments.size());
-    out_inspection.classifications.clear();
-    out_inspection.classifications.reserve(num_compartments);
-
-    for (int i = 0; i < num_compartments; ++i) {
-        const auto& comp = out_inspection.compartments[i];
-        ClassificationResult res;
-        if (!comp.cropped_mat.empty() && m_classifier.predict(comp.cropped_mat, res)) {
-            out_inspection.classifications.push_back(std::move(res));
-        } else {
-            res.class_id = -1;
-            res.class_name = "no_food";
-            res.confidence = 0.0f;
-            out_inspection.classifications.push_back(std::move(res));
-        }
-    }
+    // 2. Dynamic Food Detection (YOLOv8) + SIMD Quality/Freshness Evaluation
+    out_inspection.detections.clear();
+    [[maybe_unused]] bool det_ok = m_classifier.detect(dewarped, out_inspection.detections, 0.25f, 0.45f);
 
     const int64_t t_end = cv::getTickCount();
     out_inspection.processing_time_ms = ((t_end - t_start) * 1000.0) / cv::getTickFrequency();
     out_inspection.is_valid = true;
 
-    // 4. Render Visual Annotation Overlay
+    // 3. Render Visual Annotation Overlay
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
     return out_inspection.is_valid;
@@ -109,63 +85,59 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
 
     out_display = inspection.dewarped_image.clone();
 
-    // Color palette for meal compartments / food categories
-    const cv::Scalar colors[] = {
-        cv::Scalar(0, 255, 255),  // Yellow - Rice / Carb
-        cv::Scalar(0, 255, 0),    // Green - Vegetables
-        cv::Scalar(0, 140, 255),  // Orange - Protein / Meat
-        cv::Scalar(255, 100, 255), // Magenta - Fruit
-        cv::Scalar(255, 200, 0),  // Cyan - Side
-        cv::Scalar(100, 255, 255)  // Light Yellow
-    };
-
     int detected_food_count = 0;
 
-    for (size_t i = 0; i < inspection.compartments.size(); ++i) {
-        const auto& comp = inspection.compartments[i];
-        bool has_food = false;
-        std::string label = comp.name;
-        cv::Scalar color = colors[i % 6];
-
-        if (i < inspection.classifications.size()) {
-            const auto& cls = inspection.classifications[i];
-            if (cls.class_id >= 0 && cls.confidence >= 0.35f && cls.class_name != "no_food" && cls.class_name != "no_model") {
-                has_food = true;
-                detected_food_count++;
-                std::ostringstream ss;
-                ss << cls.class_name << " (" << std::fixed << std::setprecision(1) << (cls.confidence * 100.0f) << "%)";
-                label = ss.str();
-            } else if (cls.class_name == "no_model") {
-                label = "Model Not Loaded";
-                color = cv::Scalar(80, 80, 80);
-            } else {
-                continue; // Skip drawing boxes for unconfident background noise
-            }
+    for (const auto& det : inspection.detections) {
+        if (det.class_id < 0 || det.confidence < 0.25f || det.class_name == "no_model") {
+            continue;
         }
 
-        if (!has_food && inspection.classifications[i].class_name != "no_model") {
+        detected_food_count++;
+
+        const float freshness_score = std::clamp(1.0f - det.spoilage.discoloration_ratio, 0.0f, 1.0f);
+        const std::string freshness_status = det.spoilage.is_visually_spoiled ? "SPOILED" : "FRESH";
+
+        // Determine color based on freshness / spoilage
+        cv::Scalar box_color;
+        if (det.spoilage.is_visually_spoiled) {
+            box_color = cv::Scalar(0, 0, 255); // Red (Spoiled)
+        } else if (freshness_score < 0.70f) {
+            box_color = cv::Scalar(0, 165, 255); // Amber/Orange (Warning/Degraded)
+        } else {
+            box_color = cv::Scalar(0, 255, 0); // Green (Fresh)
+        }
+
+        // Ensure bounding box stays within image bounds
+        cv::Rect clamped_box = det.bbox & cv::Rect(0, 0, out_display.cols, out_display.rows);
+        if (clamped_box.width <= 0 || clamped_box.height <= 0) {
             continue;
         }
 
         // Draw bounding box
-        cv::rectangle(out_display, comp.roi, color, 2);
+        cv::rectangle(out_display, clamped_box, box_color, 2);
+
+        // Construct label text
+        std::ostringstream ss;
+        ss << det.class_name << " " << std::fixed << std::setprecision(0) << (det.confidence * 100.0f) << "% ["
+           << freshness_status << " " << std::fixed << std::setprecision(0) << (freshness_score * 100.0f) << "%]";
+        std::string label = ss.str();
 
         // Render label background badge
         int baseline = 0;
-        cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.48, 1, &baseline);
-        int badge_y = std::max(comp.roi.y - 4, text_size.height + 4);
-        cv::Point badge_tl(comp.roi.x, badge_y - text_size.height - 4);
-        cv::Point badge_br(comp.roi.x + text_size.width + 8, badge_y + 2);
+        cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.44, 1, &baseline);
+        int badge_y = std::max(clamped_box.y - 4, text_size.height + 4);
+        cv::Point badge_tl(clamped_box.x, badge_y - text_size.height - 4);
+        cv::Point badge_br(clamped_box.x + text_size.width + 8, badge_y + 2);
         
-        cv::rectangle(out_display, badge_tl, badge_br, color, cv::FILLED);
-        cv::putText(out_display, label, cv::Point(comp.roi.x + 4, badge_y - 2),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+        cv::rectangle(out_display, badge_tl, badge_br, box_color, cv::FILLED);
+        cv::putText(out_display, label, cv::Point(clamped_box.x + 4, badge_y - 2),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
     }
 
     // Top HUD Status Bar
     cv::rectangle(out_display, cv::Point(0, 0), cv::Point(out_display.cols, 28), cv::Scalar(20, 20, 20), cv::FILLED);
     std::ostringstream hud_ss;
-    hud_ss << "BawalVision Dynamic CV AI1 Pipeline | Frame #" << inspection.frame_id 
+    hud_ss << "BawalVision YOLOv8 + SIMD Pipeline | Frame #" << inspection.frame_id 
            << " | Latency: " << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms"
            << " | Food Objects: " << detected_food_count;
     

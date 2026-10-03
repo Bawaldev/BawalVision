@@ -49,6 +49,6 @@ inline constexpr uint8_t K_STANDARD_DHT[] = {
  * @param out_frame Output cv::Mat holding the decoded BGR image.
  * @return true if decoding succeeded and out_frame is non-empty, false otherwise.
  */
-bool decodeMJPEGFrame(const std::vector<uint8_t>& raw_bytes, cv::Mat& out_frame);
+[[nodiscard]] bool decodeMJPEGFrame(const std::vector<uint8_t>& raw_bytes, cv::Mat& out_frame);
 
 } // namespace bawal::server

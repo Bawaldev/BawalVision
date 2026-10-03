@@ -337,7 +337,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 // EvaluateFoodQuality applies multi-sensor quality & food safety rules combining:
 // 1. Computer Vision: Classification similarity & object integrity (Hue/color degradation detection)
 // 2. Machine Learning: Visual decomposition & spoilage scoring (ONNX model inference)
-// 3. Sensor Suhu Makanan: Food surface temperature (danger zone > 28°C acceleration)
+// 3. Food Temperature Sensor: Food surface temperature (danger zone > 28°C acceleration)
 func EvaluateFoodQuality(foodName string, cvConf float64, mlSpoilage float64, foodTemp float64, requestedStatus string) (float64, float64, float64, string) {
 	if foodTemp <= 0 {
 		foodTemp = 25.0

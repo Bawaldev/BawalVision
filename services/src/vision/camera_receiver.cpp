@@ -25,7 +25,7 @@ void CameraReceiver::resetMetrics() noexcept {
     m_metrics = ReceiverMetrics{};
 }
 
-void CameraReceiver::decodeBase64ToScratch(const std::string& in) {
+void CameraReceiver::decodeBase64ToScratch(std::string_view in) {
     m_scratch_buffer.clear();
     size_t in_len = in.size();
     int i = 0;
@@ -147,46 +147,46 @@ bool CameraReceiver::decodeFromBinaryPacket(const uint8_t* packet_bytes, size_t 
     return decode(header, payload_ptr, payload_len, out_frame);
 }
 
-static std::string extractJsonString(const std::string& json, const std::string& key) {
-    std::string pattern = "\"" + key + "\"";
+static std::string_view extractJsonString(std::string_view json, std::string_view key) {
+    std::string pattern = "\"" + std::string(key) + "\"";
     size_t pos = json.find(pattern);
-    if (pos == std::string::npos) return "";
+    if (pos == std::string_view::npos) return "";
 
     pos = json.find(':', pos);
-    if (pos == std::string::npos) return "";
+    if (pos == std::string_view::npos) return "";
 
     size_t start = json.find('"', pos);
-    if (start == std::string::npos) return "";
+    if (start == std::string_view::npos) return "";
 
     size_t end = json.find('"', start + 1);
-    if (end == std::string::npos) return "";
+    if (end == std::string_view::npos) return "";
 
     return json.substr(start + 1, end - start - 1);
 }
 
-static uint64_t extractJsonNumber(const std::string& json, const std::string& key, uint64_t default_val = 0) {
-    std::string pattern = "\"" + key + "\"";
+static uint64_t extractJsonNumber(std::string_view json, std::string_view key, uint64_t default_val = 0) {
+    std::string pattern = "\"" + std::string(key) + "\"";
     size_t pos = json.find(pattern);
-    if (pos == std::string::npos) return default_val;
+    if (pos == std::string_view::npos) return default_val;
 
     pos = json.find(':', pos);
-    if (pos == std::string::npos) return default_val;
+    if (pos == std::string_view::npos) return default_val;
 
     pos++;
     while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n')) pos++;
 
     size_t end = pos;
-    while (end < json.size() && (isdigit(json[end]) || json[end] == '-')) end++;
+    while (end < json.size() && (isdigit(static_cast<unsigned char>(json[end])) || json[end] == '-')) end++;
 
     if (end > pos) {
         try {
-            return std::stoull(json.substr(pos, end - pos));
+            return std::stoull(std::string(json.substr(pos, end - pos)));
         } catch (...) {}
     }
     return default_val;
 }
 
-bool CameraReceiver::decodeFromJson(const std::string& json_str, DecodedFrame& out_frame) {
+bool CameraReceiver::decodeFromJson(std::string_view json_str, DecodedFrame& out_frame) {
     out_frame.is_valid = false;
 
     try {
@@ -198,7 +198,7 @@ bool CameraReceiver::decodeFromJson(const std::string& json_str, DecodedFrame& o
         header.buffer_len = static_cast<uint32_t>(extractJsonNumber(json_str, "buffer_len", 0));
         header.timestamp_ms = static_cast<int64_t>(extractJsonNumber(json_str, "timestamp_ms", 0));
 
-        std::string b64_str = extractJsonString(json_str, "image_base64");
+        std::string_view b64_str = extractJsonString(json_str, "image_base64");
         if (!b64_str.empty()) {
             decodeBase64ToScratch(b64_str);
             if (!m_scratch_buffer.empty()) {

@@ -17,11 +17,6 @@ using namespace bawal::vision;
 using namespace bawal::server;
 
 int main(int argc, char** argv) {
-    std::cout << "====================================================\n";
-    std::cout << "  BawalVision C++ End-to-End Vision Pipeline Engine \n";
-    std::cout << "  [Receiver] -> [Dewarp] -> [Segmenter] -> [AI1]    \n";
-    std::cout << "====================================================\n\n";
-
     curl_global_init(CURL_GLOBAL_ALL);
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -140,12 +135,12 @@ int main(int argc, char** argv) {
             if (!discovered.empty() && discovered != device_id) {
                 device_id = discovered;
                 stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
-                fetchLatestFrame(curl, stream_url, raw_bytes);
+                [[maybe_unused]] bool ok = fetchLatestFrame(curl, stream_url, raw_bytes);
             }
             // Attempt 3: Generic latest endpoint
             if (raw_bytes.empty()) {
                 std::string fallback_url = backend_base_url + "/api/v1/camera/latest/raw";
-                fetchLatestFrame(curl, fallback_url, raw_bytes);
+                [[maybe_unused]] bool ok = fetchLatestFrame(curl, fallback_url, raw_bytes);
             }
         }
 
@@ -153,24 +148,27 @@ int main(int argc, char** argv) {
             inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
             
             // Execute End-to-End Pipeline
-            // [CameraReceiver] -> [Dewarp] -> [Segmenter] -> [AI1 Classifier]
+            // [CameraReceiver] -> [Dewarp] -> [YOLOv8 + SIMD Evaluator]
             if (pipeline.execute(raw_bytes, inspection)) {
                 frame_ok = true;
                 frame_seq++;
                 
                 // Collect valid food detections
                 std::vector<std::pair<std::string, float>> detected_foods;
-                for (const auto& c : inspection.classifications) {
-                    if (c.class_id >= 0 && c.confidence >= 0.35f && c.class_name != "no_food" && c.class_name != "no_model") {
-                        detected_foods.emplace_back(c.class_name, c.confidence);
+                for (const auto& d : inspection.detections) {
+                    if (d.class_id >= 0 && d.confidence >= 0.25f && d.class_name != "no_food" && d.class_name != "no_model") {
+                        detected_foods.emplace_back(d.class_name, d.confidence);
                     }
                 }
 
                 if (frame_seq % 30 == 1) {
                     std::cout << "[PIPELINE] Frame #" << frame_seq 
-                              << " (" << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms) | Compartments: ";
-                    for (const auto& c : inspection.classifications) {
-                        std::cout << "[" << c.class_name << ": " << int(c.confidence * 100) << "%] ";
+                              << " (" << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms) | Detections: ";
+                    for (const auto& d : inspection.detections) {
+                        const float freshness = std::clamp(1.0f - d.spoilage.discoloration_ratio, 0.0f, 1.0f);
+                        const char* status_str = d.spoilage.is_visually_spoiled ? "SPOILED" : "FRESH";
+                        std::cout << "[" << d.class_name << ": " << int(d.confidence * 100) << "% (" 
+                                  << status_str << " " << int(freshness * 100) << "%)] ";
                     }
                     std::cout << "\n";
                 }

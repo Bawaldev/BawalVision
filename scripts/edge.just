@@ -31,8 +31,8 @@ _idf-exec cmd:
     #!/usr/bin/env bash
     set -eo pipefail
     if [ ! -f "$IDF_PATH/export.sh" ]; then
-        echo "[ERROR] ESP-IDF export.sh tidak ditemukan di: $IDF_PATH" >&2
-        echo "[HINT] Set path di .bashrc atau via CLI: export IDF_PATH=/path/ke/esp-idf" >&2
+        echo "[ERROR] ESP-IDF export.sh not found at: $IDF_PATH" >&2
+        echo "[HINT] Set path in .bashrc or via CLI: export IDF_PATH=/path/to/esp-idf" >&2
         exit 1
     fi
     set +u
