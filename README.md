@@ -1,55 +1,231 @@
-# BawalVision
+# BawalVision 🐟🔍
+> **Smart Food Quality & Tray Inspection System**  
+> *Developed for OpenCV AI Competition 2026*
 
-## 🛠 Task Runner & Command Cheatsheet
+BawalVision is an edge-to-cloud automated computer vision and telemetry system designed for quality control, freshness classification, portion detection, and thermal inspection of food trays (e.g., Makan Bergizi Gratis / MBG programs).
 
-This project uses [just](https://github.com/casey/just) as a unified task runner. All commands are modularized inside the `scripts/` directory (`scripts/backend.just` and `scripts/edge.just`).
+---
 
-### Quick Start
-List all available commands:
-```bash
-just
+## 🏛️ System Architecture
+
+```
+                      +-----------------------------+
+                      |   ESP32-S3 Edge Node        |
+                      | - OV5640 DVP Camera (VGA)   |
+                      | - ST7789 128x160 LVGL TFT   |
+                      | - GY-906 IR Temp Sensor     |
+                      | - FreeRTOS Static Tasks     |
+                      +--------------+--------------+
+                                     | HTTP POST (Keep-Alive) / Wi-Fi
+                                     v
+                      +-----------------------------+
+                      |   Go API Gateway (:8080)    |
+                      | - Ingestion & Routing       |
+                      | - JWT & Cookie Auth         |
+                      | - WebSockets & Telemetry    |
+                      +--------------+--------------+
+                                     |
+             +-----------------------+-----------------------+
+             |                                               |
+             v                                               v
++---------------------------+                 +---------------------------+
+| C++ Vision Service (:9001)|                 | SvelteKit 5 HMI (:3001)   |
+| - ONNX Runtime (YOLOv8n)  |                 | - Real-time Live Streams  |
+| - OpenCV & OpenMP (AVX2)  |                 | - Visual Inspection Cards |
+| - Color/Hue & Quality QC  |                 | - Telemetry & Analytics   |
++---------------------------+                 +---------------------------+
+             |
+             v
++---------------------------+
+| PostgreSQL Local Database |
+| - Inspection Records      |
+| - Audit & Telemetry Logs  |
++---------------------------+
 ```
 
 ---
 
-### 1. Backend & Vision Services (`scripts/backend.just`)
+## 📦 Subsystems Overview
 
-| Command | Description |
-| --- | --- |
-| `just setup-deps` | Install C++ dependencies (OpenCV, CMake, Ninja, etc.) on Ubuntu |
-| `just configure-vision [target]` | Generate CMake build system for C++ Vision service (Default: `Release`) |
-| `just build-vision [target]` | Compile C++ Vision service binary in parallel |
-| `just run-vision` | Execute C++ Vision service locally |
-| `just build-gateway` | Build Go Gateway REST API binary |
-| `just run-gateway` | Run Go Gateway REST API locally |
-| `just test-api [base_url]` | Execute automated backend REST API & session verification suite |
-| `just test-backend` | Run Go unit/package tests (`go test -v ./...`) |
-| `just compose-up [service]` | Start infrastructure via Docker Compose (Foreground) |
-| `just compose-up-d [service]` | Start infrastructure via Docker Compose (Background/Detached) |
-| `just compose-backend` | Shortcut to build & start backend service via Docker Compose |
-| `just compose-down` | Stop and clean up all Docker Compose containers |
-| `just clean` | Remove all build artifacts (C++ Vision & Go binaries) |
+### 1. Edge Node (`edge/`)
+- **Microcontroller:** ESP32-S3 Dual-Core Xtensa LX7 @ 240 MHz (FreeRTOS ESP-IDF).
+- **Camera:** OV5640 DVP CSP camera delivering MJPEG/RAW frames over HTTP Keep-Alive.
+- **Display:** ST7789/ST7735 $128 \times 160$ SPI TFT with **LVGL 8 RGB Dashboard** showing top HTTP status, Wi-Fi IP, food/core temperatures, and system inspection state.
+- **FreeRTOS Static Allocation:** All tasks (`xTaskCreateStaticPinnedToCore`) and queues (`xQueueCreateStatic`) use static memory buffers for zero heap overhead and deterministic 24/7 reliability.
+
+### 2. Vision Engine (`services/`)
+- **Core:** C++20 with OpenCV 4, ONNX Runtime, OpenMP multi-threading, and AVX2/SIMD acceleration.
+- **Model:** YOLOv8n object detection backbone exporting static fixed-dimension tensors (`[1, 3, 640, 640]`, Opset 17).
+- **Safety:** ThreadSanitizer (TSan) build configurations to detect data races and deadlocks.
+
+### 3. Backend Gateway (`backend/`)
+- **Engine:** Go 1.24 with Fiber v2, PostgreSQL driver, and WebSocket real-time telemetry broadcaster.
+- **Security:** CSRF protection, HttpOnly cookie authentication, rate limiting, and parameter validation.
+
+### 4. Frontend HMI (`frontend/`)
+- **Stack:** SvelteKit 5 (Runes), TypeScript, Vite, Tailwind CSS, DaisyUI, Chart.js.
+- **Features:** Responsive dark mode dashboard, live camera streams, real-time telemetry metrics, and food classification cards.
+
+### 5. Machine Learning & YOLO (`ml/`)
+- **Dataset Management:** Multi-engine scrapers with 64-bit perceptual dHash & MD5 deduplication.
+- **Zero-Shot Annotation:** Automatic bounding-box generation using `yolov8s-worldv2.pt` foundation model.
+- **Versioning:** DVC (Data Version Control) integration for dataset checkpointing.
 
 ---
 
-### 2. ESP32-S3 Firmware & Edge (`scripts/edge.just`)
+## 🔌 Hardware Pinout (BawalVision v3 Schematic)
 
-> **Note:** Ensure your `.env` file is configured with `WIFI_SSID`, `WIFI_PASS`, and `BACKEND_IP` before compiling the firmware.
+| Function | Signal Name | ESP32-S3 GPIO | Pin Header / Notes |
+|---|---|---|---|
+| **TFT Display (SPI)** | `LCD_MOSI` | `GPIO 14` | Pin 19 (`IO14`) |
+| | `LCD_SCK` | `GPIO 21` | Pin 37 (`IO21`) |
+| | `LCD_DC` | `GPIO 45` | Pin 34 (`IO45`) |
+| | `LCD_CS` | Tied to `GND` | Direct Ground (CS-less mode) |
+| | `LCD_RST` | Tied to `RES/EN` | Hardware Reset Line |
+| | `LCD_BCKL` | Tied to `3V3` | Always On |
+| **Thermal Sensor (I2C)** | `I2C_SDA` | `GPIO 1` | Pin 23 (`IO1`) |
+| | `I2C_SCL` | `GPIO 47` | Pin 36 (`IO47`) |
+| **OV5640 Camera (DVP)** | `CAM_XCLK` | `GPIO 15` | Pin 7 |
+| | `CAM_PCLK` | `GPIO 13` | Pin 18 |
+| | `CAM_VSYNC` | `GPIO 6` | Pin 5 |
+| | `CAM_HREF` | `GPIO 7` | Pin 6 |
+| | `CAM_SIOD` | `GPIO 4` | Pin 3 |
+| | `CAM_SIOC` | `GPIO 5` | Pin 4 |
+| | `CAM_D0..D7` (Y2..Y9) | `11, 9, 8, 10, 12, 18, 17, 16` | 8-bit Parallel DVP Data Bus |
+
+---
+
+## 🛠️ Unified Task Runner (`just`) Cheatsheet
+
+This project uses [just](https://github.com/casey/just) as a centralized, cross-platform task runner.
+
+### 1. Machine Learning & YOLO (`scripts/ml.just`)
 
 | Command | Description |
-| --- | --- |
-| `just build-edge` | Build standard ESP32-S3 firmware |
-| `just build-edge-wifi` | Build firmware while injecting Wi-Fi credentials & Backend IP from `.env` |
-| `just flash-edge [port]` | Flash firmware binary to ESP32-S3 & open serial monitor (Default port: `/dev/ttyACM0`) |
-| `just run-edge [port]` | **Shortcut:** Build (with `.env` Wi-Fi) + Flash + Serial Monitor |
-| `just erase-nvs [port]` | Erase NVS partition to reset local Wi-Fi/configuration cache |
-| `just menuconfig-edge` | Launch ESP-IDF interactive configuration menu |
-| `just clean-edge` | Clean ESP-IDF build artifacts (`fullclean`) |
+|---|---|
+| `just setup-ml` | Create `.venv` and install PyTorch (CUDA), Ultralytics, ONNX, and DVC dependencies |
+| `just scrap-dataset [cat] [n] [engine]` | Multi-engine web scraper with dHash deduplication (Default: `cat="all"` `n="1000"`) |
+| `just split-dataset [src] [out] [w]` | Multi-threaded stratified dataset splitter (70/15/15) with perceptual hashing |
+| `just augment-train [target] [dir] [w]` | Multi-threaded domain-specific augmentation applied strictly to train split |
+| `just prepare-yolo-ai1 [batch] [w]` | Batched zero-shot YOLO annotation generator using YOLO-World foundation model |
+| `just train-ai1 [epochs] [batch] [w]` | Train YOLOv8n object detector, export static ONNX, and verify numerical parity |
+| `just pipeline-ai1 [w] [batch] [epochs]` | **End-to-end autonomous ML pipeline** (split $\to$ augment $\to$ annotate $\to$ train $\to$ DVC) |
+| `just yolo-train [model] [data] ...` | Flexible YOLO training CLI via Ultralytics module |
+| `just yolo-val [model] [data] ...` | Evaluate and compute mAP50 / mAP50-95 metrics on validation set |
+| `just yolo-export [model] [format]` | Export PyTorch weights to static ONNX binary (`[1, 3, 640, 640]`, Opset 17) |
+| `just yolo-predict [model] [source]` | Run object detection inference on test images or directory |
+| `just yolo-tune [model] [data]` | Automated hyperparameter tuning / genetic search |
+| `just test-model-ai1 [model]` | Inspect ONNX model input/output tensor shapes and test CPU inference |
+| `just dvc-track [dir]` | Track dataset changes with DVC and stage git pointers |
+| `just dvc-pull` / `just dvc-push` | Pull / push dataset checkpoints to remote storage |
+| `just clean-ml` | Clean intermediate training run caches and temporary files |
 
+---
 
+### 2. Backend & Vision Services (`scripts/backend.just`)
 
-### Edge Node Compilation (ESP32-S3)
-Ensure ESP-IDF (v5.x+) is installed on your machine.
-- Default path: `$HOME/esp/esp-idf`
-- Build firmware: `just build-edge`
-- Custom toolchain path: `IDF_PATH=/path/to/esp-idf just build-edge`
+| Command | Description |
+|---|---|
+| `just setup-deps` | Install native C++ dependencies (OpenCV, CMake, Ninja, OpenMP) on Ubuntu |
+| `just configure-vision [target]` | Generate CMake build configuration for C++ Vision service (Default: `Release`) |
+| `just build-vision [target]` | Compile C++ Vision service binary with parallel build jobs (`-j$(nproc)`) |
+| `just run-vision [device_id]` | Execute C++ Vision service locally |
+| `just configure-vision-tsan` | Configure CMake with ThreadSanitizer for data race detection |
+| `just build-vision-tsan` | Compile C++ Vision binary with ThreadSanitizer instrumentation |
+| `just run-vision-tsan` | Run Vision service with ThreadSanitizer deadlock / race checking |
+| `just build-gateway` | Compile Go Gateway API binary |
+| `just run-gateway` | Run Go Gateway REST API server locally |
+| `just test-api [base_url]` | Run automated REST API & session verification test suite |
+| `just test-backend` | Run Go unit/package tests (`go test -v ./...`) |
+| `just build-frontend` | Build production bundle for SvelteKit HMI |
+| `just check-frontend` | Run Svelte TypeScript diagnostic check (`npm run check`) |
+| `just run-frontend` | Run SvelteKit development server with live reload |
+| `just clean` | Remove all build artifacts (`services/build`, `backend/bin`, etc.) |
+
+---
+
+### 3. Docker & Infrastructure (`Justfile`)
+
+| Command | Description |
+|---|---|
+| `just docker-build-all` | Build all production Docker images (`backend`, `vision`, `frontend`) |
+| `just compose-up-d [service]` | Start container stack in background (`bawal_postgres`, `bawal_backend`, `bawal_vision`, `bawal_frontend`) |
+| `just compose-down` | Stop and remove running containers |
+| `just compose-down-v` | Stop containers and remove persistent database volumes |
+| `just compose-ps` | List status of all managed containers |
+| `just compose-logs [service]` | View live aggregated container logs |
+| `just compose-restart [service]` | Restart container services |
+
+---
+
+### 4. ESP32-S3 Firmware & Edge (`scripts/edge.just`)
+
+| Command | Description |
+|---|---|
+| `just build-edge` | Build standard ESP32-S3 firmware via ESP-IDF |
+| `just build-edge-wifi` | Build firmware injecting Wi-Fi credentials and backend IP from `.env` |
+| `just flash-edge [port]` | Flash compiled binary to ESP32-S3 & launch serial monitor (Default: `/dev/ttyACM0`) |
+| `just run-edge [port]` | **Shortcut:** Build with Wi-Fi + Flash + Serial Monitor |
+| `just monitor-edge [port]` | Open ESP-IDF serial monitor |
+| `just erase-nvs [port]` | Erase NVS flash memory partition |
+| `just menuconfig-edge` | Open interactive ESP-IDF `menuconfig` |
+| `just clean-edge` | Full clean of ESP-IDF build directory |
+
+---
+
+## 🚀 Quickstart Guide
+
+### 1. Clone & Configure Environment
+```bash
+git clone https://github.com/your-org/BawalVision.git
+cd BawalVision
+
+# Copy environment template
+cp .env.example .env
+# Edit .env with your WIFI_SSID, WIFI_PASS, and BACKEND_IP
+```
+
+### 2. Launch Stack with Docker
+```bash
+# Build all container images
+just docker-build-all
+
+# Start entire infrastructure
+just compose-up-d
+```
+- **Frontend HMI:** `http://localhost:3001`
+- **Go Gateway API:** `http://localhost:8080/api/v1`
+- **PostgreSQL:** `localhost:5432`
+
+### 3. Train & Export Object Detection Model
+```bash
+# Setup Python ML Virtual Environment
+just setup-ml
+
+# Run end-to-end parallel training pipeline
+just pipeline-ai1
+```
+The trained model will be automatically validated and saved as `ml/AI1/model/ai1_vision.onnx`.
+
+### 4. Build & Flash Edge Firmware
+```bash
+# Compile and flash ESP32-S3 firmware over USB-C
+just run-edge /dev/ttyACM0
+```
+
+---
+
+## 📜 Competition Compliance & Ethical Safeguards
+
+1. **OpenCV AI Competition 2026 Compliance:**
+   - All AI-assisted modifications and autonomous pipeline executions are logged transparently in [`OUTPUT.md`](file:///home/faris-wirakusuma/Projectmandiri/BawalVision/OUTPUT.md).
+   - Dataset splits guarantee zero data leakage between train, validation, and test subsets.
+2. **Privacy & Security:**
+   - No sensitive credentials, private API keys, or private datasets are tracked in git repository commits.
+3. **Reproducibility:**
+   - DVC dataset versioning ensures exact dataset and weights checkpoints can be pulled and reproduced across environments.
+
+---
+
+## 📄 License
+This project is licensed under the Apache 2.0 License - see the `LICENSE` file for details.
