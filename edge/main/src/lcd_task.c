@@ -376,8 +376,14 @@ void lcd_task(void *pvParameters) {
     lvgl_port_unlock();
   }
 
-  // 6. Start Heartbeat / Connection Monitor Task
-  xTaskCreatePinnedToCore(lcd_monitor_heartbeat_task, "lcd_heartbeat", 2048, NULL, 2, NULL, 0);
+  // 6. Start Heartbeat / Connection Monitor Task (Static Allocation)
+  #define LCD_HB_TASK_STACK_SIZE 2048
+  static StaticTask_t s_lcd_hb_task_buffer;
+  static StackType_t s_lcd_hb_task_stack[LCD_HB_TASK_STACK_SIZE];
+
+  xTaskCreateStaticPinnedToCore(lcd_monitor_heartbeat_task, "lcd_heartbeat",
+                                LCD_HB_TASK_STACK_SIZE, NULL, 2,
+                                s_lcd_hb_task_stack, &s_lcd_hb_task_buffer, 0);
 
   ESP_LOGI(TAG, "128x160 LVGL Dashboard active.");
   vTaskDelete(NULL);
