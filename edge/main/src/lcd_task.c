@@ -75,7 +75,8 @@ const char *lcd_get_chip_type_string(void) {
     break;
   }
 
-  snprintf(chip_desc, sizeof(chip_desc), "%s r%d", model_name, chip_info.revision);
+  snprintf(chip_desc, sizeof(chip_desc), "%s r%d", model_name,
+           chip_info.revision);
   return chip_desc;
 }
 
@@ -120,10 +121,12 @@ void lcd_update_http_status(const char *status_str, bool is_error) {
   }
 
   if (lvgl_port_lock(0)) {
-    lv_color_t bar_bg = is_error ? lv_color_hex(0xe11d48) : lv_color_hex(0x0369a1);
+    lv_color_t bar_bg =
+        is_error ? lv_color_hex(0xe11d48) : lv_color_hex(0x0369a1);
     if (strstr(status_str, "200") != NULL || strstr(status_str, "OK") != NULL) {
       bar_bg = lv_color_hex(0x059669); // Green
-    } else if (strstr(status_str, "SEND") != NULL || strstr(status_str, "POST") != NULL) {
+    } else if (strstr(status_str, "SEND") != NULL ||
+               strstr(status_str, "POST") != NULL) {
       bar_bg = lv_color_hex(0xd97706); // Amber
     }
 
@@ -140,7 +143,8 @@ void lcd_update_wifi_status(bool connected, const char *ip_address) {
     strncpy(s_wifi_ip_str, ip_address, sizeof(s_wifi_ip_str) - 1);
     s_wifi_ip_str[sizeof(s_wifi_ip_str) - 1] = '\0';
   } else {
-    strncpy(s_wifi_ip_str, connected ? "CONNECTED" : "DISCONNECTED", sizeof(s_wifi_ip_str) - 1);
+    strncpy(s_wifi_ip_str, connected ? "CONNECTED" : "DISCONNECTED",
+            sizeof(s_wifi_ip_str) - 1);
   }
 
   if (s_wifi_label && lvgl_port_lock(0)) {
@@ -153,16 +157,20 @@ void lcd_update_wifi_status(bool connected, const char *ip_address) {
   }
 }
 
-void lcd_update_telemetry_display(float food_temp, float cpu_temp, uint8_t cpu_load) {
+void lcd_update_telemetry_display(float food_temp, float cpu_temp,
+                                  uint8_t cpu_load) {
   if (lvgl_port_lock(0)) {
     if (s_food_temp_label) {
-      lv_label_set_text_fmt(s_food_temp_label, "FOOD: %.1f C", food_temp > 0 ? food_temp : 24.5f);
+      lv_label_set_text_fmt(s_food_temp_label, "FOOD: %.1f C",
+                            food_temp > 0 ? food_temp : 24.5f);
     }
     if (s_mcu_temp_label) {
-      lv_label_set_text_fmt(s_mcu_temp_label, "MCU : %.1f C", cpu_temp > 0 ? cpu_temp : 36.5f);
+      lv_label_set_text_fmt(s_mcu_temp_label, "MCU : %.1f C",
+                            cpu_temp > 0 ? cpu_temp : 36.5f);
     }
     if (s_cpu_load_label) {
-      lv_label_set_text_fmt(s_cpu_load_label, "CPU : %u%%", (unsigned int)cpu_load);
+      lv_label_set_text_fmt(s_cpu_load_label, "CPU : %u%%",
+                            (unsigned int)cpu_load);
     }
     lvgl_port_unlock();
   }
@@ -170,18 +178,16 @@ void lcd_update_telemetry_display(float food_temp, float cpu_temp, uint8_t cpu_l
 
 static void create_dashboard_ui(void) {
   lv_obj_t *scr = lv_scr_act();
-  lv_obj_set_style_bg_color(scr, lv_color_hex(0x0b0f19), 0); // Darker matte background
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x0f172a),
+                            0); // Darker matte background
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   // Root container (128x160)
   lv_obj_t *root = lv_obj_create(scr);
   lv_obj_set_size(root, LCD_H_RES, LCD_V_RES);
-  lv_obj_center(root);
-  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(root, 0, 0);
-  lv_obj_set_style_pad_all(root, 2, 0);
   lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
   // 1. TOP HTTP STATUS BAR (Width: 124, Height: 20)
@@ -230,22 +236,26 @@ static void create_dashboard_ui(void) {
   lv_obj_set_style_radius(sensor_box, 4, 0);
   lv_obj_set_style_pad_all(sensor_box, 3, 0);
   lv_obj_set_flex_flow(sensor_box, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(sensor_box, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(sensor_box, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(sensor_box, LV_OBJ_FLAG_SCROLLABLE);
 
   s_food_temp_label = lv_label_create(sensor_box);
   lv_label_set_text(s_food_temp_label, "FOOD: 25.0 C");
-  lv_obj_set_style_text_color(s_food_temp_label, lv_color_hex(0xfb923c), 0); // Orange
+  lv_obj_set_style_text_color(s_food_temp_label, lv_color_hex(0xfb923c),
+                              0); // Orange
   lv_obj_set_style_text_font(s_food_temp_label, &lv_font_montserrat_10, 0);
 
   s_mcu_temp_label = lv_label_create(sensor_box);
   lv_label_set_text(s_mcu_temp_label, "MCU : 36.5 C");
-  lv_obj_set_style_text_color(s_mcu_temp_label, lv_color_hex(0xf472b6), 0); // Pink
+  lv_obj_set_style_text_color(s_mcu_temp_label, lv_color_hex(0xf472b6),
+                              0); // Pink
   lv_obj_set_style_text_font(s_mcu_temp_label, &lv_font_montserrat_10, 0);
 
   s_cpu_load_label = lv_label_create(sensor_box);
   lv_label_set_text(s_cpu_load_label, "CPU : 10%");
-  lv_obj_set_style_text_color(s_cpu_load_label, lv_color_hex(0x38bdf8), 0); // Cyan
+  lv_obj_set_style_text_color(s_cpu_load_label, lv_color_hex(0x38bdf8),
+                              0); // Cyan
   lv_obj_set_style_text_font(s_cpu_load_label, &lv_font_montserrat_10, 0);
 
   // 5. Bottom Heartbeat & Uptime Banner (Height: 14)
@@ -268,18 +278,21 @@ void lcd_monitor_heartbeat_task(void *pvParameters) {
     uint32_t secs = seconds % 60;
 
     float cpu_t = 36.5f;
-    #if defined(CONFIG_IDF_TARGET_ESP32S3)
-    // Read internal thermal sensor if available
-    #endif
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+// Read internal thermal sensor if available
+#endif
 
     uint8_t cpu_load = get_cpu_usage_percentage();
 
     if (lvgl_port_lock(0)) {
       if (s_uptime_label) {
-        lv_label_set_text_fmt(s_uptime_label, "UP %02u:%02u:%02u", (unsigned int)hrs, (unsigned int)mins, (unsigned int)secs);
+        lv_label_set_text_fmt(s_uptime_label, "UP %02u:%02u:%02u",
+                              (unsigned int)hrs, (unsigned int)mins,
+                              (unsigned int)secs);
       }
       if (s_cpu_load_label) {
-        lv_label_set_text_fmt(s_cpu_load_label, "CPU : %u%%", (unsigned int)cpu_load);
+        lv_label_set_text_fmt(s_cpu_load_label, "CPU : %u%%",
+                              (unsigned int)cpu_load);
       }
       lvgl_port_unlock();
     }
@@ -287,10 +300,21 @@ void lcd_monitor_heartbeat_task(void *pvParameters) {
 }
 
 void lcd_task(void *pvParameters) {
-  ESP_LOGI(TAG, "Initializing ST7789/ST7735 128x160 SPI TFT on host %d (MOSI:%d, SCK:%d, DC:%d, CS:%d)",
+  ESP_LOGI(TAG,
+           "Initializing ST7789/ST7735 128x160 SPI TFT on host %d (MOSI:%d, "
+           "SCK:%d, DC:%d, CS:%d)",
            LCD_HOST, LCD_PIN_MOSI, LCD_PIN_SCK, LCD_PIN_DC, LCD_PIN_CS);
 
-  // 1. Initialize SPI Bus with DMA
+// 1. Initialize SPI Bus & Backlight
+#if (LCD_PIN_BCKL >= 0)
+  gpio_config_t bk_gpio_config = {
+      .mode = GPIO_MODE_OUTPUT,
+      .pin_bit_mask = 1ULL << LCD_PIN_BCKL,
+  };
+  gpio_config(&bk_gpio_config);
+  gpio_set_level(LCD_PIN_BCKL, 1);
+#endif
+
   spi_bus_config_t buscfg = {
       .sclk_io_num = LCD_PIN_SCK,
       .mosi_io_num = LCD_PIN_MOSI,
@@ -340,29 +364,29 @@ void lcd_task(void *pvParameters) {
   ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, false));
   ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-  ESP_LOGI(TAG, "128x160 TFT panel initialized (RGB mode, %dx%d).", LCD_H_RES, LCD_V_RES);
+  ESP_LOGI(TAG, "128x160 TFT panel initialized (RGB mode, %dx%d).", LCD_H_RES,
+           LCD_V_RES);
 
   // 4. Initialize LVGL Port
   lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
   ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
-  lvgl_port_display_cfg_t disp_cfg = {
-      .io_handle = io_handle,
-      .panel_handle = panel_handle,
-      .buffer_size = LCD_H_RES * 16,
-      .double_buffer = true,
-      .hres = LCD_H_RES,
-      .vres = LCD_V_RES,
-      .monochrome = false,
-      .rotation = {
-          .swap_xy = false,
-          .mirror_x = false,
-          .mirror_y = false,
-      },
-      .flags = {
-          .buff_dma = true,
-      }
-  };
+  lvgl_port_display_cfg_t disp_cfg = {.io_handle = io_handle,
+                                      .panel_handle = panel_handle,
+                                      .buffer_size = LCD_H_RES * 16,
+                                      .double_buffer = true,
+                                      .hres = LCD_H_RES,
+                                      .vres = LCD_V_RES,
+                                      .monochrome = false,
+                                      .rotation =
+                                          {
+                                              .swap_xy = false,
+                                              .mirror_x = false,
+                                              .mirror_y = false,
+                                          },
+                                      .flags = {
+                                          .buff_dma = true,
+                                      }};
   s_disp_handle = lvgl_port_add_disp(&disp_cfg);
   if (!s_disp_handle) {
     ESP_LOGE(TAG, "Failed to register LVGL display handle");
@@ -376,8 +400,8 @@ void lcd_task(void *pvParameters) {
     lvgl_port_unlock();
   }
 
-  // 6. Start Heartbeat / Connection Monitor Task (Static Allocation)
-  #define LCD_HB_TASK_STACK_SIZE 2048
+// 6. Start Heartbeat / Connection Monitor Task (Static Allocation)
+#define LCD_HB_TASK_STACK_SIZE 2048
   static StaticTask_t s_lcd_hb_task_buffer;
   static StackType_t s_lcd_hb_task_stack[LCD_HB_TASK_STACK_SIZE];
 
