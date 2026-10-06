@@ -63,6 +63,9 @@
 /** @brief Boot button (GPIO 0 / Pin 33). */
 #define PIN_BTN_BOOT 0
 
+/** @brief External inspection trigger button (GPIO 48). Active LOW with internal pull-up. */
+#define PIN_BTN_TRIGGER 48
+
 /** @brief Status / Flash LED (GPIO 2 / Pin 24). */
 #define PIN_LED_STATUS 2
 

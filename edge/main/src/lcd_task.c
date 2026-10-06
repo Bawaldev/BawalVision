@@ -178,24 +178,27 @@ void lcd_update_telemetry_display(float food_temp, float cpu_temp,
 
 static void create_dashboard_ui(void) {
   lv_obj_t *scr = lv_scr_act();
-  lv_obj_set_style_bg_color(scr, lv_color_hex(0x0f172a),
-                            0); // Darker matte background
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   // Root container (128x160)
   lv_obj_t *root = lv_obj_create(scr);
   lv_obj_set_size(root, LCD_H_RES, LCD_V_RES);
+  lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_border_width(root, 0, 0);
+  lv_obj_set_style_pad_all(root, 0, 0);
+  lv_obj_set_style_pad_row(root, 0, 0);
   lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
-  // 1. TOP HTTP STATUS BAR (Width: 124, Height: 20)
+  // 1. TOP HTTP STATUS BAR (Width: LCD_H_RES, Height: 18)
   s_http_bar = lv_obj_create(root);
-  lv_obj_set_size(s_http_bar, LCD_H_RES - 4, 20);
+  lv_obj_set_size(s_http_bar, LCD_H_RES, 18);
   lv_obj_set_style_bg_color(s_http_bar, lv_color_hex(0x1e293b), 0);
   lv_obj_set_style_border_width(s_http_bar, 0, 0);
-  lv_obj_set_style_radius(s_http_bar, 3, 0);
+  lv_obj_set_style_radius(s_http_bar, 0, 0);
   lv_obj_set_style_pad_all(s_http_bar, 1, 0);
   lv_obj_clear_flag(s_http_bar, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -205,20 +208,20 @@ static void create_dashboard_ui(void) {
   lv_obj_set_style_text_font(s_http_label, &lv_font_montserrat_10, 0);
   lv_obj_center(s_http_label);
 
-  // 2. Wi-Fi & Device Sub-bar (Height: 14)
+  // 2. Wi-Fi & Device Sub-bar (Height: 12)
   s_wifi_label = lv_label_create(root);
   lv_label_set_recolor(s_wifi_label, true);
   lv_label_set_text(s_wifi_label, "#f43f5e # CONNECTING...");
   lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(0x94a3b8), 0);
   lv_obj_set_style_text_font(s_wifi_label, &lv_font_montserrat_10, 0);
 
-  // 3. System Inspection Status Card (Width: 120, Height: 34)
+  // 3. System Inspection Status Card (Width: 120, Height: 26)
   s_status_card = lv_obj_create(root);
-  lv_obj_set_size(s_status_card, LCD_H_RES - 8, 34);
+  lv_obj_set_size(s_status_card, LCD_H_RES - 8, 26);
   lv_obj_set_style_bg_color(s_status_card, lv_color_hex(0x0ea5e9), 0);
   lv_obj_set_style_border_width(s_status_card, 0, 0);
-  lv_obj_set_style_radius(s_status_card, 4, 0);
-  lv_obj_set_style_pad_all(s_status_card, 2, 0);
+  lv_obj_set_style_radius(s_status_card, 0, 0);
+  lv_obj_set_style_pad_all(s_status_card, 1, 0);
   lv_obj_clear_flag(s_status_card, LV_OBJ_FLAG_SCROLLABLE);
 
   s_status_label = lv_label_create(s_status_card);
@@ -227,14 +230,14 @@ static void create_dashboard_ui(void) {
   lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_12, 0);
   lv_obj_center(s_status_label);
 
-  // 4. Multi-Sensor Data Box (Width: 120, Height: 54)
+  // 4. Multi-Sensor Data Box (Width: 120, Height: 46)
   lv_obj_t *sensor_box = lv_obj_create(root);
-  lv_obj_set_size(sensor_box, LCD_H_RES - 8, 54);
+  lv_obj_set_size(sensor_box, LCD_H_RES - 8, 46);
   lv_obj_set_style_bg_color(sensor_box, lv_color_hex(0x161e2e), 0);
   lv_obj_set_style_border_color(sensor_box, lv_color_hex(0x2d3748), 0);
   lv_obj_set_style_border_width(sensor_box, 1, 0);
-  lv_obj_set_style_radius(sensor_box, 4, 0);
-  lv_obj_set_style_pad_all(sensor_box, 3, 0);
+  lv_obj_set_style_radius(sensor_box, 0, 0);
+  lv_obj_set_style_pad_all(sensor_box, 2, 0);
   lv_obj_set_flex_flow(sensor_box, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(sensor_box, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
@@ -258,10 +261,10 @@ static void create_dashboard_ui(void) {
                               0); // Cyan
   lv_obj_set_style_text_font(s_cpu_load_label, &lv_font_montserrat_10, 0);
 
-  // 5. Bottom Heartbeat & Uptime Banner (Height: 14)
+  // 5. Bottom Heartbeat & Uptime Banner (Height: 12)
   s_uptime_label = lv_label_create(root);
-  lv_label_set_text(s_uptime_label, "NODE: ESP32-S3");
-  lv_obj_set_style_text_color(s_uptime_label, lv_color_hex(0x64748b), 0);
+  lv_label_set_text(s_uptime_label, "UP 00:00:00");
+  lv_obj_set_style_text_color(s_uptime_label, lv_color_hex(0x94a3b8), 0);
   lv_obj_set_style_text_font(s_uptime_label, &lv_font_montserrat_10, 0);
 
   apply_status_style(s_current_status);

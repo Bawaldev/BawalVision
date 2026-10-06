@@ -28,7 +28,8 @@ static bool s_is_initialized = false;
 static bool s_is_streaming = false;
 
 static bool camera_lock_frame(TickType_t timeout_ticks) {
-  if (s_camera_mutex == NULL) return false;
+  if (s_camera_mutex == NULL)
+    return false;
   return (xSemaphoreTake(s_camera_mutex, timeout_ticks) == pdTRUE);
 }
 
@@ -38,18 +39,19 @@ static void camera_unlock_frame(void) {
   }
 }
 
-bool is_camera_streaming(void) {
-  return s_is_streaming;
-}
+bool is_camera_streaming(void) { return s_is_streaming; }
 
 esp_err_t camera_task_init(void) {
-  if (s_is_initialized) return ESP_OK;
+  if (s_is_initialized)
+    return ESP_OK;
 
   s_camera_mutex = xSemaphoreCreateMutex();
-  if (s_camera_mutex == NULL) return ESP_ERR_NO_MEM;
+  if (s_camera_mutex == NULL)
+    return ESP_ERR_NO_MEM;
 
   s_shared_frame.capacity = INITIAL_BUF_CAPACITY;
-  s_shared_frame.data = (uint8_t *)heap_caps_malloc(s_shared_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  s_shared_frame.data = (uint8_t *)heap_caps_malloc(
+      s_shared_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (s_shared_frame.data == NULL) {
     s_shared_frame.data = (uint8_t *)malloc(s_shared_frame.capacity);
   }
@@ -79,7 +81,8 @@ esp_err_t camera_task_init(void) {
       .pin_href = CAM_PIN_HREF,
       .pin_pclk = CAM_PIN_PCLK,
 
-      // XCLK 12 MHz clock for OV5640 (optimal for DVP DMA stability on ESP32-S3)
+      // XCLK 12 MHz clock for OV5640 (optimal for DVP DMA stability on
+      // ESP32-S3)
       .xclk_freq_hz = 12000000,
       .ledc_timer = LEDC_TIMER_0,
       .ledc_channel = LEDC_CHANNEL_0,
@@ -87,7 +90,8 @@ esp_err_t camera_task_init(void) {
       .pixel_format = PIXFORMAT_JPEG,
       .frame_size = FRAMESIZE_VGA, // 640x480
 
-      .jpeg_quality = 24, // 0-63 (18 provides optimal high compression speed & clarity)
+      .jpeg_quality =
+          24, // 0-63 (18 provides optimal high compression speed & clarity)
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -96,13 +100,15 @@ esp_err_t camera_task_init(void) {
   ESP_LOGI(TAG, "Initializing OV5640 CSP via esp_camera_init...");
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Camera init failed with error: %s (0x%x)", esp_err_to_name(err), err);
+    ESP_LOGE(TAG, "Camera init failed with error: %s (0x%x)",
+             esp_err_to_name(err), err);
     return err;
   }
 
   sensor_t *s = esp_camera_sensor_get();
   if (s != NULL) {
-    ESP_LOGI(TAG, "OV5640 sensor detected successfully (PID: 0x%02x)", s->id.PID);
+    ESP_LOGI(TAG, "OV5640 sensor detected successfully (PID: 0x%02x)",
+             s->id.PID);
     s->set_vflip(s, 0);
     s->set_hmirror(s, 0);
   }
@@ -112,7 +118,8 @@ esp_err_t camera_task_init(void) {
 }
 
 esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
-  if (out_frame == NULL || out_frame->data == NULL) return ESP_ERR_INVALID_ARG;
+  if (out_frame == NULL || out_frame->data == NULL)
+    return ESP_ERR_INVALID_ARG;
 
   if (!camera_lock_frame(pdMS_TO_TICKS(50))) {
     return ESP_ERR_TIMEOUT;
@@ -124,7 +131,8 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
       copy_len = out_frame->capacity;
     }
 
-    memcpy(&out_frame->header, &s_shared_frame.header, sizeof(camera_frame_header_t));
+    memcpy(&out_frame->header, &s_shared_frame.header,
+           sizeof(camera_frame_header_t));
     memcpy(out_frame->data, s_shared_frame.data, copy_len);
     out_frame->header.buffer_len = copy_len;
   } else {
@@ -164,11 +172,15 @@ void Camera_Capture_Task(void *pvParameters) {
       continue;
     }
 
-    // Validate JPEG SOI marker (0xFF, 0xD8) to filter out corrupted DMA/DVP transfers
+    // Validate JPEG SOI marker (0xFF, 0xD8) to filter out corrupted DMA/DVP
+    // transfers
     if (fb->format == PIXFORMAT_JPEG) {
       if (fb->len < 4 || fb->buf[0] != 0xFF || fb->buf[1] != 0xD8) {
-        ESP_LOGW(TAG, "Dropping corrupted JPEG frame (len: %u, SOI missing: 0x%02X 0x%02X)",
-                 (unsigned)fb->len, (fb->len > 0) ? fb->buf[0] : 0, (fb->len > 1) ? fb->buf[1] : 0);
+        ESP_LOGW(TAG,
+                 "Dropping corrupted JPEG frame (len: %u, SOI missing: 0x%02X "
+                 "0x%02X)",
+                 (unsigned)fb->len, (fb->len > 0) ? fb->buf[0] : 0,
+                 (fb->len > 1) ? fb->buf[1] : 0);
         esp_camera_fb_return(fb);
         vTaskDelay(pdMS_TO_TICKS(20));
         continue;
@@ -190,9 +202,13 @@ void Camera_Capture_Task(void *pvParameters) {
       if (s_shared_frame.capacity >= fb->len && s_shared_frame.data != NULL) {
         memcpy(s_shared_frame.data, fb->buf, fb->len);
         s_shared_frame.header.buffer_len = fb->len;
-        s_shared_frame.header.width = fb->width ? fb->width : DEFAULT_FRAME_WIDTH;
-        s_shared_frame.header.height = fb->height ? fb->height : DEFAULT_FRAME_HEIGHT;
-        s_shared_frame.header.format = (fb->format == PIXFORMAT_JPEG) ? FRAME_FORMAT_JPEG : FRAME_FORMAT_RAW;
+        s_shared_frame.header.width =
+            fb->width ? fb->width : DEFAULT_FRAME_WIDTH;
+        s_shared_frame.header.height =
+            fb->height ? fb->height : DEFAULT_FRAME_HEIGHT;
+        s_shared_frame.header.format = (fb->format == PIXFORMAT_JPEG)
+                                           ? FRAME_FORMAT_JPEG
+                                           : FRAME_FORMAT_RAW;
         s_shared_frame.header.frame_id = ++s_frame_counter;
         s_shared_frame.header.timestamp_ms = esp_timer_get_time() / 1000;
       }
@@ -216,12 +232,13 @@ static StackType_t s_cam_task_stack[CAM_TASK_STACK_SIZE];
 
 TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id) {
   if (!s_is_initialized) {
-    if (camera_task_init() != ESP_OK) return NULL;
+    if (camera_task_init() != ESP_OK)
+      return NULL;
   }
 
-  return xTaskCreateStaticPinnedToCore(Camera_Capture_Task, "Cam_Capture_Task",
-                                       CAM_TASK_STACK_SIZE, NULL, priority,
-                                       s_cam_task_stack, &s_cam_task_buffer, core_id);
+  return xTaskCreateStaticPinnedToCore(
+      Camera_Capture_Task, "Cam_Capture_Task", CAM_TASK_STACK_SIZE, NULL,
+      priority, s_cam_task_stack, &s_cam_task_buffer, core_id);
 }
 
 void http_stream_sender_task(void *pvParameters) {
@@ -229,7 +246,8 @@ void http_stream_sender_task(void *pvParameters) {
 
   camera_frame_buffer_t local_frame = {0};
   local_frame.capacity = INITIAL_BUF_CAPACITY;
-  local_frame.data = (uint8_t *)heap_caps_malloc(local_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  local_frame.data = (uint8_t *)heap_caps_malloc(
+      local_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (local_frame.data == NULL) {
     local_frame.data = (uint8_t *)malloc(local_frame.capacity);
   }
@@ -243,7 +261,8 @@ void http_stream_sender_task(void *pvParameters) {
   char device_id[32] = {0};
   get_internal_device_id(device_id, sizeof(device_id));
   if (g_wifi_event_group != NULL) {
-    xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE,
+                        portMAX_DELAY);
   }
 
   char backend_ip[64] = {0};
@@ -251,7 +270,8 @@ void http_stream_sender_task(void *pvParameters) {
   if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
     strncpy(backend_ip, CONFIG_BACKEND_IP, sizeof(backend_ip) - 1);
   }
-  snprintf(full_url, sizeof(full_url), "http://%s:%s%s", backend_ip, CONFIG_BACKEND_PORT, CAMERA_FRAME_ENDPOINT);
+  snprintf(full_url, sizeof(full_url), "http://%s:%s%s", backend_ip,
+           CONFIG_BACKEND_PORT, CAMERA_FRAME_ENDPOINT);
 
   esp_http_client_config_t config = {
       .url = full_url,
@@ -265,7 +285,8 @@ void http_stream_sender_task(void *pvParameters) {
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (client == NULL) {
     ESP_LOGE(TAG, "Failed to initialize HTTP client");
-    if (local_frame.data) free(local_frame.data);
+    if (local_frame.data)
+      free(local_frame.data);
     vTaskDelete(NULL);
     return;
   }
@@ -277,13 +298,65 @@ void http_stream_sender_task(void *pvParameters) {
   char frame_id_str[16];
   const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
 
-  ESP_LOGI(TAG, "HTTP Stream sender started (Persistent Keep-Alive) for: %s", full_url);
+/* =========================================================================
+ * TRANSMISSION DURATION CONFIGURATION (IN SECONDS)
+ * Change STREAM_BURST_DURATION_SEC to set how long frames stream per press.
+ * ========================================================================= */
+#define STREAM_BURST_DURATION_SEC 10
+
+  // Initialize Trigger Button (GPIO 48, Active LOW, internal pull-up)
+  gpio_config_t btn_cfg = {
+      .pin_bit_mask = (1ULL << PIN_BTN_TRIGGER),
+      .mode = GPIO_MODE_INPUT,
+      .pull_up_en = GPIO_PULLUP_ENABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+  };
+  gpio_config(&btn_cfg);
+
+  TickType_t stream_end_tick = 0;
+  bool is_burst_active = false;
+
+  ESP_LOGI(TAG,
+           "HTTP Stream sender started. Waiting for button trigger on GPIO %d "
+           "(Burst duration: %d s)...",
+           PIN_BTN_TRIGGER, STREAM_BURST_DURATION_SEC);
 
   for (;;) {
     TickType_t start_tick = xTaskGetTickCount();
 
+    // Check if external trigger button is pressed (Active LOW)
+    if (gpio_get_level(PIN_BTN_TRIGGER) == 0) {
+      if (!is_burst_active) {
+        ESP_LOGI(
+            TAG,
+            "Trigger button pressed! Streaming camera frames for %d seconds...",
+            STREAM_BURST_DURATION_SEC);
+      }
+      is_burst_active = true;
+      stream_end_tick =
+          xTaskGetTickCount() + pdMS_TO_TICKS(STREAM_BURST_DURATION_SEC * 1000);
+    }
+
+    // Check if current burst has expired
+    if (is_burst_active && (xTaskGetTickCount() >= stream_end_tick)) {
+      is_burst_active = false;
+      ESP_LOGI(TAG,
+               "Streaming window expired (%d s). Returning to idle waiting for "
+               "button...",
+               STREAM_BURST_DURATION_SEC);
+    }
+
+    // When idle (burst not active), sleep briefly to save CPU and skip
+    // transmission
+    if (!is_burst_active) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+
     if (g_wifi_event_group != NULL) {
-      EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, 0);
+      EventBits_t bits = xEventGroupWaitBits(
+          g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, 0);
       if (!(bits & WIFI_CONNECTED_BIT)) {
         vTaskDelay(pdMS_TO_TICKS(200));
         continue;
@@ -292,37 +365,46 @@ void http_stream_sender_task(void *pvParameters) {
 
     esp_err_t copy_status = camera_copy_latest_frame(&local_frame);
     if (copy_status == ESP_OK) {
-      if (local_frame.header.buffer_len > 0 && local_frame.header.frame_id != last_sent_frame_id) {
+      if (local_frame.header.buffer_len > 0 &&
+          local_frame.header.frame_id != last_sent_frame_id) {
         last_sent_frame_id = local_frame.header.frame_id;
 
         // Set dynamic headers per frame
-        snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)local_frame.header.frame_id);
+        snprintf(frame_id_str, sizeof(frame_id_str), "%lu",
+                 (unsigned long)local_frame.header.frame_id);
         esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
 
         if (local_frame.header.format == FRAME_FORMAT_JPEG) {
           esp_http_client_set_header(client, "Content-Type", "image/jpeg");
         } else {
-          esp_http_client_set_header(client, "Content-Type", "application/octet-stream");
+          esp_http_client_set_header(client, "Content-Type",
+                                     "application/octet-stream");
           esp_http_client_set_header(client, "X-Pixel-Format", "YUYV");
         }
 
         // Attach binary payload directly
-        esp_http_client_set_post_field(client, (const char *)local_frame.data, local_frame.header.buffer_len);
+        esp_http_client_set_post_field(client, (const char *)local_frame.data,
+                                       local_frame.header.buffer_len);
 
         // Perform HTTP POST over the established TCP socket
         esp_err_t err = esp_http_client_perform(client);
         if (err == ESP_OK) {
           int status_code = esp_http_client_get_status_code(client);
           if (status_code == 200 || status_code == 201 || status_code == 202) {
-            ESP_LOGD(TAG, "Frame #%lu sent (%u bytes, HTTP %d)", 
-                     (unsigned long)last_sent_frame_id, (unsigned)local_frame.header.buffer_len, status_code);
+            ESP_LOGD(TAG, "Frame #%lu sent (%u bytes, HTTP %d)",
+                     (unsigned long)last_sent_frame_id,
+                     (unsigned)local_frame.header.buffer_len, status_code);
           } else {
-            ESP_LOGW(TAG, "Frame #%lu rejected with HTTP %d", 
+            ESP_LOGW(TAG, "Frame #%lu rejected with HTTP %d",
                      (unsigned long)last_sent_frame_id, status_code);
           }
         } else {
-          ESP_LOGW(TAG, "Transmission failed (%s), closing socket for reconnection...", esp_err_to_name(err));
-          // Reset the underlying socket on failure so the next perform reconnects cleanly
+          ESP_LOGW(
+              TAG,
+              "Transmission failed (%s), closing socket for reconnection...",
+              esp_err_to_name(err));
+          // Reset the underlying socket on failure so the next perform
+          // reconnects cleanly
           esp_http_client_close(client);
         }
       }
@@ -339,6 +421,7 @@ void http_stream_sender_task(void *pvParameters) {
   }
 
   esp_http_client_cleanup(client);
-  if (local_frame.data) free(local_frame.data);
+  if (local_frame.data)
+    free(local_frame.data);
   vTaskDelete(NULL);
 }
