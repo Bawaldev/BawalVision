@@ -30,10 +30,17 @@
     ];
 
     let streamError = $state(false);
+    let streamEpoch = $state(Date.now());
 
     let activeStreamUrl = $derived(
-        streamUrl || (deviceId ? `/api/v1/camera/stream/${deviceId}` : '/api/v1/camera/stream')
+        streamUrl || (deviceId ? `/api/v1/camera/stream/${deviceId}?t=${streamEpoch}` : `/api/v1/camera/stream?t=${streamEpoch}`)
     );
+
+    $effect(() => {
+        if (hasCamera) {
+            streamError = false;
+        }
+    });
 
     function isDetected(item: typeof standardFoodItems[number]): { found: boolean; confidence: number } {
         if (!hasCamera || detections.length === 0) {
@@ -74,6 +81,7 @@
                     src={activeStreamUrl}
                     alt="Live Video Stream"
                     class="feed-video"
+                    onload={() => (streamError = false)}
                     onerror={() => (streamError = true)}
                 />
             {:else}
@@ -83,7 +91,7 @@
                     <h4>No Camera Stream Connected</h4>
                     <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
                     {#if streamError}
-                        <button type="button" class="retry-btn" onclick={() => (streamError = false)}>
+                        <button type="button" class="retry-btn" onclick={() => { streamError = false; streamEpoch = Date.now(); }}>
                             ↻ Reconnect Stream
                         </button>
                     {/if}

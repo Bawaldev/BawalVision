@@ -104,3 +104,13 @@ button, input, select, textarea {
     padding: 18px 22px 28px;
     overflow-y: auto;
 }
+
+.view-panel {
+    display: block;
+    width: 100%;
+}
+
+.view-panel.is-hidden {
+    display: none !important;
+}
+

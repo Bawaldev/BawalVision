@@ -306,9 +306,9 @@
             }}
         />
 
-        <!-- Page Content Router -->
+        <!-- Page Content Router (Persistent View Panels: No DOM Destruction, Instant Switching) -->
         <main class="page-body">
-            {#if activeTab === 'Dashboard'}
+            <div class="view-panel" class:is-hidden={activeTab !== 'Dashboard'}>
                 <DashboardView
                     {detections}
                     {telemetry}
@@ -325,19 +325,25 @@
                     onInspectTray={handleInspectTray}
                     onClearLogs={handleClearLogs}
                 />
-            {:else if activeTab === 'Telemetry Analytics'}
+            </div>
+
+            <div class="view-panel" class:is-hidden={activeTab !== 'Telemetry Analytics'}>
                 <TelemetryView
                     currentTelemetry={telemetry}
                     history={telemetryHistory}
                 />
-            {:else if activeTab === 'Result Log'}
+            </div>
+
+            <div class="view-panel" class:is-hidden={activeTab !== 'Result Log'}>
                 <ResultLogView />
-            {:else if activeTab === 'System & Cloud Settings'}
+            </div>
+
+            <div class="view-panel" class:is-hidden={activeTab !== 'System & Cloud Settings'}>
                 <SettingsView
                     config={systemConfig}
                     onSaveConfig={handleSaveConfig}
                 />
-            {/if}
+            </div>
         </main>
     </div>
 </div>
