@@ -17,13 +17,14 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         std::cerr << "[Pipeline] Warning: Camera calibration initialization failed.\n";
     }
 
-    // Initialize YOLOv8 Inference Model & SIMD Evaluator
     if (!model_path.empty()) {
         if (m_classifier.init(model_path, 2)) {
-            std::cout << "[Pipeline] AI1 YOLOv8 ONNX model loaded: " << model_path << "\n";
+            std::cout << "[Pipeline] Model loaded successfully: " << model_path << "\n";
         } else {
-            std::cout << "[Pipeline] Model file not ready. Running in fallback mode.\n";
+            std::cout << "[Pipeline] Model path fallback triggered.\n";
         }
+    } else {
+        m_classifier.init("", 2);
     }
 
     return true;
@@ -57,22 +58,22 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     out_inspection.raw_image = frame;
     out_inspection.is_valid = false;
 
-    // 1. Lens Distortion Correction & Perspective Dewarping
+    // 1. Koreksi lensa dan distorsi
     cv::Mat dewarped;
     if (!m_dewarper.process(frame, dewarped)) {
         dewarped = frame.clone();
     }
     out_inspection.dewarped_image = dewarped;
 
-    // 2. Dynamic Food Detection (YOLOv8) + SIMD Quality/Freshness Evaluation
+    // 2. Deteksi makanan YOLOv8 + Evaluasi degradasi warna SIMD (Threshold 0.15f)
     out_inspection.detections.clear();
-    [[maybe_unused]] bool det_ok = m_classifier.detect(dewarped, out_inspection.detections, 0.25f, 0.45f);
+    [[maybe_unused]] bool det_ok = m_classifier.detect(dewarped, out_inspection.detections, 0.15f, 0.45f);
 
     const int64_t t_end = cv::getTickCount();
     out_inspection.processing_time_ms = ((t_end - t_start) * 1000.0) / cv::getTickFrequency();
     out_inspection.is_valid = true;
 
-    // 3. Render Visual Annotation Overlay
+    // 3. Render visual overlay box
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
     return out_inspection.is_valid;
@@ -84,11 +85,10 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
     }
 
     out_display = inspection.dewarped_image.clone();
-
     int detected_food_count = 0;
 
     for (const auto& det : inspection.detections) {
-        if (det.class_id < 0 || det.confidence < 0.25f || det.class_name == "no_model") {
+        if (det.class_id < 0 || det.confidence < 0.15f || det.class_name == "no_model") {
             continue;
         }
 
@@ -97,32 +97,27 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         const float freshness_score = std::clamp(1.0f - det.spoilage.discoloration_ratio, 0.0f, 1.0f);
         const std::string freshness_status = det.spoilage.is_visually_spoiled ? "SPOILED" : "FRESH";
 
-        // Determine color based on freshness / spoilage
         cv::Scalar box_color;
         if (det.spoilage.is_visually_spoiled) {
-            box_color = cv::Scalar(0, 0, 255); // Red (Spoiled)
+            box_color = cv::Scalar(0, 0, 255); // Merah
         } else if (freshness_score < 0.70f) {
-            box_color = cv::Scalar(0, 165, 255); // Amber/Orange (Warning/Degraded)
+            box_color = cv::Scalar(0, 165, 255); // Oranye
         } else {
-            box_color = cv::Scalar(0, 255, 0); // Green (Fresh)
+            box_color = cv::Scalar(0, 255, 0); // Hijau
         }
 
-        // Ensure bounding box stays within image bounds
         cv::Rect clamped_box = det.bbox & cv::Rect(0, 0, out_display.cols, out_display.rows);
         if (clamped_box.width <= 0 || clamped_box.height <= 0) {
             continue;
         }
 
-        // Draw bounding box
         cv::rectangle(out_display, clamped_box, box_color, 2);
 
-        // Construct label text
         std::ostringstream ss;
         ss << det.class_name << " " << std::fixed << std::setprecision(0) << (det.confidence * 100.0f) << "% ["
            << freshness_status << " " << std::fixed << std::setprecision(0) << (freshness_score * 100.0f) << "%]";
         std::string label = ss.str();
 
-        // Render label background badge
         int baseline = 0;
         cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.44, 1, &baseline);
         int badge_y = std::max(clamped_box.y - 4, text_size.height + 4);
@@ -134,12 +129,11 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
                     cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
     }
 
-    // Top HUD Status Bar
     cv::rectangle(out_display, cv::Point(0, 0), cv::Point(out_display.cols, 28), cv::Scalar(20, 20, 20), cv::FILLED);
     std::ostringstream hud_ss;
     hud_ss << "BawalVision YOLOv8 + SIMD Pipeline | Frame #" << inspection.frame_id 
            << " | Latency: " << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms"
-           << " | Food Objects: " << detected_food_count;
+           << " | Food Items: " << detected_food_count;
     
     cv::putText(out_display, hud_ss.str(), cv::Point(10, 19),
                 cv::FONT_HERSHEY_SIMPLEX, 0.48, cv::Scalar(0, 255, 180), 1, cv::LINE_AA);

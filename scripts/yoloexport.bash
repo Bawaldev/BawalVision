@@ -1,1 +1,1 @@
-yolo export model=weights/yolo26n.pt format=onnx dynamic=True simplify=True && mv weights/yolo26n.onnx weights/yolo8n.onnx && docker compose -f deploy/docker-compose.yml restart vision
+docker run --rm -v "$(pwd)/weights:/weights" ultralytics/ultralytics:latest yolo export model=/weights/yolo26n.pt format=onnx imgsz=640 dynamic=False opset=12 simplify=False && cp weights/yolo26n.onnx weights/yolo8n.onnx && docker compose -f deploy/docker-compose.yml restart vision

@@ -18,14 +18,15 @@
     }: Props = $props();
 
     const standardFoodItems = [
-        { id: 'nasi', label: 'Rice (Nasi)', icon: '🍚' },
-        { id: 'ayam', label: 'Chicken (Ayam)', icon: '🍗' },
-        { id: 'tofu', label: 'Tofu (Tahu)', icon: '🧊' },
-        { id: 'pisang', label: 'Banana (Pisang)', icon: '🍌' },
-        { id: 'jeruk', label: 'Orange (Jeruk)', icon: '🍊' },
-        { id: 'bayam', label: 'Spinach (Bayam)', icon: '🥬' },
-        { id: 'kangkung', label: 'Water Spinach', icon: '🌱' },
-        { id: 'others', label: 'Side Dish', icon: '🍱' }
+        { id: 'rice', aliases: ['rice', 'nasi'], label: 'Rice (Nasi)', icon: '🍚' },
+        { id: 'chicken', aliases: ['chicken', 'ayam'], label: 'Chicken (Ayam)', icon: '🍗' },
+        { id: 'egg', aliases: ['egg', 'telur'], label: 'Egg (Telur)', icon: '🥚' },
+        { id: 'tempeh', aliases: ['tempeh', 'tempe'], label: 'Tempeh (Tempe)', icon: '🧇' },
+        { id: 'tofu', aliases: ['tofu', 'tahu'], label: 'Tofu (Tahu)', icon: '🧊' },
+        { id: 'banana', aliases: ['banana', 'pisang'], label: 'Banana (Pisang)', icon: '🍌' },
+        { id: 'orange', aliases: ['orange', 'jeruk'], label: 'Orange (Jeruk)', icon: '🍊' },
+        { id: 'spinach', aliases: ['spinach', 'bayam'], label: 'Spinach (Bayam)', icon: '🥬' },
+        { id: 'water_spinach', aliases: ['water_spinach', 'waterspinach', 'kangkung'], label: 'Water Spinach (Kangkung)', icon: '🌱' }
     ];
 
     let streamError = $state(false);
@@ -34,39 +35,24 @@
         streamUrl || (deviceId ? `/api/v1/camera/stream/${deviceId}` : '/api/v1/camera/stream')
     );
 
-    function isDetected(id: string): { found: boolean; confidence: number } {
+    function isDetected(item: typeof standardFoodItems[number]): { found: boolean; confidence: number } {
         if (!hasCamera || detections.length === 0) {
             return { found: false, confidence: 0 };
         }
-        if (id === 'others') {
-            const other = detections.find(d => !standardFoodItems.slice(0, 7).some(s => s.id === d.food_name.toLowerCase()));
-            return { found: !!other, confidence: other ? other.similarity_rate : 0 };
-        }
-        const item = detections.find(d => d.food_name.toLowerCase() === id.toLowerCase());
-        return { found: !!item, confidence: item ? item.similarity_rate : 0 };
+        const matched = detections.find(d => {
+            const rawName = (d.food_name || '').toLowerCase().replace(/[\s_-]+/g, '');
+            return item.aliases.some(alias => {
+                const cleanAlias = alias.toLowerCase().replace(/[\s_-]+/g, '');
+                return rawName.includes(cleanAlias) || cleanAlias.includes(rawName);
+            });
+        });
+        return { found: !!matched, confidence: matched ? matched.similarity_rate : 0 };
     }
 
-    const compartments = [
-        { id: 'carb', name: 'SLOT 1: CARBOHYDRATE', x: 45, y: 42, w: 220, h: 396, color: '#38bdf8' },
-        { id: 'protein', name: 'SLOT 2: PROTEIN', x: 275, y: 42, w: 320, h: 190, color: '#f43f5e' },
-        { id: 'veggie', name: 'SLOT 3: VEGETABLE', x: 275, y: 242, w: 155, h: 196, color: '#22c55e' },
-        { id: 'fruit', name: 'SLOT 4: FRUIT / SIDE', x: 440, y: 242, w: 155, h: 196, color: '#c084fc' }
-    ];
-
-    function getMatchedDetection(compId: string, slotIdx: number): FoodDetection | null {
-        if (detections.length === 0) return null;
-        let det = detections.find(d => {
-            const name = d.food_name.toLowerCase();
-            if (compId === 'carb' && (name.includes('nasi') || name.includes('rice') || d.category === 'Carbohydrate')) return true;
-            if (compId === 'protein' && (name.includes('ayam') || name.includes('chicken') || name.includes('tofu') || d.category === 'Protein')) return true;
-            if (compId === 'veggie' && (name.includes('kangkung') || name.includes('bayam') || name.includes('spinach') || d.category === 'Vegetable')) return true;
-            if (compId === 'fruit' && (name.includes('pisang') || name.includes('jeruk') || name.includes('banana') || name.includes('orange') || d.category === 'Fruit')) return true;
-            return false;
-        });
-        if (!det && detections[slotIdx]) {
-            return detections[slotIdx];
-        }
-        return det || null;
+    function getBoxColor(det: FoodDetection): string {
+        if (det.status === 'REJECT' || (det.spoilage_score || 0) >= 55) return '#ef4444';
+        if (det.status === 'REVIEW' || (det.spoilage_score || 0) >= 35) return '#f59e0b';
+        return '#22c55e';
     }
 </script>
 
@@ -83,7 +69,7 @@
 
         <div class="canvas-container">
             {#if hasCamera && !streamError}
-                <!-- Native Browser MJPEG Stream for Zero Delay Hardware Rendering -->
+                <!-- Native Browser MJPEG Stream with C++ Hardware-Accelerated Dynamic Bounding Boxes -->
                 <img
                     src={activeStreamUrl}
                     alt="Live Video Stream"
@@ -91,60 +77,63 @@
                     onerror={() => (streamError = true)}
                 />
 
-                <!-- Crisp Vector Overlay for Food Detection Compartments -->
-                <svg class="detection-svg-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
-                    {#each compartments as comp, idx}
-                        {@const det = getMatchedDetection(comp.id, idx)}
-                        {#if det}
-                            <!-- Outer Bounding Box -->
-                            <rect
-                                x={comp.x}
-                                y={comp.y}
-                                width={comp.w}
-                                height={comp.h}
-                                rx="8"
-                                fill="none"
-                                stroke={comp.color}
-                                stroke-width="2"
-                                opacity="0.9"
-                            />
-
-                            <!-- Tech Corner Accents -->
-                            <path
-                                d={`M ${comp.x} ${comp.y + 16} L ${comp.x} ${comp.y} L ${comp.x + 16} ${comp.y}
-                                    M ${comp.x + comp.w - 16} ${comp.y} L ${comp.x + comp.w} ${comp.y} L ${comp.x + comp.w} ${comp.y + 16}
-                                    M ${comp.x} ${comp.y + comp.h - 16} L ${comp.x} ${comp.y + comp.h} L ${comp.x + 16} ${comp.y + comp.h}
-                                    M ${comp.x + comp.w - 16} ${comp.y + comp.h} L ${comp.x + comp.w} ${comp.y + comp.h} L ${comp.x + comp.w} ${comp.y + comp.h - 16}`}
-                                fill="none"
-                                stroke={comp.color}
-                                stroke-width="3.5"
-                                stroke-linecap="round"
-                            />
-
-                            <!-- Classification Label Pill -->
-                            <g transform={`translate(${comp.x}, ${comp.y - 20})`}>
+                <!-- Dynamic Vector Overlay for Client-Side YOLO Detections (Only when box coordinates are present) -->
+                {#if detections.some(d => d.box && d.box.length === 4)}
+                    <svg class="detection-svg-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
+                        {#each detections as det}
+                            {#if det.box && det.box.length === 4}
+                                {@const [bx, by, bw, bh] = det.box}
+                                {@const color = getBoxColor(det)}
+                                <!-- Dynamic Outer Bounding Box -->
                                 <rect
-                                    x="0"
-                                    y="0"
-                                    width={det.food_name.length * 8 + 60}
-                                    height="20"
+                                    x={bx}
+                                    y={by}
+                                    width={bw}
+                                    height={bh}
                                     rx="4"
-                                    fill={comp.color}
+                                    fill="none"
+                                    stroke={color}
+                                    stroke-width="2"
+                                    opacity="0.95"
                                 />
-                                <text
-                                    x="8"
-                                    y="14"
-                                    fill="#0f172a"
-                                    font-size="11"
-                                    font-weight="bold"
-                                    font-family="sans-serif"
-                                >
-                                    {det.food_name.toUpperCase()} {(det.similarity_rate * 100).toFixed(0)}%
-                                </text>
-                            </g>
-                        {/if}
-                    {/each}
-                </svg>
+
+                                <!-- Tech Corner Accents -->
+                                <path
+                                    d={`M ${bx} ${by + 12} L ${bx} ${by} L ${bx + 12} ${by}
+                                        M ${bx + bw - 12} ${by} L ${bx + bw} L ${bx + bw} ${by + 12}
+                                        M ${bx} ${by + bh - 12} L ${bx} ${by + bh} L ${bx + 12} ${by + bh}
+                                        M ${bx + bw - 12} ${by + bh} L ${bx + bw} ${by + bh} L ${bx + bw} ${by + bh - 12}`}
+                                    fill="none"
+                                    stroke={color}
+                                    stroke-width="3.5"
+                                    stroke-linecap="round"
+                                />
+
+                                <!-- Classification Label Pill -->
+                                <g transform={`translate(${bx}, ${Math.max(0, by - 22)})`}>
+                                    <rect
+                                        x="0"
+                                        y="0"
+                                        width={det.food_name.length * 8 + 55}
+                                        height="20"
+                                        rx="4"
+                                        fill={color}
+                                    />
+                                    <text
+                                        x="6"
+                                        y="14"
+                                        fill="#0f172a"
+                                        font-size="11"
+                                        font-weight="bold"
+                                        font-family="sans-serif"
+                                    >
+                                        {det.food_name.toUpperCase()} {(det.similarity_rate * 100).toFixed(0)}%
+                                    </text>
+                                </g>
+                            {/if}
+                        {/each}
+                    </svg>
+                {/if}
             {:else}
                 <!-- Standby State -->
                 <div class="standby-box">

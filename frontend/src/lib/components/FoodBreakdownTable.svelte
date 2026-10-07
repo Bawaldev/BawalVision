@@ -7,12 +7,19 @@
 
     let { detections = [] }: Props = $props();
 
-    const compartmentDefaults = [
-        { slot: 'Slot #1 (Main)', defaultName: 'Carbohydrate (Rice)', icon: '🍚' },
-        { slot: 'Slot #2 (Protein)', defaultName: 'Protein (Chicken/Tofu)', icon: '🍗' },
-        { slot: 'Slot #3 (Vegetable)', defaultName: 'Vegetable (Spinach)', icon: '🥬' },
-        { slot: 'Slot #4 (Fruit/Side)', defaultName: 'Fruit (Banana/Orange)', icon: '🍌' }
-    ];
+    function getFoodIcon(name: string): string {
+        const lower = (name || '').toLowerCase();
+        if (lower.includes('rice') || lower.includes('nasi')) return '🍚';
+        if (lower.includes('chicken') || lower.includes('ayam')) return '🍗';
+        if (lower.includes('egg') || lower.includes('telur')) return '🥚';
+        if (lower.includes('tempeh') || lower.includes('tempe')) return '🧇';
+        if (lower.includes('tofu') || lower.includes('tahu')) return '🧊';
+        if (lower.includes('banana') || lower.includes('pisang')) return '🍌';
+        if (lower.includes('orange') || lower.includes('jeruk')) return '🍊';
+        if (lower.includes('water_spinach') || lower.includes('kangkung')) return '🌱';
+        if (lower.includes('spinach') || lower.includes('bayam')) return '🥬';
+        return '🍱';
+    }
 </script>
 
 <div class="breakdown-card">
@@ -20,13 +27,14 @@
         <div class="header-left">
             <span class="card-icon">🍱</span>
             <div>
-                <h4>Meal Tray Compartments</h4>
-                <p class="sub-label">4-Slot Optical & Thermal Safety Inspection</p>
+                <h4>Detected Food Items</h4>
+                <p class="sub-label">Dynamic YOLO Object Detection & Freshness Analysis</p>
             </div>
         </div>
         <div class="header-stats">
+            <span class="stat-pill">{detections.length} Detected</span>
             <span class="stat-pill">Thermal Limit: ≤38°C</span>
-            <span class="stat-pill">CV Threshold: ≥60%</span>
+            <span class="stat-pill">CV Threshold: ≥40%</span>
         </div>
     </div>
 
@@ -34,7 +42,7 @@
         <table class="styled-table">
             <thead>
                 <tr>
-                    <th>Compartment</th>
+                    <th>#</th>
                     <th>Detected Item</th>
                     <th>Food Temp</th>
                     <th>CV Match</th>
@@ -46,69 +54,53 @@
                 {#if detections.length === 0}
                     <tr>
                         <td colspan="6" class="empty-row">
-                            <span class="empty-msg">No active tray detected on optical camera sensor.</span>
+                            <span class="empty-msg">No food items detected in camera view.</span>
                         </td>
                     </tr>
                 {:else}
-                    {#each compartmentDefaults as comp, idx}
-                        {@const det = detections[idx]}
-                        <tr class:has-item={!!det}>
+                    {#each detections as det, idx}
+                        <tr class="has-item">
                             <td class="slot-cell">
-                                <span class="slot-tag">{comp.icon} {comp.slot}</span>
+                                <span class="slot-tag">#{idx + 1}</span>
                             </td>
                             <td class="food-cell">
-                                {#if det}
-                                    <strong class="food-name">{det.food_name}</strong>
-                                    <small class="cat-label">{det.category || 'Food'}</small>
-                                {:else}
-                                    <span class="empty-name">{comp.defaultName}</span>
-                                {/if}
+                                <div class="food-name-row">
+                                    <span class="food-icon">{getFoodIcon(det.food_name)}</span>
+                                    <div>
+                                        <strong class="food-name">{det.food_name}</strong>
+                                        <small class="cat-label">{det.category || 'Food'}</small>
+                                    </div>
+                                </div>
                             </td>
                             <td class="temp-cell">
-                                {#if det}
-                                    <span
-                                        class="temp-num"
-                                        class:warn={(det.temperature || 25) > 35}
-                                        class:danger={(det.temperature || 25) > 42}
-                                    >
-                                        {det.temperature ? det.temperature.toFixed(1) : '24.5'} <small>°C</small>
-                                    </span>
-                                {:else}
-                                    <span class="muted-dash">—</span>
-                                {/if}
+                                <span
+                                    class="temp-num"
+                                    class:warn={(det.temperature || 25) > 35}
+                                    class:danger={(det.temperature || 25) > 42}
+                                >
+                                    {det.temperature ? det.temperature.toFixed(1) : '24.5'} <small>°C</small>
+                                </span>
                             </td>
                             <td class="sim-cell">
-                                {#if det}
-                                    <div class="sim-bar-box">
-                                        <div class="sim-track">
-                                            <div class="sim-fill" style={`width: ${det.similarity_rate * 100}%`}></div>
-                                        </div>
-                                        <span class="sim-num">{(det.similarity_rate * 100).toFixed(0)}%</span>
+                                <div class="sim-bar-box">
+                                    <div class="sim-track">
+                                        <div class="sim-fill" style={`width: ${Math.min(100, det.similarity_rate * 100)}%`}></div>
                                     </div>
-                                {:else}
-                                    <span class="muted-dash">—</span>
-                                {/if}
+                                    <span class="sim-num">{(det.similarity_rate * 100).toFixed(0)}%</span>
+                                </div>
                             </td>
                             <td class="spoilage-cell">
-                                {#if det}
-                                    <span class="spoilage-num" class:danger={(det.spoilage_score || 0) >= 55}>
-                                        {(det.spoilage_score || 0).toFixed(0)}%
-                                    </span>
-                                {:else}
-                                    <span class="muted-dash">—</span>
-                                {/if}
+                                <span class="spoilage-num" class:danger={(det.spoilage_score || 0) >= 55}>
+                                    {(det.spoilage_score || 0).toFixed(0)}%
+                                </span>
                             </td>
                             <td class="status-cell">
-                                {#if det}
-                                    {#if det.status === 'REJECT' || (det.spoilage_score || 0) >= 55 || det.similarity_rate < 0.35}
-                                        <span class="badge reject">Reject</span>
-                                    {:else if det.status === 'REVIEW' || (det.spoilage_score || 0) >= 35 || det.similarity_rate < 0.60}
-                                        <span class="badge hold">Review</span>
-                                    {:else}
-                                        <span class="badge pass">Pass</span>
-                                    {/if}
+                                {#if det.status === 'REJECT' || (det.spoilage_score || 0) >= 55 || det.similarity_rate < 0.35}
+                                    <span class="badge reject">Reject</span>
+                                {:else if det.status === 'REVIEW' || (det.spoilage_score || 0) >= 35 || det.similarity_rate < 0.60}
+                                    <span class="badge hold">Review</span>
                                 {:else}
-                                    <span class="badge idle">Standby</span>
+                                    <span class="badge pass">Pass</span>
                                 {/if}
                             </td>
                         </tr>

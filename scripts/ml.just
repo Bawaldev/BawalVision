@@ -118,19 +118,26 @@ yolo-val model="ml/AI1/weights/best.pt" data="ml/AI1/yolo_dataset/dataset.yaml" 
         yolo detect val model={{ model }} data={{ data }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} || python3 -m ultralytics detect val model={{ model }} data={{ data }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }}
     fi
 
-# Export PyTorch weights to static ONNX binary
-yolo-export model="ml/AI1/weights/best.pt" format="onnx" imgsz="640" opset="17":
+# Export PyTorch weights to dynamic ONNX binary (Ultralytics Dynamic Detection)
+yolo-export model="ml/AI1/weights/best.pt" format="onnx" imgsz="640" opset="12" dynamic="True":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
-    echo "[+] Exporting YOLO checkpoint: {{ model }} to {{ format }} format (Opset: {{ opset }})"
+    echo "[+] Exporting YOLO checkpoint: {{ model }} to {{ format }} format (Dynamic: {{ dynamic }}, Opset: {{ opset }})"
     if [ -f .venv/bin/yolo ]; then
-        .venv/bin/yolo export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic=False simplify=True
+        .venv/bin/yolo export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic={{ dynamic }} simplify=True
     elif [ -f .venv/bin/python3 ]; then
-        .venv/bin/python3 -m ultralytics export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic=False simplify=True
+        .venv/bin/python3 -m ultralytics export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic={{ dynamic }} simplify=True
     elif [ -f .venv/Scripts/yolo.exe ]; then
-        .venv/Scripts/yolo.exe export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic=False simplify=True
+        .venv/Scripts/yolo.exe export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic={{ dynamic }} simplify=True
     else
-        yolo export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic=False simplify=True || python3 -m ultralytics export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic=False simplify=True
+        yolo export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic={{ dynamic }} simplify=True || python3 -m ultralytics export model={{ model }} format={{ format }} imgsz={{ imgsz }} opset={{ opset }} dynamic={{ dynamic }} simplify=True
+    fi
+    ONNX_SRC="${model%.pt}.onnx"
+    if [ -f "$ONNX_SRC" ]; then
+        mkdir -p weights ml/AI1/model
+        cp -f "$ONNX_SRC" weights/yolo8n.onnx
+        cp -f "$ONNX_SRC" ml/AI1/model/ai1_vision.onnx
+        echo "[✓] Synced dynamic ONNX binary to weights/yolo8n.onnx and ml/AI1/model/ai1_vision.onnx"
     fi
 
 # Run inference / prediction on test images
@@ -163,19 +170,44 @@ yolo-tune model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="30"
         yolo detect tune model={{ model }} data={{ data }} epochs={{ epochs }} iterations={{ iterations }} device={{ device }} || python3 -m ultralytics detect tune model={{ model }} data={{ data }} epochs={{ epochs }} iterations={{ iterations }} device={{ device }}
     fi
 
-# End-to-end autonomous parallel pipeline: split -> augment -> prepare annotations -> train & export ONNX -> DVC track (workers=0: auto-detect max cores)
-pipeline-ai1 workers="0" batch="16" epochs="50":
-    @echo "=== [1/5] Parallel Splitting Dataset (Train/Val/Test) ==="
-    just split-dataset "ml/dataset/dataset_mbg_matang" "ml/AI1/dataset" "{{ workers }}"
-    @echo "=== [2/5] Parallel Augmenting Training Set Safely ==="
+# Rebuild and reload the vision inspection container
+deploy-vision:
+    #!/usr/bin/env bash
+    cd {{ justfile_directory() }}
+    echo "[+] Rebuilding and deploying vision container with latest ONNX weights..."
+    docker compose -f deploy/docker-compose.yml up -d --build vision
+    echo "[✓] Vision container deployed successfully."
+
+# End-to-end autonomous parallel pipeline: data gathering -> split -> augment -> annotate -> train & export ONNX -> deploy vision (workers=0: auto-detect max cores)
+pipeline-ai1 workers="0" batch="16" epochs="50" target="300":
+    #!/usr/bin/env bash
+    cd {{ justfile_directory() }}
+    echo "=== [1/6] Checking Raw Image Dataset ==="
+    DATASET_DIR="ml/dataset/dataset_mbg_matang"
+    IMG_COUNT=$(find "$DATASET_DIR" -type f \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" -o -name "*.webp" \) 2>/dev/null | wc -l || echo 0)
+    if [ "$IMG_COUNT" -lt 50 ]; then
+        echo "[+] Found only $IMG_COUNT images in $DATASET_DIR. Launching scraper for {{ target }} images per category..."
+        just scrap-dataset all {{ target }} all {{ workers }}
+    else
+        echo "[✓] Found $IMG_COUNT raw images in $DATASET_DIR."
+    fi
+
+    echo "=== [2/6] Parallel Splitting Dataset (Train/Val/Test) ==="
+    just split-dataset "$DATASET_DIR" "ml/AI1/dataset" "{{ workers }}"
+
+    echo "=== [3/6] Parallel Augmenting Training Set Safely ==="
     just augment-train "500" "ml/AI1/dataset/train" "{{ workers }}"
-    @echo "=== [3/5] Batched Zero-Shot YOLO Annotations & Metadata ==="
+
+    echo "=== [4/6] Batched Zero-Shot YOLO Annotations & Metadata ==="
     just prepare-yolo-ai1 "{{ batch }}" "{{ workers }}"
-    @echo "=== [4/5] Multi-Threaded YOLOv8n Training & ONNX Export ==="
+
+    echo "=== [5/6] Multi-Threaded YOLOv8n Training & Dynamic ONNX Export ==="
     just train-ai1 "{{ epochs }}" "{{ batch }}" "{{ workers }}"
-    @echo "=== [5/5] Tracking Dataset with DVC ==="
-    just dvc-track
-    @echo "[✓] Parallel AI1 Pipeline execution completed successfully!"
+
+    echo "=== [6/6] Verifying ONNX Model & Deploying Vision Service ==="
+    just test-model-ai1
+    just deploy-vision
+    echo "[✓] End-to-end ML Pipeline to Vision Deployment completed successfully!"
 
 # Sanity check and inspect ONNX model tensors and execution provider
 test-model-ai1 model="ml/AI1/model/ai1_vision.onnx":
@@ -187,7 +219,7 @@ test-model-ai1 model="ml/AI1/model/ai1_vision.onnx":
     elif [ -f .venv/Scripts/python.exe ]; then
         PY_BIN=".venv/Scripts/python.exe"
     fi
-    $PY_BIN -c "import onnxruntime as ort, numpy as np; sess = ort.InferenceSession('{{ model }}', providers=['CPUExecutionProvider']); in_meta = sess.get_inputs()[0]; print(f'[✓] ONNX Model Verified: {{ model }}'); print(f'    Input : {in_meta.name} {in_meta.shape} {in_meta.type}'); dummy = np.zeros(in_meta.shape, dtype=np.float32); out = sess.run(None, {in_meta.name: dummy}); print(f'    Output Shape: {out[0].shape}'); print('[✓] Model forward pass successful via ONNX Runtime CPU.')"
+    $PY_BIN -c "import onnxruntime as ort, numpy as np; sess = ort.InferenceSession('{{ model }}', providers=['CPUExecutionProvider']); in_meta = sess.get_inputs()[0]; print(f'[✓] ONNX Model Verified: {{ model }}'); print(f'    Input : {in_meta.name} {in_meta.shape} {in_meta.type}'); dummy = np.zeros([1, 3, 640, 640], dtype=np.float32); out = sess.run(None, {in_meta.name: dummy}); print(f'    Output Shape: {out[0].shape}'); print('[✓] Model forward pass successful via ONNX Runtime CPU.')"
 
 # Track dataset artifacts with DVC and stage git pointers
 dvc-track dir="ml/AI1/dataset":

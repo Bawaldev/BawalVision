@@ -57,7 +57,7 @@ services:
       - QT_QPA_PLATFORM=offscreen
       - BACKEND_HOST=backend
       - BACKEND_PORT=8080
-      - MODEL_PATH=/app/weights/yolo8n.onnx
+      - MODEL_PATH=/app/ml/AI1/model/ai1_vision.onnx
       - OMP_NUM_THREADS=4
       - OMP_SCHEDULE=static
       - OMP_PROC_BIND=true

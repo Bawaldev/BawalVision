@@ -8,16 +8,6 @@ export interface FoodDetection {
     category?: 'Carbohydrate' | 'Protein' | 'Vegetable' | 'Fruit' | 'Side';
 }
 
-export interface FoodCompartmentItem {
-    id: number;
-    name: string;
-    detectedFood: string;
-    similarityRate: number;
-    temperature: number;
-    spoilageIndex: number;
-    status: 'PASS' | 'REVIEW' | 'REJECT';
-}
-
 export interface InspectionRecord {
     id: string;
     user_id?: string;

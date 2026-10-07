@@ -56,7 +56,7 @@
             {hasCamera}
         />
 
-        <!-- 2. Food Breakdown & Compartments Table -->
+        <!-- 2. Dynamic Detected Food Items Table -->
         <FoodBreakdownTable
             {detections}
         />

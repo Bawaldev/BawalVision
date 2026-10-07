@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # ==============================================================================
 # BawalVision Machine Vision & ONNX ML Inference Engine
-# Language: C++20 (OpenCV, OpenMP, CMake, Ninja, POSIX HTTP Client)
+# Language: C++20 (OpenCV, ONNX Runtime C++, OpenMP, CMake, Ninja)
 # Target OS: Ubuntu 24.04 LTS (Optimized with AVX2 & OpenMP Multithreading)
 # ==============================================================================
 
@@ -10,7 +10,7 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Use BuildKit cache mounts for APT to accelerate rebuilds
+# Install dependensi dan pasang ONNX Runtime C++ release v1.19.2
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -22,16 +22,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libcurl4-openssl-dev \
     libomp-dev \
     nlohmann-json3-dev \
-    ca-certificates
+    ca-certificates \
+    curl \
+    tar && \
+    mkdir -p /opt/onnxruntime && \
+    curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | tar -xz -C /opt/onnxruntime --strip-components=1 && \
+    cp -r /opt/onnxruntime/include/* /usr/local/include/ && \
+    cp -r /opt/onnxruntime/lib/* /usr/local/lib/ && \
+    ldconfig
 
 WORKDIR /src
 
-# Copy C++ computer vision service source
+# Salin source code services C++
 COPY services/ /src/services/
 
-# Compile optimized release binary with SIMD/AVX2/FMA and OpenMP instructions
-RUN --mount=type=cache,target=/root/.cache/cmake \
-    cmake -B /src/services/build -S /src/services -G Ninja \
+# Kompilasi binary dengan optimasi AVX2/FMA dan OpenMP
+RUN cmake -B /src/services/build -S /src/services -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_FLAGS="-O3 -mavx2 -mfma -fopenmp" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && \
@@ -42,7 +48,7 @@ FROM ubuntu:24.04 AS runner
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Ubuntu 24.04 runtime shared libraries & create non-root user
+# Install shared libraries runtime
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -54,17 +60,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-# Copy compiled executable binary from builder
+# Salin runtime shared library ONNX Runtime ke direktori sistem
+COPY --from=builder /opt/onnxruntime/lib/ /usr/local/lib/
+RUN ldconfig
+
+# Salin hasil kompilasi binary
 COPY --from=builder /src/services/build/bin/vision_service /usr/local/bin/vision_service
 
-# Create model runtime directory and set non-root ownership
-RUN mkdir -p /app/ml/AI1/model && chown -R visionuser:visionuser /app
+# Siapkan direktori model
+RUN mkdir -p /app/ml/AI1/model /app/weights && chown -R visionuser:visionuser /app
 
-# Concurrency & CPU Pinning parameters for OpenMP Vision Pipeline
-# Register CPU pass-through (AVX2/FMA) runs natively on host CPU
 ENV OMP_NUM_THREADS=4 \
     OMP_SCHEDULE=static \
     OMP_PROC_BIND=true \
+    LD_LIBRARY_PATH=/usr/local/lib:/opt/onnxruntime/lib:$LD_LIBRARY_PATH \
     HEADLESS=1 \
     QT_QPA_PLATFORM=offscreen
 
