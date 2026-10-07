@@ -290,3 +290,12 @@ clean-ml:
     cd {{ justfile_directory() }}
     rm -rf ml/AI1/runs ml/AI1/yolo_dataset/__pycache__ ml/__pycache__
     echo "[✓] ML training runs and caches cleaned."
+
+
+# Running MLflow tracking local server via PostgreSQL
+mlflow-ui:
+    mlflow server \
+      --backend-store-uri postgresql://postgres:1234@127.0.0.1:5433/mlflow_db \
+      --default-artifact-root ./ml/mlflow_artifacts \
+      --host 127.0.0.1 \
+      --port 5000
