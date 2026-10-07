@@ -8,9 +8,18 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Copy dependency manifests for optimal layer caching
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# Copy dependency manifests (lockfile optional)
+COPY frontend/package.json ./
+COPY frontend/package-lock.json* ./
+
+# Install dependencies: use npm ci if lockfile exists, otherwise npm install
+RUN if [ -f package-lock.json ]; then \
+        echo ">>> Using npm ci (lockfile found)"; \
+        npm ci; \
+    else \
+        echo ">>> No lockfile found, using npm install"; \
+        npm install; \
+    fi
 
 # Copy frontend source code
 COPY frontend/ ./
@@ -23,20 +32,21 @@ FROM node:22-alpine AS runner
 
 WORKDIR /app
 
-# Copy required package files & built artifacts with node user ownership
-COPY --chown=node:node --from=builder /app/package.json /app/package-lock.json ./
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=3000
+
+# Copy only what's needed to run the production preview
+COPY --chown=node:node --from=builder /app/package.json ./
+COPY --chown=node:node --from=builder /app/package-lock.json* ./
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/.svelte-kit ./.svelte-kit
 COPY --chown=node:node --from=builder /app/static ./static
 COPY --chown=node:node --from=builder /app/src ./src
-COPY --chown=node:node --from=builder /app/vite.config.ts /app/tsconfig.json ./
+COPY --chown=node:node --from=builder /app/vite.config.ts ./
+COPY --chown=node:node --from=builder /app/tsconfig.json ./
+COPY --chown=node:node --from=builder /app/svelte.config.js* ./
 
-# Set environment variables for Vite Preview / Production server
-ENV HOST=0.0.0.0 \
-    PORT=3000 \
-    NODE_ENV=production
-
-# Switch to built-in unprivileged node user
 USER node
 
 EXPOSE 3000
