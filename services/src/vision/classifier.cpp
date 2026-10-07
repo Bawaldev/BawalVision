@@ -1,13 +1,44 @@
 #include "bawal/vision/classifier.hpp"
+#include "bawal/vision/simd_food_evaluator.hpp"
 #include <cmath>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <vector>
 #include <omp.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/dnn.hpp>
 
 namespace bawal::vision {
+
+namespace {
+
+// Struktur pelacak temporal untuk mengeliminasi kedipan (flickering) antar-frame
+struct TrackedItem {
+    DetectionResult result;
+    int age{0};          // Jumlah frame terdeteksi secara berturut-turut
+    int lost_frames{0};  // Toleransi frame kosong sebelum kotak dihapus
+};
+
+static std::vector<TrackedItem> s_tracked_items;
+
+// Menghitung Intersection over Union (IoU) antar dua kotak pembatas
+inline float computeIoU(const cv::Rect& a, const cv::Rect& b) {
+    int inter_x1 = std::max(a.x, b.x);
+    int inter_y1 = std::max(a.y, b.y);
+    int inter_x2 = std::min(a.x + a.width, b.x + b.width);
+    int inter_y2 = std::min(a.y + a.height, b.y + b.height);
+
+    int inter_w = std::max(0, inter_x2 - inter_x1);
+    int inter_h = std::max(0, inter_y2 - inter_y1);
+    float inter_area = static_cast<float>(inter_w * inter_h);
+
+    float union_area = static_cast<float>(a.area() + b.area()) - inter_area;
+    if (union_area <= 0.0f) return 0.0f;
+    return inter_area / union_area;
+}
+
+} // anonymous namespace
 
 FoodClassifier::FoodClassifier() 
     : m_class_names{
@@ -125,20 +156,28 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         cv::Mat resized;
         cv::resize(frame, resized, cv::Size(target_w, target_h), 0, 0, cv::INTER_LINEAR);
 
+        // Gray-World Auto White Balance & Normalisasi Warna
+        const cv::Scalar mean_bgr = cv::mean(resized);
+        const double mean_gray = (mean_bgr[0] + mean_bgr[1] + mean_bgr[2]) / 3.0;
+        const float scale_b = static_cast<float>((mean_bgr[0] > 1.0) ? (mean_gray / mean_bgr[0]) : 1.0);
+        const float scale_g = static_cast<float>((mean_bgr[1] > 1.0) ? (mean_gray / mean_bgr[1]) : 1.0);
+        const float scale_r = static_cast<float>((mean_bgr[2] > 1.0) ? (mean_gray / mean_bgr[2]) : 1.0);
+
         // 2. Preprocessing Paralel (HWC BGR -> CHW RGB, Normalisasi Float)
         std::vector<float> input_tensor_values(1 * 3 * spatial_size);
 
         #pragma omp parallel for schedule(static)
         for (int c = 0; c < 3; ++c) {
-            // Swap BGR ke RGB (c=0 -> R, c=1 -> G, c=2 -> B)
             const int src_ch = 2 - c;
+            const float channel_scale = (src_ch == 0) ? scale_b : ((src_ch == 1) ? scale_g : scale_r);
             float* ch_dest = input_tensor_values.data() + (c * spatial_size);
 
             for (int h = 0; h < target_h; ++h) {
                 const auto* row_ptr = resized.ptr<cv::Vec3b>(h);
                 #pragma omp simd
                 for (int w = 0; w < target_w; ++w) {
-                    ch_dest[h * target_w + w] = static_cast<float>(row_ptr[w][src_ch]) * (1.0f / 255.0f);
+                    const float val = static_cast<float>(row_ptr[w][src_ch]) * channel_scale;
+                    ch_dest[h * target_w + w] = std::clamp(val * (1.0f / 255.0f), 0.0f, 1.0f);
                 }
             }
         }
@@ -176,12 +215,10 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
         if (shape.size() == 3) {
             if (shape[1] < shape[2]) {
-                // Standar YOLOv8: [1, 13, 8400]
                 channels = static_cast<int>(shape[1]);
                 num_anchors = static_cast<int>(shape[2]);
                 is_transposed = false;
             } else {
-                // Format tertranspose: [1, 8400, 13]
                 num_anchors = static_cast<int>(shape[1]);
                 channels = static_cast<int>(shape[2]);
                 is_transposed = true;
@@ -212,7 +249,6 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             float max_score = -1.0f;
 
             if (!is_transposed) {
-                // Layout [1, channels, 8400]
                 cx = raw_output[0 * num_anchors + a];
                 cy = raw_output[1 * num_anchors + a];
                 w  = raw_output[2 * num_anchors + a];
@@ -226,7 +262,6 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                     }
                 }
             } else {
-                // Layout [1, 8400, channels]
                 const float* anchor_ptr = raw_output + (a * channels);
                 cx = anchor_ptr[0];
                 cy = anchor_ptr[1];
@@ -251,7 +286,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 cv::Rect box(left, top, width, height);
                 box &= cv::Rect(0, 0, frame.cols, frame.rows);
 
-                if (box.width > 4 && box.height > 4) {
+                if (box.width > 16 && box.height > 16) {
                     boxes.push_back(box);
                     confidences.push_back(max_score);
                     class_ids.push_back(best_class_id);
@@ -263,24 +298,212 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         std::vector<int> nms_indices;
         cv::dnn::NMSBoxes(boxes, confidences, conf_threshold, nms_threshold, nms_indices);
 
-        out_detections.reserve(nms_indices.size());
+        // Jika YOLO tidak mendeteksi objek apapun, bersihkan tracker dan selesai (NO FAKE DETECTIONS)
+        if (nms_indices.empty()) {
+            s_tracked_items.clear();
+            return true;
+        }
 
-        // 6. Evaluasi degradasi warna SIMD AVX2 pada tiap ROI
+        // 6. Evaluasi Kontras Fisik Scene
+        cv::Scalar mean_bgr_frame, std_bgr_frame;
+        cv::meanStdDev(frame, mean_bgr_frame, std_bgr_frame);
+        const double scene_contrast = (std_bgr_frame[0] + std_bgr_frame[1] + std_bgr_frame[2]) / 3.0;
+
+        if (scene_contrast < 10.0) {
+            s_tracked_items.clear();
+            return true;
+        }
+
+        std::vector<DetectionResult> current_detections;
+        current_detections.reserve(nms_indices.size());
+
+        // 7. Evaluasi Setiap Deteksi YOLO dengan AVX2 Texture Filter & Disambiguasi Semantik
         for (int idx : nms_indices) {
-            DetectionResult det;
-            det.class_id = class_ids[idx];
-            det.class_name = (det.class_id < static_cast<int>(m_class_names.size()))
-                                 ? m_class_names[det.class_id]
-                                 : ("food_class_" + std::to_string(det.class_id));
-            det.confidence = confidences[idx];
-            det.bbox = boxes[idx];
+            cv::Rect yolo_box = boxes[idx];
+            yolo_box &= cv::Rect(0, 0, frame.cols, frame.rows);
 
-            if (det.bbox.width >= 8 && det.bbox.height >= 8) {
-                cv::Mat roi = frame(det.bbox);
-                det.spoilage = evaluateSpoilageAVX2(roi, det.class_name);
+            if (yolo_box.width < 24 || yolo_box.height < 24) {
+                continue;
             }
 
-            out_detections.push_back(std::move(det));
+            cv::Mat food_roi = frame(yolo_box);
+
+            // Filter AVX2 SIMD: Tolak background dinding / meja flat tanpa tekstur makanan
+            TextureMetric tex = evaluateTextureAVX2(food_roi);
+            if (!tex.is_valid_food_texture) {
+                continue;
+            }
+
+            // Local Contour Refinement: Rapatkan bounding box ke kontur piring/makanan nyata jika ada
+            cv::Rect final_box = yolo_box;
+            cv::Mat gray_roi;
+            cv::cvtColor(food_roi, gray_roi, cv::COLOR_BGR2GRAY);
+            cv::Mat otsu_roi;
+            cv::threshold(gray_roi, otsu_roi, 0, 255, cv::THRESH_BINARY + cv::THRESH_OTSU);
+
+            std::vector<std::vector<cv::Point>> local_contours;
+            cv::findContours(otsu_roi, local_contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+            for (const auto& cnt : local_contours) {
+                double a = cv::contourArea(cnt);
+                if (a >= (yolo_box.area() * 0.15) && a <= (yolo_box.area() * 0.95)) {
+                    cv::Rect lr = cv::boundingRect(cnt);
+                    float aspect = static_cast<float>(lr.width) / static_cast<float>(lr.height);
+                    if (aspect >= 0.35f && aspect <= 2.8f) {
+                        int snap_x = yolo_box.x + lr.x;
+                        int snap_y = yolo_box.y + lr.y;
+                        cv::Rect snapped(snap_x, snap_y, lr.width, lr.height);
+                        snapped &= cv::Rect(0, 0, frame.cols, frame.rows);
+                        if (snapped.width >= 24 && snapped.height >= 24) {
+                            final_box = snapped;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Analisis Warna Spektral Core ROI (Tengah 50%)
+            int core_w = std::max(16, static_cast<int>(final_box.width * 0.50f));
+            int core_h = std::max(16, static_cast<int>(final_box.height * 0.50f));
+            int core_x = final_box.x + (final_box.width - core_w) / 2;
+            int core_y = final_box.y + (final_box.height - core_h) / 2;
+            cv::Rect core_rect = cv::Rect(core_x, core_y, core_w, core_h) & cv::Rect(0, 0, frame.cols, frame.rows);
+
+            cv::Mat core_roi = frame(core_rect);
+            cv::Mat hsv_core;
+            cv::cvtColor(core_roi, hsv_core, cv::COLOR_BGR2HSV);
+            cv::Scalar mean_hsv = cv::mean(hsv_core);
+            cv::Scalar mean_bgr = cv::mean(core_roi);
+
+            const double h_val = mean_hsv[0];
+            const double s_val = mean_hsv[1];
+            const double v_val = mean_hsv[2];
+
+            const double b_val = mean_bgr[0];
+            const double g_val = mean_bgr[1];
+            const double r_val = mean_bgr[2];
+
+            int yolo_cls = class_ids[idx];
+            float yolo_score = confidences[idx];
+
+            std::string predicted_name = (yolo_cls < static_cast<int>(m_class_names.size()))
+                                             ? m_class_names[yolo_cls]
+                                             : "food_item";
+            int final_class_id = yolo_cls;
+
+            // Aturan Validasi Pisang (Banana Rejection):
+            // Pisang harus memiliki saturasi warna kuning/kehijauan (S >= 38, H: 18 - 42).
+            // Tembok krem/putih/abu-abu memiliki saturasi rendah (S < 35) sehingga BUKAN pisang!
+            if (predicted_name == "banana") {
+                if (s_val < 38.0 || h_val < 15.0 || h_val > 45.0) {
+                    if (s_val < 35.0 && v_val > 80.0 &&
+                        std::abs(r_val - g_val) < 30.0 && std::abs(g_val - b_val) < 30.0) {
+                        predicted_name = "rice";
+                        final_class_id = 4;
+                    } else {
+                        // Tolak false detection pada dinding/latar
+                        continue;
+                    }
+                }
+            }
+
+            // Aturan Nasi Putih: Saturasi rendah, kecerahan tinggi, RGB netral
+            if (s_val < 50.0 && v_val > 80.0 &&
+                std::abs(r_val - g_val) < 30.0 && std::abs(g_val - b_val) < 30.0) {
+                predicted_name = "rice";
+                final_class_id = 4;
+            }
+            // Aturan Sayuran Hijau (Bayam / Kangkung)
+            else if (h_val >= 30.0 && h_val <= 88.0 && s_val > 35.0 && g_val > r_val + 3.0) {
+                if (predicted_name != "spinach" && predicted_name != "water_spinach") {
+                    predicted_name = "spinach";
+                    final_class_id = 5;
+                }
+            }
+            // Aturan Jeruk (Orange)
+            else if (h_val >= 6.0 && h_val <= 22.0 && s_val > 65.0) {
+                predicted_name = "orange";
+                final_class_id = 3;
+            }
+
+            DetectionResult det;
+            det.bbox = final_box;
+            det.class_id = final_class_id;
+            det.class_name = predicted_name;
+            det.confidence = std::clamp(yolo_score, 0.40f, 0.95f);
+
+            // Evaluasi degradasi warna SIMD AVX2 pada ROI makanan utuh
+            cv::Mat final_food_roi = frame(det.bbox);
+            det.spoilage = evaluateSpoilageAVX2(final_food_roi, det.class_name);
+
+            current_detections.push_back(std::move(det));
+        }
+
+        if (current_detections.empty()) {
+            s_tracked_items.clear();
+            return true;
+        }
+
+        // 8. Temporal Tracking & Smoothing (Meredam Kedipan dan Menstabilkan Kotak)
+        std::vector<bool> matched(current_detections.size(), false);
+
+        for (auto& tracked : s_tracked_items) {
+            float best_iou = 0.0f;
+            int best_idx = -1;
+
+            for (size_t i = 0; i < current_detections.size(); ++i) {
+                if (matched[i]) continue;
+                float iou = computeIoU(tracked.result.bbox, current_detections[i].bbox);
+                if (iou > best_iou) {
+                    best_iou = iou;
+                    best_idx = static_cast<int>(i);
+                }
+            }
+
+            if (best_iou > 0.15f && best_idx >= 0) {
+                matched[best_idx] = true;
+                const auto& cur = current_detections[best_idx];
+
+                // EMA Bounding Box Smoothing
+                tracked.result.bbox.x = static_cast<int>(0.70f * cur.bbox.x + 0.30f * tracked.result.bbox.x);
+                tracked.result.bbox.y = static_cast<int>(0.70f * cur.bbox.y + 0.30f * tracked.result.bbox.y);
+                tracked.result.bbox.width = static_cast<int>(0.70f * cur.bbox.width + 0.30f * tracked.result.bbox.width);
+                tracked.result.bbox.height = static_cast<int>(0.70f * cur.bbox.height + 0.30f * tracked.result.bbox.height);
+
+                tracked.result.class_name = cur.class_name;
+                tracked.result.class_id = cur.class_id;
+                tracked.result.confidence = 0.70f * cur.confidence + 0.30f * tracked.result.confidence;
+                tracked.result.spoilage = cur.spoilage;
+                tracked.lost_frames = 0;
+                tracked.age++;
+            } else {
+                tracked.lost_frames++;
+                tracked.result.confidence *= 0.90f;
+            }
+        }
+
+        // Daftarkan objek baru yang belum terpetakan
+        for (size_t i = 0; i < current_detections.size(); ++i) {
+            if (!matched[i]) {
+                TrackedItem new_item;
+                new_item.result = current_detections[i];
+                new_item.age = 1;
+                new_item.lost_frames = 0;
+                s_tracked_items.push_back(std::move(new_item));
+            }
+        }
+
+        // Hapus objek yang telah hilang lebih dari 2 frame
+        s_tracked_items.erase(
+            std::remove_if(s_tracked_items.begin(), s_tracked_items.end(),
+                           [](const TrackedItem& item) { return item.lost_frames > 2; }),
+            s_tracked_items.end());
+
+        // Salin seluruh hasil pelacakan yang masih valid ke output
+        for (const auto& item : s_tracked_items) {
+            if (item.lost_frames <= 1) {
+                out_detections.push_back(item.result);
+            }
         }
 
         return true;

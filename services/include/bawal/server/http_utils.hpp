@@ -39,4 +39,15 @@ struct CameraConfig {
  */
 [[nodiscard]] bool postInspectionPayload(CURL* curl, std::string_view backend_base_url, std::string_view json_payload);
 
+/**
+ * @brief Sends an annotated JPEG frame with OpenCV bounding boxes to the backend.
+ * @param curl Active libcurl handle.
+ * @param backend_base_url Base URL of the backend service.
+ * @param device_id Target device ID.
+ * @param frame_id Current frame sequence ID.
+ * @param jpeg_bytes JPEG encoded annotated image bytes.
+ * @return true if backend returned HTTP 200 OK.
+ */
+[[nodiscard]] bool postAnnotatedFrame(CURL* curl, std::string_view backend_base_url, std::string_view device_id, uint32_t frame_id, const std::vector<uint8_t>& jpeg_bytes);
+
 } // namespace bawal::server

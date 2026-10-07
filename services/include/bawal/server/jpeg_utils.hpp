@@ -51,4 +51,13 @@ inline constexpr uint8_t K_STANDARD_DHT[] = {
  */
 [[nodiscard]] bool decodeMJPEGFrame(const std::vector<uint8_t>& raw_bytes, cv::Mat& out_frame);
 
+/**
+ * @brief Encodes an OpenCV image to a compressed JPEG byte buffer.
+ * @param image Input image.
+ * @param out_bytes Output buffer to store JPEG compressed data.
+ * @param quality JPEG quality (1-100, default 80).
+ * @return true if encoding succeeded, false otherwise.
+ */
+[[nodiscard]] bool encodeJPEGFrame(const cv::Mat& image, std::vector<uint8_t>& out_bytes, int quality = 80);
+
 } // namespace bawal::server

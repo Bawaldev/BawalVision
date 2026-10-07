@@ -16,6 +16,20 @@ struct SpoilageMetric {
     bool is_visually_spoiled{false};
 };
 
+struct TextureMetric {
+    float edge_energy{0.0f};           // Mean spatial gradient across ROI
+    float std_dev{0.0f};               // Standard deviation of luminance
+    bool is_valid_food_texture{false}; // True if ROI contains genuine food micro-texture/contrast (rejects flat walls/tables)
+};
+
+/**
+ * @brief Evaluates spatial gradient energy and luminance variance using AVX2 SIMD to reject flat walls and smooth backgrounds.
+ * 
+ * @param food_roi Cropped food bounding box BGR image matrix.
+ * @return TextureMetric Computed edge energy, standard deviation, and validity verdict.
+ */
+[[nodiscard]] TextureMetric evaluateTextureAVX2(const cv::Mat& food_roi);
+
 /**
  * @brief Evaluates color degradation, hue anomalies, and freshness of detected food RoIs using SIMD (AVX2/NEON/OpenMP).
  * 

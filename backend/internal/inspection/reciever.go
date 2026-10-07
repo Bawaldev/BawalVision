@@ -12,12 +12,14 @@ var GlobalInspectionStore = NewInspectionStore()
 
 type InspectionStore struct {
 	sync.RWMutex
-	readings map[string]TelemetryIngressPayload
+	readings          map[string]TelemetryIngressPayload
+	latestInspections map[string]IngressInspectionRequest
 }
 
 func NewInspectionStore() *InspectionStore {
 	return &InspectionStore{
-		readings: make(map[string]TelemetryIngressPayload),
+		readings:          make(map[string]TelemetryIngressPayload),
+		latestInspections: make(map[string]IngressInspectionRequest),
 	}
 }
 
@@ -32,6 +34,29 @@ func (s *InspectionStore) StoreTelemetry(payload TelemetryIngressPayload) {
 	s.Lock()
 	s.readings[payload.DeviceID] = payload
 	s.Unlock()
+}
+
+func (s *InspectionStore) StoreLatestInspection(req IngressInspectionRequest) {
+	if req.DeviceID == "" {
+		return
+	}
+	s.Lock()
+	s.latestInspections[req.DeviceID] = req
+	s.Unlock()
+}
+
+func (s *InspectionStore) GetLatestInspection(deviceID string) (IngressInspectionRequest, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	if deviceID == "" || deviceID == "latest" || deviceID == "*" {
+		for _, insp := range s.latestInspections {
+			if len(insp.Detections) > 0 {
+				return insp, true
+			}
+		}
+	}
+	insp, exists := s.latestInspections[deviceID]
+	return insp, exists
 }
 
 func (s *InspectionStore) ProcessTelemetry(r io.Reader) (*TelemetryIngressPayload, error) {
@@ -73,3 +98,4 @@ func (s *InspectionStore) GetAnyLatestTelemetry() (TelemetryIngressPayload, bool
 	}
 	return latest, false
 }
+

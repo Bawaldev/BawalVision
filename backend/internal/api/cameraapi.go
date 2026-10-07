@@ -63,8 +63,31 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		return c.SendStatus(fiber.StatusOK)
 	}
 
+	annotatedIngressHandler := func(c *fiber.Ctx) error {
+		body := c.Body()
+		if len(body) == 0 {
+			return c.SendStatus(fiber.StatusBadRequest)
+		}
+
+		deviceID := c.Get("X-Device-ID")
+		if deviceID == "" {
+			deviceID = "DEFAULT_CAMERA"
+		}
+
+		frameIDHeader := c.Get("X-Frame-ID", "0")
+		frameID, _ := strconv.ParseUint(frameIDHeader, 10, 32)
+
+		imageBytes := make([]byte, len(body))
+		copy(imageBytes, body)
+
+		camera_handler.GlobalCameraStore.StoreAnnotatedFrame(deviceID, uint32(frameID), imageBytes)
+
+		return c.SendStatus(fiber.StatusOK)
+	}
+
 	camGroup.Post("/stream", ingressHandler)
 	camGroup.Post("/frame", ingressHandler)
+	camGroup.Post("/annotated", annotatedIngressHandler)
 
 	camGroup.Get("/active", func(c *fiber.Ctx) error {
 		activeID := camera_handler.GlobalCameraStore.GetActiveDeviceID()
@@ -90,7 +113,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			defer unsubscribe()
 
 			// Send current frame immediately if available
-			if initialFrame, ok := camera_handler.GlobalCameraStore.GetRawFrame(deviceID); ok && len(initialFrame) > 0 {
+			if initialFrame, ok := camera_handler.GlobalCameraStore.GetStreamFrame(deviceID); ok && len(initialFrame) > 0 {
 				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(initialFrame)); err == nil {
 					_, _ = w.Write(initialFrame)
 					_, _ = w.WriteString("\r\n")

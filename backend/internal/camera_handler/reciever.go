@@ -19,26 +19,43 @@ type subscriber struct {
 
 type CameraStore struct {
 	sync.RWMutex
-	frames      map[string]CachedFrame
-	subscribers map[uint64]*subscriber
-	subCounter  uint64
+	rawFrames       map[string]CachedFrame
+	annotatedFrames map[string]CachedFrame
+	subscribers     map[uint64]*subscriber
+	subCounter      uint64
 }
 
 var GlobalCameraStore = &CameraStore{
-	frames:      make(map[string]CachedFrame),
-	subscribers: make(map[uint64]*subscriber),
+	rawFrames:       make(map[string]CachedFrame),
+	annotatedFrames: make(map[string]CachedFrame),
+	subscribers:     make(map[uint64]*subscriber),
 }
 
 func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte) {
 	s.Lock()
-	s.frames[deviceID] = CachedFrame{
+	now := time.Now().UnixMilli()
+	s.rawFrames[deviceID] = CachedFrame{
 		DeviceID:    deviceID,
 		FrameID:     frameID,
 		ImageBytes:  data,
-		TimestampMS: time.Now().UnixMilli(),
+		TimestampMS: now,
 	}
 
-	// Copy subscriber channels to broadcast outside lock
+	// Check if vision service is actively streaming annotated frames (< 2500ms)
+	hasActiveAnnotatedStream := false
+	for _, f := range s.annotatedFrames {
+		if now-f.TimestampMS < 2500 {
+			hasActiveAnnotatedStream = true
+			break
+		}
+	}
+
+	// If vision service is active, suppress raw frame broadcast to eliminate alternating box/no-box flicker
+	if hasActiveAnnotatedStream {
+		s.Unlock()
+		return
+	}
+
 	subs := make([]chan []byte, 0, len(s.subscribers))
 	for _, sub := range s.subscribers {
 		if sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*" {
@@ -47,12 +64,44 @@ func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte
 	}
 	s.Unlock()
 
-	// Non-blocking broadcast with stale frame drop
+	// Non-blocking instantaneous broadcast with stale frame drop
 	for _, ch := range subs {
 		select {
 		case ch <- data:
 		default:
-			// Buffer full: drain stale frame immediately and push newest frame
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- data:
+			default:
+			}
+		}
+	}
+}
+
+func (s *CameraStore) StoreAnnotatedFrame(deviceID string, frameID uint32, data []byte) {
+	s.Lock()
+	s.annotatedFrames[deviceID] = CachedFrame{
+		DeviceID:    deviceID,
+		FrameID:     frameID,
+		ImageBytes:  data,
+		TimestampMS: time.Now().UnixMilli(),
+	}
+
+	subs := make([]chan []byte, 0, len(s.subscribers))
+	for _, sub := range s.subscribers {
+		if sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*" {
+			subs = append(subs, sub.ch)
+		}
+	}
+	s.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- data:
+		default:
 			select {
 			case <-ch:
 			default:
@@ -96,7 +145,7 @@ func (s *CameraStore) GetRawFrame(deviceID string) ([]byte, bool) {
 
 	if deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "ESP32-S3-BENCH-01" {
 		var latestFrame *CachedFrame
-		for _, f := range s.frames {
+		for _, f := range s.rawFrames {
 			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
 				curr := f
 				latestFrame = &curr
@@ -107,10 +156,64 @@ func (s *CameraStore) GetRawFrame(deviceID string) ([]byte, bool) {
 		}
 	}
 
-	frame, exists := s.frames[deviceID]
+	frame, exists := s.rawFrames[deviceID]
 	if !exists || len(frame.ImageBytes) == 0 {
 		var latestFrame *CachedFrame
-		for _, f := range s.frames {
+		for _, f := range s.rawFrames {
+			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+				curr := f
+				latestFrame = &curr
+			}
+		}
+		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
+			return latestFrame.ImageBytes, true
+		}
+		return nil, false
+	}
+	return frame.ImageBytes, true
+}
+
+func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {
+	s.RLock()
+	defer s.RUnlock()
+
+	now := time.Now().UnixMilli()
+	if deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*" {
+		var latestAnn *CachedFrame
+		for _, f := range s.annotatedFrames {
+			if latestAnn == nil || f.TimestampMS > latestAnn.TimestampMS {
+				curr := f
+				latestAnn = &curr
+			}
+		}
+		if latestAnn != nil && len(latestAnn.ImageBytes) > 0 && (now-latestAnn.TimestampMS < 2500) {
+			return latestAnn.ImageBytes, true
+		}
+	} else if f, ok := s.annotatedFrames[deviceID]; ok && len(f.ImageBytes) > 0 && (now-f.TimestampMS < 2500) {
+		return f.ImageBytes, true
+	}
+
+	return s.getRawFrameLocked(deviceID)
+}
+
+func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
+	if deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "ESP32-S3-BENCH-01" {
+		var latestFrame *CachedFrame
+		for _, f := range s.rawFrames {
+			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+				curr := f
+				latestFrame = &curr
+			}
+		}
+		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
+			return latestFrame.ImageBytes, true
+		}
+	}
+
+	frame, exists := s.rawFrames[deviceID]
+	if !exists || len(frame.ImageBytes) == 0 {
+		var latestFrame *CachedFrame
+		for _, f := range s.rawFrames {
 			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
 				curr := f
 				latestFrame = &curr
@@ -130,7 +233,7 @@ func (s *CameraStore) GetActiveDeviceID() string {
 
 	var latestID string
 	var maxTime int64 = 0
-	for id, f := range s.frames {
+	for id, f := range s.rawFrames {
 		if f.TimestampMS > maxTime {
 			maxTime = f.TimestampMS
 			latestID = id

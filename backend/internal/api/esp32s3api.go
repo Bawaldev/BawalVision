@@ -89,6 +89,9 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
+		// Cache live detections in-memory for instant frontend HUD overlay rendering
+		inspection.GlobalInspectionStore.StoreLatestInspection(req)
+
 		// Retrieve latest telemetry cache for this device as fallback for missing sensor values
 		latestTelemetry, hasCached := inspection.GlobalInspectionStore.GetLatestTelemetry(req.DeviceID)
 
@@ -324,8 +327,19 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		})
 	})
 
-	// 4. GET Latest Inspection with Detections
+	// 4. GET Latest Inspection with Detections & Real-time Bounding Boxes
 	router.Get("/inspections/latest", func(c *fiber.Ctx) error {
+		if live, ok := inspection.GlobalInspectionStore.GetLatestInspection(""); ok && len(live.Detections) > 0 {
+			return c.JSON(fiber.Map{
+				"device_id":        live.DeviceID,
+				"food_temperature": live.FoodTemperature,
+				"temperature":      live.Temperature,
+				"cpu_temperature":  live.CPUTemperature,
+				"detections":       live.Detections,
+				"is_live":          true,
+			})
+		}
+
 		var record inspection.InspectionRecord
 		if err := db.Preload("InspectionFoods.FoodItem").Order("created_at DESC").First(&record).Error; err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": "No inspection records found"})

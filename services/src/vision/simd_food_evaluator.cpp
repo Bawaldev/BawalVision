@@ -34,21 +34,21 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
     // - banana: V < 50 (overripe blackened peel)
     // - tofu / tempeh: L < 70 or V < 40 (black mold / degradation)
     // - chicken / egg: L < 60 (dark oxidation / burning)
-    uint8_t lum_thresh_val = 50;
+    uint8_t lum_thresh_val = 30;
     bool use_v_channel = false;
 
     if (food_class == "rice") {
-        lum_thresh_val = 115;
+        lum_thresh_val = 35;
     } else if (food_class == "spinach" || food_class == "water_spinach") {
-        lum_thresh_val = 45;
+        lum_thresh_val = 25;
         use_v_channel = true;
     } else if (food_class == "banana" || food_class == "orange") {
-        lum_thresh_val = 40;
+        lum_thresh_val = 25;
         use_v_channel = true;
     } else if (food_class == "tofu" || food_class == "tempeh") {
-        lum_thresh_val = 65;
+        lum_thresh_val = 35;
     } else if (food_class == "chicken" || food_class == "egg") {
-        lum_thresh_val = 55;
+        lum_thresh_val = 30;
     }
 
 #if defined(__AVX2__)
@@ -114,8 +114,134 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
         metric.discoloration_ratio = static_cast<float>(bad_pixels) * inv_total;
     }
 
-    // Food is considered visually spoiled if > 18% pixels are degraded
-    metric.is_visually_spoiled = (metric.discoloration_ratio > 0.18f);
+    // Food is considered visually spoiled if > 35% pixels are degraded
+    metric.is_visually_spoiled = (metric.discoloration_ratio > 0.35f);
+
+    return metric;
+}
+
+TextureMetric evaluateTextureAVX2(const cv::Mat& food_roi) {
+    TextureMetric metric;
+    if (food_roi.empty() || food_roi.cols < 16 || food_roi.rows < 16) {
+        return metric;
+    }
+
+    cv::Mat gray;
+    if (food_roi.channels() == 3) {
+        cv::cvtColor(food_roi, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = food_roi;
+    }
+
+    const int rows = gray.rows;
+    const int cols = gray.cols;
+    uint64_t total_grad_sum = 0;
+    uint64_t sum_val = 0;
+    uint64_t sum_sq_val = 0;
+    const int inner_pixels = (rows - 2) * (cols - 2);
+
+    if (inner_pixels <= 0) {
+        return metric;
+    }
+
+#if defined(__AVX2__)
+    const __m256i zero_vec = _mm256_setzero_si256();
+
+    for (int y = 1; y < rows - 1; ++y) {
+        const uint8_t* row_prev = gray.ptr<uint8_t>(y - 1);
+        const uint8_t* row_curr = gray.ptr<uint8_t>(y);
+        const uint8_t* row_next = gray.ptr<uint8_t>(y + 1);
+
+        int x = 1;
+        for (; x <= cols - 33; x += 32) {
+            __m256i c_pix = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(row_curr + x));
+            __m256i l_pix = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(row_curr + x - 1));
+            __m256i r_pix = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(row_curr + x + 1));
+            __m256i t_pix = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(row_prev + x));
+            __m256i b_pix = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(row_next + x));
+
+            __m256i h_diff1 = _mm256_subs_epu8(r_pix, l_pix);
+            __m256i h_diff2 = _mm256_subs_epu8(l_pix, r_pix);
+            __m256i h_grad = _mm256_or_si256(h_diff1, h_diff2);
+
+            __m256i v_diff1 = _mm256_subs_epu8(b_pix, t_pix);
+            __m256i v_diff2 = _mm256_subs_epu8(t_pix, b_pix);
+            __m256i v_grad = _mm256_or_si256(v_diff1, v_diff2);
+
+            __m256i h_low = _mm256_unpacklo_epi8(h_grad, zero_vec);
+            __m256i h_high = _mm256_unpackhi_epi8(h_grad, zero_vec);
+            __m256i v_low = _mm256_unpacklo_epi8(v_grad, zero_vec);
+            __m256i v_high = _mm256_unpackhi_epi8(v_grad, zero_vec);
+
+            __m256i grad_low = _mm256_add_epi16(h_low, v_low);
+            __m256i grad_high = _mm256_add_epi16(h_high, v_high);
+
+            __m256i g_sum32_a = _mm256_add_epi32(_mm256_unpacklo_epi16(grad_low, zero_vec), _mm256_unpackhi_epi16(grad_low, zero_vec));
+            __m256i g_sum32_b = _mm256_add_epi32(_mm256_unpacklo_epi16(grad_high, zero_vec), _mm256_unpackhi_epi16(grad_high, zero_vec));
+            __m256i g_sum_all = _mm256_add_epi32(g_sum32_a, g_sum32_b);
+
+            alignas(32) int32_t g_temp[8];
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(g_temp), g_sum_all);
+            for (int i = 0; i < 8; ++i) total_grad_sum += g_temp[i];
+
+            __m256i c_low = _mm256_unpacklo_epi8(c_pix, zero_vec);
+            __m256i c_high = _mm256_unpackhi_epi8(c_pix, zero_vec);
+
+            __m256i c_sum32_a = _mm256_add_epi32(_mm256_unpacklo_epi16(c_low, zero_vec), _mm256_unpackhi_epi16(c_low, zero_vec));
+            __m256i c_sum32_b = _mm256_add_epi32(_mm256_unpacklo_epi16(c_high, zero_vec), _mm256_unpackhi_epi16(c_high, zero_vec));
+            __m256i c_sum_all = _mm256_add_epi32(c_sum32_a, c_sum32_b);
+
+            alignas(32) int32_t c_temp[8];
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(c_temp), c_sum_all);
+            for (int i = 0; i < 8; ++i) sum_val += c_temp[i];
+
+            __m256i c_sq_low = _mm256_madd_epi16(c_low, c_low);
+            __m256i c_sq_high = _mm256_madd_epi16(c_high, c_high);
+            __m256i c_sq_all = _mm256_add_epi32(c_sq_low, c_sq_high);
+
+            alignas(32) int32_t sq_temp[8];
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(sq_temp), c_sq_all);
+            for (int i = 0; i < 8; ++i) sum_sq_val += sq_temp[i];
+        }
+
+        for (; x < cols - 1; ++x) {
+            int h_d = std::abs(static_cast<int>(row_curr[x + 1]) - static_cast<int>(row_curr[x - 1]));
+            int v_d = std::abs(static_cast<int>(row_next[x]) - static_cast<int>(row_prev[x]));
+            total_grad_sum += (h_d + v_d);
+            int v = row_curr[x];
+            sum_val += v;
+            sum_sq_val += (v * v);
+        }
+    }
+#else
+    for (int y = 1; y < rows - 1; ++y) {
+        const uint8_t* row_prev = gray.ptr<uint8_t>(y - 1);
+        const uint8_t* row_curr = gray.ptr<uint8_t>(y);
+        const uint8_t* row_next = gray.ptr<uint8_t>(y + 1);
+
+        #pragma omp simd reduction(+:total_grad_sum, sum_val, sum_sq_val)
+        for (int x = 1; x < cols - 1; ++x) {
+            int h_d = std::abs(static_cast<int>(row_curr[x + 1]) - static_cast<int>(row_curr[x - 1]));
+            int v_d = std::abs(static_cast<int>(row_next[x]) - static_cast<int>(row_prev[x]));
+            total_grad_sum += (h_d + v_d);
+            int v = row_curr[x];
+            sum_val += v;
+            sum_sq_val += (v * v);
+        }
+    }
+#endif
+
+    const float inv_n = 1.0f / static_cast<float>(inner_pixels);
+    metric.edge_energy = static_cast<float>(total_grad_sum) * inv_n;
+
+    const float mean = static_cast<float>(sum_val) * inv_n;
+    const float mean_sq = static_cast<float>(sum_sq_val) * inv_n;
+    const float variance = std::max(0.0f, mean_sq - (mean * mean));
+    metric.std_dev = std::sqrt(variance);
+
+    // Wall & flat surface rejection:
+    // Real food objects have grain, porous texture, contours, and color variance.
+    metric.is_valid_food_texture = (metric.edge_energy >= 7.5f || metric.std_dev >= 13.0f);
 
     return metric;
 }

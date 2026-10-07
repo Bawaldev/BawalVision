@@ -58,9 +58,9 @@ services:
       - BACKEND_HOST=backend
       - BACKEND_PORT=8080
       - MODEL_PATH=/app/ml/AI1/model/ai1_vision.onnx
-      - OMP_NUM_THREADS=4
+      - OMP_WAIT_POLICY=PASSIVE
+      - OMP_NUM_THREADS=2
       - OMP_SCHEDULE=static
-      - OMP_PROC_BIND=true
     volumes:
       - ../weights:/app/weights:ro
       - ../ml/AI1/model:/app/ml/AI1/model:ro

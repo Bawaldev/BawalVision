@@ -113,4 +113,45 @@ bool postInspectionPayload(CURL* curl, std::string_view backend_base_url, std::s
     return (http_status_code >= 200 && http_status_code < 300);
 }
 
+bool postAnnotatedFrame(CURL* curl, std::string_view backend_base_url, std::string_view device_id, uint32_t frame_id, const std::vector<uint8_t>& jpeg_bytes) {
+    if (!curl || backend_base_url.empty() || jpeg_bytes.empty()) {
+        return false;
+    }
+
+    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/camera/annotated";
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: image/jpeg");
+    const std::string dev_header = "X-Device-ID: " + std::string(device_id.empty() ? "DEFAULT_CAMERA" : device_id);
+    const std::string frame_header = "X-Frame-ID: " + std::to_string(frame_id);
+    headers = curl_slist_append(headers, dev_header.c_str());
+    headers = curl_slist_append(headers, frame_header.c_str());
+
+    curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jpeg_bytes.data());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(jpeg_bytes.size()));
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1000L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 500L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+    std::vector<uint8_t> response_buffer;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
+
+    const CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
+    curl_easy_setopt(curl, CURLOPT_POST, 0L);
+
+    if (res != CURLE_OK) {
+        return false;
+    }
+
+    long http_status_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
+    return (http_status_code >= 200 && http_status_code < 300);
+}
+
 } // namespace bawal::server

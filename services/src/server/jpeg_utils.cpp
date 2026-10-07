@@ -105,4 +105,12 @@ bool decodeMJPEGFrame(const std::vector<uint8_t>& raw_bytes, cv::Mat& out_frame)
     return false;
 }
 
+bool encodeJPEGFrame(const cv::Mat& image, std::vector<uint8_t>& out_bytes, int quality) {
+    if (image.empty()) {
+        return false;
+    }
+    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, std::clamp(quality, 10, 100)};
+    return cv::imencode(".jpg", image, out_bytes, params);
+}
+
 } // namespace bawal::server

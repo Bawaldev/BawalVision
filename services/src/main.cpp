@@ -19,6 +19,9 @@ using namespace bawal::vision;
 using namespace bawal::server;
 
 int main(int argc, char** argv) {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
     curl_global_init(CURL_GLOBAL_ALL);
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -110,14 +113,18 @@ int main(int argc, char** argv) {
     }
 
     std::vector<uint8_t> raw_bytes;
+    std::vector<uint8_t> prev_raw_bytes;
     raw_bytes.reserve(256 * 1024);
+    prev_raw_bytes.reserve(256 * 1024);
     uint64_t frame_seq = 0;
     int discovery_tick = 0;
     auto last_dispatch_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    auto last_inference_time = std::chrono::steady_clock::now() - std::chrono::seconds(1);
 
-    constexpr int kActiveFrameIntervalMs = 33;
-    constexpr int kIdleBackoffMinMs = 250;
-    constexpr int kIdleBackoffMaxMs = 5000;
+    constexpr int kActiveFrameIntervalMs = 100;
+    constexpr int kMinInferenceIntervalMs = 150; // Cap AI inference to ~6.6 FPS to prevent CPU saturation & system lag
+    constexpr int kIdleBackoffMinMs = 400;
+    constexpr int kIdleBackoffMaxMs = 3000;
     int idle_backoff_ms = 0;  // 0 == currently receiving frames
 
     while (true) {
@@ -156,6 +163,21 @@ int main(int argc, char** argv) {
         }
 
         if (got_frame) {
+            // Deduplicate: If frame is unchanged from previous cycle, sleep and avoid burning CPU
+            if (raw_bytes.size() == prev_raw_bytes.size() && raw_bytes == prev_raw_bytes) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            prev_raw_bytes = raw_bytes;
+
+            // Throttle inference frequency to keep system completely responsive and lag-free
+            const auto now_time = std::chrono::steady_clock::now();
+            const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_time - last_inference_time).count();
+            if (elapsed_ms < kMinInferenceIntervalMs) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kMinInferenceIntervalMs - elapsed_ms));
+            }
+            last_inference_time = std::chrono::steady_clock::now();
+
             inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
             
             // Execute End-to-End Pipeline
@@ -163,12 +185,12 @@ int main(int argc, char** argv) {
             if (pipeline.execute(raw_bytes, inspection)) {
                 frame_ok = true;
                 frame_seq++;
-                
+
                 // Collect valid food detections
-                std::vector<std::pair<std::string, float>> detected_foods;
+                std::vector<DetectionResult> valid_detections;
                 for (const auto& d : inspection.detections) {
-                    if (d.class_id >= 0 && d.confidence >= 0.25f && d.class_name != "no_food" && d.class_name != "no_model") {
-                        detected_foods.emplace_back(d.class_name, d.confidence);
+                    if (d.class_id >= 0 && d.confidence >= 0.05f && d.class_name != "no_food" && d.class_name != "no_model") {
+                        valid_detections.push_back(d);
                     }
                 }
 
@@ -188,16 +210,23 @@ int main(int argc, char** argv) {
                 const auto current_time = std::chrono::steady_clock::now();
                 const auto elapsed_since_dispatch = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_dispatch_time).count();
 
-                if (!detected_foods.empty() && elapsed_since_dispatch >= 2000 && !device_id.empty()) {
+                if (!valid_detections.empty() && elapsed_since_dispatch >= 800 && !device_id.empty()) {
                     std::ostringstream json_ss;
                     json_ss << "{"
                             << "\"device_id\":\"" << device_id << "\","
                             << "\"detections\":[";
-                    for (size_t i = 0; i < detected_foods.size(); ++i) {
+                    for (size_t i = 0; i < valid_detections.size(); ++i) {
+                        const auto& vd = valid_detections[i];
+                        const float spoilage_pct = std::clamp(vd.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
+                        const std::string status = vd.spoilage.is_visually_spoiled ? "REJECT" : (spoilage_pct > 35.0f ? "REVIEW" : "PASS");
+
                         if (i > 0) json_ss << ",";
                         json_ss << "{"
-                                << "\"food_name\":\"" << detected_foods[i].first << "\","
-                                << "\"similarity_rate\":" << std::fixed << std::setprecision(4) << detected_foods[i].second
+                                << "\"food_name\":\"" << vd.class_name << "\","
+                                << "\"similarity_rate\":" << std::fixed << std::setprecision(4) << vd.confidence << ","
+                                << "\"spoilage_score\":" << std::fixed << std::setprecision(2) << spoilage_pct << ","
+                                << "\"status\":\"" << status << "\","
+                                << "\"box\":[" << vd.bbox.x << "," << vd.bbox.y << "," << vd.bbox.width << "," << vd.bbox.height << "]"
                                 << "}";
                     }
                     json_ss << "]}";
@@ -206,7 +235,16 @@ int main(int argc, char** argv) {
                     if (bawal::server::postInspectionPayload(curl, backend_base_url, payload_json)) {
                         last_dispatch_time = current_time;
                         std::cout << "[DISPATCH] Inspection payload saved to PostgreSQL (" 
-                                  << detected_foods.size() << " detected foods)\n";
+                                  << valid_detections.size() << " detected foods)\n";
+                    }
+                }
+
+                // Push OpenCV Annotated Frame with detection boxes to backend camera stream
+                if (!inspection.annotated_image.empty() && !device_id.empty()) {
+                    std::vector<uint8_t> annotated_jpeg;
+                    std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, 80};
+                    if (cv::imencode(".jpg", inspection.annotated_image, annotated_jpeg, encode_params)) {
+                        bawal::server::postAnnotatedFrame(curl, backend_base_url, device_id, inspection.frame_id, annotated_jpeg);
                     }
                 }
             }

@@ -61,6 +61,7 @@ type FoodDetection struct {
 	Temperature    float64 `json:"temperature,omitempty"`
 	SpoilageScore  float64 `json:"spoilage_score,omitempty"`
 	Status         string  `json:"status,omitempty"`
+	Box            []int   `json:"box,omitempty"`
 }
 
 type IngressInspectionRequest struct {

@@ -65,9 +65,9 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     }
     out_inspection.dewarped_image = dewarped;
 
-    // 2. Deteksi makanan YOLOv8 + Evaluasi degradasi warna SIMD (Threshold 0.15f)
+    // 2. Deteksi makanan YOLOv8 + Evaluasi degradasi warna SIMD (Threshold 0.40f)
     out_inspection.detections.clear();
-    [[maybe_unused]] bool det_ok = m_classifier.detect(dewarped, out_inspection.detections, 0.15f, 0.45f);
+    [[maybe_unused]] bool det_ok = m_classifier.detect(dewarped, out_inspection.detections, 0.40f, 0.45f);
 
     const int64_t t_end = cv::getTickCount();
     out_inspection.processing_time_ms = ((t_end - t_start) * 1000.0) / cv::getTickFrequency();
@@ -88,7 +88,7 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
     int detected_food_count = 0;
 
     for (const auto& det : inspection.detections) {
-        if (det.class_id < 0 || det.confidence < 0.15f || det.class_name == "no_model") {
+        if (det.class_id < 0 || det.confidence < 0.05f || det.class_name == "no_model") {
             continue;
         }
 
@@ -128,15 +128,6 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         cv::putText(out_display, label, cv::Point(clamped_box.x + 4, badge_y - 2),
                     cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
     }
-
-    cv::rectangle(out_display, cv::Point(0, 0), cv::Point(out_display.cols, 28), cv::Scalar(20, 20, 20), cv::FILLED);
-    std::ostringstream hud_ss;
-    hud_ss << "BawalVision YOLOv8 + SIMD Pipeline | Frame #" << inspection.frame_id 
-           << " | Latency: " << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms"
-           << " | Food Items: " << detected_food_count;
-    
-    cv::putText(out_display, hud_ss.str(), cv::Point(10, 19),
-                cv::FONT_HERSHEY_SIMPLEX, 0.48, cv::Scalar(0, 255, 180), 1, cv::LINE_AA);
 }
 
 } // namespace bawal::vision
