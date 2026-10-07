@@ -113,7 +113,24 @@
                 isOnline = true;
             }
 
-            // 4. Inspections & Records from DB (Only count actual meals with scanned food items!)
+            // 4. Live Real-time Inspections & Dynamic Bounding Boxes
+            const latestLive: any = await fetchLatestInspection(systemConfig.backendUrl);
+            let hasLiveDetections = false;
+            if (latestLive && latestLive.detections && latestLive.detections.length > 0) {
+                isOnline = true;
+                hasLiveDetections = true;
+                detections = latestLive.detections.map((det: any) => ({
+                    food_name: det.food_name || 'food_item',
+                    similarity_rate: Number(det.similarity_rate) || 0.0,
+                    temperature: Number(det.temperature) || Number(latestLive.food_temperature) || Number(latestLive.temperature) || 25,
+                    spoilage_score: Number(det.spoilage_score) || 0,
+                    status: (det.status as 'PASS' | 'REVIEW' | 'REJECT') || 'PASS',
+                    category: getCategory(det.food_name || ''),
+                    box: det.box || []
+                }));
+            }
+
+            // 5. Inspections & Records from DB (Only count actual meals with scanned food items!)
             const allRecords = await fetchRecords(systemConfig.backendUrl);
             const validRecords = (allRecords || []).filter(
                 r => r.inspection_foods && r.inspection_foods.length > 0
@@ -125,23 +142,25 @@
                 totalRejected = spoiled;
                 totalAccepted = validRecords.length - spoiled;
 
-                const latest = validRecords[0];
-                if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
-                    detections = latest.inspection_foods.map(item => {
-                        const name = item.food_item?.name || 'food_item';
-                        return {
-                            food_name: name,
-                            similarity_rate: Number(item.similarity_rate) || 0.0,
-                            temperature: Number(item.temperature) || Number(latest.food_temperature) || Number(latest.temperature) || 25,
-                            spoilage_score: Number(item.spoilage_score) || 0,
-                            status: (item.status as 'PASS' | 'REVIEW' | 'REJECT') || 'PASS',
-                            category: getCategory(name)
-                        };
-                    });
-                } else {
-                    detections = [];
+                if (!hasLiveDetections) {
+                    const latest = validRecords[0];
+                    if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
+                        detections = latest.inspection_foods.map(item => {
+                            const name = item.food_item?.name || 'food_item';
+                            return {
+                                food_name: name,
+                                similarity_rate: Number(item.similarity_rate) || 0.0,
+                                temperature: Number(item.temperature) || Number(latest.food_temperature) || Number(latest.temperature) || 25,
+                                spoilage_score: Number(item.spoilage_score) || 0,
+                                status: (item.status as 'PASS' | 'REVIEW' | 'REJECT') || 'PASS',
+                                category: getCategory(name)
+                            };
+                        });
+                    } else {
+                        detections = [];
+                    }
                 }
-            } else {
+            } else if (!hasLiveDetections) {
                 totalAccepted = 0;
                 totalRejected = 0;
                 detections = [];
@@ -155,10 +174,10 @@
         // Initial polling
         await pollBackendData();
 
-        // Continuous real-time backend synchronization loop (every 2.5s)
+        // Continuous real-time backend synchronization loop (every 600ms for responsive HUD & detections)
         pollingTimer = setInterval(async () => {
             await pollBackendData();
-        }, 2500);
+        }, 600);
     });
 
     onDestroy(() => {

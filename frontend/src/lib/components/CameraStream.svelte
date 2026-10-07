@@ -76,64 +76,6 @@
                     class="feed-video"
                     onerror={() => (streamError = true)}
                 />
-
-                <!-- Dynamic Vector Overlay for Client-Side YOLO Detections (Only when box coordinates are present) -->
-                {#if detections.some(d => d.box && d.box.length === 4)}
-                    <svg class="detection-svg-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
-                        {#each detections as det}
-                            {#if det.box && det.box.length === 4}
-                                {@const [bx, by, bw, bh] = det.box}
-                                {@const color = getBoxColor(det)}
-                                <!-- Dynamic Outer Bounding Box -->
-                                <rect
-                                    x={bx}
-                                    y={by}
-                                    width={bw}
-                                    height={bh}
-                                    rx="4"
-                                    fill="none"
-                                    stroke={color}
-                                    stroke-width="2"
-                                    opacity="0.95"
-                                />
-
-                                <!-- Tech Corner Accents -->
-                                <path
-                                    d={`M ${bx} ${by + 12} L ${bx} ${by} L ${bx + 12} ${by}
-                                        M ${bx + bw - 12} ${by} L ${bx + bw} L ${bx + bw} ${by + 12}
-                                        M ${bx} ${by + bh - 12} L ${bx} ${by + bh} L ${bx + 12} ${by + bh}
-                                        M ${bx + bw - 12} ${by + bh} L ${bx + bw} ${by + bh} L ${bx + bw} ${by + bh - 12}`}
-                                    fill="none"
-                                    stroke={color}
-                                    stroke-width="3.5"
-                                    stroke-linecap="round"
-                                />
-
-                                <!-- Classification Label Pill -->
-                                <g transform={`translate(${bx}, ${Math.max(0, by - 22)})`}>
-                                    <rect
-                                        x="0"
-                                        y="0"
-                                        width={det.food_name.length * 8 + 55}
-                                        height="20"
-                                        rx="4"
-                                        fill={color}
-                                    />
-                                    <text
-                                        x="6"
-                                        y="14"
-                                        fill="#0f172a"
-                                        font-size="11"
-                                        font-weight="bold"
-                                        font-family="sans-serif"
-                                    >
-                                        {det.food_name.toUpperCase()} {(det.similarity_rate * 100).toFixed(0)}%
-                                    </text>
-                                </g>
-                            {/if}
-                        {/each}
-                    </svg>
-                {/if}
             {:else}
                 <!-- Standby State -->
                 <div class="standby-box">
