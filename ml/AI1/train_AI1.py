@@ -9,6 +9,17 @@ import torch
 from ultralytics import YOLO
 
 # ==============================================================================
+#  mlflow setup & initialization
+# ==============================================================================
+import mlflow
+
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+MLFLOW_EXPERIMENT_NAME = "MBG-BawalVision-YOLOv8n"
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+
+# ==============================================================================
 # PIPELINE CONFIGURATION & HYPERPARAMETERS
 # ==============================================================================
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -82,168 +93,223 @@ def main() -> None:
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
     # ==============================================================================
-    # 1. TRAINING PHASE (OPTIONAL VIA --export-only)
+    # Wrap Run with Mlflow
     # ==============================================================================
-    if not args.export_only:
-        if not YAML_CONFIG.exists():
-            raise FileNotFoundError(
-                f"Specification not found: {YAML_CONFIG}. Run prepare_yolo_dataset.py first!"
+    run_name = f"yolov8n_e{args.epochs}_b{args.batch_size}"
+    if args.export_only:
+        run_name += "_export_only"
+
+    with mlflow.start_run(run_name=run_name) as run:
+        print(f"[+] Active MLflow Run ID: {run.info.run_id}")
+
+        # Log Training Parameters to MLflow
+        mlflow.log_params({
+            "model_architecture": MODEL_ARCH,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "img_resolution": INPUT_RESOLUTION,
+            "early_stopping_patience": EARLY_STOP_PATIENCE,
+            "onnx_opset": ONNX_OPSET,
+            "num_classes": NUM_CLASSES,
+            "workers": args.workers,
+            "device": "cuda" if torch.cuda.is_available() else "cpu",
+        })
+
+        # ==============================================================================
+        # 1. TRAINING PHASE (OPTIONAL VIA --export-only)
+        # ==============================================================================
+        if not args.export_only:
+            if not YAML_CONFIG.exists():
+                raise FileNotFoundError(
+                    f"Specification not found: {YAML_CONFIG}. Run prepare_yolo_dataset.py first!"
+                )
+
+            # Enable TF32 on Ampere+ GPUs (RTX 3050/3060/40xx)
+            if torch.cuda.is_available():
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+                torch.backends.cudnn.benchmark = True
+                try:
+                    torch.set_float32_matmul_precision("high")
+                except Exception:
+                    pass
+
+            device_id = "0" if torch.cuda.is_available() else "cpu"
+            compute_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "Host CPU"
+            print(f"[+] Compute Hardware    : {compute_name} (TF32/FP32 Precision Enabled)")
+            print(f"[+] DataLoader Workers  : {args.workers} parallel workers | CPU Threads: {system_cores}")
+            print(f"[+] Target Categories   : {NUM_CLASSES} Food Classes")
+
+            print(f"\n[+] Loading Detection Base: {MODEL_ARCH}...")
+            model = YOLO(MODEL_ARCH)
+
+            print("\n=== Commencing YOLOv8n Object Detection Training ===")
+            start_timestamp = time.time()
+
+            train_job = model.train(
+                data=str(YAML_CONFIG),
+                epochs=args.epochs,
+                patience=EARLY_STOP_PATIENCE,
+                batch=args.batch_size,
+                imgsz=INPUT_RESOLUTION,
+                device=device_id,
+                workers=args.workers,
+                project=str(SCRIPT_DIR / "runs"),
+                name="ai1_yolov8n_det",
+                exist_ok=True,
+                verbose=True,
+                optimizer="AdamW",
+                lr0=0.001,
+                lrf=0.01,
+                cos_lr=True,
+                warmup_epochs=3.0,
+                amp=False,
+                box=7.5,
+                cls=1.0,
+                dfl=1.5,
+                hsv_h=0.015,
+                hsv_s=0.7,
+                hsv_v=0.4,
+                degrees=15.0,
+                translate=0.1,
+                scale=0.5,
+                shear=2.0,
+                flipud=0.0,
+                fliplr=0.5,
+                mosaic=1.0,
+                mixup=0.15,
+                close_mosaic=10,
+                plots=True,
+                save=True,
+                val=True,
             )
 
-        # Enable TF32 on Ampere+ GPUs (RTX 3050/3060/40xx)
-        if torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            torch.backends.cudnn.benchmark = True
-            try:
-                torch.set_float32_matmul_precision("high")
-            except Exception:
-                pass
+            elapsed_seconds = time.time() - start_timestamp
+            print(f"\n[⏱️] Total Training Runtime: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
 
-        device_id = "0" if torch.cuda.is_available() else "cpu"
-        compute_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "Host CPU"
-        print(f"[+] Compute Hardware    : {compute_name} (TF32/FP32 Precision Enabled)")
-        print(f"[+] DataLoader Workers  : {args.workers} parallel workers | CPU Threads: {system_cores}")
-        print(f"[+] Target Categories   : {NUM_CLASSES} Food Classes")
+            # ==============================================================================
+            # [TITIK 3: SETELAH TRAINING] CATAT METRIK & PLOT ULTRALYTICS KE MLFLOW
+            # ==============================================================================
+            mlflow.log_metric("training_duration_seconds", elapsed_seconds)
 
-        print(f"\n[+] Loading Detection Base: {MODEL_ARCH}...")
-        model = YOLO(MODEL_ARCH)
+            if hasattr(train_job, "results_dict") and isinstance(train_job.results_dict, dict):
+                for metric_key, metric_val in train_job.results_dict.items():
+                    sanitized_key = metric_key.replace("/", "_").replace("(", "").replace(")", "").strip()
+                    try:
+                        mlflow.log_metric(sanitized_key, float(metric_val))
+                    except (ValueError, TypeError):
+                        pass
 
-        print("\n=== Commencing YOLOv8n Object Detection Training ===")
-        start_timestamp = time.time()
+            # Simpan visualisasi kurva loss, PR curve, dan confusion matrix ke MLflow UI
+            if hasattr(train_job, "save_dir") and Path(train_job.save_dir).exists():
+                mlflow.log_artifacts(str(train_job.save_dir), artifact_path="ultralytics_outputs")
 
-        train_job = model.train(
-            data=str(YAML_CONFIG),
-            epochs=args.epochs,
-            patience=EARLY_STOP_PATIENCE,
-            batch=args.batch_size,
+            checkpoint_best = Path(train_job.save_dir) / "weights" / "best.pt"
+            if checkpoint_best.exists():
+                shutil.copy2(checkpoint_best, FINAL_PT_TARGET)
+                print(f"[✓] Optimal PyTorch weights saved to: {FINAL_PT_TARGET}")
+            else:
+                raise FileNotFoundError(f"Missing checkpoint at: {checkpoint_best}")
+        else:
+            print("[+] Flag --export-only aktif: Melewati proses training.")
+
+        # ==============================================================================
+        # 2. STATIC FP32 ONNX EXPORT (OPENCV DNN COMPLIANT)
+        # ==============================================================================
+        if not FINAL_PT_TARGET.exists():
+            runs_candidates = list((SCRIPT_DIR / "runs").glob("**/weights/best.pt"))
+            if runs_candidates:
+                FINAL_PT_TARGET.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(runs_candidates[0], FINAL_PT_TARGET)
+            else:
+                raise FileNotFoundError(f"Weights file not found at: {FINAL_PT_TARGET}. Run without --export-only first.")
+
+        print(f"\n=== Exporting PyTorch Checkpoint ({FINAL_PT_TARGET}) to Static FP32 ONNX ===")
+        detection_engine = YOLO(str(FINAL_PT_TARGET))
+
+        exported_onnx = detection_engine.export(
+            format="onnx",
             imgsz=INPUT_RESOLUTION,
-            device=device_id,
-            workers=args.workers,
-            project=str(SCRIPT_DIR / "runs"),
-            name="ai1_yolov8n_det",
-            exist_ok=True,
-            verbose=True,
-            optimizer="AdamW",
-            lr0=0.001,
-            lrf=0.01,
-            cos_lr=True,
-            warmup_epochs=3.0,
-            amp=False,
-            box=7.5,
-            cls=1.0,
-            dfl=1.5,
-            hsv_h=0.015,
-            hsv_s=0.7,
-            hsv_v=0.4,
-            degrees=15.0,
-            translate=0.1,
-            scale=0.5,
-            shear=2.0,
-            flipud=0.0,
-            fliplr=0.5,
-            mosaic=1.0,
-            mixup=0.15,
-            close_mosaic=10,
-            plots=True,
-            save=True,
-            val=True,
+            dynamic=False,     # STATIS: Mencegah error Unsupported data type: BOOL
+            opset=ONNX_OPSET,  # Opset 12
+            half=False,        # FP32 murni
+            simplify=True,     # Constant folding
         )
 
-        elapsed_seconds = time.time() - start_timestamp
-        print(f"\n[⏱️] Total Training Runtime: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
+        if os.path.exists(exported_onnx):
+            shutil.copy2(exported_onnx, FINAL_ONNX_TARGET)
+            ROOT_WEIGHTS_TARGET.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(exported_onnx, ROOT_WEIGHTS_TARGET)
+            os.remove(exported_onnx)
+            print(f"[✓] Static FP32 ONNX binary deployed to: {FINAL_ONNX_TARGET}")
+            print(f"[✓] Deployed to Docker vision mount   : {ROOT_WEIGHTS_TARGET}")
 
-        checkpoint_best = Path(train_job.save_dir) / "weights" / "best.pt"
-        if checkpoint_best.exists():
-            shutil.copy2(checkpoint_best, FINAL_PT_TARGET)
-            print(f"[✓] Optimal PyTorch weights saved to: {FINAL_PT_TARGET}")
-        else:
-            raise FileNotFoundError(f"Missing checkpoint at: {checkpoint_best}")
-    else:
-        print("[+] Flag --export-only aktif: Melewati proses training.")
+        # ==============================================================================
+        # 3. NUMERICAL SANITY CHECK (PyTorch vs ONNX Runtime Multi-Threaded CPU)
+        # ==============================================================================
+        print("\n=== Executing Parity Sanity Check ===")
 
-    # ==============================================================================
-    # 2. STATIC FP32 ONNX EXPORT (OPENCV DNN COMPLIANT)
-    # ==============================================================================
-    if not FINAL_PT_TARGET.exists():
-        # Fallback search if best.pt is inside runs directory
-        runs_candidates = list((SCRIPT_DIR / "runs").glob("**/weights/best.pt"))
-        if runs_candidates:
-            FINAL_PT_TARGET.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(runs_candidates[0], FINAL_PT_TARGET)
-        else:
-            raise FileNotFoundError(f"Weights file not found at: {FINAL_PT_TARGET}. Run without --export-only first.")
+        synthetic_frame = torch.randn(
+            1, 3, INPUT_RESOLUTION, INPUT_RESOLUTION, dtype=torch.float32, device="cpu"
+        )
 
-    print(f"\n=== Exporting PyTorch Checkpoint ({FINAL_PT_TARGET}) to Static FP32 ONNX ===")
-    detection_engine = YOLO(str(FINAL_PT_TARGET))
+        # 1. Native PyTorch inference
+        torch_eval_model = detection_engine.model.to("cpu").eval()
+        with torch.no_grad():
+            torch_raw = torch_eval_model(synthetic_frame)
+            if isinstance(torch_raw, (list, tuple)):
+                torch_raw = torch_raw[0]
+            torch_tensor = torch_raw.cpu().numpy()
 
-    # Kunci dynamic=False untuk mematikan node BOOL yang memicu error pada OpenCV DNN
-    exported_onnx = detection_engine.export(
-        format="onnx",
-        imgsz=INPUT_RESOLUTION,
-        dynamic=False,     # STATIS: Mencegah error Unsupported data type: BOOL
-        opset=ONNX_OPSET,  # Opset 12
-        half=False,        # FP32 murni
-        simplify=True,     # Constant folding
-    )
+        # 2. ONNX Runtime Multi-Threaded CPU inference
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = system_cores
+        sess_options.inter_op_num_threads = system_cores
+        sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-    if os.path.exists(exported_onnx):
-        shutil.copy2(exported_onnx, FINAL_ONNX_TARGET)
-        ROOT_WEIGHTS_TARGET.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(exported_onnx, ROOT_WEIGHTS_TARGET)
-        os.remove(exported_onnx)
-        print(f"[✓] Static FP32 ONNX binary deployed to: {FINAL_ONNX_TARGET}")
-        print(f"[✓] Deployed to Docker vision mount   : {ROOT_WEIGHTS_TARGET}")
+        ort_session = ort.InferenceSession(
+            str(FINAL_ONNX_TARGET), sess_options, providers=["CPUExecutionProvider"]
+        )
+        ort_in_name = ort_session.get_inputs()[0].name
+        onnx_tensor = ort_session.run(None, {ort_in_name: synthetic_frame.numpy()})[0]
 
-    # ==============================================================================
-    # 3. NUMERICAL SANITY CHECK (PyTorch vs ONNX Runtime Multi-Threaded CPU)
-    # ==============================================================================
-    print("\n=== Executing Parity Sanity Check ===")
+        peak_diff = float(np.max(np.abs(torch_tensor - onnx_tensor)))
+        mean_diff = float(np.mean(np.abs(torch_tensor - onnx_tensor)))
 
-    synthetic_frame = torch.randn(
-        1, 3, INPUT_RESOLUTION, INPUT_RESOLUTION, dtype=torch.float32, device="cpu"
-    )
+        print(f" -> PyTorch Output Shape : {torch_tensor.shape}")
+        print(f" -> ONNX Output Shape    : {onnx_tensor.shape}")
+        print(f" -> Peak Absolute Delta  : {peak_diff:.8f}")
+        print(f" -> Mean Absolute Delta  : {mean_diff:.8f}")
 
-    # 1. Native PyTorch inference
-    torch_eval_model = detection_engine.model.to("cpu").eval()
-    with torch.no_grad():
-        torch_raw = torch_eval_model(synthetic_frame)
-        if isinstance(torch_raw, (list, tuple)):
-            torch_raw = torch_raw[0]
-        torch_tensor = torch_raw.cpu().numpy()
+        expected_dim = 4 + NUM_CLASSES
+        assert onnx_tensor.shape == (1, expected_dim, 8400), (
+            f"Unexpected output shape: {onnx_tensor.shape}. Expected: (1, {expected_dim}, 8400)"
+        )
 
-    # 2. ONNX Runtime Multi-Threaded CPU inference
-    sess_options = ort.SessionOptions()
-    sess_options.intra_op_num_threads = system_cores
-    sess_options.inter_op_num_threads = system_cores
-    sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
-    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # ==============================================================================
+        # Metric log & final weight to Mlflow
+        # ==============================================================================
+        mlflow.log_metrics({
+            "parity_peak_diff": peak_diff,
+            "parity_mean_diff": mean_diff,
+        })
 
-    ort_session = ort.InferenceSession(
-        str(FINAL_ONNX_TARGET), sess_options, providers=["CPUExecutionProvider"]
-    )
-    ort_in_name = ort_session.get_inputs()[0].name
-    onnx_tensor = ort_session.run(None, {ort_in_name: synthetic_frame.numpy()})[0]
+        if FINAL_PT_TARGET.exists():
+            mlflow.log_artifact(str(FINAL_PT_TARGET), artifact_path="weights")
+        if FINAL_ONNX_TARGET.exists():
+            mlflow.log_artifact(str(FINAL_ONNX_TARGET), artifact_path="model_onnx")
 
-    peak_diff = np.max(np.abs(torch_tensor - onnx_tensor))
-    mean_diff = np.mean(np.abs(torch_tensor - onnx_tensor))
+        try:
+            np.testing.assert_allclose(torch_tensor, onnx_tensor, rtol=1e-03, atol=1e-04)
+            mlflow.set_tag("sanity_check_status", "PASSED")
+            print("\n[✓] Sanity check PASSED! Model is fully compliant for C++ deployment.")
+        except AssertionError as err:
+            mlflow.set_tag("sanity_check_status", "FAILED")
+            print("\n[!] Warning: Numerical divergence detected between engines:")
+            print(err)
 
-    print(f" -> PyTorch Output Shape : {torch_tensor.shape}")
-    print(f" -> ONNX Output Shape    : {onnx_tensor.shape}")
-    print(f" -> Peak Absolute Delta  : {peak_diff:.8f}")
-    print(f" -> Mean Absolute Delta  : {mean_diff:.8f}")
-
-    expected_dim = 4 + NUM_CLASSES
-    assert onnx_tensor.shape == (1, expected_dim, 8400), (
-        f"Unexpected output shape: {onnx_tensor.shape}. Expected: (1, {expected_dim}, 8400)"
-    )
-
-    try:
-        np.testing.assert_allclose(torch_tensor, onnx_tensor, rtol=1e-03, atol=1e-04)
-        print("\n[✓] Sanity check PASSED! Model is fully compliant for C++ deployment.")
-    except AssertionError as err:
-        print("\n[!] Warning: Numerical divergence detected between engines:")
-        print(err)
+        print(f"\n[✓] Sesi run tercatat di MLflow Server: {MLFLOW_TRACKING_URI}")
 
 
 if __name__ == "__main__":
