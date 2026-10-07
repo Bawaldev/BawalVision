@@ -13,16 +13,9 @@ namespace bawal::vision {
 
 namespace {
 
-// Struktur pelacak temporal untuk mengeliminasi kedipan (flickering) antar-frame
-struct TrackedItem {
-    DetectionResult result;
-    int age{0};          // Jumlah frame terdeteksi secara berturut-turut
-    int lost_frames{0};  // Toleransi frame kosong sebelum kotak dihapus
-};
-
 static std::vector<TrackedItem> s_tracked_items;
 
-// Menghitung Intersection over Union (IoU) antar dua kotak pembatas
+// Compute Intersection over Union (IoU) between two bounding boxes
 inline float computeIoU(const cv::Rect& a, const cv::Rect& b) {
     int inter_x1 = std::max(a.x, b.x);
     int inter_y1 = std::max(a.y, b.y);
@@ -82,7 +75,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     }
 
     if (resolved_path.empty()) {
-        std::cerr << "[FoodClassifier] Error: File model ONNX tidak ditemukan di search path.\n";
+        std::cerr << "[FoodClassifier] Error: ONNX model file not found in candidate search paths.\n";
         return false;
     }
 
@@ -96,7 +89,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
 
         Ort::AllocatorWithDefaultOptions allocator;
 
-        // Ambil nama node input
+        // Retrieve input node names
         m_input_node_names.clear();
         m_input_names.clear();
         const size_t num_inputs = m_session->GetInputCount();
@@ -108,7 +101,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
             m_input_names.push_back(name.c_str());
         }
 
-        // Ambil nama node output
+        // Retrieve output node names
         m_output_node_names.clear();
         m_output_names.clear();
         const size_t num_outputs = m_session->GetOutputCount();
@@ -121,7 +114,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
         }
 
         m_is_ready = true;
-        std::cout << "[FoodClassifier] ONNX Runtime v1.19.2 berhasil memuat model: " << resolved_path << "\n";
+        std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << resolved_path << "\n";
         return true;
     } catch (const Ort::Exception& e) {
         std::cerr << "[FoodClassifier] ONNX Runtime Init Error (" << resolved_path << "): " << e.what() << "\n";
@@ -156,14 +149,14 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         cv::Mat resized;
         cv::resize(frame, resized, cv::Size(target_w, target_h), 0, 0, cv::INTER_LINEAR);
 
-        // Gray-World Auto White Balance & Normalisasi Warna
+        // Gray-World Auto White Balance & Color Normalization
         const cv::Scalar mean_bgr = cv::mean(resized);
         const double mean_gray = (mean_bgr[0] + mean_bgr[1] + mean_bgr[2]) / 3.0;
         const float scale_b = static_cast<float>((mean_bgr[0] > 1.0) ? (mean_gray / mean_bgr[0]) : 1.0);
         const float scale_g = static_cast<float>((mean_bgr[1] > 1.0) ? (mean_gray / mean_bgr[1]) : 1.0);
         const float scale_r = static_cast<float>((mean_bgr[2] > 1.0) ? (mean_gray / mean_bgr[2]) : 1.0);
 
-        // 2. Preprocessing Paralel (HWC BGR -> CHW RGB, Normalisasi Float)
+        // 2. Parallel Preprocessing (HWC BGR -> CHW RGB, Float Normalization)
         std::vector<float> input_tensor_values(1 * 3 * spatial_size);
 
         #pragma omp parallel for schedule(static)
@@ -182,7 +175,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             }
         }
 
-        // 3. Eksekusi Inferensi ONNX Runtime
+        // 3. Execute ONNX Runtime Inference
         auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
             mem_info, 
@@ -205,7 +198,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             return false;
         }
 
-        // 4. Parser Tensor Output YOLOv8
+        // 4. Parse YOLOv8 Output Tensor
         float* raw_output = output_tensors[0].GetTensorMutableData<float>();
         auto shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
 
@@ -298,13 +291,13 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         std::vector<int> nms_indices;
         cv::dnn::NMSBoxes(boxes, confidences, conf_threshold, nms_threshold, nms_indices);
 
-        // Jika YOLO tidak mendeteksi objek apapun, bersihkan tracker dan selesai (NO FAKE DETECTIONS)
+        // If YOLO detects no candidates, clear active tracks and return immediately
         if (nms_indices.empty()) {
             s_tracked_items.clear();
             return true;
         }
 
-        // 6. Evaluasi Kontras Fisik Scene
+        // 6. Evaluate Scene Physical Contrast
         cv::Scalar mean_bgr_frame, std_bgr_frame;
         cv::meanStdDev(frame, mean_bgr_frame, std_bgr_frame);
         const double scene_contrast = (std_bgr_frame[0] + std_bgr_frame[1] + std_bgr_frame[2]) / 3.0;
@@ -317,7 +310,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         std::vector<DetectionResult> current_detections;
         current_detections.reserve(nms_indices.size());
 
-        // 7. Evaluasi Setiap Deteksi YOLO dengan AVX2 Texture Filter & Disambiguasi Semantik
+        // 7. Evaluate Each YOLO Detection with AVX2 Texture Filter & Semantic Disambiguation
         for (int idx : nms_indices) {
             cv::Rect yolo_box = boxes[idx];
             yolo_box &= cv::Rect(0, 0, frame.cols, frame.rows);
@@ -328,13 +321,13 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
             cv::Mat food_roi = frame(yolo_box);
 
-            // Filter AVX2 SIMD: Tolak background dinding / meja flat tanpa tekstur makanan
+            // AVX2 SIMD Filter: Reject flat background walls/tables without genuine food texture
             TextureMetric tex = evaluateTextureAVX2(food_roi);
             if (!tex.is_valid_food_texture) {
                 continue;
             }
 
-            // Local Contour Refinement: Rapatkan bounding box ke kontur piring/makanan nyata jika ada
+            // Local Contour Refinement: Fit bounding box to plate/food contours if present
             cv::Rect final_box = yolo_box;
             cv::Mat gray_roi;
             cv::cvtColor(food_roi, gray_roi, cv::COLOR_BGR2GRAY);
@@ -362,7 +355,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 }
             }
 
-            // Analisis Warna Spektral Core ROI (Tengah 50%)
+            // Spectral Color Analysis on Core ROI (Center 50%)
             int core_w = std::max(16, static_cast<int>(final_box.width * 0.50f));
             int core_h = std::max(16, static_cast<int>(final_box.height * 0.50f));
             int core_x = final_box.x + (final_box.width - core_w) / 2;
@@ -390,49 +383,68 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                                              ? m_class_names[yolo_cls]
                                              : "food_item";
             int final_class_id = yolo_cls;
+            bool is_valid_food = true;
 
-            // Aturan Validasi Pisang (Banana Rejection):
-            // Pisang harus memiliki saturasi warna kuning/kehijauan (S >= 38, H: 18 - 42).
-            // Tembok krem/putih/abu-abu memiliki saturasi rendah (S < 35) sehingga BUKAN pisang!
-            if (predicted_name == "banana") {
-                if (s_val < 38.0 || h_val < 15.0 || h_val > 45.0) {
-                    if (s_val < 35.0 && v_val > 80.0 &&
-                        std::abs(r_val - g_val) < 30.0 && std::abs(g_val - b_val) < 30.0) {
+            // 1. Green Vegetable Validation (Water Spinach / Spinach):
+            // Green vegetables must exhibit genuine green chromaticity (H: 28 - 92, Saturation S >= 32, and G > R + 2).
+            if (predicted_name == "water_spinach" || predicted_name == "spinach") {
+                if (h_val < 28.0 || h_val > 92.0 || s_val < 32.0 || g_val < r_val + 2.0) {
+                    if (s_val < 35.0 && v_val > 80.0 && std::abs(r_val - g_val) < 25.0 && std::abs(g_val - b_val) < 25.0) {
                         predicted_name = "rice";
                         final_class_id = 4;
                     } else {
-                        // Tolak false detection pada dinding/latar
-                        continue;
+                        is_valid_food = false;
                     }
                 }
             }
+            // 2. Banana Validation:
+            else if (predicted_name == "banana") {
+                if (s_val < 38.0 || h_val < 15.0 || h_val > 45.0) {
+                    if (s_val < 35.0 && v_val > 80.0 && std::abs(r_val - g_val) < 25.0 && std::abs(g_val - b_val) < 25.0) {
+                        predicted_name = "rice";
+                        final_class_id = 4;
+                    } else {
+                        is_valid_food = false;
+                    }
+                }
+            }
+            // 3. Orange Validation:
+            else if (predicted_name == "orange") {
+                if (s_val < 45.0 || h_val < 5.0 || h_val > 25.0) {
+                    is_valid_food = false;
+                }
+            }
+            // 4. White Rice Validation:
+            else if (predicted_name == "rice") {
+                if (s_val > 55.0 || v_val < 70.0 || std::abs(r_val - g_val) > 35.0) {
+                    is_valid_food = false;
+                }
+            }
 
-            // Aturan Nasi Putih: Saturasi rendah, kecerahan tinggi, RGB netral
-            if (s_val < 50.0 && v_val > 80.0 &&
-                std::abs(r_val - g_val) < 30.0 && std::abs(g_val - b_val) < 30.0) {
+            // Reject detection if physical chromaticity/texture checks fail
+            if (!is_valid_food) {
+                continue;
+            }
+
+            // White Rice Normalization: Disambiguate tofu/egg false positives with pure white rice profile
+            if (s_val < 40.0 && v_val > 85.0 &&
+                std::abs(r_val - g_val) < 25.0 && std::abs(g_val - b_val) < 25.0) {
                 predicted_name = "rice";
                 final_class_id = 4;
             }
-            // Aturan Sayuran Hijau (Bayam / Kangkung)
-            else if (h_val >= 30.0 && h_val <= 88.0 && s_val > 35.0 && g_val > r_val + 3.0) {
-                if (predicted_name != "spinach" && predicted_name != "water_spinach") {
-                    predicted_name = "spinach";
-                    final_class_id = 5;
-                }
-            }
-            // Aturan Jeruk (Orange)
-            else if (h_val >= 6.0 && h_val <= 22.0 && s_val > 65.0) {
-                predicted_name = "orange";
-                final_class_id = 3;
-            }
+
+            // Realistic Confidence Calibration (Bounded within 45% - 82%)
+            // Fuse neural network probability with visual edge texture density
+            float texture_factor = std::clamp((tex.edge_energy - 8.0f) / 16.0f, 0.0f, 1.0f);
+            float calibrated_conf = (yolo_score * 0.68f) + (texture_factor * 0.12f);
 
             DetectionResult det;
             det.bbox = final_box;
             det.class_id = final_class_id;
             det.class_name = predicted_name;
-            det.confidence = std::clamp(yolo_score, 0.40f, 0.95f);
+            det.confidence = std::clamp(calibrated_conf, 0.45f, 0.82f);
 
-            // Evaluasi degradasi warna SIMD AVX2 pada ROI makanan utuh
+            // AVX2 SIMD color spoilage and freshness assessment
             cv::Mat final_food_roi = frame(det.bbox);
             det.spoilage = evaluateSpoilageAVX2(final_food_roi, det.class_name);
 
@@ -444,7 +456,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             return true;
         }
 
-        // 8. Temporal Tracking & Smoothing (Meredam Kedipan dan Menstabilkan Kotak)
+        // 8. Temporal Tracking & Smoothing (Stabilizes Bounding Boxes & Suppresses Flicker)
         std::vector<bool> matched(current_detections.size(), false);
 
         for (auto& tracked : s_tracked_items) {
@@ -482,7 +494,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             }
         }
 
-        // Daftarkan objek baru yang belum terpetakan
+        // Register new untracked detections
         for (size_t i = 0; i < current_detections.size(); ++i) {
             if (!matched[i]) {
                 TrackedItem new_item;
@@ -493,13 +505,13 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             }
         }
 
-        // Hapus objek yang telah hilang lebih dari 2 frame
+        // Remove tracks lost for more than 2 consecutive frames
         s_tracked_items.erase(
             std::remove_if(s_tracked_items.begin(), s_tracked_items.end(),
                            [](const TrackedItem& item) { return item.lost_frames > 2; }),
             s_tracked_items.end());
 
-        // Salin seluruh hasil pelacakan yang masih valid ke output
+        // Copy valid tracks to output container
         for (const auto& item : s_tracked_items) {
             if (item.lost_frames <= 1) {
                 out_detections.push_back(item.result);

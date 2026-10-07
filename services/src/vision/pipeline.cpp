@@ -58,14 +58,14 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     out_inspection.raw_image = frame;
     out_inspection.is_valid = false;
 
-    // 1. Koreksi lensa dan distorsi
+    // 1. Lens undistortion and perspective correction
     cv::Mat dewarped;
     if (!m_dewarper.process(frame, dewarped)) {
         dewarped = frame.clone();
     }
     out_inspection.dewarped_image = dewarped;
 
-    // 2. Deteksi makanan YOLOv8 + Evaluasi degradasi warna SIMD (Threshold 0.40f)
+    // 2. YOLOv8 multi-food detection and SIMD freshness evaluation (0.40f threshold)
     out_inspection.detections.clear();
     [[maybe_unused]] bool det_ok = m_classifier.detect(dewarped, out_inspection.detections, 0.40f, 0.45f);
 
@@ -73,7 +73,7 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     out_inspection.processing_time_ms = ((t_end - t_start) * 1000.0) / cv::getTickFrequency();
     out_inspection.is_valid = true;
 
-    // 3. Render visual overlay box
+    // 3. Render visual HUD and detection bounding boxes
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
     return out_inspection.is_valid;

@@ -241,7 +241,8 @@ TextureMetric evaluateTextureAVX2(const cv::Mat& food_roi) {
 
     // Wall & flat surface rejection:
     // Real food objects have grain, porous texture, contours, and color variance.
-    metric.is_valid_food_texture = (metric.edge_energy >= 7.5f || metric.std_dev >= 13.0f);
+    // Flat walls and smooth backgrounds are strictly rejected.
+    metric.is_valid_food_texture = (metric.edge_energy >= 8.5f || metric.std_dev >= 15.0f);
 
     return metric;
 }

@@ -10,7 +10,7 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependensi dan pasang ONNX Runtime C++ release v1.19.2
+# Install build dependencies and ONNX Runtime C++ release v1.19.2
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -33,10 +33,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /src
 
-# Salin source code services C++
+# Copy services C++ source tree
 COPY services/ /src/services/
 
-# Kompilasi binary dengan optimasi AVX2/FMA dan OpenMP
+# Compile binary with AVX2/FMA and OpenMP vector optimizations
 RUN cmake -B /src/services/build -S /src/services -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_FLAGS="-O3 -mavx2 -mfma -fopenmp" \
@@ -48,7 +48,7 @@ FROM ubuntu:24.04 AS runner
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install shared libraries runtime
+# Install runtime shared libraries
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -60,14 +60,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-# Salin runtime shared library ONNX Runtime ke direktori sistem
+# Copy ONNX Runtime shared libraries to system directory
 COPY --from=builder /opt/onnxruntime/lib/ /usr/local/lib/
 RUN ldconfig
 
-# Salin hasil kompilasi binary
+# Copy compiled binary executable
 COPY --from=builder /src/services/build/bin/vision_service /usr/local/bin/vision_service
 
-# Siapkan direktori model
+# Prepare model weight directories
 RUN mkdir -p /app/ml/AI1/model /app/weights && chown -R visionuser:visionuser /app
 
 ENV OMP_NUM_THREADS=4 \

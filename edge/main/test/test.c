@@ -11,7 +11,7 @@ static const char *TAG = "TEST_PRODUCER";
 void test_telemetry_producer_task(void *pvParameters) {
     QueueHandle_t data_queue = (QueueHandle_t)pvParameters;
     if (data_queue == NULL) {
-        ESP_LOGE(TAG, "Queue handle bernilai NULL, task dihentikan.");
+        ESP_LOGE(TAG, "Queue handle is NULL, terminating test producer task.");
         vTaskDelete(NULL);
         return;
     }
@@ -30,11 +30,11 @@ void test_telemetry_producer_task(void *pvParameters) {
         dummy_data.temperature = temp_counter;
         dummy_data.current_cpu_load = get_cpu_usage_percentage();
 
-        ESP_LOGI(TAG, "Mendorong payload ke antrean [ID: %s, FoodTemp: %.2f C, CPUTemp: %.2f C, CPU: %d%%]...", 
+        ESP_LOGI(TAG, "Enqueuing telemetry packet [ID: %s, FoodTemp: %.2f C, CPUTemp: %.2f C, CPU: %d%%]...", 
                  dummy_data.device_id, dummy_data.food_temperature, dummy_data.cpu_temperature, dummy_data.current_cpu_load);
 
         if (xQueueSend(data_queue, &dummy_data, pdMS_TO_TICKS(1000)) != pdTRUE) {
-            ESP_LOGW(TAG, "Antrean penuh, payload dilewati.");
+            ESP_LOGW(TAG, "Telemetry queue full, dropping test packet.");
         }
 
         temp_counter += 0.5f;

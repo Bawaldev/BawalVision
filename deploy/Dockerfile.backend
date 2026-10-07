@@ -27,8 +27,8 @@ WORKDIR /app
 
 COPY --from=builder /bin/gateway /usr/local/bin/gateway
 
-# Salin folder templates/migrations HANYA jika ada (gunakan wildcard agar tidak break jika folder kosong)
-# Jika kamu butuh file 01_schema.sql di runtime backend, pastikan disalin ke sini:
+# Copy templates/migrations directory if present
+# (Use wildcard pattern to avoid build failures if directory is empty)
 # COPY --from=builder /src/01_schema.sql /app/01_schema.sql
 
 USER appuser:appgroup

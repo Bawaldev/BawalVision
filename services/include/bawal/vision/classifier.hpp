@@ -11,6 +11,9 @@
 
 namespace bawal::vision {
 
+/**
+ * @brief Detection outcome for an individual food bounding box with SIMD freshness metrics.
+ */
 struct DetectionResult {
     int class_id{-1};
     std::string class_name{"no_food"};
@@ -21,18 +24,37 @@ struct DetectionResult {
 
 using ClassificationResult = DetectionResult;
 
+/**
+ * @brief Temporal tracker container to eliminate frame-to-frame bounding box flickering.
+ */
+struct TrackedItem {
+    DetectionResult result;
+    int age{0};          ///< Number of consecutive frames tracked
+    int lost_frames{0};  ///< Empty frame tolerance before track eviction
+};
+
 class FoodClassifier {
 public:
     FoodClassifier();
     ~FoodClassifier() = default;
 
     /**
-     * @brief Inisialisasi ONNX Runtime Engine untuk model YOLOv8.
+     * @brief Initializes the ONNX Runtime Engine with the YOLOv8 food detection model.
+     * 
+     * @param model_path Path to the ONNX model file.
+     * @param thread_count Number of intra-op execution threads.
+     * @return true if initialization succeeded and session is active.
      */
     [[nodiscard]] bool init(std::string_view model_path, int thread_count = 4);
 
     /**
-     * @brief Deteksi multi-objek makanan YOLOv8 + evaluasi degradasi warna SIMD.
+     * @brief Multi-object food detection using YOLOv8 fused with AVX2 SIMD freshness evaluation.
+     * 
+     * @param frame Input BGR frame matrix.
+     * @param out_detections Output vector of validated food detections.
+     * @param conf_threshold Minimum detection confidence threshold.
+     * @param nms_threshold Non-Maximum Suppression IoU threshold.
+     * @return true if inference and post-processing completed successfully.
      */
     [[nodiscard]] bool detect(const cv::Mat& frame, 
                             std::vector<DetectionResult>& out_detections,
@@ -40,7 +62,11 @@ public:
                             float nms_threshold = 0.45f);
 
     /**
-     * @brief Prediksi tunggal ROI dengan skor keyakinan tertinggi.
+     * @brief Single-ROI prediction returning the candidate with highest confidence score.
+     * 
+     * @param bgr_image Input BGR ROI image.
+     * @param out_result Highest confidence detection outcome.
+     * @return true if classification succeeded.
      */
     [[nodiscard]] bool predict(const cv::Mat& bgr_image, ClassificationResult& out_result);
 
