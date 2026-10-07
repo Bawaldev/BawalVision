@@ -1,4 +1,8 @@
 ---
+Diagnostics:
+  UnusedIncludes: None
+
+---
 If:
   PathMatch: edge/.*
 CompileFlags:
@@ -23,4 +27,3 @@ CompileFlags:
   Add:
     - -std=c++20
     - -Iservices/include
-    - -I/opt/onnxruntime/include
