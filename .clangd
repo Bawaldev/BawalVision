@@ -1,3 +1,6 @@
+---
+If:
+  PathMatch: edge/.*
 CompileFlags:
   CompilationDatabase: edge/build
   Remove:
@@ -11,3 +14,13 @@ CompileFlags:
     - -fzero-init-padding-bits=all
     - -fno-malloc-dce
     - -fno-jump-tables
+
+---
+If:
+  PathMatch: services/.*
+CompileFlags:
+  CompilationDatabase: services/build
+  Add:
+    - -std=c++20
+    - -Iservices/include
+    - -I/opt/onnxruntime/include
