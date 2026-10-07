@@ -1,0 +1,1 @@
+yolo export model=weights/yolo26n.pt format=onnx dynamic=True simplify=True && mv weights/yolo26n.onnx weights/yolo8n.onnx && docker compose -f deploy/docker-compose.yml restart vision

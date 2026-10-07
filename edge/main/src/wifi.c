@@ -395,7 +395,11 @@ void WiFi_Server_Task(void *pvParameters) {
         if (g_wifi_event_group != NULL) {
             EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(1000));
             if (!(bits & WIFI_CONNECTED_BIT)) {
-                ESP_LOGD(TAG, "WiFi not connected, skipping telemetry dispatch.");
+                static uint32_t s_skip_count = 0;
+                if ((s_skip_count++ % 6) == 0) {
+                    ESP_LOGW(TAG, "Wi-Fi not connected (SSID '%s', retries %d). Telemetry dropped (%lu so far).",
+                             g_wifi_ssid, g_wifi_retry_num, (unsigned long)s_skip_count);
+                }
                 continue;
             }
         }

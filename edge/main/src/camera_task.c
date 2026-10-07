@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "driver/gpio.h"
 #include "esp_camera.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
@@ -298,61 +297,10 @@ void http_stream_sender_task(void *pvParameters) {
   char frame_id_str[16];
   const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
 
-/* =========================================================================
- * TRANSMISSION DURATION CONFIGURATION (IN SECONDS)
- * Change STREAM_BURST_DURATION_SEC to set how long frames stream per press.
- * ========================================================================= */
-#define STREAM_BURST_DURATION_SEC 10
-
-  // Initialize Trigger Button (GPIO 48, Active LOW, internal pull-up)
-  gpio_config_t btn_cfg = {
-      .pin_bit_mask = (1ULL << PIN_BTN_TRIGGER),
-      .mode = GPIO_MODE_INPUT,
-      .pull_up_en = GPIO_PULLUP_ENABLE,
-      .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = GPIO_INTR_DISABLE,
-  };
-  gpio_config(&btn_cfg);
-
-  TickType_t stream_end_tick = 0;
-  bool is_burst_active = false;
-
-  ESP_LOGI(TAG,
-           "HTTP Stream sender started. Waiting for button trigger on GPIO %d "
-           "(Burst duration: %d s)...",
-           PIN_BTN_TRIGGER, STREAM_BURST_DURATION_SEC);
+  ESP_LOGI(TAG, "HTTP Stream sender started. Streaming frames continuously.");
 
   for (;;) {
     TickType_t start_tick = xTaskGetTickCount();
-
-    // Check if external trigger button is pressed (Active LOW)
-    if (gpio_get_level(PIN_BTN_TRIGGER) == 0) {
-      if (!is_burst_active) {
-        ESP_LOGI(
-            TAG,
-            "Trigger button pressed! Streaming camera frames for %d seconds...",
-            STREAM_BURST_DURATION_SEC);
-      }
-      is_burst_active = true;
-      stream_end_tick =
-          xTaskGetTickCount() + pdMS_TO_TICKS(STREAM_BURST_DURATION_SEC * 1000);
-    }
-
-    // Check if current burst has expired
-    if (is_burst_active && (xTaskGetTickCount() >= stream_end_tick)) {
-      is_burst_active = false;
-      ESP_LOGI(TAG,
-               "Streaming window expired (%d s). Returning to idle waiting for "
-               "button...",
-               STREAM_BURST_DURATION_SEC);
-    }
-
-    // When idle (burst not active), sleep briefly to save CPU and skip
-    // transmission
-    if (!is_burst_active) {
-      vTaskDelay(pdMS_TO_TICKS(50));
-      continue;
-    }
 
     if (g_wifi_event_group != NULL) {
       EventBits_t bits = xEventGroupWaitBits(

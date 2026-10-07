@@ -18,6 +18,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var version = "dev"
+
 func getEnv(key, fallback string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value

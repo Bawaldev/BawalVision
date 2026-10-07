@@ -35,7 +35,7 @@ idf_component_register(
 set(ENV_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../.env")
 if(EXISTS "${ENV_FILE}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ENV_FILE}")
-    file(STRINGS "${ENV_FILE}" ENV_LINES REGEX "^[A-Za-z0-9_]+=")
+    file(STRINGS "${ENV_FILE}" ENV_LINES REGEX "^[ \t]*[A-Za-z0-9_]+[ \t]*=")
     foreach(line ${ENV_LINES})
         if(line MATCHES "^([^=]+)=(.*)$")
             string(STRIP "${CMAKE_MATCH_1}" KEY)

@@ -1,48 +1,38 @@
-# ==============================================================================
-# BawalVision Gateway Service - Production Multi-Stage Dockerfile
-# Language: Go (Fiber + GORM + PostgreSQL Gateway)
-# ==============================================================================
-
 # --- Stage 1: Build Environment ---
 FROM golang:1.24-alpine AS builder
 
-# Install essential compilation dependencies
+ARG VERSION=dev
+
 RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /src
 
-# Leverage Docker layer caching for Go modules
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download && go mod verify
 
-# Copy backend source tree
 COPY backend/ ./
 
-# Compile fully static Go binary without CGO dependency
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -trimpath \
-    -ldflags="-w -s -X main.version=1.0.0 -extldflags '-static'" \
+    -ldflags="-w -s -X main.version=${VERSION} -extldflags '-static'" \
     -o /bin/gateway ./cmd/server/main.go
 
-# --- Stage 2: Minimal Distroless/Alpine Runtime ---
+# --- Stage 2: Minimal Alpine Runtime ---
 FROM alpine:3.20 AS runner
 
-# Install runtime security certificates & timezone data
 RUN apk --no-cache add ca-certificates tzdata \
     && addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
-# Copy statically compiled binary from builder
 COPY --from=builder /bin/gateway /usr/local/bin/gateway
 
-# Copy template assets if needed
-COPY --from=builder /src/internal/data/templates /app/internal/data/templates
+# Salin folder templates/migrations HANYA jika ada (gunakan wildcard agar tidak break jika folder kosong)
+# Jika kamu butuh file 01_schema.sql di runtime backend, pastikan disalin ke sini:
+# COPY --from=builder /src/01_schema.sql /app/01_schema.sql
 
-# Enforce non-root execution
 USER appuser:appgroup
 
-# Fiber HTTP Gateway default port
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/gateway"]

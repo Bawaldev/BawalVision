@@ -21,6 +21,7 @@ bool fetchLatestFrame(CURL* curl, std::string_view url, std::vector<uint8_t>& bu
     const std::string url_str(url);
     buffer.clear();
     curl_easy_setopt(curl, CURLOPT_URL, url_str.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);

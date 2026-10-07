@@ -5,6 +5,8 @@
 #include <chrono>
 #include <thread>
 #include <iomanip>
+#include <algorithm>
+#include <sstream>
 
 #include <curl/curl.h>
 #include <opencv2/highgui.hpp>
@@ -113,12 +115,16 @@ int main(int argc, char** argv) {
     int discovery_tick = 0;
     auto last_dispatch_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
+    constexpr int kActiveFrameIntervalMs = 33;
+    constexpr int kIdleBackoffMinMs = 250;
+    constexpr int kIdleBackoffMaxMs = 5000;
+    int idle_backoff_ms = 0;  // 0 == currently receiving frames
+
     while (true) {
         bool frame_ok = false;
         InspectionOutput inspection;
 
-        // Periodically refresh active device ID and update stream URL
-        if (device_id.empty() || (discovery_tick++ % 30 == 0)) {
+        if (device_id.empty() || idle_backoff_ms > 0 || (discovery_tick++ % 30 == 0)) {
             const std::string discovered = discoverActiveDeviceID(curl, backend_base_url);
             if (!discovered.empty() && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
                 device_id = discovered;
@@ -128,23 +134,28 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Attempt 1: Fetch from active stream URL
-        if (!fetchLatestFrame(curl, stream_url, raw_bytes) || raw_bytes.empty()) {
-            // Attempt 2: Check if device ID updated on backend
-            const std::string discovered = discoverActiveDeviceID(curl, backend_base_url);
-            if (!discovered.empty() && discovered != device_id) {
-                device_id = discovered;
-                stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
-                [[maybe_unused]] bool ok = fetchLatestFrame(curl, stream_url, raw_bytes);
-            }
-            // Attempt 3: Generic latest endpoint
-            if (raw_bytes.empty()) {
-                std::string fallback_url = backend_base_url + "/api/v1/camera/latest/raw";
-                [[maybe_unused]] bool ok = fetchLatestFrame(curl, fallback_url, raw_bytes);
-            }
+        bool got_frame = fetchLatestFrame(curl, stream_url, raw_bytes) && !raw_bytes.empty();
+        if (!got_frame && !device_id.empty()) {
+            const std::string fallback_url = backend_base_url + "/api/v1/camera/latest/raw";
+            got_frame = fetchLatestFrame(curl, fallback_url, raw_bytes) && !raw_bytes.empty();
         }
 
-        if (!raw_bytes.empty()) {
+        if (got_frame) {
+            if (idle_backoff_ms > 0) {
+                std::cout << "[INFO] Camera frames resumed.\n";
+            }
+            idle_backoff_ms = 0;
+        } else {
+            if (idle_backoff_ms == 0) {
+                std::cout << "[INFO] No camera frame available. Backing off until an ESP32 stream appears...\n";
+                idle_backoff_ms = kIdleBackoffMinMs;
+            } else {
+                idle_backoff_ms = std::min(idle_backoff_ms * 2, kIdleBackoffMaxMs);
+            }
+            raw_bytes.clear();
+        }
+
+        if (got_frame) {
             inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
             
             // Execute End-to-End Pipeline
@@ -220,13 +231,14 @@ int main(int argc, char** argv) {
 
             cv::imshow(window_name, display_frame);
 
-            const int key = cv::waitKey(30);
+            const int key = cv::waitKey(idle_backoff_ms > 0 ? idle_backoff_ms : 30);
             if (key == 'q' || key == 'Q' || key == 27) {
                 std::cout << "[INFO] User requested stop. Closing vision window...\n";
                 break;
             }
         } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(33));
+            std::this_thread::sleep_for(std::chrono::milliseconds(
+                idle_backoff_ms > 0 ? idle_backoff_ms : kActiveFrameIntervalMs));
         }
     }
 

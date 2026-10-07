@@ -9,7 +9,7 @@ import (
 type User struct {
 	ID        string         `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	Name      string         `json:"name" gorm:"column:name;type:varchar(100);not null"`
-	Email     string         `json:"email" gorm:"column:email;type:varchar(100);uniqueIndex;not null"`
+	Email     string         `json:"email" gorm:"column:email;type:varchar(100);unique;not null"`
 	Password  string         `json:"-" gorm:"column:password_hash;type:varchar(255);not null"`
 	CreatedAt time.Time      `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt time.Time      `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`

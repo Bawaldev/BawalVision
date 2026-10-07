@@ -205,7 +205,7 @@ static void create_dashboard_ui(void) {
   s_http_label = lv_label_create(s_http_bar);
   lv_label_set_text(s_http_label, "HTTP: IDLE");
   lv_obj_set_style_text_color(s_http_label, lv_color_white(), 0);
-  lv_obj_set_style_text_font(s_http_label, &lv_font_montserrat_10, 0);
+  lv_obj_set_style_text_font(s_http_label, LV_FONT_DEFAULT, 0);
   lv_obj_center(s_http_label);
 
   // 2. Wi-Fi & Device Sub-bar (Height: 12)
@@ -213,7 +213,7 @@ static void create_dashboard_ui(void) {
   lv_label_set_recolor(s_wifi_label, true);
   lv_label_set_text(s_wifi_label, "#f43f5e # CONNECTING...");
   lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(0x94a3b8), 0);
-  lv_obj_set_style_text_font(s_wifi_label, &lv_font_montserrat_10, 0);
+  lv_obj_set_style_text_font(s_wifi_label, LV_FONT_DEFAULT, 0);
 
   // 3. System Inspection Status Card (Width: 120, Height: 26)
   s_status_card = lv_obj_create(root);
@@ -227,7 +227,7 @@ static void create_dashboard_ui(void) {
   s_status_label = lv_label_create(s_status_card);
   lv_label_set_text(s_status_label, "BAWAL VISION");
   lv_obj_set_style_text_color(s_status_label, lv_color_white(), 0);
-  lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_14, 0);
   lv_obj_center(s_status_label);
 
   // 4. Multi-Sensor Data Box (Width: 120, Height: 46)
@@ -247,25 +247,25 @@ static void create_dashboard_ui(void) {
   lv_label_set_text(s_food_temp_label, "FOOD: 25.0 C");
   lv_obj_set_style_text_color(s_food_temp_label, lv_color_hex(0xfb923c),
                               0); // Orange
-  lv_obj_set_style_text_font(s_food_temp_label, &lv_font_montserrat_10, 0);
+  lv_obj_set_style_text_font(s_food_temp_label, LV_FONT_DEFAULT, 0);
 
   s_mcu_temp_label = lv_label_create(sensor_box);
   lv_label_set_text(s_mcu_temp_label, "MCU : 36.5 C");
   lv_obj_set_style_text_color(s_mcu_temp_label, lv_color_hex(0xf472b6),
                               0); // Pink
-  lv_obj_set_style_text_font(s_mcu_temp_label, &lv_font_montserrat_10, 0);
+  lv_obj_set_style_text_font(s_mcu_temp_label, LV_FONT_DEFAULT, 0);
 
   s_cpu_load_label = lv_label_create(sensor_box);
   lv_label_set_text(s_cpu_load_label, "CPU : 10%");
   lv_obj_set_style_text_color(s_cpu_load_label, lv_color_hex(0x38bdf8),
                               0); // Cyan
-  lv_obj_set_style_text_font(s_cpu_load_label, &lv_font_montserrat_10, 0);
+  lv_obj_set_style_text_font(s_cpu_load_label, LV_FONT_DEFAULT, 0);
 
   // 5. Bottom Heartbeat & Uptime Banner (Height: 12)
   s_uptime_label = lv_label_create(root);
   lv_label_set_text(s_uptime_label, "UP 00:00:00");
   lv_obj_set_style_text_color(s_uptime_label, lv_color_hex(0x94a3b8), 0);
-  lv_obj_set_style_text_font(s_uptime_label, &lv_font_montserrat_10, 0);
+  lv_obj_set_style_text_font(s_uptime_label, LV_FONT_DEFAULT, 0);
 
   apply_status_style(s_current_status);
 }
@@ -281,9 +281,7 @@ void lcd_monitor_heartbeat_task(void *pvParameters) {
     uint32_t secs = seconds % 60;
 
     float cpu_t = 36.5f;
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-// Read internal thermal sensor if available
-#endif
+    (void)cpu_t; // Prevent unused variable warning
 
     uint8_t cpu_load = get_cpu_usage_percentage();
 

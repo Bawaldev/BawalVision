@@ -1,10 +1,3 @@
-# ==============================================================================
-# BawalVision Production Container Stack (Ubuntu 24.04 + Native AVX2/SIMD)
-# Active Containers: PostgreSQL, Go Fiber Gateway, C++ Vision Engine, SvelteKit HMI
-# Note: ML Training runs directly on Host OS (.venv + NVIDIA RTX 3050 GPU)
-#       Edge Firmware runs bare-metal on ESP32-S3 (FreeRTOS)
-# ==============================================================================
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -18,6 +11,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../backend/internal/data/templates/shema.sql:/docker-entrypoint-initdb.d/01_schema.sql
     networks:
       - bawal-net
     healthcheck:
@@ -61,12 +55,14 @@ services:
     environment:
       - HEADLESS=1
       - QT_QPA_PLATFORM=offscreen
-      - BACKEND_URL=http://backend:8080
+      - BACKEND_HOST=backend
+      - BACKEND_PORT=8080
+      - MODEL_PATH=/app/weights/yolo8n.onnx
       - OMP_NUM_THREADS=4
       - OMP_SCHEDULE=static
       - OMP_PROC_BIND=true
     volumes:
-      # Mount ONNX model trained on Host GPU into container runtime
+      - ../weights:/app/weights:ro
       - ../ml/AI1/model:/app/ml/AI1/model:ro
     networks:
       - bawal-net
