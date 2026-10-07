@@ -1,3 +1,10 @@
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "lcd_task.h"
 #include "pins.h"
 #include "system_monitor.h"
@@ -15,8 +22,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
-#include <stdio.h>
-#include <string.h>
 
 static const char *TAG = "LCD_TASK";
 

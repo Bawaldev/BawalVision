@@ -110,6 +110,21 @@ esp_err_t camera_task_init(void) {
              s->id.PID);
     s->set_vflip(s, 0);
     s->set_hmirror(s, 0);
+
+    // Hardware Auto White Balance (AWB) & Color Correction to eliminate green cast
+    s->set_whitebal(s, 1);       // Enable AWB
+    s->set_awb_gain(s, 1);       // Enable AWB Gain
+    s->set_wb_mode(s, 0);        // 0 = Auto White Balance
+    s->set_exposure_ctrl(s, 1);  // Enable AEC
+    s->set_aec2(s, 1);           // Enable AEC DSP
+    s->set_gain_ctrl(s, 1);      // Enable AGC
+    s->set_gainceiling(s, (gainceiling_t)2);
+    s->set_bpc(s, 1);            // Enable Black Pixel Correction
+    s->set_wpc(s, 1);            // Enable White Pixel Correction
+    s->set_raw_gma(s, 1);        // Enable Gamma curve
+    s->set_lenc(s, 1);           // Enable Lens Correction
+    s->set_brightness(s, 1);     // Brightness (+1)
+    s->set_saturation(s, 0);     // Natural saturation
   }
 
   s_is_initialized = true;
