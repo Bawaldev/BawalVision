@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
                 // Collect valid food detections
                 std::vector<DetectionResult> valid_detections;
                 for (const auto& d : detected) {
-                    if (d.class_id >= 0 && d.confidence >= 0.35f && d.class_name != "no_food" && d.class_name != "no_model") {
+                    if (d.class_id >= 0 && d.confidence >= 0.48f && d.class_name != "no_food" && d.class_name != "no_model") {
                         valid_detections.push_back(d);
                     }
                 }

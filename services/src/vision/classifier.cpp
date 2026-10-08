@@ -363,17 +363,13 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 }
             }
 
-            // Prevent oversized bounding boxes from engulfing the entire camera frame
+            // 1. Enforce Realistic Food Portion Bounding Box Boundaries:
+            // Single meal portions on a school lunch tray do not engulf entire room or exceed 38% frame area
             const float frame_area = static_cast<float>(frame.cols * frame.rows);
-            if (final_box.area() > frame_area * 0.60f || 
-                (final_box.width > frame.cols * 0.78f && final_box.height > frame.rows * 0.78f)) {
-                int max_w = static_cast<int>(frame.cols * 0.68f);
-                int max_h = static_cast<int>(frame.rows * 0.68f);
-                int new_w = std::min(final_box.width, max_w);
-                int new_h = std::min(final_box.height, max_h);
-                int new_x = final_box.x + (final_box.width - new_w) / 2;
-                int new_y = final_box.y + (final_box.height - new_h) / 2;
-                final_box = cv::Rect(new_x, new_y, new_w, new_h) & cv::Rect(0, 0, frame.cols, frame.rows);
+            if (final_box.area() > frame_area * 0.38f || 
+                final_box.width > frame.cols * 0.62f || 
+                final_box.height > frame.rows * 0.62f) {
+                continue; // Reject human figures, room backdrops, and entire scene bounding boxes
             }
 
             // Spectral Color Analysis on Core ROI (Center 50%)
@@ -397,7 +393,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             const double g_val = mean_bgr[1];
             const double r_val = mean_bgr[2];
 
-            // 1. Comprehensive Light Emitter / Lamp & Specular Glare Rejection:
+            // 2. Comprehensive Light Emitter / Lamp & Specular Glare Rejection:
             int blown_out_count = 0;
             const int core_total_px = core_roi.rows * core_roi.cols;
             for (int y = 0; y < core_roi.rows; ++y) {
@@ -423,26 +419,27 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             bool is_valid_food = true;
 
             // Semantic Food Disambiguation for Neutral White Food (Rice vs Tofu vs Egg):
-            // White rice in bowl/plate has low saturation (S <= 25), bright organic luminance (V: 65 - 235),
-            // and balanced RGB (|R - G| <= 20, |G - B| <= 20).
-            const bool is_neutral_white_profile = (s_val <= 25.0 && v_val >= 65.0 && v_val <= 235.0 &&
-                                                   std::abs(r_val - g_val) <= 20.0 &&
-                                                   std::abs(g_val - b_val) <= 20.0);
+            // Authentic cooked white rice has bright organic luminance (V >= 120, RGB >= 105),
+            // low saturation (S <= 28), and neutral color balance (|R - G| <= 18, |G - B| <= 18).
+            const bool is_neutral_white_profile = (s_val <= 28.0 && v_val >= 120.0 && v_val <= 245.0 &&
+                                                   r_val >= 105.0 && g_val >= 105.0 && b_val >= 105.0 &&
+                                                   std::abs(r_val - g_val) <= 18.0 &&
+                                                   std::abs(g_val - b_val) <= 18.0);
 
-            if (is_neutral_white_profile && (predicted_name == "tofu" || predicted_name == "egg" || predicted_name == "food_item")) {
+            if (is_neutral_white_profile && (predicted_name == "tofu" || predicted_name == "egg") && yolo_score >= 0.55f) {
                 predicted_name = "rice";
                 final_class_id = 4; // Index 4 is "rice"
             }
 
             float calibrated_conf = yolo_score;
 
-            // 2. Strict Per-Class Physical & Chromatic Validation:
+            // 3. Strict Per-Class Physical & Chromatic Validation:
             // White Rice:
             if (predicted_name == "rice") {
-                if (is_neutral_white_profile) {
-                    calibrated_conf = std::clamp(std::max(yolo_score * 1.30f, 0.78f) + (tex.std_dev * 0.003f), 0.75f, 0.94f);
-                } else if (s_val > 45.0 || v_val < 65.0 || v_val > 220.0 || std::abs(r_val - g_val) > 25.0) {
-                    is_valid_food = false;
+                if (is_neutral_white_profile && yolo_score >= 0.48f) {
+                    calibrated_conf = std::clamp(yolo_score + (tex.std_dev * 0.002f), 0.50f, 0.95f);
+                } else {
+                    is_valid_food = false; // Reject dark shadows, dark clothing, and non-white regions
                 }
             }
             // Green Vegetables (Water Spinach / Spinach):

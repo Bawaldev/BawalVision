@@ -90,7 +90,7 @@ esp_err_t camera_task_init(void) {
       .frame_size = FRAMESIZE_VGA, // 640x480
 
       .jpeg_quality =
-          12, // 10-12 provides high clarity and sharp edges with reduced block artifacts
+          10, // 10 = best clarity and reduced block artifacts
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -110,19 +110,23 @@ esp_err_t camera_task_init(void) {
              s->id.PID);
     s->set_vflip(s, 0);
     s->set_hmirror(s, 0);
+    s->set_framesize(s, FRAMESIZE_VGA);
+    s->set_quality(s, 10);
 
-    // Hardware Auto White Balance (AWB) & ISP Tuning for crisp, vivid food colors
+    // Hardware Auto White Balance (AWB) & ISP Tuning
     s->set_whitebal(s, 1);       // Enable Hardware AWB
     s->set_awb_gain(s, 1);       // Enable AWB Gain
     s->set_wb_mode(s, 0);        // 0 = Auto White Balance
     s->set_exposure_ctrl(s, 1);  // Enable AEC
     s->set_aec2(s, 1);           // Enable AEC DSP
+    s->set_ae_level(s, -1);      // -1 reduces central spotlight overexposure
     s->set_gain_ctrl(s, 1);      // Enable AGC
     s->set_gainceiling(s, (gainceiling_t)2);
-    s->set_bpc(s, 1);            // Enable Black Pixel Correction
+    s->set_bpc(s, 0);            // Black Pixel Correction OFF (suppresses speckle noise)
     s->set_wpc(s, 1);            // Enable White Pixel Correction
     s->set_raw_gma(s, 1);        // Enable Gamma curve
     s->set_lenc(s, 1);           // Enable Lens Correction
+    s->set_dcw(s, 0);            // Downsize OFF (full crisp resolution)
     s->set_brightness(s, 0);     // Balanced brightness
     s->set_contrast(s, 1);       // Contrast boost (+1)
     s->set_saturation(s, 1);     // Color saturation boost (+1)

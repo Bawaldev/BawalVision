@@ -3,7 +3,10 @@
 #include <cstdint>
 #include <string>
 #include <filesystem>
+#include <memory>
 #include <opencv2/core/mat.hpp>
+#include <opencv2/dnn.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace bawal::vision {
 
@@ -25,28 +28,33 @@ struct __attribute__((packed)) RealESRGANParams {
  * Evaluated only during startup engine initialization.
  */
 struct RealESRGANConfig {
-    std::filesystem::path model_dir;               ///< Directory path containing .param and .bin weight files
+    std::filesystem::path model_dir;               ///< Directory path containing .param/.bin or .onnx files
     std::string model_name{"realesr-animevideov3-x2"}; ///< Model architecture name prefix
     RealESRGANParams params;                       ///< Inference execution parameters
 };
 
 /**
- * @brief Standalone Super-Resolution inference engine leveraging Tencent NCNN Vulkan backend.
+ * @brief Standalone Super-Resolution and Enhancement engine leveraging OpenCV DNN and Tencent NCNN.
  */
 struct RealESRGANEngine {
     /**
-     * @brief Initialize NCNN pipeline, allocate Vulkan compute shaders, and load model weights.
+     * @brief Initialize NCNN or OpenCV DNN pipeline, allocate compute shaders, and load model weights.
      * 
      * @param config Cold configuration containing model filesystem paths and execution settings.
-     * @return true if Vulkan device context and model weight layers load successfully, false otherwise.
+     * @return true if engine initialized successfully, false otherwise.
      */
     [[nodiscard]] bool init(const RealESRGANConfig& config);
 
     /**
-     * @brief Execute super-resolution upscaling on a BGR image frame.
+     * @brief Initialize OpenCV DNN neural network model from ONNX weight file.
      * 
-     * Performs optional image tiling, FP16/FP32 neural inference, and stitches
-     * processed tiles into the scaled destination matrix.
+     * @param model_path Path to ONNX super-resolution / enhancer model.
+     * @return true if loaded and compiled into OpenCV DNN, false otherwise.
+     */
+    [[nodiscard]] bool initOpenCVDNN(const std::filesystem::path& model_path);
+
+    /**
+     * @brief Execute super-resolution upscaling on a BGR image frame.
      * 
      * @param input Source image matrix (8-bit BGR format).
      * @param output Destination matrix holding the upscaled image (dimensions = input * scale).
@@ -55,30 +63,56 @@ struct RealESRGANEngine {
     [[nodiscard]] bool process(const cv::Mat& input, cv::Mat& output);
 
     /**
-     * @brief Release loaded NCNN network graphs and destroy Vulkan GPU pipeline instances.
+     * @brief Execute forward inference using OpenCV DNN neural net.
+     * 
+     * @param input Source image matrix (8-bit BGR format).
+     * @param output Destination matrix.
+     * @return true on successful execution.
+     */
+    [[nodiscard]] bool processOpenCVDNN(const cv::Mat& input, cv::Mat& output);
+
+    /**
+     * @brief Release loaded neural graphs and free compute instances.
      */
     void release();
 
-    /**
-     * @brief Query initialization state of the inference engine.
-     * 
-     * @return true if weights are resident in memory and ready for inference, false otherwise.
-     */
     [[nodiscard]] bool isReady() const noexcept {
-        return is_initialized;
+        return is_initialized || is_dnn_ready;
     }
 
-    /**
-     * @brief Query whether neural acceleration is using hardware GPU (Vulkan).
-     * 
-     * @return true if hardware GPU Vulkan is active, false if operating on CPU SIMD.
-     */
     [[nodiscard]] bool isGpuAccelerated() const noexcept {
         return is_initialized && (params.use_gpu != 0);
     }
 
-    bool is_initialized{false}; ///< Operational readiness state flag
-    RealESRGANParams params;     ///< Compact active hot parameters (14 bytes) retained during runtime
+    [[nodiscard]] bool hasDnnModel() const noexcept {
+        return is_dnn_ready;
+    }
+
+    bool is_initialized{false}; ///< Operational readiness state flag (NCNN/SIMD)
+    bool is_dnn_ready{false};   ///< Operational readiness state flag (OpenCV DNN)
+    cv::dnn::Net dnn_net;       ///< OpenCV DNN Neural Network container
+    RealESRGANParams params;    ///< Compact active hot parameters (14 bytes) retained during runtime
+};
+
+/**
+ * @brief Multi-Architecture Target-Cloned SIMD Super-Resolution / Texture Kernel (AVX-512 / AVX2 / OpenMP).
+ */
+void applyFastSuperResolutionSIMD(const cv::Mat& src, cv::Mat& dst, int scale = 2);
+
+/**
+ * @brief Deep AI Illumination & Scene Restoration Engine (C++).
+ * Employs adaptive non-linear curve estimation (Zero-DCE style), multi-scale Retinex
+ * shadow lifting, highlight glare compression, and CIELAB color vibrancy recovery.
+ */
+struct IlluminationEnhancerAI {
+    /**
+     * @brief Execute intelligent low-light restoration, shadow illumination, and edge sharpening.
+     * 
+     * @param src Raw camera BGR matrix
+     * @param dst Restored high-definition BGR matrix
+     * @param persistent_clahe Optional persistent CLAHE context to eliminate per-frame allocations
+     */
+    static void process(const cv::Mat& src, cv::Mat& dst, cv::Ptr<cv::CLAHE> persistent_clahe = nullptr);
 };
 
 } // namespace bawal::vision

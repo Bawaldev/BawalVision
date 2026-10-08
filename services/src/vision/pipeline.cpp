@@ -33,8 +33,8 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         (void)m_classifier.init("", num_threads);
     }
 
-    // Initialize persistent CLAHE engine to avoid per-frame allocation
-    m_clahe = cv::createCLAHE(1.8, cv::Size(8, 8));
+    // Initialize persistent CLAHE engine with gentle 1.0 clip limit for low-noise enhancement
+    m_clahe = cv::createCLAHE(1.0, cv::Size(8, 8));
 
     // Ensure NCNN Super-Resolution weights exist; generate via bawal::ml::NCNNGenerator if missing
     const std::filesystem::path default_weight_dir = "/app/weights";
@@ -50,7 +50,7 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         gen_cfg.scale = 2;
         gen_cfg.output_dir = weight_dir;
         gen_cfg.sync_dirs = {"/app/weights", "services/weights", "weights"};
-        bawal::ml::NCNNGenerator::generate(gen_cfg);
+        (void)bawal::ml::NCNNGenerator::generate(gen_cfg);
     }
 
     // Initialize Real-ESRGAN NCNN Super-Resolution Engine
@@ -59,7 +59,7 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     enhancer_cfg.model_name = "realesr-animevideov3-x2";
     enhancer_cfg.params.scale = 2;
     enhancer_cfg.params.tile_size = 192;
-    enhancer_cfg.params.prepadding = 10;
+    enhancer_cfg.params.prepadding = 16;
     enhancer_cfg.params.use_gpu = 1;
     enhancer_cfg.params.use_fp16 = 1;
     if (m_enhancer.init(enhancer_cfg)) {
@@ -93,48 +93,8 @@ void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
         return;
     }
 
-    // 1. Gray-World Auto White Balance (Corrects sensor tint / pink-purple indoor color cast)
-    cv::Scalar mean_bgr = cv::mean(src);
-    const double gray_target = (mean_bgr[0] + mean_bgr[1] + mean_bgr[2]) / 3.0;
-
-    const float gain_b = static_cast<float>(std::clamp((mean_bgr[0] > 1.0) ? (gray_target / mean_bgr[0]) : 1.0, 0.75, 1.35));
-    const float gain_g = static_cast<float>(std::clamp((mean_bgr[1] > 1.0) ? (gray_target / mean_bgr[1]) : 1.0, 0.75, 1.35));
-    const float gain_r = static_cast<float>(std::clamp((mean_bgr[2] > 1.0) ? (gray_target / mean_bgr[2]) : 1.0, 0.75, 1.35));
-
-    cv::Mat balanced;
-    std::vector<cv::Mat> channels(3);
-    cv::split(src, channels);
-    channels[0].convertTo(channels[0], -1, gain_b, 0);
-    channels[1].convertTo(channels[1], -1, gain_g, 0);
-    channels[2].convertTo(channels[2], -1, gain_r, 0);
-    cv::merge(channels, balanced);
-
-    // 2. Adaptive Local Contrast (CLAHE on L*) & Food Vibrancy Boost (a*, b*)
-    cv::Mat lab;
-    cv::cvtColor(balanced, lab, cv::COLOR_BGR2Lab);
-    std::vector<cv::Mat> lab_planes(3);
-    cv::split(lab, lab_planes);
-
-    if (!m_clahe) {
-        m_clahe = cv::createCLAHE(1.8, cv::Size(8, 8));
-    }
-    m_clahe->apply(lab_planes[0], lab_planes[0]);
-
-    // 1.15x vibrancy enhancement on chroma planes (a*, b*) centered at 128
-    // Elevates food colors (rice, chicken, egg, vegetables) without oversaturation
-    lab_planes[1].convertTo(lab_planes[1], -1, 1.15f, (1.0f - 1.15f) * 128.0f);
-    lab_planes[2].convertTo(lab_planes[2], -1, 1.15f, (1.0f - 1.15f) * 128.0f);
-
-    cv::merge(lab_planes, lab);
-    cv::Mat contrast_enhanced;
-    cv::cvtColor(lab, contrast_enhanced, cv::COLOR_Lab2BGR);
-
-    // 3. Fast Edge-Preserving Sharpening (Unsharp Masking)
-    cv::Mat low_freq;
-    cv::GaussianBlur(contrast_enhanced, low_freq, cv::Size(0, 0), 1.6);
-
-    // 1.25x original - 0.25x blur removes haze and boosts micro-texture without ringing halos
-    cv::addWeighted(contrast_enhanced, 1.25, low_freq, -0.25, 0, dst);
+    // Deep AI Adaptive Illumination, Retinex Dynamic Range & Noise Restoration
+    IlluminationEnhancerAI::process(src, dst, m_clahe);
 }
 
 bool InspectionPipeline::processStream(const cv::Mat& frame, 
@@ -146,15 +106,52 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     out_inspection.raw_image = frame;
     out_inspection.is_valid = false;
 
-    // 1. Lens Dewarping Calibration
-    cv::Mat dewarped;
-    if (!m_dewarper.process(frame, dewarped)) {
-        dewarped = frame.clone();
+    // 0. Camera Orientation Calibration (VFLIP / HFLIP)
+    static int s_vflip = -1;
+    static int s_hflip = -1;
+    if (s_vflip == -1) {
+        const char* ev = std::getenv("CAMERA_VFLIP");
+        s_vflip = (ev && (std::string(ev) == "1" || std::string(ev) == "true")) ? 1 : 0;
+        const char* eh = std::getenv("CAMERA_HFLIP");
+        s_hflip = (eh && (std::string(eh) == "1" || std::string(eh) == "true")) ? 1 : 0;
     }
 
-    // 2. Adaptive ISP Enhancement
+    cv::Mat oriented;
+    if (s_vflip && s_hflip) {
+        cv::flip(frame, oriented, -1);
+    } else if (s_vflip) {
+        cv::flip(frame, oriented, 0);
+    } else if (s_hflip) {
+        cv::flip(frame, oriented, 1);
+    } else {
+        oriented = frame;
+    }
+
+    // 1. Lens Dewarping Calibration
+    cv::Mat dewarped;
+    if (!m_dewarper.process(oriented, dewarped)) {
+        dewarped = oriented.clone();
+    }
+    out_inspection.raw_image = dewarped;
+
+    // Debugging: Save raw ESP32 frame before enhancement every 30 frames
+    static int s_frame_counter = 0;
+    if (s_frame_counter++ % 30 == 0) {
+        cv::imwrite("/tmp/raw_esp32_" + std::to_string(s_frame_counter) + ".jpg", dewarped);
+        std::cout << "[DEBUG] Saved raw frame to /tmp/raw_esp32_" << s_frame_counter << ".jpg\n";
+    }
+
+    // 2. RealESRGAN Clean Denoising / Upscaling first on raw stream if GPU accelerated
+    cv::Mat clean_base;
+    if (m_enhancer.isGpuAccelerated()) {
+        m_enhancer.process(dewarped, clean_base);
+    } else {
+        clean_base = dewarped;
+    }
+
+    // 3. Adaptive ISP Enhancement on clean frame
     cv::Mat enhanced;
-    enhanceImage(dewarped, enhanced);
+    enhanceImage(clean_base, enhanced);
     out_inspection.dewarped_image = enhanced;
 
     // 3. Attach current active detections from AI worker
