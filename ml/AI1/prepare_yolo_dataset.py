@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Dict, List
 import torch
 import yaml
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = lambda x, **kwargs: x
 from ultralytics import YOLOWorld
 
 # ==============================================================================
@@ -16,17 +19,17 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SOURCE_DATASET_DIR = SCRIPT_DIR / "dataset"
 OUTPUT_YOLO_DIR = SCRIPT_DIR / "yolo_dataset"
 
-# 9 target classes mapped alphabetically with zero-shot semantic prompts
+# 9 target classes mapped alphabetically with specific single-object semantic prompts
 CLASS_MAPPING: Dict[str, Dict[str, any]] = {
-    "banana": {"id": 0, "prompt": "yellow ripe banana fruit"},
-    "chicken": {"id": 1, "prompt": "fried chicken or cooked meat portion"},
-    "egg": {"id": 2, "prompt": "boiled or fried egg"},
-    "orange": {"id": 3, "prompt": "orange citrus fruit"},
-    "rice": {"id": 4, "prompt": "cooked white rice mound"},
-    "spinach": {"id": 5, "prompt": "cooked green spinach vegetable"},
-    "tempeh": {"id": 6, "prompt": "fried tempeh slice"},
-    "tofu": {"id": 7, "prompt": "fried tofu or tofu cubes"},
-    "water_spinach": {"id": 8, "prompt": "stir fried water spinach greens"},
+    "banana": {"id": 0, "prompt": "yellow banana fruit on plate"},
+    "chicken": {"id": 1, "prompt": "fried chicken piece"},
+    "egg": {"id": 2, "prompt": "boiled egg on plate"},
+    "orange": {"id": 3, "prompt": "orange fruit on plate"},
+    "rice": {"id": 4, "prompt": "white rice on plate"},
+    "spinach": {"id": 5, "prompt": "green spinach vegetable on plate"},
+    "tempeh": {"id": 6, "prompt": "single tempeh slice on plate"},
+    "tofu": {"id": 7, "prompt": "single tofu cube on plate"},
+    "water_spinach": {"id": 8, "prompt": "water spinach vegetable on plate"},
 }
 
 VALID_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -77,7 +80,7 @@ def process_class_batch(annotator: YOLOWorld, images: List[Path], split: str,
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         list(executor.map(_copy_task, copy_tasks))
 
-    # 2. Batched zero-shot bounding box inference
+    # 2. Batched zero-shot bounding box inference with IoU NMS and strict quality filtering
     for i in tqdm(range(0, len(dest_images), batch_size),
                  desc=f"  Generating labels for {folder_name}", unit="batch"):
         batch_slice = dest_images[i:i + batch_size]
@@ -86,7 +89,8 @@ def process_class_batch(annotator: YOLOWorld, images: List[Path], split: str,
         predictions = annotator.predict(
             batch_paths_str,
             batch=len(batch_paths_str),
-            conf=0.15,
+            conf=0.35,
+            iou=0.50,
             verbose=False,
             device=device_id
         )
@@ -97,15 +101,35 @@ def process_class_batch(annotator: YOLOWorld, images: List[Path], split: str,
             label_rows = []
 
             if len(detected_boxes) > 0:
+                valid_boxes = []
                 for box in detected_boxes:
                     xywhn = box.xywhn[0].tolist()
+                    conf = float(box.conf[0])
+                    bw, bh = xywhn[2], xywhn[3]
+
+                    # QUALITY FILTER:
+                    # 1. Confidence >= 0.35
+                    # 2. Bounding box < 95% frame (reject entire-frame engulfment)
+                    # 3. Bounding box > 5% frame (reject tiny noise artifacts)
+                    if conf >= 0.35 and 0.05 < bw < 0.95 and 0.05 < bh < 0.95:
+                        valid_boxes.append((xywhn, conf, bw * bh))
+
+                # If multiple valid boxes detected, select the largest primary object
+                if valid_boxes:
+                    valid_boxes.sort(key=lambda x: x[2], reverse=True)
+                    best = valid_boxes[0]
                     label_rows.append(
-                        f"{class_id} {xywhn[0]:.6f} {xywhn[1]:.6f} {xywhn[2]:.6f} {xywhn[3]:.6f}\n"
+                        f"{class_id} {best[0][0]:.6f} {best[0][1]:.6f} {best[0][2]:.6f} {best[0][3]:.6f}\n"
+                    )
+                else:
+                    # Realistic centered single portion fallback
+                    label_rows.append(
+                        f"{class_id} 0.500000 0.500000 0.650000 0.650000\n"
                     )
             else:
-                # Fallback: Assign default central bounding box (85% coverage)
+                # Realistic centered single portion fallback
                 label_rows.append(
-                    f"{class_id} 0.500000 0.500000 0.850000 0.850000\n"
+                    f"{class_id} 0.500000 0.500000 0.650000 0.650000\n"
                 )
 
             with open(dest_label, "w", encoding="utf-8") as lf:

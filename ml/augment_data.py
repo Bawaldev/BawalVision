@@ -37,6 +37,19 @@ def transform_greenery(img: Image.Image) -> Image.Image:
     return img
 
 
+def transform_tempeh(img: Image.Image) -> Image.Image:
+    """Specialized augmentation for tempeh: narrow rotation + subtle lighting."""
+    angle = random.uniform(-15, 15)
+    img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False)
+    if random.random() > 0.5:
+        img = ImageOps.mirror(img)
+    enhancer_b = ImageEnhance.Brightness(img)
+    img = enhancer_b.enhance(random.uniform(0.85, 1.20))
+    enhancer_c = ImageEnhance.Contrast(img)
+    img = enhancer_c.enhance(random.uniform(1.0, 1.15))
+    return img
+
+
 def transform_protein(img: Image.Image) -> Image.Image:
     """Focuses on lighting reflections and orientation for meats, tofu & tempeh."""
     angle = random.uniform(-30, 30)
@@ -90,8 +103,8 @@ CATEGORY_TRANSFORMS = {
     "ayam": transform_protein,
     "tofu": transform_protein,
     "tahu": transform_protein,
-    "tempeh": transform_protein,
-    "tempe": transform_protein,
+    "tempeh": transform_tempeh,
+    "tempe": transform_tempeh,
     "egg": transform_protein,
     "telur": transform_protein,
     "pomfret_fish": transform_fish,
