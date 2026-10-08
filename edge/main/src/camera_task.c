@@ -203,13 +203,13 @@ void Camera_Capture_Task(void *pvParameters) {
 
     s_is_streaming = true;
 
-    if (camera_lock_frame(pdMS_TO_TICKS(50))) {
+    if (camera_lock_frame(pdMS_TO_TICKS(40))) {
       if (s_shared_frame.capacity < fb->len) {
         uint8_t *new_buf = (uint8_t *)heap_caps_realloc(
-            s_shared_frame.data, fb->len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            s_shared_frame.data, fb->len + 8192, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (new_buf != NULL) {
           s_shared_frame.data = new_buf;
-          s_shared_frame.capacity = fb->len;
+          s_shared_frame.capacity = fb->len + 8192;
         }
       }
 
@@ -235,7 +235,7 @@ void Camera_Capture_Task(void *pvParameters) {
     if (elapsed_ticks < frame_interval_ticks) {
       vTaskDelay(frame_interval_ticks - elapsed_ticks);
     } else {
-      vTaskDelay(pdMS_TO_TICKS(1));
+      taskYIELD();
     }
   }
 }
@@ -290,7 +290,7 @@ void http_stream_sender_task(void *pvParameters) {
   esp_http_client_config_t config = {
       .url = full_url,
       .method = HTTP_METHOD_POST,
-      .timeout_ms = 1000,
+      .timeout_ms = 1500,
       .buffer_size_tx = 8192,
       .buffer_size = 512,
       .keep_alive_enable = true,
@@ -353,6 +353,10 @@ void http_stream_sender_task(void *pvParameters) {
         esp_err_t err = esp_http_client_perform(client);
         if (err == ESP_OK) {
           int status_code = esp_http_client_get_status_code(client);
+          // Drain any response data to keep socket clean
+          char drain_buf[128];
+          while (esp_http_client_read(client, drain_buf, sizeof(drain_buf)) > 0) {}
+
           if (status_code == 200 || status_code == 201 || status_code == 202) {
             ESP_LOGD(TAG, "Frame #%lu sent (%u bytes, HTTP %d)",
                      (unsigned long)last_sent_frame_id,
@@ -364,11 +368,10 @@ void http_stream_sender_task(void *pvParameters) {
         } else {
           ESP_LOGW(
               TAG,
-              "Transmission failed (%s), closing socket for reconnection...",
+              "Transmission failed (%s), resetting socket...",
               esp_err_to_name(err));
-          // Reset the underlying socket on failure so the next perform
-          // reconnects cleanly
           esp_http_client_close(client);
+          vTaskDelay(pdMS_TO_TICKS(50));
         }
       }
     } else {
