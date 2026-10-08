@@ -4,7 +4,7 @@ Diagnostics:
 
 ---
 If:
-  PathMatch: edge/.*
+  PathMatch: .*/edge/.*
 CompileFlags:
   CompilationDatabase: edge/build
   Remove:
@@ -21,7 +21,7 @@ CompileFlags:
 
 ---
 If:
-  PathMatch: services/.*
+  PathMatch: .*/services/.*
 CompileFlags:
   CompilationDatabase: services/build
   Add:
@@ -31,10 +31,12 @@ CompileFlags:
 
 ---
 If:
-  PathMatch: ml/.*
+  PathMatch: .*/ml/.*
 CompileFlags:
   Add:
-    - -std=c++17
+    - -xc++
+    - -std=c++20
     - -Iml/include
+    - -Iinclude
     - -Wall
     - -Wextra

@@ -4,6 +4,12 @@
 using namespace bawal::ml;
 
 int main(int argc, char** argv) {
+    if (argc > 1 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
+        std::cout << "Usage: " << argv[0] << " [model_name] [scale] [output_dir]\n"
+                  << "Example: " << argv[0] << " realesr-animevideov3-x2 2 weights\n";
+        return 0;
+    }
+
     NCNNModelConfig config;
     if (argc > 1) config.model_name = argv[1];
     if (argc > 2) config.scale = std::stoi(argv[2]);
