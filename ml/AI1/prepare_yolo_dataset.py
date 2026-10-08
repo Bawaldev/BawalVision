@@ -19,17 +19,44 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SOURCE_DATASET_DIR = SCRIPT_DIR / "dataset"
 OUTPUT_YOLO_DIR = SCRIPT_DIR / "yolo_dataset"
 
-# 9 target classes mapped alphabetically with specific single-object semantic prompts
+# 9 target classes mapped alphabetically with multi-synonym semantic prompts
 CLASS_MAPPING: Dict[str, Dict[str, any]] = {
-    "banana": {"id": 0, "prompt": "yellow banana fruit on plate"},
-    "chicken": {"id": 1, "prompt": "fried chicken piece"},
-    "egg": {"id": 2, "prompt": "boiled egg on plate"},
-    "orange": {"id": 3, "prompt": "orange fruit on plate"},
-    "rice": {"id": 4, "prompt": "white rice on plate"},
-    "spinach": {"id": 5, "prompt": "green spinach vegetable on plate"},
-    "tempeh": {"id": 6, "prompt": "single tempeh slice on plate"},
-    "tofu": {"id": 7, "prompt": "single tofu cube on plate"},
-    "water_spinach": {"id": 8, "prompt": "water spinach vegetable on plate"},
+    "banana": {
+        "id": 0,
+        "prompts": ["banana", "yellow banana", "banana fruit", "fruit"],
+    },
+    "chicken": {
+        "id": 1,
+        "prompts": ["fried chicken", "cooked chicken", "chicken meat", "poultry", "meat dish", "food"],
+    },
+    "egg": {
+        "id": 2,
+        "prompts": ["boiled egg", "fried egg", "egg", "sliced egg", "food"],
+    },
+    "orange": {
+        "id": 3,
+        "prompts": ["orange fruit", "sliced orange", "orange", "fruit"],
+    },
+    "rice": {
+        "id": 4,
+        "prompts": ["white rice", "cooked rice", "rice", "bowl of rice", "food"],
+    },
+    "spinach": {
+        "id": 5,
+        "prompts": ["cooked spinach", "green spinach", "spinach vegetable", "leafy greens", "vegetable dish", "food"],
+    },
+    "tempeh": {
+        "id": 6,
+        "prompts": ["tempeh", "fried tempeh", "tempeh slice", "soybean cake", "fried food", "food"],
+    },
+    "tofu": {
+        "id": 7,
+        "prompts": ["tofu", "fried tofu", "tofu cube", "white tofu", "fried food", "food"],
+    },
+    "water_spinach": {
+        "id": 8,
+        "prompts": ["water spinach", "stir fried water spinach", "kangkung", "green vegetable", "vegetable dish", "food"],
+    },
 }
 
 VALID_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -69,10 +96,10 @@ def _copy_task(args: tuple):
 
 
 def process_class_batch(annotator: YOLOWorld, images: List[Path], split: str,
-                        folder_name: str, class_id: int, prompt: str,
+                        folder_name: str, class_id: int, prompts: List[str],
                         batch_size: int, device_id: any, num_workers: int):
     """Processes a category's images using parallel copy & batched YOLO-World inference."""
-    annotator.set_classes([prompt])
+    annotator.set_classes(prompts)
 
     # 1. Parallel copy to YOLO images folder
     dest_images = [OUTPUT_YOLO_DIR / "images" / split / img.name for img in images]
@@ -89,7 +116,7 @@ def process_class_batch(annotator: YOLOWorld, images: List[Path], split: str,
         predictions = annotator.predict(
             batch_paths_str,
             batch=len(batch_paths_str),
-            conf=0.35,
+            conf=0.28,
             iou=0.50,
             verbose=False,
             device=device_id
@@ -121,16 +148,6 @@ def process_class_batch(annotator: YOLOWorld, images: List[Path], split: str,
                     label_rows.append(
                         f"{class_id} {best[0][0]:.6f} {best[0][1]:.6f} {best[0][2]:.6f} {best[0][3]:.6f}\n"
                     )
-                else:
-                    # Realistic centered single portion fallback
-                    label_rows.append(
-                        f"{class_id} 0.500000 0.500000 0.650000 0.650000\n"
-                    )
-            else:
-                # Realistic centered single portion fallback
-                label_rows.append(
-                    f"{class_id} 0.500000 0.500000 0.650000 0.650000\n"
-                )
 
             with open(dest_label, "w", encoding="utf-8") as lf:
                 lf.writelines(label_rows)
@@ -189,7 +206,7 @@ def main() -> None:
                 continue
 
             class_id = meta["id"]
-            prompt = meta["prompt"]
+            prompts = meta["prompts"]
 
             images: List[Path] = [
                 img for img in class_folder.iterdir()
@@ -209,7 +226,7 @@ def main() -> None:
                 split=split,
                 folder_name=folder_name,
                 class_id=class_id,
-                prompt=prompt,
+                prompts=prompts,
                 batch_size=args.batch_size,
                 device_id=device_id,
                 num_workers=args.workers
