@@ -119,15 +119,23 @@
             if (latestLive && latestLive.detections && latestLive.detections.length > 0) {
                 isOnline = true;
                 hasLiveDetections = true;
-                detections = latestLive.detections.map((det: any) => ({
-                    food_name: det.food_name || 'food_item',
-                    similarity_rate: Number(det.similarity_rate) || 0.0,
-                    temperature: Number(det.temperature) || Number(latestLive.food_temperature) || Number(latestLive.temperature) || 25,
-                    spoilage_score: Number(det.spoilage_score) || 0,
-                    status: (det.status as 'PASS' | 'REVIEW' | 'REJECT') || 'PASS',
-                    category: getCategory(det.food_name || ''),
-                    box: det.box || []
-                }));
+                detections = latestLive.detections.map((det: any) => {
+                    const spoilage = Number(det.spoilage_score) || 0;
+                    const conf = Number(det.similarity_rate) || 0.0;
+                    let st: 'PASS' | 'REVIEW' | 'REJECT' = det.status;
+                    if (!st || st === '') {
+                        st = (spoilage >= 50 || conf < 0.55) ? 'REJECT' : ((spoilage >= 25 || conf < 0.68) ? 'REVIEW' : 'PASS');
+                    }
+                    return {
+                        food_name: det.food_name || 'food_item',
+                        similarity_rate: conf,
+                        temperature: Number(det.temperature) || Number(latestLive.food_temperature) || Number(latestLive.temperature) || 25,
+                        spoilage_score: spoilage,
+                        status: st,
+                        category: getCategory(det.food_name || ''),
+                        box: det.box || []
+                    };
+                });
             }
 
             // 5. Inspections & Records from DB (Only count actual meals with scanned food items!)
@@ -138,21 +146,28 @@
 
             if (validRecords.length > 0) {
                 isOnline = true;
-                const spoiled = validRecords.filter(r => r.is_spoiled).length;
-                totalRejected = spoiled;
-                totalAccepted = validRecords.length - spoiled;
+                const spoiled = validRecords.filter(r => r.is_spoiled || (r.inspection_foods && r.inspection_foods.some(f => f.status === 'REJECT'))).length;
+                const accepted = validRecords.length - spoiled;
+                totalRejected = Math.max(totalRejected, spoiled);
+                totalAccepted = Math.max(totalAccepted, accepted);
 
                 if (!hasLiveDetections) {
                     const latest = validRecords[0];
                     if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
                         detections = latest.inspection_foods.map(item => {
                             const name = item.food_item?.name || 'food_item';
+                            const sp = Number(item.spoilage_score) || 0;
+                            const cf = Number(item.similarity_rate) || 0.0;
+                            let st: 'PASS' | 'REVIEW' | 'REJECT' = (item.status as any);
+                            if (!st || st === '') {
+                                st = (sp >= 50 || cf < 0.55) ? 'REJECT' : ((sp >= 25 || cf < 0.68) ? 'REVIEW' : 'PASS');
+                            }
                             return {
                                 food_name: name,
-                                similarity_rate: Number(item.similarity_rate) || 0.0,
+                                similarity_rate: cf,
                                 temperature: Number(item.temperature) || Number(latest.food_temperature) || Number(latest.temperature) || 25,
-                                spoilage_score: Number(item.spoilage_score) || 0,
-                                status: (item.status as 'PASS' | 'REVIEW' | 'REJECT') || 'PASS',
+                                spoilage_score: sp,
+                                status: st,
                                 category: getCategory(name)
                             };
                         });
@@ -161,8 +176,6 @@
                     }
                 }
             } else if (!hasLiveDetections) {
-                totalAccepted = 0;
-                totalRejected = 0;
                 detections = [];
             }
         } catch (err) {
@@ -206,45 +219,71 @@
                     id: Math.random().toString(36).substring(2, 9),
                     timestamp: new Date().toLocaleTimeString(),
                     level: 'WARN',
-                    message: 'Cannot inspect tray: No active camera device found.'
+                    message: 'Inspection halted: No active camera stream connected.'
+                }
+            ];
+            return;
+        }
+
+        if (detections.length === 0) {
+            logs = [
+                ...logs,
+                {
+                    id: Math.random().toString(36).substring(2, 9),
+                    timestamp: new Date().toLocaleTimeString(),
+                    level: 'WARN',
+                    message: 'Inspection halted: No food items detected on tray. Place meal plate under camera.'
                 }
             ];
             return;
         }
 
         isInspecting = true;
-        logs = [
-            ...logs,
-            {
-                id: Math.random().toString(36).substring(2, 9),
-                timestamp: new Date().toLocaleTimeString(),
-                level: 'INFO',
-                message: 'Triggering high-resolution tray inspection capture...'
-            }
-        ];
+        
+        // Evaluate Tray QC Quality & Freshness
+        let anyReject = false;
+        let anyReview = false;
+        let totalFreshness = 0;
+        for (const det of detections) {
+            const spoilage = Number(det.spoilage_score) || 0;
+            const freshness = Math.max(0, Math.min(100, 100 - spoilage));
+            totalFreshness += freshness;
+            if (det.status === 'REJECT' || spoilage >= 50) anyReject = true;
+            else if (det.status === 'REVIEW' || spoilage >= 25) anyReview = true;
+        }
 
-        try {
-            await triggerManualInspection(systemConfig.deviceId, detections, systemConfig.backendUrl);
-            await pollBackendData();
-            logs = [
-                ...logs,
-                {
-                    id: Math.random().toString(36).substring(2, 9),
-                    timestamp: new Date().toLocaleTimeString(),
-                    level: 'SUCCESS',
-                    message: 'Inspection captured and synced to PostgreSQL.'
-                }
-            ];
-        } catch (err) {
+        const avgFreshness = detections.length > 0 ? totalFreshness / detections.length : 100;
+        const isTrayRejected = anyReject || avgFreshness < 55.0 || (telemetry?.food_temperature || 0) > 42.0;
+
+        if (isTrayRejected) {
+            totalRejected++;
             logs = [
                 ...logs,
                 {
                     id: Math.random().toString(36).substring(2, 9),
                     timestamp: new Date().toLocaleTimeString(),
                     level: 'ERROR',
-                    message: `Inspection failed: ${err}`
+                    message: `QC VERDICT: REJECT - Tray failed quality checks (${detections.length} items, Avg Freshness: ${avgFreshness.toFixed(0)}%).`
                 }
             ];
+        } else {
+            totalAccepted++;
+            logs = [
+                ...logs,
+                {
+                    id: Math.random().toString(36).substring(2, 9),
+                    timestamp: new Date().toLocaleTimeString(),
+                    level: anyReview ? 'WARN' : 'SUCCESS',
+                    message: `QC VERDICT: ${anyReview ? 'REVIEW' : 'PASS'} - Tray approved (${detections.length} items, Avg Freshness: ${avgFreshness.toFixed(0)}%).`
+                }
+            ];
+        }
+
+        try {
+            await triggerManualInspection(systemConfig.deviceId, detections, systemConfig.backendUrl);
+            await pollBackendData();
+        } catch (err) {
+            console.warn('[MANUAL INSPECTION SYNC]', err);
         } finally {
             isInspecting = false;
         }

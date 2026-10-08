@@ -71,6 +71,20 @@
             </div>
         </div>
     </div>
+
+    <!-- Production Metrics Footer -->
+    <div class="summary-footer-stats">
+        <div class="footer-stat">
+            <span class="stat-k">Total Tested</span>
+            <strong class="stat-v">{total.toLocaleString()} Trays</strong>
+        </div>
+        <div class="footer-stat">
+            <span class="stat-k">Yield Status</span>
+            <strong class="stat-v" class:green={passRate >= 80} class:red={total > 0 && passRate < 80}>
+                {total === 0 ? 'Standby' : (passRate >= 80 ? 'Optimal' : 'Attention')}
+            </strong>
+        </div>
+    </div>
 </div>
 
 <style>
@@ -241,5 +255,45 @@
         font-family: var(--font-mono);
         color: var(--text-primary);
         font-weight: 700;
+    }
+
+    .summary-footer-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        padding-top: 10px;
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .footer-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        background: var(--bg-inset);
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-subtle);
+    }
+
+    .stat-k {
+        font-size: 0.62rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        font-weight: 600;
+    }
+
+    .stat-v {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+
+    .stat-v.green {
+        color: var(--accent-green);
+    }
+
+    .stat-v.red {
+        color: var(--accent-red);
     }
 </style>

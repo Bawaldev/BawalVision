@@ -4,16 +4,19 @@
         isSpoiled?: boolean;
         tSafeHours?: number;
         hasFood?: boolean;
+        qualityScore?: number;
     }
 
-    let { temperature = 24.5, isSpoiled = false, tSafeHours = 0, hasFood = false }: Props = $props();
+    let { temperature = 24.5, isSpoiled = false, tSafeHours = 0, hasFood = false, qualityScore = 0 }: Props = $props();
 
     let freshnessIndex = $derived(
         !hasFood
             ? 0
             : isSpoiled
             ? 15
-            : Math.max(20, Math.min(100, 100 - Math.max(0, (temperature - 20) * 3)))
+            : qualityScore > 0
+            ? Math.max(10, Math.min(100, qualityScore - (temperature > 35 ? (temperature - 35) * 2.5 : 0)))
+            : Math.max(20, Math.min(100, 100 - Math.max(0, (temperature - 20) * 2)))
     );
 
     let statusText = $derived(
@@ -22,7 +25,7 @@
             : isSpoiled || freshnessIndex < 40
             ? 'Spoiled / Reject'
             : freshnessIndex < 70
-            ? 'Caution / Monitor'
+            ? 'Caution / Review'
             : 'Optimal & Fresh'
     );
 

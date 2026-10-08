@@ -164,16 +164,7 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // Fast Header/Footer Duplicate Check (Avoids 250KB memcmp & eliminates lag)
-        if (raw_bytes.size() == prev_raw_bytes.size() && raw_bytes.size() >= 32) {
-            if (std::memcmp(raw_bytes.data(), prev_raw_bytes.data(), 16) == 0 &&
-                std::memcmp(raw_bytes.data() + raw_bytes.size() - 16, prev_raw_bytes.data() + prev_raw_bytes.size() - 16, 16) == 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                continue;
-            }
-        }
         prev_raw_bytes = raw_bytes;
-
         inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
         
         // Execute End-to-End Pipeline in parallel AVX2
@@ -214,7 +205,9 @@ int main(int argc, char** argv) {
                 for (size_t i = 0; i < valid_detections.size(); ++i) {
                     const auto& vd = valid_detections[i];
                     const float spoilage_pct = std::clamp(vd.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
-                    const std::string status = vd.spoilage.is_visually_spoiled ? "REJECT" : (spoilage_pct > 35.0f ? "REVIEW" : "PASS");
+                    const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 50.0f || vd.confidence < 0.55f)
+                                                   ? "REJECT"
+                                                   : ((spoilage_pct >= 25.0f || vd.confidence < 0.68f) ? "REVIEW" : "PASS");
 
                     if (i > 0) json_ss << ",";
                     json_ss << "{"

@@ -69,6 +69,14 @@ public:
     [[nodiscard]] bool execute(const cv::Mat& frame, InspectionOutput& out_inspection);
 
     /**
+     * @brief Adaptive Image Enhancement: Edge-preserving Bilateral Denoising, CLAHE (L* in CIE-Lab), and Unsharp Masking.
+     * 
+     * @param src Input BGR image matrix
+     * @param dst Enhanced output image matrix with boosted micro-contrast and sharpness
+     */
+    void enhanceImage(const cv::Mat& src, cv::Mat& dst);
+
+    /**
      * @brief Renders visual bounding boxes, food class badges, and spoilage indicators on image.
      * 
      * @param inspection Output struct from execute()

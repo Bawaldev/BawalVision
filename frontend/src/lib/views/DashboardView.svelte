@@ -43,6 +43,16 @@
         onInspectTray,
         onClearLogs
     }: Props = $props();
+
+    let avgFreshness = $derived.by(() => {
+        if (!detections || detections.length === 0) return 0;
+        let sum = 0;
+        for (const det of detections) {
+            const sp = Number(det.spoilage_score) || 0;
+            sum += Math.max(0, Math.min(100, 100 - sp));
+        }
+        return Math.round(sum / detections.length);
+    });
 </script>
 
 <div class="dashboard-main-grid">
@@ -82,6 +92,7 @@
             isSpoiled={(telemetry?.food_temperature || telemetry?.temperature || 0) > 40 || (detections && detections.some(d => d.status === 'REJECT'))}
             tSafeHours={detections && detections.length > 0 ? (telemetry?.food_temperature && telemetry.food_temperature > 20 ? 8.0 * (1.0 / (1.0 + 0.05 * (telemetry.food_temperature - 20))) : 8.0) : 0}
             hasFood={detections && detections.length > 0}
+            qualityScore={avgFreshness}
         />
 
         <!-- 3. Physical Environmental Telemetry -->

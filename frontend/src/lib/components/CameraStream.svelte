@@ -42,25 +42,46 @@
         }
     });
 
-    function isDetected(item: typeof standardFoodItems[number]): { found: boolean; confidence: number } {
-        if (!hasCamera || detections.length === 0) {
-            return { found: false, confidence: 0 };
-        }
-        const matched = detections.find(d => {
-            const rawName = (d.food_name || '').toLowerCase().replace(/[\s_-]+/g, '');
-            return item.aliases.some(alias => {
-                const cleanAlias = alias.toLowerCase().replace(/[\s_-]+/g, '');
-                return rawName.includes(cleanAlias) || cleanAlias.includes(rawName);
-            });
-        });
-        return { found: !!matched, confidence: matched ? matched.similarity_rate : 0 };
+    function getCategoryIcon(name: string): string {
+        const lower = (name || '').toLowerCase();
+        if (lower.includes('rice') || lower.includes('nasi')) return '🍚';
+        if (lower.includes('chicken') || lower.includes('ayam')) return '🍗';
+        if (lower.includes('egg') || lower.includes('telur')) return '🥚';
+        if (lower.includes('tempeh') || lower.includes('tempe')) return '🧇';
+        if (lower.includes('tofu') || lower.includes('tahu')) return '🧊';
+        if (lower.includes('banana') || lower.includes('pisang')) return '🍌';
+        if (lower.includes('orange') || lower.includes('jeruk')) return '🍊';
+        if (lower.includes('water_spinach') || lower.includes('kangkung')) return '🌱';
+        if (lower.includes('spinach') || lower.includes('bayam')) return '🥬';
+        return '🍱';
     }
 
-    function getBoxColor(det: FoodDetection): string {
-        if (det.status === 'REJECT' || (det.spoilage_score || 0) >= 55) return '#ef4444';
-        if (det.status === 'REVIEW' || (det.spoilage_score || 0) >= 35) return '#f59e0b';
-        return '#22c55e';
-    }
+    let mealGroups = $derived.by(() => {
+        const names = detections.map(d => (d.food_name || '').toLowerCase());
+        const hasCarb = names.some(n => n.includes('rice') || n.includes('nasi'));
+        const hasProtein = names.some(n => n.includes('chicken') || n.includes('ayam') || n.includes('egg') || n.includes('telur') || n.includes('tofu') || n.includes('tahu') || n.includes('tempeh') || n.includes('tempe'));
+        const hasVeggie = names.some(n => n.includes('spinach') || n.includes('kangkung') || n.includes('bayam'));
+        const hasFruit = names.some(n => n.includes('banana') || n.includes('pisang') || n.includes('orange') || n.includes('jeruk'));
+        return {
+            carb: hasCarb,
+            protein: hasProtein,
+            veggie: hasVeggie,
+            fruit: hasFruit,
+            count: [hasCarb, hasProtein, hasVeggie, hasFruit].filter(Boolean).length
+        };
+    });
+
+    // Auto-recovery watchdog: auto-reconnect stream if stalled
+    $effect(() => {
+        if (!hasCamera) return;
+        const interval = setInterval(() => {
+            if (streamError) {
+                streamEpoch = Date.now();
+                streamError = false;
+            }
+        }, 3500);
+        return () => clearInterval(interval);
+    });
 </script>
 
 <div class="camera-stream-wrapper">
@@ -71,7 +92,7 @@
                 <span class="live-dot" class:offline={!hasCamera || streamError}></span>
                 <strong>Live Inspection View</strong>
             </div>
-            <span class="pill-badge">{hasCamera && !streamError ? 'MJPEG Stream (Zero Lag)' : 'Standby'}</span>
+            <span class="pill-badge">{hasCamera && !streamError ? 'MJPEG Stream (Active HUD)' : 'Standby'}</span>
         </div>
 
         <div class="canvas-container">
@@ -105,29 +126,70 @@
         </div>
     </div>
 
-    <!-- Lovelace Entity Chips Grid (Like Home Assistant Switch Chips) -->
+    <!-- Detected Items Live Panel -->
     <div class="entities-panel">
         <div class="panel-header">
             <div class="panel-title-group">
                 <span class="entity-group-icon">🍱</span>
                 <h3>Detected Items</h3>
             </div>
-            <span class="active-count">{detections.length} Active</span>
+            <span class="active-count" class:has-items={detections.length > 0}>
+                {detections.length} {detections.length === 1 ? 'Item' : 'Items'} Active
+            </span>
         </div>
 
         <div class="entity-chips-grid">
-            {#each standardFoodItems as item}
-                {@const check = isDetected(item.id)}
-                <div class="entity-item" class:on={check.found}>
-                    <div class="entity-icon-circle">
-                        <span>{item.icon}</span>
-                    </div>
-                    <div class="entity-info">
-                        <span class="entity-name">{item.label}</span>
-                        <span class="entity-state">{check.found ? `${(check.confidence * 100).toFixed(0)}% Match` : 'Off'}</span>
-                    </div>
+            {#if detections.length === 0}
+                <div class="empty-tray-state">
+                    <span class="empty-icon">🍽️</span>
+                    <strong>Awaiting Food Tray</strong>
+                    <p>Place meal tray in camera view for real-time AI food detection & quality inspection.</p>
                 </div>
-            {/each}
+            {:else}
+                {#each detections as det, idx}
+                    {@const spoilage = Number(det.spoilage_score) || 0}
+                    {@const freshness = Math.max(0, Math.min(100, Math.round(100 - spoilage)))}
+                    {@const status = (det.status as 'PASS' | 'REVIEW' | 'REJECT') || (spoilage >= 50 ? 'REJECT' : (spoilage >= 25 ? 'REVIEW' : 'PASS'))}
+                    
+                    <div class="entity-item on" class:pass={status === 'PASS'} class:review={status === 'REVIEW'} class:reject={status === 'REJECT'}>
+                        <div class="entity-icon-circle">
+                            <span>{getCategoryIcon(det.food_name)}</span>
+                        </div>
+                        <div class="entity-info">
+                            <div class="entity-top-row">
+                                <span class="entity-name">{det.food_name}</span>
+                                <span class="status-pill" class:pill-pass={status === 'PASS'} class:pill-review={status === 'REVIEW'} class:pill-reject={status === 'REJECT'}>
+                                    {status}
+                                </span>
+                            </div>
+                            <div class="entity-state-row">
+                                <span class="entity-meta">
+                                    {(det.similarity_rate * 100).toFixed(0)}% Conf
+                                </span>
+                                <span class="freshness-tag" class:tag-pass={status === 'PASS'} class:tag-review={status === 'REVIEW'} class:tag-reject={status === 'REJECT'}>
+                                    {freshness}% Fresh
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                {/each}
+            {/if}
+        </div>
+
+        <!-- MBG Nutrition Balance Footer -->
+        <div class="nutrition-footer">
+            <div class="nutrition-header">
+                <span class="nutrition-title">MBG Tray Balance</span>
+                <span class="nutrition-badge" class:complete={mealGroups.count === 4}>
+                    {mealGroups.count}/4 Groups
+                </span>
+            </div>
+            <div class="nutrition-chips">
+                <span class="nutri-chip" class:active={mealGroups.carb}>🍚 Carbs</span>
+                <span class="nutri-chip" class:active={mealGroups.protein}>🍗 Protein</span>
+                <span class="nutri-chip" class:active={mealGroups.veggie}>🥬 Veggies</span>
+                <span class="nutri-chip" class:active={mealGroups.fruit}>🍊 Fruit</span>
+            </div>
         </div>
     </div>
 </div>
@@ -379,13 +441,174 @@
         font-weight: 700;
     }
 
+    .entity-state-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 1px;
+    }
+
     .entity-state {
         font-size: 0.65rem;
         color: var(--text-muted);
     }
 
     .entity-item.on .entity-state {
-        color: var(--accent-blue);
+        color: var(--text-secondary);
         font-weight: 600;
+    }
+
+    .freshness-tag {
+        font-size: 0.62rem;
+        font-weight: 700;
+        padding: 1px 6px;
+        border-radius: 4px;
+        line-height: 1.2;
+    }
+
+    .freshness-tag.tag-pass {
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+        border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .freshness-tag.tag-review {
+        background: rgba(245, 158, 11, 0.15);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    .entity-top-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+    }
+
+    .status-pill {
+        font-size: 0.60rem;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        padding: 1px 6px;
+        border-radius: 4px;
+        text-transform: uppercase;
+    }
+
+    .status-pill.pill-pass {
+        background: rgba(34, 197, 94, 0.18);
+        color: #22c55e;
+    }
+
+    .status-pill.pill-review {
+        background: rgba(245, 158, 11, 0.18);
+        color: #f59e0b;
+    }
+
+    .status-pill.pill-reject {
+        background: rgba(239, 68, 68, 0.18);
+        color: #ef4444;
+    }
+
+    .entity-meta {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+
+    .empty-tray-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 24px 12px;
+        background: var(--bg-inset);
+        border: 1px dashed var(--border-subtle);
+        border-radius: var(--radius-md);
+        gap: 6px;
+    }
+
+    .empty-icon {
+        font-size: 1.8rem;
+    }
+
+    .empty-tray-state strong {
+        font-size: 0.82rem;
+        color: var(--text-primary);
+    }
+
+    .empty-tray-state p {
+        margin: 0;
+        font-size: 0.68rem;
+        color: var(--text-muted);
+        line-height: 1.3;
+    }
+
+    .active-count.has-items {
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+        border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .nutrition-footer {
+        margin-top: auto;
+        padding-top: 10px;
+        border-top: 1px solid var(--border-subtle);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .nutrition-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .nutrition-title {
+        font-size: 0.70rem;
+        font-weight: 700;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .nutrition-badge {
+        font-size: 0.65rem;
+        font-weight: 700;
+        background: var(--bg-chip);
+        color: var(--text-secondary);
+        padding: 1px 6px;
+        border-radius: var(--radius-pill);
+    }
+
+    .nutrition-badge.complete {
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+    }
+
+    .nutrition-chips {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+    }
+
+    .nutri-chip {
+        font-size: 0.65rem;
+        padding: 4px 6px;
+        border-radius: 4px;
+        background: var(--bg-inset);
+        color: var(--text-muted);
+        border: 1px solid var(--border-subtle);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        opacity: 0.55;
+    }
+
+    .nutri-chip.active {
+        background: rgba(56, 189, 248, 0.1);
+        color: var(--text-primary);
+        border-color: rgba(56, 189, 248, 0.4);
+        font-weight: 600;
+        opacity: 1.0;
     }
 </style>
