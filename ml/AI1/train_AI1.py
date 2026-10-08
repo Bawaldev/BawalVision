@@ -9,15 +9,19 @@ import torch
 from ultralytics import YOLO
 
 # ==============================================================================
-#  mlflow setup & initialization
+#  mlflow setup & initialization (Optional/Safe Fallback)
 # ==============================================================================
-import mlflow
-
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
-MLFLOW_EXPERIMENT_NAME = "MBG-BawalVision-YOLOv8n"
-
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+try:
+    import mlflow
+    MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+    MLFLOW_EXPERIMENT_NAME = "MBG-BawalVision-YOLOv8n"
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+    MLFLOW_ENABLED = True
+except Exception as e:
+    print(f"[!] MLflow tracking offline/skipped ({e}). Proceeding with local training runs.")
+    MLFLOW_ENABLED = False
+    mlflow = None
 
 # ==============================================================================
 # PIPELINE CONFIGURATION & HYPERPARAMETERS
@@ -95,15 +99,56 @@ def main() -> None:
     # ==============================================================================
     # Wrap Run with Mlflow
     # ==============================================================================
+    # ==============================================================================
+    # Wrap Run with Mlflow (or NullContext if offline)
+    # ==============================================================================
+    import contextlib
+
+    class DummyMLflowRun:
+        class Info:
+            run_id = "local_training_run"
+        info = Info()
+
+    @contextlib.contextmanager
+    def safe_mlflow_run(run_name):
+        if MLFLOW_ENABLED and mlflow:
+            try:
+                with mlflow.start_run(run_name=run_name) as r:
+                    yield r
+                return
+            except Exception as e:
+                print(f"[!] MLflow connect error: {e}. Falling back to local run.")
+        yield DummyMLflowRun()
+
+    def safe_mlflow_log_params(params):
+        if MLFLOW_ENABLED and mlflow:
+            try: mlflow.log_params(params)
+            except Exception: pass
+
+    def safe_mlflow_log_metrics(metrics):
+        if MLFLOW_ENABLED and mlflow:
+            try: mlflow.log_metrics(metrics)
+            except Exception: pass
+
+    def safe_mlflow_log_artifact(art, artifact_path=None):
+        if MLFLOW_ENABLED and mlflow:
+            try: mlflow.log_artifact(art, artifact_path=artifact_path)
+            except Exception: pass
+
+    def safe_mlflow_set_tag(key, val):
+        if MLFLOW_ENABLED and mlflow:
+            try: mlflow.set_tag(key, val)
+            except Exception: pass
+
     run_name = f"yolov8n_e{args.epochs}_b{args.batch_size}"
     if args.export_only:
         run_name += "_export_only"
 
-    with mlflow.start_run(run_name=run_name) as run:
-        print(f"[+] Active MLflow Run ID: {run.info.run_id}")
+    with safe_mlflow_run(run_name=run_name) as run:
+        print(f"[+] Active Training Run ID: {run.info.run_id}")
 
-        # Log Training Parameters to MLflow
-        mlflow.log_params({
+        # Log Training Parameters
+        safe_mlflow_log_params({
             "model_architecture": MODEL_ARCH,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
@@ -290,26 +335,24 @@ def main() -> None:
         # ==============================================================================
         # Metric log & final weight to Mlflow
         # ==============================================================================
-        mlflow.log_metrics({
+        safe_mlflow_log_metrics({
             "parity_peak_diff": peak_diff,
             "parity_mean_diff": mean_diff,
         })
 
         if FINAL_PT_TARGET.exists():
-            mlflow.log_artifact(str(FINAL_PT_TARGET), artifact_path="weights")
+            safe_mlflow_log_artifact(str(FINAL_PT_TARGET), artifact_path="weights")
         if FINAL_ONNX_TARGET.exists():
-            mlflow.log_artifact(str(FINAL_ONNX_TARGET), artifact_path="model_onnx")
+            safe_mlflow_log_artifact(str(FINAL_ONNX_TARGET), artifact_path="model_onnx")
 
         try:
             np.testing.assert_allclose(torch_tensor, onnx_tensor, rtol=1e-03, atol=1e-04)
-            mlflow.set_tag("sanity_check_status", "PASSED")
+            safe_mlflow_set_tag("sanity_check_status", "PASSED")
             print("\n[✓] Sanity check PASSED! Model is fully compliant for C++ deployment.")
         except AssertionError as err:
-            mlflow.set_tag("sanity_check_status", "FAILED")
+            safe_mlflow_set_tag("sanity_check_status", "FAILED")
             print("\n[!] Warning: Numerical divergence detected between engines:")
             print(err)
-
-        print(f"\n[✓] Sesi run tercatat di MLflow Server: {MLFLOW_TRACKING_URI}")
 
 
 if __name__ == "__main__":

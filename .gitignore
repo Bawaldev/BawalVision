@@ -86,9 +86,15 @@ ml/model/*.pth
 ml/model/*.onnx
 ml/model/*.engine
 !ml/model/.gitkeep
-ml/AI1/runs/ai1_yolov8n_det
+runs/
+**/runs/
+mlruns/
+**/.mlruns/
 weights/
 ml/AI1/weights/
+**/*_backup*
+*.bin
+*.param
 # -------------------------------------------------------------------------
 # Datasets & DVC (Data Version Control)
 # -------------------------------------------------------------------------
@@ -104,6 +110,8 @@ ml/AI1/dataset/
 *.tar.gz
 *.tar
 ml/AI1/yolo_dataset/
+yolo_dataset*/
+**/yolo_dataset_OLD*/
 ml/AI1/.dvc
 # ==========================================
 # DVC Metadata Tracking (Wajib di Git)
