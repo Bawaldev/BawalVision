@@ -241,7 +241,7 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
     const int scale = (params.scale > 0) ? params.scale : 2;
 
 #if BAWAL_HAVE_NCNN
-    if (is_initialized && s_realesrgan_net && (params.use_gpu != 0) && s_vulkan_initialized) {
+    if (is_initialized && s_realesrgan_net) {
         try {
             const int w = input.cols;
             const int h = input.rows;
