@@ -288,19 +288,20 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         std::vector<int> nms_indices;
         cv::dnn::NMSBoxes(boxes, confidences, conf_threshold, nms_threshold, nms_indices);
 
-        // If YOLO detects no candidates, clear active tracks and return immediately
+        // If YOLO detects no candidates this frame, age existing tracks instead of clearing immediately
         if (nms_indices.empty()) {
-            s_tracked_items.clear();
-            return true;
-        }
+            for (auto& item : s_tracked_items) {
+                item.lost_frames++;
+                item.result.confidence *= 0.95f;
+            }
+            s_tracked_items.erase(
+                std::remove_if(s_tracked_items.begin(), s_tracked_items.end(),
+                               [](const TrackedItem& item) { return item.lost_frames > 15; }),
+                s_tracked_items.end());
 
-        // 6. Evaluate Scene Physical Contrast
-        cv::Scalar mean_bgr_frame, std_bgr_frame;
-        cv::meanStdDev(frame, mean_bgr_frame, std_bgr_frame);
-        const double scene_contrast = (std_bgr_frame[0] + std_bgr_frame[1] + std_bgr_frame[2]) / 3.0;
-
-        if (scene_contrast < 10.0) {
-            s_tracked_items.clear();
+            for (const auto& item : s_tracked_items) {
+                out_detections.push_back(item.result);
+            }
             return true;
         }
 
@@ -312,7 +313,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             cv::Rect yolo_box = boxes[idx];
             yolo_box &= cv::Rect(0, 0, frame.cols, frame.rows);
 
-            if (yolo_box.width < 24 || yolo_box.height < 24) {
+            if (yolo_box.width < 20 || yolo_box.height < 20) {
                 continue;
             }
 
@@ -343,10 +344,10 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
             for (const auto& cnt : local_contours) {
                 double a = cv::contourArea(cnt);
-                if (a >= (total_roi_area * 0.12) && a <= (total_roi_area * 0.88)) {
+                if (a >= (total_roi_area * 0.10) && a <= (total_roi_area * 0.90)) {
                     cv::Rect lr = cv::boundingRect(cnt);
                     float aspect = static_cast<float>(lr.width) / static_cast<float>(lr.height);
-                    if (aspect >= 0.35f && aspect <= 2.8f && a > max_valid_area) {
+                    if (aspect >= 0.30f && aspect <= 3.2f && a > max_valid_area) {
                         max_valid_area = a;
                         best_contour_box = lr;
                     }
@@ -358,18 +359,17 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 int snap_y = yolo_box.y + best_contour_box.y;
                 cv::Rect snapped(snap_x, snap_y, best_contour_box.width, best_contour_box.height);
                 snapped &= cv::Rect(0, 0, frame.cols, frame.rows);
-                if (snapped.width >= 24 && snapped.height >= 24) {
+                if (snapped.width >= 20 && snapped.height >= 20) {
                     final_box = snapped;
                 }
             }
 
-            // 1. Enforce Realistic Food Portion Bounding Box Boundaries:
-            // Single meal portions on a school lunch tray do not engulf entire room or exceed 38% frame area
+            // Enforce Realistic Food Portion Bounding Box Boundaries (allow close-up trays/dishes up to 70% frame)
             const float frame_area = static_cast<float>(frame.cols * frame.rows);
-            if (final_box.area() > frame_area * 0.38f || 
-                final_box.width > frame.cols * 0.62f || 
-                final_box.height > frame.rows * 0.62f) {
-                continue; // Reject human figures, room backdrops, and entire scene bounding boxes
+            if (final_box.area() > frame_area * 0.70f || 
+                final_box.width > frame.cols * 0.85f || 
+                final_box.height > frame.rows * 0.85f) {
+                continue;
             }
 
             // Spectral Color Analysis on Core ROI (Center 50%)
@@ -433,55 +433,31 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
             float calibrated_conf = yolo_score;
 
-            // 3. Strict Per-Class Physical & Chromatic Validation:
+            // 3. Per-Class Physical & Chromatic Validation:
             // White Rice:
             if (predicted_name == "rice") {
-                if (is_neutral_white_profile && yolo_score >= 0.48f) {
-                    calibrated_conf = std::clamp(yolo_score + (tex.std_dev * 0.002f), 0.50f, 0.95f);
+                if (v_val < 35.0 || s_val > 90.0) {
+                    is_valid_food = false; // Reject dark shadows
                 } else {
-                    is_valid_food = false; // Reject dark shadows, dark clothing, and non-white regions
+                    calibrated_conf = std::clamp(yolo_score, 0.40f, 0.98f);
                 }
             }
             // Green Vegetables (Water Spinach / Spinach):
             else if (predicted_name == "water_spinach" || predicted_name == "spinach") {
-                if (h_val < 28.0 || h_val > 92.0 || s_val < 30.0 || g_val < r_val + 2.0) {
+                if (v_val < 25.0 || s_val < 15.0) {
                     is_valid_food = false;
                 }
             }
-            // Banana:
-            else if (predicted_name == "banana") {
-                if (s_val < 32.0 || h_val < 15.0 || h_val > 48.0 || v_val > 225.0) {
+            // Banana / Orange:
+            else if (predicted_name == "banana" || predicted_name == "orange") {
+                if (v_val < 30.0 || s_val < 15.0) {
                     is_valid_food = false;
                 }
             }
-            // Orange:
-            else if (predicted_name == "orange") {
-                if (s_val < 38.0 || h_val < 5.0 || h_val > 28.0 || v_val > 225.0) {
-                    is_valid_food = false;
-                }
-            }
-            // Tofu (Curd Soy Block):
-            else if (predicted_name == "tofu") {
-                if (v_val < 60.0 || v_val > 210.0 || s_val < 15.0 || s_val > 65.0 || 
-                    yolo_score < 0.60f || tex.edge_energy < 10.0f || tex.std_dev < 16.0f) {
-                    is_valid_food = false;
-                }
-            }
-            // Tempeh (Fermented Soy Cake):
-            else if (predicted_name == "tempeh") {
-                if (h_val < 10.0 || h_val > 55.0 || s_val < 18.0 || v_val < 40.0 || v_val > 200.0 || yolo_score < 0.55f) {
-                    is_valid_food = false;
-                }
-            }
-            // Fried Chicken:
-            else if (predicted_name == "chicken") {
-                if (h_val < 8.0 || h_val > 48.0 || s_val < 20.0 || v_val < 35.0 || v_val > 205.0 || yolo_score < 0.55f) {
-                    is_valid_food = false;
-                }
-            }
-            // Egg:
-            else if (predicted_name == "egg") {
-                if (v_val < 65.0 || v_val > 215.0 || s_val > 60.0 || yolo_score < 0.55f) {
+            // Tofu / Tempeh / Chicken / Egg:
+            else if (predicted_name == "tofu" || predicted_name == "tempeh" || 
+                     predicted_name == "chicken" || predicted_name == "egg") {
+                if (v_val < 25.0 || v_val > 245.0) {
                     is_valid_food = false;
                 }
             }

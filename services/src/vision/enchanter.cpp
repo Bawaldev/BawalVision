@@ -162,7 +162,18 @@ bool RealESRGANEngine::init(const RealESRGANConfig& config) {
                 s_vulkan_initialized = true;
             }
             int gpu_count = ncnn::get_gpu_count();
+            bool is_software_gpu = false;
             if (gpu_count > 0) {
+                const auto& info = ncnn::get_gpu_info(0);
+                std::string dev_name = info.device_name() ? info.device_name() : "";
+                if (dev_name.find("llvmpipe") != std::string::npos || dev_name.find("software") != std::string::npos || dev_name.find("Software") != std::string::npos) {
+                    is_software_gpu = true;
+                    std::cout << "[RealESRGAN] Software Vulkan device detected (" << dev_name 
+                              << "). Activating high-performance multi-threaded AVX2 / OpenMP CPU SIMD.\n";
+                }
+            }
+
+            if (gpu_count > 0 && !is_software_gpu) {
                 s_realesrgan_net->opt.use_vulkan_compute = 1;
                 s_realesrgan_net->set_vulkan_device(params.gpu_device < gpu_count ? params.gpu_device : 0);
             } else {

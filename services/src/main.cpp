@@ -138,6 +138,8 @@ int main(int argc, char** argv) {
     std::vector<DetectionResult> shared_detections;
     std::string current_device_id = device_id;
 
+    auto last_valid_detection_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+
     std::thread ai_worker([&]() {
         CURL* curl_db = curl_easy_init();
         auto last_dispatch_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -160,16 +162,27 @@ int main(int argc, char** argv) {
             std::vector<DetectionResult> detected;
             if (pipeline.runInference(frame_to_process, detected)) {
                 const double infer_ms = ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
-                {
-                    std::lock_guard<std::mutex> lock(ai_mutex);
-                    shared_detections = detected;
-                }
-
+                
                 // Collect valid food detections
                 std::vector<DetectionResult> valid_detections;
                 for (const auto& d : detected) {
-                    if (d.class_id >= 0 && d.confidence >= 0.48f && d.class_name != "no_food" && d.class_name != "no_model") {
+                    if (d.class_id >= 0 && d.confidence >= 0.35f && d.class_name != "no_food" && d.class_name != "no_model") {
                         valid_detections.push_back(d);
+                    }
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(ai_mutex);
+                    if (!valid_detections.empty()) {
+                        shared_detections = valid_detections;
+                        last_valid_detection_time = std::chrono::steady_clock::now();
+                    } else {
+                        // Only clear after 1.5s of no detections to avoid HUD flicker
+                        const auto now = std::chrono::steady_clock::now();
+                        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_valid_detection_time).count();
+                        if (elapsed_ms > 1500) {
+                            shared_detections.clear();
+                        }
                     }
                 }
 

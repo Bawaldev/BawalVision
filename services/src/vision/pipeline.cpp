@@ -175,7 +175,7 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
     if (enhanced_frame.empty()) return false;
     out_detections.clear();
 
-    if (!m_classifier.detect(enhanced_frame, out_detections, 0.45f, 0.45f)) {
+    if (!m_classifier.detect(enhanced_frame, out_detections, 0.35f, 0.40f)) {
         return false;
     }
 
@@ -221,7 +221,7 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
     out_display = inspection.dewarped_image.clone();
 
     for (const auto& det : inspection.detections) {
-        if (det.class_id < 0 || det.confidence < 0.48f || det.class_name == "no_food" || det.class_name == "no_model") {
+        if (det.class_id < 0 || det.confidence < 0.35f || det.class_name == "no_food" || det.class_name == "no_model") {
             continue;
         }
 
