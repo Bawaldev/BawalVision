@@ -141,17 +141,9 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
         std::cout << "[DEBUG] Saved raw frame to /tmp/raw_esp32_" << s_frame_counter << ".jpg\n";
     }
 
-    // 2. RealESRGAN Clean Denoising / Upscaling first on raw stream if GPU accelerated
-    cv::Mat clean_base;
-    if (m_enhancer.isGpuAccelerated()) {
-        m_enhancer.process(dewarped, clean_base);
-    } else {
-        clean_base = dewarped;
-    }
-
-    // 3. Adaptive ISP Enhancement on clean frame
+    // 2. Fast AI Adaptive ISP Enhancement on dewarped stream frame (< 16 ms)
     cv::Mat enhanced;
-    enhanceImage(clean_base, enhanced);
+    enhanceImage(dewarped, enhanced);
     out_inspection.dewarped_image = enhanced;
 
     // 3. Attach current active detections from AI worker

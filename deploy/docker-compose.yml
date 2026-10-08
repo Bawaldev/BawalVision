@@ -64,7 +64,7 @@ services:
       - CAMERA_VFLIP=${CAMERA_VFLIP:-1}
       - CAMERA_HFLIP=${CAMERA_HFLIP:-0}
     volumes:
-      # - ../weights:/app/weights:ro
+      - ../weights:/app/weights:ro
       - ../ml/AI1/model:/app/ml/AI1/model:ro
     networks:
       - bawal-net

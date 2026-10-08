@@ -148,6 +148,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libcurl4 \
     libgomp1 \
     libvulkan1 \
+    mesa-vulkan-drivers \
+    vulkan-tools \
     ca-certificates \
     && useradd -m -s /bin/bash -u 1001 visionuser
 
