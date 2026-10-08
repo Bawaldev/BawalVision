@@ -204,10 +204,32 @@ pipeline-ai1 workers="0" batch="16" epochs="50" target="300":
     echo "=== [5/6] Multi-Threaded YOLOv8n Training & Dynamic ONNX Export ==="
     just train-ai1 "{{ epochs }}" "{{ batch }}" "{{ workers }}"
 
-    echo "=== [6/6] Verifying ONNX Model & Deploying Vision Service ==="
+    echo "=== [6/6] Verifying Models & Deploying Vision Service ==="
+    just generate-ncnn-cpp
     just test-model-ai1
     just deploy-vision
     echo "[✓] End-to-end ML Pipeline to Vision Deployment completed successfully!"
+
+# Compile and run high-speed C++ NCNN model generator (.param and .bin)
+generate-ncnn-cpp model="realesr-animevideov3-x2" scale="2" out="weights":
+    #!/usr/bin/env bash
+    cd {{ justfile_directory() }}
+    echo "[+] Compiling and running high-speed C++ NCNN Generator (bawal::ml)..."
+    g++ -std=c++17 -O3 -I ml/include ml/src/ncnn_generator.cpp ml/ncnn_generator.cpp -o ml/ncnn_generator
+    ./ml/ncnn_generator "{{ model }}" "{{ scale }}" "{{ out }}"
+    echo "[✓] NCNN models successfully created and synced to {{ out }}/"
+
+# Generate or fetch NCNN model weights via Python pipeline
+generate-ncnn model="realesr-animevideov3-x2" scale="2" out="weights":
+    #!/usr/bin/env bash
+    cd {{ justfile_directory() }}
+    if [ -f .venv/bin/python3 ]; then
+        .venv/bin/python3 ml/generate_ncnn_models.py --model-name "{{ model }}" --scale "{{ scale }}" --output-dir "{{ out }}"
+    elif [ -f .venv/Scripts/python.exe ]; then
+        .venv/Scripts/python.exe ml/generate_ncnn_models.py --model-name "{{ model }}" --scale "{{ scale }}" --output-dir "{{ out }}"
+    else
+        python3 ml/generate_ncnn_models.py --model-name "{{ model }}" --scale "{{ scale }}" --output-dir "{{ out }}" || just generate-ncnn-cpp "{{ model }}" "{{ scale }}" "{{ out }}"
+    fi
 
 # Sanity check and inspect ONNX model tensors and execution provider
 test-model-ai1 model="ml/AI1/model/ai1_vision.onnx":

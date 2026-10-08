@@ -13,6 +13,7 @@ cmake-build-*/
 _deps/
 services/build/
 backend/bin/
+ml/ncnn_generator
 
 # CMake Artifacts
 CMakeCache.txt
