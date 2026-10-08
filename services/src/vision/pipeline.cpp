@@ -40,30 +40,42 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     const std::filesystem::path default_weight_dir = "/app/weights";
     const std::filesystem::path local_weight_dir = "weights";
     const std::filesystem::path weight_dir = std::filesystem::exists(default_weight_dir) ? default_weight_dir : local_weight_dir;
-    const std::filesystem::path param_file = weight_dir / "realesr-animevideov3-x2.param";
-    const std::filesystem::path bin_file = weight_dir / "realesr-animevideov3-x2.bin";
+
+    std::string model_name = "realesrgan-x4plus";
+    int model_scale = 4;
+    const char* env_model = std::getenv("REALESRGAN_MODEL");
+    if (env_model && std::string(env_model).length() > 0) {
+        model_name = env_model;
+        if (model_name.find("x2") != std::string::npos) model_scale = 2;
+        else if (model_name.find("x3") != std::string::npos) model_scale = 3;
+        else if (model_name.find("x4") != std::string::npos) model_scale = 4;
+    }
+
+    const std::filesystem::path param_file = weight_dir / (model_name + ".param");
+    const std::filesystem::path bin_file = weight_dir / (model_name + ".bin");
 
     if (!std::filesystem::exists(param_file) || !std::filesystem::exists(bin_file)) {
-        std::cout << "[Pipeline] Synthesizing NCNN Super-Resolution model via bawal::ml::NCNNGenerator...\n";
+        std::cout << "[Pipeline] Synthesizing NCNN Super-Resolution model (" << model_name << ") via bawal::ml::NCNNGenerator...\n";
         bawal::ml::NCNNModelConfig gen_cfg;
-        gen_cfg.model_name = "realesr-animevideov3-x2";
-        gen_cfg.scale = 2;
+        gen_cfg.model_name = model_name;
+        gen_cfg.scale = model_scale;
         gen_cfg.output_dir = weight_dir;
         gen_cfg.sync_dirs = {"/app/weights", "services/weights", "weights"};
         (void)bawal::ml::NCNNGenerator::generate(gen_cfg);
     }
 
-    // Initialize Real-ESRGAN NCNN Super-Resolution Engine
+    // Initialize Real-ESRGAN NCNN Super-Resolution Engine (Flagship RealESRGAN_x4plus 23 RRDB Blocks)
     RealESRGANConfig enhancer_cfg;
     enhancer_cfg.model_dir = weight_dir;
-    enhancer_cfg.model_name = "realesr-animevideov3-x2";
-    enhancer_cfg.params.scale = 2;
+    enhancer_cfg.model_name = model_name;
+    enhancer_cfg.params.scale = model_scale;
     enhancer_cfg.params.tile_size = 192;
     enhancer_cfg.params.prepadding = 16;
     enhancer_cfg.params.use_gpu = 1;
     enhancer_cfg.params.use_fp16 = 1;
     if (m_enhancer.init(enhancer_cfg)) {
-        std::cout << "[Pipeline] Real-ESRGAN Super-Resolution Engine initialized successfully.\n";
+        std::cout << "[Pipeline] Real-ESRGAN Super-Resolution Engine initialized successfully with model: " 
+                  << model_name << " (Scale: " << model_scale << "x)\n";
     }
 
     return true;

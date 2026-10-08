@@ -62,63 +62,25 @@ RUN mkdir -p /app/weights && \
         -o /usr/local/bin/ncnn_generator
 
 # ------------------------------------------------------------------------------
-# 5. DOWNLOAD REAL RealESRGAN x2 NCNN MODEL (bukan model sintetis!)
+# 5. DOWNLOAD OFFICIAL Real-ESRGAN NCNN MODEL SUITE (realesrgan-x4plus, animevideo, etc.)
 # ------------------------------------------------------------------------------
-# Strategi: coba beberapa sumber, verifikasi ukuran, fallback ke generator sintetis.
 RUN set -eux; \
-    PARAM_URLS=" \
-        https://raw.githubusercontent.com/xinntao/Real-ESRGAN-ncnn-vulkan/master/models/realesr-animevideov3-x2.param \
-        https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/main/experiments/pretrained_models/realesr-animevideov3-x2.param \
-        https://raw.githubusercontent.com/nihui/realsr-ncnn-vulkan/master/models/realesr-animevideov3-x2.param \
-    "; \
-    BIN_URLS=" \
-        https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3-x2.bin \
-        https://github.com/nihui/realsr-ncnn-vulkan/releases/download/20220424/realesr-animevideov3-x2.bin \
-    "; \
-    \
-    echo "[INFO] Mencoba mengunduh file .param..."; \
-    PARAM_OK=0; \
-    for url in $PARAM_URLS; do \
-        echo "[INFO] Mencoba: $url"; \
-        if curl -fsSL --connect-timeout 15 --max-time 60 -o /tmp/model.param "$url"; then \
-            SIZE=$(stat -c%s /tmp/model.param 2>/dev/null || echo 0); \
-            if [ "$SIZE" -gt 1000 ]; then \
-                echo "[SUCCESS] .param berhasil diunduh dari $url (ukuran: $SIZE bytes)"; \
-                cp /tmp/model.param /app/weights/realesr-animevideov3-x2.param; \
-                PARAM_OK=1; \
-                break; \
-            else \
-                echo "[WARN] File terlalu kecil ($SIZE bytes), coba sumber lain"; \
-            fi; \
+    echo "[INFO] Downloading official Real-ESRGAN model suite..."; \
+    mkdir -p /tmp/realesr_dl /app/weights && \
+    if curl -fsSL --connect-timeout 20 --max-time 300 -o /tmp/realesrgan.zip \
+        https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip; then \
+        unzip -q -o /tmp/realesrgan.zip -d /tmp/realesr_dl && \
+        if [ -d /tmp/realesr_dl/models ]; then \
+            cp -r /tmp/realesr_dl/models/* /app/weights/; \
+            echo "[SUCCESS] Official Real-ESRGAN models installed successfully."; \
         fi; \
-    done; \
-    \
-    echo "[INFO] Mencoba mengunduh file .bin..."; \
-    BIN_OK=0; \
-    for url in $BIN_URLS; do \
-        echo "[INFO] Mencoba: $url"; \
-        if curl -fsSL --connect-timeout 15 --max-time 300 -o /tmp/model.bin "$url"; then \
-            SIZE=$(stat -c%s /tmp/model.bin 2>/dev/null || echo 0); \
-            if [ "$SIZE" -gt 500000 ]; then \
-                echo "[SUCCESS] .bin berhasil diunduh dari $url (ukuran: $SIZE bytes)"; \
-                cp /tmp/model.bin /app/weights/realesr-animevideov3-x2.bin; \
-                BIN_OK=1; \
-                break; \
-            else \
-                echo "[WARN] File terlalu kecil ($SIZE bytes), coba sumber lain"; \
-            fi; \
-        fi; \
-    done; \
-    \
-    # --------------------------------------------------------------------------
-    # 6. Fallback: jika download gagal, gunakan generator sintetis
-    # --------------------------------------------------------------------------
-    if [ "$PARAM_OK" -eq 0 ] || [ "$BIN_OK" -eq 0 ]; then \
-        echo "[WARN] Download model RealESRGAN gagal, menggunakan generator sintetis..."; \
+        rm -rf /tmp/realesrgan.zip /tmp/realesr_dl; \
+    else \
+        echo "[WARN] Download failed, generating synthetic models..."; \
+        /usr/local/bin/ncnn_generator realesrgan-x4plus 4 /app/weights; \
         /usr/local/bin/ncnn_generator realesr-animevideov3-x2 2 /app/weights; \
     fi; \
-    \
-    echo "[INFO] Isi direktori /app/weights:"; \
+    echo "[INFO] Weights directory content:"; \
     ls -la /app/weights/
 
 # ------------------------------------------------------------------------------
