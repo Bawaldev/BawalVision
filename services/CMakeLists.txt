@@ -4,7 +4,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(bawal_vision_service
     VERSION 1.0.0
-    DESCRIPTION "Vision processing service for MBG inspection"
+    DESCRIPTION "Vision processing service for MBG inspection with Real-ESRGAN NCNN"
     LANGUAGES CXX
 )
 
@@ -28,13 +28,40 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     endif()
 endif()
 
+# Core dependencies
 find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui dnn)
 find_package(CURL REQUIRED)
 find_package(nlohmann_json QUIET)
+find_package(ncnn QUIET)
 
-# Resolusi Header & Library ONNX Runtime C++
+if(NOT TARGET ncnn)
+    find_path(NCNN_INCLUDE_DIR
+        NAMES net.h gpu.h
+        PATHS
+            /opt/ncnn/include/ncnn
+            /usr/local/include/ncnn
+            /usr/include/ncnn
+    )
+
+    find_library(NCNN_LIB
+        NAMES ncnn
+        PATHS
+            /opt/ncnn/lib
+            /usr/local/lib
+            /usr/lib
+            /usr/lib/x86_64-linux-gnu
+            /usr/lib/aarch64-linux-gnu
+    )
+
+    if(NOT NCNN_INCLUDE_DIR OR NOT NCNN_LIB)
+        message(STATUS "NCNN library not found. Operating with native multi-architecture AVX-512 / AVX2 / OpenMP SIMD super-resolution engine.")
+    endif()
+endif()
+
+find_package(Vulkan QUIET)
+
 find_path(ONNXRUNTIME_INCLUDE_DIR
     NAMES onnxruntime_cxx_api.h
     PATHS
@@ -59,13 +86,19 @@ if(NOT ONNXRUNTIME_LIB)
     set(ONNXRUNTIME_LIB "/opt/onnxruntime/lib/libonnxruntime.so")
 endif()
 
+set(ML_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ml/include)
+set(ML_GENERATOR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../ml/src/ncnn_generator.cpp)
+
 file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+if(EXISTS ${ML_GENERATOR_SRC})
+    list(APPEND SERVICE_SOURCES ${ML_GENERATOR_SRC})
+endif()
 
 add_executable(vision_service ${SERVICE_SOURCES})
 
-# Daftarkan include direktori ONNX Runtime & OpenCV ke GCC
 target_include_directories(vision_service PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${ML_INCLUDE_DIR}
     ${OpenCV_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
     ${ONNXRUNTIME_INCLUDE_DIR}
@@ -73,12 +106,32 @@ target_include_directories(vision_service PRIVATE
     /usr/local/include
 )
 
+# Add NCNN include directory if not using imported target
+if(NCNN_INCLUDE_DIR)
+    target_include_directories(vision_service PRIVATE ${NCNN_INCLUDE_DIR})
+endif()
+
 target_link_libraries(vision_service PRIVATE
     Threads::Threads
     OpenMP::OpenMP_CXX
     ${OpenCV_LIBS}
     ${ONNXRUNTIME_LIB}
 )
+
+# Link NCNN library if available
+if(TARGET ncnn)
+    target_link_libraries(vision_service PRIVATE ncnn)
+    target_compile_definitions(vision_service PRIVATE HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
+elseif(NCNN_LIB)
+    target_link_libraries(vision_service PRIVATE ${NCNN_LIB})
+    target_compile_definitions(vision_service PRIVATE HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
+endif()
+
+# Link Vulkan if NCNN GPU acceleration is enabled
+if(Vulkan_FOUND AND (TARGET ncnn OR NCNN_LIB))
+    target_link_libraries(vision_service PRIVATE Vulkan::Vulkan)
+    target_compile_definitions(vision_service PRIVATE USE_NCNN_VULKAN=1)
+endif()
 
 if(TARGET CURL::libcurl)
     target_link_libraries(vision_service PRIVATE CURL::libcurl)

@@ -215,7 +215,7 @@ generate-ncnn-cpp model="realesr-animevideov3-x2" scale="2" out="weights":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Compiling and running high-speed C++ NCNN Generator (bawal::ml)..."
-    g++ -std=c++17 -O3 -I ml/include ml/src/ncnn_generator.cpp ml/ncnn_generator.cpp -o ml/ncnn_generator
+    g++ -std=c++20 -O3 -I ml/include ml/src/ncnn_generator.cpp ml/ncnn_generator.cpp -o ml/ncnn_generator
     ./ml/ncnn_generator "{{ model }}" "{{ scale }}" "{{ out }}"
     echo "[✓] NCNN models successfully created and synced to {{ out }}/"
 

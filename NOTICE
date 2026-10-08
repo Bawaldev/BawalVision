@@ -34,3 +34,15 @@ Third-Party Software Attributions
 6. ESP-IDF / Arduino core for ESP32
    Copyright (C) 2015-2026 Espressif Systems (Shanghai) PTE LTD
    Licensed under the Apache License, Version 2.0.
+
+7. Tencent NCNN High-Performance Neural Network Inference Framework
+   Copyright (C) 2017 THL A29 Limited, a Tencent company. All rights reserved.
+   Licensed under the BSD 3-Clause License.
+
+8. Real-ESRGAN (Practical Algorithms for General Image/Video Restoration)
+   Copyright (c) 2021-2026 Xintao Wang, Liangbin Xie, Chao Dong, Ying Shan
+   Licensed under the BSD 3-Clause License.
+
+9. Intel RealSense SDK 2.0 (librealsense)
+   Copyright (C) 2017-2026 Intel Corporation. All Rights Reserved.
+   Licensed under the Apache License, Version 2.0.

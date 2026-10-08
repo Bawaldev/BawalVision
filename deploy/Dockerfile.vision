@@ -1,7 +1,6 @@
-# syntax=docker/dockerfile:1.4
 # ==============================================================================
-# BawalVision Machine Vision & ONNX ML Inference Engine
-# Language: C++20 (OpenCV, ONNX Runtime C++, OpenMP, CMake, Ninja)
+# BawalVision Machine Vision, ONNX ML & NCNN Super-Resolution Engine
+# Language: C++20 (OpenCV, ONNX Runtime, NCNN, OpenMP, CMake, Ninja)
 # Target OS: Ubuntu 24.04 LTS (Optimized with AVX2 & OpenMP Multithreading)
 # ==============================================================================
 
@@ -10,7 +9,7 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies and ONNX Runtime C++ release v1.19.2
+# Install dependensi build, OpenCV, NCNN, Vulkan, dan perkakas kompilasi
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -22,21 +21,37 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libcurl4-openssl-dev \
     libomp-dev \
     nlohmann-json3-dev \
+    libvulkan-dev \
+    glslang-tools \
     ca-certificates \
     curl \
-    tar && \
+    tar \
+    unzip && \
     mkdir -p /opt/onnxruntime && \
     curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | tar -xz -C /opt/onnxruntime --strip-components=1 && \
     cp -r /opt/onnxruntime/include/* /usr/local/include/ && \
     cp -r /opt/onnxruntime/lib/* /usr/local/lib/ && \
+    mkdir -p /opt/ncnn /tmp/ncnn_extracted && \
+    curl -fsSL https://github.com/Tencent/ncnn/releases/download/20240410/ncnn-20240410-ubuntu-2204.zip -o /tmp/ncnn.zip && \
+    unzip -q /tmp/ncnn.zip -d /tmp/ncnn_extracted && \
+    cp -r /tmp/ncnn_extracted/ncnn-20240410-ubuntu-2204/* /opt/ncnn/ && \
+    cp -r /opt/ncnn/include/* /usr/local/include/ && \
+    cp -r /opt/ncnn/lib/* /usr/local/lib/ && \
+    rm -rf /tmp/ncnn.zip /tmp/ncnn_extracted && \
     ldconfig
 
 WORKDIR /src
 
-# Copy services C++ source tree
+# Compile modular NCNN model generator and pre-generate model weights
+COPY ml/ /src/ml/
+RUN mkdir -p /app/weights && \
+    g++ -std=c++20 -O3 -I /src/ml/include /src/ml/src/ncnn_generator.cpp /src/ml/ncnn_generator.cpp -o /usr/local/bin/ncnn_generator && \
+    /usr/local/bin/ncnn_generator realesr-animevideov3-x2 2 /app/weights
+
+# Copy C++ services source tree
 COPY services/ /src/services/
 
-# Compile binary with AVX2/FMA and OpenMP vector optimizations
+# Compile binary with AVX2, FMA, and OpenMP optimizations
 RUN cmake -B /src/services/build -S /src/services -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_FLAGS="-O3 -mavx2 -mfma -fopenmp" \
@@ -48,27 +63,32 @@ FROM ubuntu:24.04 AS runner
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime shared libraries
+# Install runtime shared libraries (OpenCV, libcurl, OpenMP, Vulkan)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     libopencv-dev \
     libcurl4 \
     libgomp1 \
+    libvulkan1 \
     ca-certificates \
     && useradd -m -s /bin/bash -u 1001 visionuser
 
 WORKDIR /app
 
-# Copy ONNX Runtime shared libraries to system directory
+# Copy shared libraries (ONNX Runtime & NCNN) to system runner
 COPY --from=builder /opt/onnxruntime/lib/ /usr/local/lib/
+COPY --from=builder /usr/local/lib/libncnn* /usr/local/lib/
 RUN ldconfig
 
-# Copy compiled binary executable
+# Copy compiled executable binary & generator
 COPY --from=builder /src/services/build/bin/vision_service /usr/local/bin/vision_service
+COPY --from=builder /usr/local/bin/ncnn_generator /usr/local/bin/ncnn_generator
 
-# Prepare model weight directories
-RUN mkdir -p /app/ml/AI1/model /app/weights && chown -R visionuser:visionuser /app
+# Prepare weight storage directories and pre-generated NCNN weights
+RUN mkdir -p /app/ml/AI1/model /app/weights
+COPY --from=builder /app/weights/ /app/weights/
+RUN chown -R visionuser:visionuser /app
 
 ENV OMP_NUM_THREADS=4 \
     OMP_SCHEDULE=static \

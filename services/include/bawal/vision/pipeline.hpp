@@ -11,6 +11,7 @@
 #include "bawal/vision/camera_receiver.hpp"
 #include "bawal/vision/classifier.hpp"
 #include "bawal/vision/dewarp.hpp"
+#include "bawal/vision/enchanter.hpp"
 #include "bawal/vision/types.hpp"
 
 namespace bawal::vision {
@@ -30,7 +31,7 @@ struct InspectionOutput {
 
 /**
  * @brief Master Orchestrator Pipeline:
- * [CameraReceiver] -> [Calibration & Dewarp] -> [YOLOv8 Classifier + SIMD Food Evaluator]
+ * [CameraReceiver] -> [Calibration & Dewarp] -> [Real-ESRGAN / Super-Resolution] -> [YOLOv8 Classifier + SIMD Food Evaluator]
  */
 class InspectionPipeline {
 public:
@@ -38,7 +39,7 @@ public:
     ~InspectionPipeline() = default;
 
     /**
-     * @brief Initialize all pipeline stages (dewarper and AI1 YOLOv8 classifier).
+     * @brief Initialize all pipeline stages (dewarper, super-resolution enhancer, and AI1 YOLOv8 classifier).
      * 
      * @param model_path Path to ONNX model (optional, falls back to heuristic if empty/missing)
      * @param target_width Processing resolution width (default: 640)
@@ -69,7 +70,29 @@ public:
     [[nodiscard]] bool execute(const cv::Mat& frame, InspectionOutput& out_inspection);
 
     /**
-     * @brief Adaptive Image Enhancement: Edge-preserving Bilateral Denoising, CLAHE (L* in CIE-Lab), and Unsharp Masking.
+     * @brief High-speed real-time streaming pass: Dewarp + Fast ISP + Overlay with active detections (< 4 ms, 30+ FPS).
+     * 
+     * @param frame Raw camera BGR matrix
+     * @param active_detections Pre-computed latest detections from background AI worker
+     * @param out_inspection Formatted inspection output with annotated stream frame
+     * @return true if stream frame processed successfully.
+     */
+    [[nodiscard]] bool processStream(const cv::Mat& frame, 
+                                     const std::vector<DetectionResult>& active_detections, 
+                                     InspectionOutput& out_inspection);
+
+    /**
+     * @brief High-performance AI detection and SIMD spoilage evaluation pass.
+     * 
+     * @param enhanced_frame ISP-enhanced frame
+     * @param out_detections Output detected food items with freshness scores
+     * @return true if inference succeeded.
+     */
+    [[nodiscard]] bool runInference(const cv::Mat& enhanced_frame, 
+                                    std::vector<DetectionResult>& out_detections);
+
+    /**
+     * @brief Adaptive Image Enhancement: Super-Resolution / Bilateral Denoising, CLAHE, and Unsharp Masking.
      * 
      * @param src Input BGR image matrix
      * @param dst Enhanced output image matrix with boosted micro-contrast and sharpness
@@ -87,12 +110,15 @@ public:
     // Component accessors
     [[nodiscard]] CameraReceiver& getReceiver() noexcept { return m_receiver; }
     [[nodiscard]] DewarpEngine& getDewarper() noexcept { return m_dewarper; }
+    [[nodiscard]] RealESRGANEngine& getEnhancer() noexcept { return m_enhancer; }
     [[nodiscard]] FoodClassifier& getClassifier() noexcept { return m_classifier; }
 
 private:
     CameraReceiver m_receiver;
     DewarpEngine m_dewarper;
+    RealESRGANEngine m_enhancer;
     FoodClassifier m_classifier;
+    cv::Ptr<cv::CLAHE> m_clahe;
     int m_width{640};
     int m_height{480};
 };

@@ -1,33 +1,46 @@
 #include "bawal/ml/ncnn_generator.hpp"
+
 #include <iostream>
+#include <string_view>
+#include <span>
+#include <format>
 
 using namespace bawal::ml;
 
 int main(int argc, char** argv) {
-    if (argc > 1 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
-        std::cout << "Usage: " << argv[0] << " [model_name] [scale] [output_dir]\n"
-                  << "Example: " << argv[0] << " realesr-animevideov3-x2 2 weights\n";
-        return 0;
+    const std::span<char*> args(argv, argc);
+
+    if (args.size() > 1) {
+        const std::string_view first_arg{args[1]};
+        if (first_arg == "--help" || first_arg == "-h") {
+            std::cout << std::format("Usage: {} [model_name] [scale] [output_dir]\n"
+                                     "Example: {} realesr-animevideov3-x2 2 weights\n",
+                                     args[0], args[0]);
+            return 0;
+        }
     }
 
     NCNNModelConfig config;
-    if (argc > 1) config.model_name = argv[1];
-    if (argc > 2) config.scale = std::stoi(argv[2]);
-    if (argc > 3) config.output_dir = argv[3];
+    if (args.size() > 1) config.model_name = args[1];
+    if (args.size() > 2) config.scale = std::stoi(args[2]);
+    if (args.size() > 3) config.output_dir = args[3];
 
-    std::cout << "[bawal::ml::NCNNGenerator] Generating model: " << config.model_name 
-              << " (" << config.scale << "x Scale, Sub-Pixel LeakyReLU Graph)\n";
+    std::cout << std::format("[bawal::ml::NCNNGenerator] Generating model: {} ({}x Scale, Sub-Pixel LeakyReLU Graph)\n",
+                             config.model_name, config.scale);
 
-    NCNNGenerationResult res = NCNNGenerator::generate(config);
+    const NCNNGenerationResult res = NCNNGenerator::generate(config);
     if (!res.success) {
         std::cerr << "[bawal::ml::NCNNGenerator] Error: Model synthesis failed!\n";
         return 1;
     }
 
-    std::cout << "[✓] Param generated: " << res.param_path << " (" << res.param_size_bytes << " bytes)\n"
-              << "[✓] Bin generated:   " << res.bin_path << " (" << res.bin_size_bytes << " bytes)\n";
+    std::cout << std::format("[✓] Param generated: {} ({} bytes)\n"
+                             "[✓] Bin generated:   {} ({} bytes)\n",
+                             res.param_path.string(), res.param_size_bytes,
+                             res.bin_path.string(), res.bin_size_bytes);
+
     for (const auto& path : res.synced_paths) {
-        std::cout << "    -> Synced: " << path << "\n";
+        std::cout << std::format("    -> Synced: {}\n", path.string());
     }
 
     return 0;

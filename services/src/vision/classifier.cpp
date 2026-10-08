@@ -160,18 +160,15 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         std::vector<float> input_tensor_values(1 * 3 * spatial_size);
 
         #pragma omp parallel for schedule(static)
-        for (int c = 0; c < 3; ++c) {
-            const int src_ch = 2 - c;
-            const float channel_scale = (src_ch == 0) ? scale_b : ((src_ch == 1) ? scale_g : scale_r);
-            float* ch_dest = input_tensor_values.data() + (c * spatial_size);
-
-            for (int h = 0; h < target_h; ++h) {
-                const auto* row_ptr = resized.ptr<cv::Vec3b>(h);
-                #pragma omp simd
-                for (int w = 0; w < target_w; ++w) {
-                    const float val = static_cast<float>(row_ptr[w][src_ch]) * channel_scale;
-                    ch_dest[h * target_w + w] = std::clamp(val * (1.0f / 255.0f), 0.0f, 1.0f);
-                }
+        for (int h = 0; h < target_h; ++h) {
+            const auto* row_ptr = resized.ptr<cv::Vec3b>(h);
+            const int row_offset = h * target_w;
+            #pragma omp simd
+            for (int w = 0; w < target_w; ++w) {
+                const auto& pixel = row_ptr[w];
+                input_tensor_values[0 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[2]) * scale_r * (1.0f / 255.0f), 0.0f, 1.0f);
+                input_tensor_values[1 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[1]) * scale_g * (1.0f / 255.0f), 0.0f, 1.0f);
+                input_tensor_values[2 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[0]) * scale_b * (1.0f / 255.0f), 0.0f, 1.0f);
             }
         }
 
