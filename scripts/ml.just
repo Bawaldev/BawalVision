@@ -69,7 +69,7 @@ prepare-yolo-ai1 batch="16" workers="0":
     fi
 
 # Train YOLOv8n detector with multi-core DataLoader workers & multi-threaded ONNX parity verification (workers=0: auto-detect max cores)
-train-ai1 epochs="50" batch="16" workers="0":
+train-ai1 epochs="100" batch="8" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     if [ -f .venv/bin/python3 ]; then
