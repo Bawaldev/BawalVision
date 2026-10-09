@@ -28,7 +28,7 @@ except Exception as e:
 # ==============================================================================
 SCRIPT_DIR = Path(__file__).resolve().parent
 
-YAML_CONFIG = SCRIPT_DIR / "yolo_dataset" / "dataset.yaml"
+DEFAULT_YAML_CONFIG = SCRIPT_DIR / "yolo_dataset" / "dataset.yaml"
 WEIGHTS_DIR = SCRIPT_DIR / "weights"
 MODEL_DIR = SCRIPT_DIR / "model"
 
@@ -81,6 +81,17 @@ def main() -> None:
         help=f"DataLoader parallel worker processes (0 = auto-detect: {default_dataloader_workers})"
     )
     parser.add_argument(
+        "--data", "-d",
+        type=str,
+        default=str(DEFAULT_YAML_CONFIG),
+        help=f"Path to dataset.yaml specification (default: {DEFAULT_YAML_CONFIG})"
+    )
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="Enable Automatic Mixed Precision (FP16) training for memory saving"
+    )
+    parser.add_argument(
         "--export-only",
         action="store_true",
         help="Skip training and immediately re-export existing weights/best.pt to static ONNX"
@@ -90,15 +101,14 @@ def main() -> None:
     if args.workers <= 0:
         args.workers = default_dataloader_workers
 
+    yaml_config = Path(args.data).resolve()
+
     # Configure PyTorch CPU parallel execution threads
     torch.set_num_threads(system_cores)
 
     WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ==============================================================================
-    # Wrap Run with Mlflow
-    # ==============================================================================
     # ==============================================================================
     # Wrap Run with Mlflow (or NullContext if offline)
     # ==============================================================================
@@ -157,6 +167,8 @@ def main() -> None:
             "onnx_opset": ONNX_OPSET,
             "num_classes": NUM_CLASSES,
             "workers": args.workers,
+            "data_config": str(yaml_config),
+            "amp_enabled": args.amp,
             "device": "cuda" if torch.cuda.is_available() else "cpu",
         })
 
@@ -164,9 +176,9 @@ def main() -> None:
         # 1. TRAINING PHASE (OPTIONAL VIA --export-only)
         # ==============================================================================
         if not args.export_only:
-            if not YAML_CONFIG.exists():
+            if not yaml_config.exists():
                 raise FileNotFoundError(
-                    f"Specification not found: {YAML_CONFIG}. Run prepare_yolo_dataset.py first!"
+                    f"Specification not found: {yaml_config}. Check --data argument!"
                 )
 
             # Enable TF32 on Ampere+ GPUs (RTX 3050/3060/40xx)
@@ -184,6 +196,7 @@ def main() -> None:
             print(f"[+] Compute Hardware    : {compute_name} (TF32/FP32 Precision Enabled)")
             print(f"[+] DataLoader Workers  : {args.workers} parallel workers | CPU Threads: {system_cores}")
             print(f"[+] Target Categories   : {NUM_CLASSES} Food Classes")
+            print(f"[+] Dataset Config      : {yaml_config}")
 
             print(f"\n[+] Loading Detection Base: {MODEL_ARCH}...")
             model = YOLO(MODEL_ARCH)
@@ -192,7 +205,7 @@ def main() -> None:
             start_timestamp = time.time()
 
             train_job = model.train(
-                data=str(YAML_CONFIG),
+                data=str(yaml_config),
                 epochs=args.epochs,
                 patience=EARLY_STOP_PATIENCE,
                 batch=args.batch_size,
@@ -208,7 +221,7 @@ def main() -> None:
                 lrf=0.01,
                 cos_lr=True,
                 warmup_epochs=3.0,
-                amp=False,
+                amp=args.amp,
                 box=7.5,
                 cls=2.0,
                 dfl=1.5,
@@ -233,7 +246,7 @@ def main() -> None:
             print(f"\n[⏱️] Total Training Runtime: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
 
             # ==============================================================================
-            # [TITIK 3: SETELAH TRAINING] CATAT METRIK & PLOT ULTRALYTICS KE MLFLOW
+            # METRICS & PLOT LOGGING TO MLFLOW
             # ==============================================================================
             metrics_to_log = {"training_duration_seconds": elapsed_seconds}
 
@@ -247,7 +260,6 @@ def main() -> None:
 
             safe_mlflow_log_metrics(metrics_to_log)
 
-            # Simpan visualisasi kurva loss, PR curve, dan confusion matrix ke MLflow UI
             if hasattr(train_job, "save_dir") and Path(train_job.save_dir).exists():
                 if MLFLOW_ENABLED and mlflow:
                     try:

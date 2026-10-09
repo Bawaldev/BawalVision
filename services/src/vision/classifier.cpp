@@ -132,19 +132,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     if (!model_path.empty()) {
         candidate_paths.emplace_back(model_path);
     }
-    // 1. Prioritize Lightweight INT8 Quantized Models
-    candidate_paths.push_back("/app/ml/AI1/model/ai1_vision_int8.onnx");
-    candidate_paths.push_back("/app/weights/yolo8n_int8.onnx");
-    candidate_paths.push_back("/app/weights/ai1_vision_int8.onnx");
-    candidate_paths.push_back("ml/AI1/model/ai1_vision_int8.onnx");
-    candidate_paths.push_back("../ml/AI1/model/ai1_vision_int8.onnx");
-    candidate_paths.push_back("../../ml/AI1/model/ai1_vision_int8.onnx");
-    candidate_paths.push_back("weights/yolo8n_int8.onnx");
-    candidate_paths.push_back("../weights/yolo8n_int8.onnx");
-    candidate_paths.push_back("weights/ai1_vision_int8.onnx");
-    candidate_paths.push_back("../weights/ai1_vision_int8.onnx");
-
-    // 2. Fallback to Standard Models
+    // Prioritize Standard Full-Precision FP32 Model
     candidate_paths.push_back("/app/ml/AI1/model/ai1_vision.onnx");
     candidate_paths.push_back("/app/weights/yolo8n.onnx");
     candidate_paths.push_back("ml/AI1/model/ai1_vision.onnx");
@@ -303,9 +291,19 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             return false;
         }
 
-        // 4. Parse YOLOv8 Output Tensor
+        auto type_info = output_tensors[0].GetTensorTypeAndShapeInfo();
+        auto element_type = type_info.GetElementType();
+
+        // Validasi tipe data output secara runtime
+        if (element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+            std::cerr << "[FoodClassifier] Error: Tensor output bertipe " 
+                    << element_type << " (bukan FLOAT32). "
+                    << "Pastikan kuantisasi INT8 menyisakan node output sebagai dequantized float!\n";
+            return false;
+        }
+
         float* raw_output = output_tensors[0].GetTensorMutableData<float>();
-        auto shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
+        auto shape = type_info.GetShape();
 
         int channels = 0;
         int num_anchors = 0;
@@ -541,31 +539,31 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
             float calibrated_conf = yolo_score;
 
-            // 3. Per-Class Physical & Chromatic Validation:
+            // 3. Per-Class Physical & Chromatic Validation (Gentle Low-Bound Checks):
             // White Rice:
             if (predicted_name == "rice") {
-                if (v_val < 35.0 || s_val > 90.0) {
-                    is_valid_food = false; // Reject dark shadows
+                if (v_val < 5.0) {
+                    is_valid_food = false; // Reject total blackness only
                 } else {
                     calibrated_conf = std::clamp(yolo_score, 0.40f, 0.98f);
                 }
             }
             // Green Vegetables (Water Spinach / Spinach):
             else if (predicted_name == "water_spinach" || predicted_name == "spinach") {
-                if (v_val < 25.0 || s_val < 15.0) {
+                if (v_val < 5.0) {
                     is_valid_food = false;
                 }
             }
             // Banana / Orange:
             else if (predicted_name == "banana" || predicted_name == "orange") {
-                if (v_val < 30.0 || s_val < 15.0) {
+                if (v_val < 5.0) {
                     is_valid_food = false;
                 }
             }
             // Tofu / Tempeh / Chicken / Egg:
             else if (predicted_name == "tofu" || predicted_name == "tempeh" || 
                      predicted_name == "chicken" || predicted_name == "egg") {
-                if (v_val < 25.0 || v_val > 245.0) {
+                if (v_val < 5.0) {
                     is_valid_food = false;
                 }
             }

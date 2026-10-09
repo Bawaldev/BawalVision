@@ -98,8 +98,8 @@ int main(int argc, char** argv) {
         : (backend_base_url + "/api/v1/camera/latest/raw");
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
-    // 4. Initialize Inspection Pipeline Orchestrator (Defaulting to INT8 Quantized Model)
-    std::string model_path = "ml/AI1/model/ai1_vision_int8.onnx";
+    // 4. Initialize Inspection Pipeline Orchestrator (Defaulting to Standard FP32 Model)
+    std::string model_path = "ml/AI1/model/ai1_vision.onnx";
     if (const char* env_model = std::getenv("MODEL_PATH")) {
         model_path = env_model;
     }
