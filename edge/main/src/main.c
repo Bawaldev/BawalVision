@@ -18,6 +18,7 @@
 #include "camera_task.h"
 #include "test.h"
 #include "wifi.h"
+#include "led_strip.h"
 
 static const char *TAG = "MAIN";
 
@@ -27,26 +28,12 @@ static const char *TAG = "MAIN";
 #define HTTP_STREAM_STACK_SIZE 4096
 #define TEST_PRODUCER_STACK_SIZE 3072
 
-/* ============================================================
- *  LED CONFIGURATION
- *  ------------------------------------------------------------
- *  Sesuaikan daftar di bawah dengan board-mu:
- *    - WS2812_LED_GPIO  : GPIO WS2812 onboard (biasanya 48 di S3)
- *    - DISABLE_LED_PINS : semua pin yang mungkin dipakai LED hijau
- *
- *  Catatan: LED "power" yang hardwired ke 3.3V TIDAK BISA
- *  dimatikan lewat software. Kalau setelah kode ini LED hijau
- *  masih nyala, itu LED power → tutup dengan selotip / potong
- *  jalurnya secara fisik.
- * ============================================================ */
 #define WS2812_LED_GPIO      GPIO_NUM_48
 
-static const int s_disable_led_pins[] = {
-    2,   // LED onboard klasik (DevKit v1, Super Mini, dsb.)
-    21,  // XIAO ESP32S3 user LED
-    38,  // beberapa board S3
-    39,  // beberapa board S3
-    47,  // beberapa board S3
+static const int s_candidate_indicator_pins[] = {
+    2,   // Onboard classic status/flash LED (Active-LOW/HIGH)
+    21,  // Secondary indicator / flash LED on S3 CAM
+    38,  // Auxiliary indicator / backlight pin
 };
 
 static QueueHandle_t s_telemetry_queue = NULL;
@@ -69,87 +56,126 @@ static StackType_t s_test_producer_task_stack[TEST_PRODUCER_STACK_SIZE];
 static TaskHandle_t s_test_task_handle = NULL;
 
 static TaskHandle_t s_camera_task_handle = NULL;
-static void disable_indicator_pin(int pin) {
-    if (pin == WS2812_LED_GPIO) {
-        return; 
-    }
-
-    gpio_reset_pin(pin);
-    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
-    gpio_pullup_dis(pin);
-    gpio_pulldown_dis(pin);
-
-    gpio_set_level(pin, 0);
-}
-
-static void disable_all_indicator_leds(void) {
-    const size_t n = sizeof(s_disable_led_pins) / sizeof(s_disable_led_pins[0]);
-    for (size_t i = 0; i < n; ++i) {
-        disable_indicator_pin(s_disable_led_pins[i]);
-    }
-    ESP_LOGI(TAG, "Disabled %u candidate indicator LED pins", (unsigned)n);
-}
 
 /* ============================================================
- *  Helper: WS2812 single LED → pure white
+ *  Helper: Send WS2812 0-pulse stream (240 MHz cycle timing)
+ *  T0H: ~300 ns (72 cycles @ 240MHz)
+ *  T0L: ~900 ns (216 cycles @ 240MHz)
  * ============================================================ */
-static void set_single_led_white(uint8_t brightness) {
-    /* 1. Pastikan semua LED indikator mati dulu */
-    disable_all_indicator_leds();
+static void send_ws2812_zero_stream(gpio_num_t gpio_num) {
+    if (gpio_num < 0 || gpio_num >= GPIO_NUM_MAX) return;
 
-    /* 2. Drive single WS2812 RGB LED (GPIO48) dengan pure white */
-    gpio_reset_pin(WS2812_LED_GPIO);
-    gpio_set_direction(WS2812_LED_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(WS2812_LED_GPIO, 0);
-    esp_rom_delay_us(200); // WS2812 reset latch
+    gpio_reset_pin(gpio_num);
+    gpio_set_direction(gpio_num, GPIO_MODE_OUTPUT);
+    gpio_set_level(gpio_num, 0);
+    esp_rom_delay_us(350);
 
-    /* Standard 24-bit GRB payload (Green, Red, Blue) */
-    const uint8_t grb_data[3] = {brightness, brightness, brightness};
-    const uint32_t mask = (1UL << (WS2812_LED_GPIO - 32)); // GPIO48 di out1 bit 16
+    const bool is_high_reg = (gpio_num >= 32);
+    const uint32_t mask = is_high_reg ? (1UL << (gpio_num - 32)) : (1UL << gpio_num);
 
     portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
     portENTER_CRITICAL(&mux);
 
-    for (int byte_idx = 0; byte_idx < 3; ++byte_idx) {
-        uint8_t byte_val = grb_data[byte_idx];
-        for (int bit = 7; bit >= 0; --bit) {
-            if ((byte_val >> bit) & 0x01) {
-                /* Bit '1': HIGH ~750 ns, LOW ~450 ns */
-                GPIO.out1_w1ts.val = mask;
-                uint32_t start = esp_cpu_get_cycle_count();
-                while ((esp_cpu_get_cycle_count() - start) < 165) {}
+    for (int i = 0; i < 48; ++i) {
+        if (is_high_reg) {
+            GPIO.out1_w1ts.val = mask;
+            uint32_t start = esp_cpu_get_cycle_count();
+            while ((esp_cpu_get_cycle_count() - start) < 72) {}
 
-                GPIO.out1_w1tc.val = mask;
-                start = esp_cpu_get_cycle_count();
-                while ((esp_cpu_get_cycle_count() - start) < 95) {}
-            } else {
-                /* Bit '0': HIGH ~300 ns, LOW ~900 ns */
-                GPIO.out1_w1ts.val = mask;
-                uint32_t start = esp_cpu_get_cycle_count();
-                while ((esp_cpu_get_cycle_count() - start) < 55) {}
+            GPIO.out1_w1tc.val = mask;
+            start = esp_cpu_get_cycle_count();
+            while ((esp_cpu_get_cycle_count() - start) < 216) {}
+        } else {
+            GPIO.out_w1ts = mask;
+            uint32_t start = esp_cpu_get_cycle_count();
+            while ((esp_cpu_get_cycle_count() - start) < 72) {}
 
-                GPIO.out1_w1tc.val = mask;
-                start = esp_cpu_get_cycle_count();
-                while ((esp_cpu_get_cycle_count() - start) < 195) {}
-            }
+            GPIO.out_w1tc = mask;
+            start = esp_cpu_get_cycle_count();
+            while ((esp_cpu_get_cycle_count() - start) < 216) {}
         }
     }
 
+    if (is_high_reg) {
+        GPIO.out1_w1tc.val = mask;
+    } else {
+        GPIO.out_w1tc = mask;
+    }
+
     portEXIT_CRITICAL(&mux);
+    esp_rom_delay_us(350);
+}
 
-    /* Latch data (hold LOW > 150 us) */
-    GPIO.out1_w1tc.val = mask;
-    esp_rom_delay_us(200);
+/* ============================================================
+ *  Helper: Official Espressif RMT WS2812 LED Extinguish
+ * ============================================================ */
+static void turn_off_ws2812_rmt(gpio_num_t gpio_num) {
+    if (gpio_num < 0 || gpio_num >= GPIO_NUM_MAX) return;
 
-    ESP_LOGI(TAG, "Indicator LEDs disabled. WS2812 set to WHITE (brightness: %d)", brightness);
+    led_strip_handle_t led_strip = NULL;
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = gpio_num,
+        .max_leds = 2,
+        .led_model = LED_MODEL_WS2812,
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        .flags = {
+            .invert_out = false,
+        },
+    };
+
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .flags.with_dma = false,
+    };
+
+    esp_err_t err = led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
+    if (err == ESP_OK && led_strip != NULL) {
+        led_strip_clear(led_strip);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        led_strip_del(led_strip);
+    } else {
+        send_ws2812_zero_stream(gpio_num);
+    }
+
+    // Actively clamp the data line to GND (0V) with pulldown to prevent RF noise / floating re-trigger
+    gpio_reset_pin(gpio_num);
+    gpio_set_direction(gpio_num, GPIO_MODE_OUTPUT);
+    gpio_set_level(gpio_num, 0);
+    gpio_pulldown_en(gpio_num);
+}
+
+/* ============================================================
+ *  Helper: Disable discrete indicator pins (Active-LOW and Active-HIGH)
+ *  Configuring as High-Z Input with NO pullups/pulldowns cuts all current
+ * ============================================================ */
+static void disable_discrete_led_pin(int pin) {
+    if (pin < 0 || pin >= GPIO_NUM_MAX) return;
+    gpio_reset_pin((gpio_num_t)pin);
+    gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT);
+    gpio_pullup_dis((gpio_num_t)pin);
+    gpio_pulldown_dis((gpio_num_t)pin);
+}
+
+static void disable_all_indicator_leds(void) {
+    // 1. Clear addressable WS2812 RGB LEDs on candidate pins using official RMT driver
+    turn_off_ws2812_rmt(GPIO_NUM_48);
+    turn_off_ws2812_rmt(GPIO_NUM_38);
+
+    // 2. Disable discrete indicator LEDs via High-Z isolation
+    const size_t num_pins = sizeof(s_candidate_indicator_pins) / sizeof(s_candidate_indicator_pins[0]);
+    for (size_t i = 0; i < num_pins; ++i) {
+        disable_discrete_led_pin(s_candidate_indicator_pins[i]);
+    }
+    ESP_LOGI(TAG, "All indicator LEDs and WS2812 RGB LEDs completely extinguished.");
 }
 
 /* ============================================================
  *  app_main
  * ============================================================ */
 void app_main(void) {
-    /* Initialize LED configuration before other peripherals start */
-    set_single_led_white(180);
+    /* Disable all indicator and WS2812 LEDs */
+    disable_all_indicator_leds();
 
     /* Set camera log verbosity */
     esp_log_level_set("camera", ESP_LOG_INFO);
