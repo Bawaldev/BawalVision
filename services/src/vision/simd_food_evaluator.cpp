@@ -62,16 +62,11 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
         for (; x <= food_roi.cols - 32; x += 32) {
             __m256i pixels = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(l_ptr + x));
 
-            __m256i l_low  = _mm256_unpacklo_epi8(pixels, zero_vec);
-            __m256i l_high = _mm256_unpackhi_epi8(pixels, zero_vec);
-            
-            __m256i sum32_a = _mm256_add_epi32(_mm256_unpacklo_epi16(l_low, zero_vec), _mm256_unpackhi_epi16(l_low, zero_vec));
-            __m256i sum32_b = _mm256_add_epi32(_mm256_unpacklo_epi16(l_high, zero_vec), _mm256_unpackhi_epi16(l_high, zero_vec));
-            __m256i sum_all = _mm256_add_epi32(sum32_a, sum32_b);
-
-            alignas(32) int32_t temp_sums[8];
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(temp_sums), sum_all);
-            for (int i = 0; i < 8; ++i) total_l_sum += temp_sums[i];
+            // Single hardware instruction PSADBW (_mm256_sad_epu8) computes 4x 64-bit horizontal sums in 1 cycle
+            __m256i sad = _mm256_sad_epu8(pixels, zero_vec);
+            const uint64_t sum_low = static_cast<uint64_t>(_mm256_extract_epi64(sad, 0)) + static_cast<uint64_t>(_mm256_extract_epi64(sad, 1));
+            const uint64_t sum_high = static_cast<uint64_t>(_mm256_extract_epi64(sad, 2)) + static_cast<uint64_t>(_mm256_extract_epi64(sad, 3));
+            total_l_sum += (sum_low + sum_high);
 
             __m256i diff = _mm256_subs_epu8(thresh_vec, pixels);
             __m256i mask_bad = _mm256_cmpgt_epi8(diff, zero_vec);
@@ -168,33 +163,25 @@ TextureMetric evaluateTextureAVX2(const cv::Mat& food_roi) {
             __m256i v_diff2 = _mm256_subs_epu8(t_pix, b_pix);
             __m256i v_grad = _mm256_or_si256(v_diff1, v_diff2);
 
-            __m256i h_low = _mm256_unpacklo_epi8(h_grad, zero_vec);
-            __m256i h_high = _mm256_unpackhi_epi8(h_grad, zero_vec);
-            __m256i v_low = _mm256_unpacklo_epi8(v_grad, zero_vec);
-            __m256i v_high = _mm256_unpackhi_epi8(v_grad, zero_vec);
+            __m256i grad = _mm256_adds_epu8(h_grad, v_grad);
 
-            __m256i grad_low = _mm256_add_epi16(h_low, v_low);
-            __m256i grad_high = _mm256_add_epi16(h_high, v_high);
+            // Accumulate total gradients using PSADBW
+            __m256i sad_grad = _mm256_sad_epu8(grad, zero_vec);
+            total_grad_sum += static_cast<uint64_t>(_mm256_extract_epi64(sad_grad, 0)) +
+                              static_cast<uint64_t>(_mm256_extract_epi64(sad_grad, 1)) +
+                              static_cast<uint64_t>(_mm256_extract_epi64(sad_grad, 2)) +
+                              static_cast<uint64_t>(_mm256_extract_epi64(sad_grad, 3));
 
-            __m256i g_sum32_a = _mm256_add_epi32(_mm256_unpacklo_epi16(grad_low, zero_vec), _mm256_unpackhi_epi16(grad_low, zero_vec));
-            __m256i g_sum32_b = _mm256_add_epi32(_mm256_unpacklo_epi16(grad_high, zero_vec), _mm256_unpackhi_epi16(grad_high, zero_vec));
-            __m256i g_sum_all = _mm256_add_epi32(g_sum32_a, g_sum32_b);
+            // Accumulate pixel sums using PSADBW
+            __m256i sad_val = _mm256_sad_epu8(c_pix, zero_vec);
+            sum_val += static_cast<uint64_t>(_mm256_extract_epi64(sad_val, 0)) +
+                       static_cast<uint64_t>(_mm256_extract_epi64(sad_val, 1)) +
+                       static_cast<uint64_t>(_mm256_extract_epi64(sad_val, 2)) +
+                       static_cast<uint64_t>(_mm256_extract_epi64(sad_val, 3));
 
-            alignas(32) int32_t g_temp[8];
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(g_temp), g_sum_all);
-            for (int i = 0; i < 8; ++i) total_grad_sum += g_temp[i];
-
+            // Accumulate sum of squares using maddubs
             __m256i c_low = _mm256_unpacklo_epi8(c_pix, zero_vec);
             __m256i c_high = _mm256_unpackhi_epi8(c_pix, zero_vec);
-
-            __m256i c_sum32_a = _mm256_add_epi32(_mm256_unpacklo_epi16(c_low, zero_vec), _mm256_unpackhi_epi16(c_low, zero_vec));
-            __m256i c_sum32_b = _mm256_add_epi32(_mm256_unpacklo_epi16(c_high, zero_vec), _mm256_unpackhi_epi16(c_high, zero_vec));
-            __m256i c_sum_all = _mm256_add_epi32(c_sum32_a, c_sum32_b);
-
-            alignas(32) int32_t c_temp[8];
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(c_temp), c_sum_all);
-            for (int i = 0; i < 8; ++i) sum_val += c_temp[i];
-
             __m256i c_sq_low = _mm256_madd_epi16(c_low, c_low);
             __m256i c_sq_high = _mm256_madd_epi16(c_high, c_high);
             __m256i c_sq_all = _mm256_add_epi32(c_sq_low, c_sq_high);

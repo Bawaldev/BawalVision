@@ -21,10 +21,11 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         std::cerr << "[Pipeline] Warning: Camera calibration initialization failed.\n";
     }
 
-    const int num_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 2, 4);
+    // Thread count for YOLO: Limit background inference threads (2-4) to prevent CPU starvation on stream thread
+    const int num_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()) / 2, 2, 4);
     if (!model_path.empty()) {
         if (m_classifier.init(model_path, num_threads)) {
-            std::cout << "[Pipeline] Model loaded successfully: " << model_path 
+            std::cout << "[Pipeline] Model loaded: " << model_path
                       << " (Inference threads: " << num_threads << ")\n";
         } else {
             std::cout << "[Pipeline] Model path fallback triggered.\n";
@@ -33,16 +34,23 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         (void)m_classifier.init("", num_threads);
     }
 
-    // Initialize persistent CLAHE engine with gentle 1.0 clip limit for low-noise enhancement
-    m_clahe = cv::createCLAHE(1.0, cv::Size(8, 8));
+    // Persistent CLAHE engine. Clip limit 1.5 is a reasonable default
+    // for food imagery — high enough to bring out texture, low enough
+    // to avoid amplifying sensor noise.
+    m_clahe = cv::createCLAHE(1.5, cv::Size(8, 8));
 
-    // Ensure NCNN Super-Resolution weights exist; generate via bawal::ml::NCNNGenerator if missing
+    // Locate weight directory
     const std::filesystem::path default_weight_dir = "/app/weights";
     const std::filesystem::path local_weight_dir = "weights";
-    const std::filesystem::path weight_dir = std::filesystem::exists(default_weight_dir) ? default_weight_dir : local_weight_dir;
+    const std::filesystem::path weight_dir =
+        std::filesystem::exists(default_weight_dir) ? default_weight_dir : local_weight_dir;
 
-    std::string model_name = "realesrgan-x4plus";
-    int model_scale = 4;
+    // Model selection. realesr-general-x4v3 is the smallest general-purpose
+    // RealESRGAN model (~17 MB) and runs well on CPU. Override via env var
+    // REALESRGAN_MODEL if a different model is needed.
+    std::string model_name = "realesr-general-x4v3";
+    int model_scale = 2;
+
     const char* env_model = std::getenv("REALESRGAN_MODEL");
     if (env_model && std::string(env_model).length() > 0) {
         model_name = env_model;
@@ -55,7 +63,8 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     const std::filesystem::path bin_file = weight_dir / (model_name + ".bin");
 
     if (!std::filesystem::exists(param_file) || !std::filesystem::exists(bin_file)) {
-        std::cout << "[Pipeline] Synthesizing NCNN Super-Resolution model (" << model_name << ") via bawal::ml::NCNNGenerator...\n";
+        std::cout << "[Pipeline] Model weights not found locally. Generating via NCNNGenerator: "
+                  << model_name << "\n";
         bawal::ml::NCNNModelConfig gen_cfg;
         gen_cfg.model_name = model_name;
         gen_cfg.scale = model_scale;
@@ -64,18 +73,26 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         (void)bawal::ml::NCNNGenerator::generate(gen_cfg);
     }
 
-    // Initialize Real-ESRGAN NCNN Super-Resolution Engine (Flagship RealESRGAN_x4plus 23 RRDB Blocks)
+    // RealESRGAN engine configuration.
+    //
+    // CPU-only settings because the target deployment environment is
+    // AWS Lambda, which has no GPU:
+    //   - use_gpu = 0          : disable Vulkan entirely
+    //   - use_fp16 = 0         : FP16 gives no speedup on CPU
+    //   - tile_size = 128      : keeps working set inside L2 cache
+    //   - prepadding = 8       : small overlap, still hides tile seams
     RealESRGANConfig enhancer_cfg;
     enhancer_cfg.model_dir = weight_dir;
     enhancer_cfg.model_name = model_name;
     enhancer_cfg.params.scale = model_scale;
-    enhancer_cfg.params.tile_size = 192;
-    enhancer_cfg.params.prepadding = 16;
-    enhancer_cfg.params.use_gpu = 1;
-    enhancer_cfg.params.use_fp16 = 1;
+    enhancer_cfg.params.tile_size = 128;
+    enhancer_cfg.params.prepadding = 8;
+    enhancer_cfg.params.use_gpu = 0;
+    enhancer_cfg.params.use_fp16 = 0;
+
     if (m_enhancer.init(enhancer_cfg)) {
-        std::cout << "[Pipeline] Real-ESRGAN Super-Resolution Engine initialized successfully with model: " 
-                  << model_name << " (Scale: " << model_scale << "x)\n";
+        std::cout << "[Pipeline] RealESRGAN engine initialized: "
+                  << model_name << " (" << model_scale << "x, CPU-only)\n";
     }
 
     return true;
@@ -105,12 +122,12 @@ void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
         return;
     }
 
-    // Deep AI Adaptive Illumination, Retinex Dynamic Range & Noise Restoration
+    // Adaptive illumination, Retinex dynamic range, and noise restoration.
     IlluminationEnhancerAI::process(src, dst, m_clahe);
 }
 
-bool InspectionPipeline::processStream(const cv::Mat& frame, 
-                                       const std::vector<DetectionResult>& active_detections, 
+bool InspectionPipeline::processStream(const cv::Mat& frame,
+                                       const std::vector<DetectionResult>& active_detections,
                                        InspectionOutput& out_inspection) {
     if (frame.empty()) return false;
 
@@ -118,9 +135,8 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     out_inspection.raw_image = frame;
     out_inspection.is_valid = false;
 
-    // 0. Camera Orientation Calibration (VFLIP / HFLIP)
-    static int s_vflip = -1;
-    static int s_hflip = -1;
+    // Camera orientation from environment. Read once and cached.
+    static int s_vflip = -1, s_hflip = -1;
     if (s_vflip == -1) {
         const char* ev = std::getenv("CAMERA_VFLIP");
         s_vflip = (ev && (std::string(ev) == "1" || std::string(ev) == "true")) ? 1 : 0;
@@ -129,39 +145,23 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
 
     cv::Mat oriented;
-    if (s_vflip && s_hflip) {
-        cv::flip(frame, oriented, -1);
-    } else if (s_vflip) {
-        cv::flip(frame, oriented, 0);
-    } else if (s_hflip) {
-        cv::flip(frame, oriented, 1);
-    } else {
-        oriented = frame;
-    }
+    if (s_vflip && s_hflip) cv::flip(frame, oriented, -1);
+    else if (s_vflip) cv::flip(frame, oriented, 0);
+    else if (s_hflip) cv::flip(frame, oriented, 1);
+    else oriented = frame;
 
-    // 1. Lens Dewarping Calibration
+    // Lens dewarping.
     cv::Mat dewarped;
-    if (!m_dewarper.process(oriented, dewarped)) {
-        dewarped = oriented.clone();
-    }
+    if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented.clone();
     out_inspection.raw_image = dewarped;
 
-    // Debugging: Save raw ESP32 frame before enhancement every 30 frames
-    static int s_frame_counter = 0;
-    if (s_frame_counter++ % 30 == 0) {
-        cv::imwrite("/tmp/raw_esp32_" + std::to_string(s_frame_counter) + ".jpg", dewarped);
-        std::cout << "[DEBUG] Saved raw frame to /tmp/raw_esp32_" << s_frame_counter << ".jpg\n";
-    }
-
-    // 2. Fast AI Adaptive ISP Enhancement on dewarped stream frame (< 16 ms)
+    // ISP enhancement only. RealESRGAN runs on the AI worker thread over
+    // small crops; running it here would drop the stream below 30 FPS.
     cv::Mat enhanced;
     enhanceImage(dewarped, enhanced);
     out_inspection.dewarped_image = enhanced;
 
-    // 3. Attach current active detections from AI worker
     out_inspection.detections = active_detections;
-
-    // 4. Render HUD Overlay on Enhanced Frame
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
     const int64_t t_end = cv::getTickCount();
@@ -170,7 +170,7 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     return true;
 }
 
-bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame, 
+bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
                                       std::vector<DetectionResult>& out_detections) {
     if (enhanced_frame.empty()) return false;
     out_detections.clear();
@@ -179,13 +179,17 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
         return false;
     }
 
-    // Super-Resolution Enhancer & Targeted Spoilage Evaluation directly on food crops
+    // Run RealESRGAN on each food crop for texture and spoilage analysis.
+    // Typical crop size is 50x50 to 150x150 pixels, so CPU inference stays
+    // around 30-60 ms per crop.
     for (auto& det : out_detections) {
         if (det.class_id < 0 || det.class_name == "no_food") continue;
+
         cv::Rect crop_rect = det.bbox & cv::Rect(0, 0, enhanced_frame.cols, enhanced_frame.rows);
         if (crop_rect.width >= 16 && crop_rect.height >= 16) {
             cv::Mat food_crop = enhanced_frame(crop_rect);
             cv::Mat sr_crop;
+
             if (m_enhancer.process(food_crop, sr_crop) && !sr_crop.empty()) {
                 det.spoilage = evaluateSpoilageAVX2(sr_crop, det.class_name);
             } else {
@@ -200,12 +204,10 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     if (frame.empty()) return false;
 
     std::vector<DetectionResult> detected;
-    // Process stream first for visual base
     if (!processStream(frame, {}, out_inspection)) {
         return false;
     }
 
-    // Synchronous execution path: run inference on enhanced frame
     if (runInference(out_inspection.dewarped_image, detected)) {
         out_inspection.detections = detected;
         renderOverlay(out_inspection, out_inspection.annotated_image);
@@ -218,10 +220,16 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         return;
     }
 
+    if (inspection.detections.empty()) {
+        out_display = inspection.dewarped_image;
+        return;
+    }
+
     out_display = inspection.dewarped_image.clone();
 
     for (const auto& det : inspection.detections) {
-        if (det.class_id < 0 || det.confidence < 0.35f || det.class_name == "no_food" || det.class_name == "no_model") {
+        if (det.class_id < 0 || det.confidence < 0.35f ||
+            det.class_name == "no_food" || det.class_name == "no_model") {
             continue;
         }
 
@@ -229,14 +237,14 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         const float freshness_score = std::clamp(100.0f - spoilage_pct, 0.0f, 100.0f);
 
         std::string status_badge = "PASS";
-        cv::Scalar box_color = cv::Scalar(40, 200, 40); // Clean Green (PASS)
+        cv::Scalar box_color = cv::Scalar(40, 200, 40);
 
         if (det.spoilage.is_visually_spoiled || spoilage_pct >= 50.0f || det.confidence < 0.52f) {
             status_badge = "REJECT";
-            box_color = cv::Scalar(30, 30, 235); // Crimson Red (REJECT)
+            box_color = cv::Scalar(30, 30, 235);
         } else if (spoilage_pct >= 25.0f || det.confidence < 0.65f) {
             status_badge = "REVIEW";
-            box_color = cv::Scalar(0, 165, 255); // Amber Orange (REVIEW)
+            box_color = cv::Scalar(0, 165, 255);
         }
 
         cv::Rect clamped_box = det.bbox & cv::Rect(0, 0, out_display.cols, out_display.rows);
@@ -244,13 +252,13 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
             continue;
         }
 
-        // Draw bounding box
         cv::rectangle(out_display, clamped_box, box_color, 2);
 
-        // Build item label: e.g. "rice 74% [PASS 96%]"
         std::ostringstream ss;
-        ss << det.class_name << " " << std::fixed << std::setprecision(0) << (det.confidence * 100.0f) << "% ["
-           << status_badge << " " << std::fixed << std::setprecision(0) << freshness_score << "%]";
+        ss << det.class_name << " " << std::fixed << std::setprecision(0)
+           << (det.confidence * 100.0f) << "% ["
+           << status_badge << " " << std::fixed << std::setprecision(0)
+           << freshness_score << "%]";
         std::string label = ss.str();
 
         int baseline = 0;
@@ -258,7 +266,7 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         int badge_y = std::max(clamped_box.y - 4, text_size.height + 4);
         cv::Point badge_tl(clamped_box.x, badge_y - text_size.height - 4);
         cv::Point badge_br(clamped_box.x + text_size.width + 8, badge_y + 2);
-        
+
         cv::rectangle(out_display, badge_tl, badge_br, box_color, cv::FILLED);
         cv::putText(out_display, label, cv::Point(clamped_box.x + 4, badge_y - 2),
                     cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);

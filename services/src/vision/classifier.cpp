@@ -8,10 +8,85 @@
 #include <omp.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/dnn.hpp>
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 namespace bawal::vision {
 
 namespace {
+
+#if defined(__AVX2__)
+static inline void computeBGRSumsAVX2(const cv::Mat& bgr_mat, double& out_sum_b, double& out_sum_g, double& out_sum_r, int& out_sampled_pixels) {
+    const int width = bgr_mat.cols;
+    const int height = bgr_mat.rows;
+    if (bgr_mat.empty() || width <= 0 || height <= 0) {
+        out_sum_b = out_sum_g = out_sum_r = 0.0;
+        out_sampled_pixels = 0;
+        return;
+    }
+
+    const __m128i m0_b = _mm_setr_epi8(0, 3, 6, 9, 12, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    const __m128i m1_b = _mm_setr_epi8(-1, -1, -1, -1, -1, -1, 2, 5, 8, 11, 14, -1, -1, -1, -1, -1);
+    const __m128i m2_b = _mm_setr_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 1, 4, 7, 10, 13);
+
+    const __m128i m0_g = _mm_setr_epi8(1, 4, 7, 10, 13, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    const __m128i m1_g = _mm_setr_epi8(-1, -1, -1, -1, -1, 0, 3, 6, 9, 12, 15, -1, -1, -1, -1, -1);
+    const __m128i m2_g = _mm_setr_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, 5, 8, 11, 14);
+
+    const __m128i m0_r = _mm_setr_epi8(2, 5, 8, 11, 14, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    const __m128i m1_r = _mm_setr_epi8(-1, -1, -1, -1, -1, 1, 4, 7, 10, 13, -1, -1, -1, -1, -1, -1);
+    const __m128i m2_r = _mm_setr_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 3, 6, 9, 12, 15);
+
+    const __m256i zero256 = _mm256_setzero_si256();
+    __m256i acc_b = _mm256_setzero_si256();
+    __m256i acc_g = _mm256_setzero_si256();
+    __m256i acc_r = _mm256_setzero_si256();
+
+    int sampled_pixels = 0;
+    for (int y = 0; y < height; y += 16) {
+        const uint8_t* row_ptr = bgr_mat.ptr<uint8_t>(y);
+        for (int x = 0; x <= width - 32; x += 32) {
+            const uint8_t* ptr0 = row_ptr + x * 3;
+            __m128i v0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0));
+            __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0 + 16));
+            __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0 + 32));
+
+            __m128i b_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_b), _mm_or_si128(_mm_shuffle_epi8(v1, m1_b), _mm_shuffle_epi8(v2, m2_b)));
+            __m128i g_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_g), _mm_or_si128(_mm_shuffle_epi8(v1, m1_g), _mm_shuffle_epi8(v2, m2_g)));
+            __m128i r_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_r), _mm_or_si128(_mm_shuffle_epi8(v1, m1_r), _mm_shuffle_epi8(v2, m2_r)));
+
+            const uint8_t* ptr1 = ptr0 + 48;
+            __m128i v3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1));
+            __m128i v4 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1 + 16));
+            __m128i v5 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1 + 32));
+
+            __m128i b_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_b), _mm_or_si128(_mm_shuffle_epi8(v4, m1_b), _mm_shuffle_epi8(v5, m2_b)));
+            __m128i g_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_g), _mm_or_si128(_mm_shuffle_epi8(v4, m1_g), _mm_shuffle_epi8(v5, m2_g)));
+            __m128i r_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_r), _mm_or_si128(_mm_shuffle_epi8(v4, m1_r), _mm_shuffle_epi8(v5, m2_r)));
+
+            __m256i b_256 = _mm256_set_m128i(b_high, b_low);
+            __m256i g_256 = _mm256_set_m128i(g_high, g_low);
+            __m256i r_256 = _mm256_set_m128i(r_high, r_low);
+
+            acc_b = _mm256_add_epi64(acc_b, _mm256_sad_epu8(b_256, zero256));
+            acc_g = _mm256_add_epi64(acc_g, _mm256_sad_epu8(g_256, zero256));
+            acc_r = _mm256_add_epi64(acc_r, _mm256_sad_epu8(r_256, zero256));
+            sampled_pixels += 32;
+        }
+    }
+
+    alignas(32) uint64_t b_arr[4], g_arr[4], r_arr[4];
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(b_arr), acc_b);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(g_arr), acc_g);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(r_arr), acc_r);
+
+    out_sum_b = static_cast<double>(b_arr[0] + b_arr[1] + b_arr[2] + b_arr[3]);
+    out_sum_g = static_cast<double>(g_arr[0] + g_arr[1] + g_arr[2] + g_arr[3]);
+    out_sum_r = static_cast<double>(r_arr[0] + r_arr[1] + r_arr[2] + r_arr[3]);
+    out_sampled_pixels = sampled_pixels;
+}
+#endif
 
 static std::vector<TrackedItem> s_tracked_items;
 
@@ -113,6 +188,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
             m_output_names.push_back(name.c_str());
         }
 
+        m_input_tensor_values.resize(1 * 3 * 640 * 640);
         m_is_ready = true;
         std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << resolved_path << "\n";
         return true;
@@ -141,34 +217,52 @@ bool FoodClassifier::detect(const cv::Mat& frame,
     }
 
     try {
-        const int target_w = 640;
-        const int target_h = 640;
-        const int spatial_size = target_w * target_h;
+        constexpr int target_w = 640;
+        constexpr int target_h = 640;
+        constexpr int spatial_size = target_w * target_h;
 
-        // 1. Resize Frame
-        cv::Mat resized;
-        cv::resize(frame, resized, cv::Size(target_w, target_h), 0, 0, cv::INTER_LINEAR);
+        // 1. Resize Frame with persistent buffer
+        cv::resize(frame, m_resized_buffer, cv::Size(target_w, target_h), 0, 0, cv::INTER_LINEAR);
 
-        // Gray-World Auto White Balance & Color Normalization
-        const cv::Scalar mean_bgr = cv::mean(resized);
-        const double mean_gray = (mean_bgr[0] + mean_bgr[1] + mean_bgr[2]) / 3.0;
-        const float scale_b = static_cast<float>((mean_bgr[0] > 1.0) ? (mean_gray / mean_bgr[0]) : 1.0);
-        const float scale_g = static_cast<float>((mean_bgr[1] > 1.0) ? (mean_gray / mean_bgr[1]) : 1.0);
-        const float scale_r = static_cast<float>((mean_bgr[2] > 1.0) ? (mean_gray / mean_bgr[2]) : 1.0);
+        // Hardware AVX2 Accelerated Gray-World Balance via _mm256_sad_epu8
+        double sum_b = 0.0, sum_g = 0.0, sum_r = 0.0;
+        int sampled_count = 0;
+#if defined(__AVX2__)
+        computeBGRSumsAVX2(m_resized_buffer, sum_b, sum_g, sum_r, sampled_count);
+#else
+        for (int y = 0; y < target_h; y += 16) {
+            const auto* row_ptr = m_resized_buffer.ptr<cv::Vec3b>(y);
+            for (int x = 0; x < target_w; x += 16) {
+                sum_b += row_ptr[x][0];
+                sum_g += row_ptr[x][1];
+                sum_r += row_ptr[x][2];
+                ++sampled_count;
+            }
+        }
+#endif
+        const double mean_b = sum_b / std::max(1, sampled_count);
+        const double mean_g = sum_g / std::max(1, sampled_count);
+        const double mean_r = sum_r / std::max(1, sampled_count);
+        const double mean_gray = (mean_b + mean_g + mean_r) / 3.0;
 
-        // 2. Parallel Preprocessing (HWC BGR -> CHW RGB, Float Normalization)
-        std::vector<float> input_tensor_values(1 * 3 * spatial_size);
+        const float scale_b = static_cast<float>((mean_b > 1.0) ? (mean_gray / mean_b) : 1.0);
+        const float scale_g = static_cast<float>((mean_g > 1.0) ? (mean_gray / mean_g) : 1.0);
+        const float scale_r = static_cast<float>((mean_r > 1.0) ? (mean_gray / mean_r) : 1.0);
+
+        // 2. Parallel Preprocessing into Persistent Buffer (HWC BGR -> CHW RGB, Float Normalization)
+        float* const __restrict tensor_ptr = m_input_tensor_values.data();
+        constexpr float inv255 = 1.0f / 255.0f;
 
         #pragma omp parallel for schedule(static)
         for (int h = 0; h < target_h; ++h) {
-            const auto* row_ptr = resized.ptr<cv::Vec3b>(h);
+            const auto* __restrict row_ptr = m_resized_buffer.ptr<cv::Vec3b>(h);
             const int row_offset = h * target_w;
             #pragma omp simd
             for (int w = 0; w < target_w; ++w) {
                 const auto& pixel = row_ptr[w];
-                input_tensor_values[0 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[2]) * scale_r * (1.0f / 255.0f), 0.0f, 1.0f);
-                input_tensor_values[1 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[1]) * scale_g * (1.0f / 255.0f), 0.0f, 1.0f);
-                input_tensor_values[2 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[0]) * scale_b * (1.0f / 255.0f), 0.0f, 1.0f);
+                tensor_ptr[0 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[2]) * scale_r * inv255, 0.0f, 1.0f);
+                tensor_ptr[1 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[1]) * scale_g * inv255, 0.0f, 1.0f);
+                tensor_ptr[2 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[0]) * scale_b * inv255, 0.0f, 1.0f);
             }
         }
 
@@ -176,8 +270,8 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
             mem_info, 
-            input_tensor_values.data(), 
-            input_tensor_values.size(), 
+            tensor_ptr, 
+            m_input_tensor_values.size(), 
             m_input_shape.data(), 
             m_input_shape.size()
         );
