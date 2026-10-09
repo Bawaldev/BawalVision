@@ -5,64 +5,54 @@
 
 namespace bawal::vision {
 
-static const std::string b64_chars = 
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "abcdefghijklmnopqrstuvwxyz"
-    "0123456789+/";
-
-static inline bool is_base64(unsigned char c) {
-    return (isalnum(c) || (c == '+') || (c == '/'));
-}
-
 CameraReceiver::CameraReceiver(const ReceiverConfig& config)
     : m_config(config) {
-    if (m_config.prealloc_buffer_size > 0) {
-        m_scratch_buffer.reserve(m_config.prealloc_buffer_size);
-    }
+    m_scratch_buffer.reserve(m_config.prealloc_buffer_size);
 }
 
 void CameraReceiver::resetMetrics() noexcept {
     m_metrics = ReceiverMetrics{};
 }
 
+static const int8_t b64_table[256] = {
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
+    52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
+    -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
+    15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+    -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+    41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+};
+
 void CameraReceiver::decodeBase64ToScratch(std::string_view in) {
     m_scratch_buffer.clear();
-    size_t in_len = in.size();
-    int i = 0;
-    int j = 0;
-    int in_ = 0;
-    unsigned char char_array_4[4], char_array_3[3];
+    const size_t in_len = in.size();
+    if (in_len == 0) return;
 
-    while (in_len-- && (in[in_] != '=') && is_base64(in[in_])) {
-        char_array_4[i++] = in[in_]; in_++;
-        if (i == 4) {
-            for (i = 0; i < 4; i++) {
-                char_array_4[i] = static_cast<unsigned char>(b64_chars.find(char_array_4[i]));
+    m_scratch_buffer.reserve((in_len / 4 + 1) * 3);
+
+    uint32_t buf = 0;
+    int bits = 0;
+
+    for (const char ch : in) {
+        if (ch == '=') break;
+        const int8_t val = b64_table[static_cast<uint8_t>(ch)];
+        if (val >= 0) {
+            buf = (buf << 6) | static_cast<uint32_t>(val);
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                m_scratch_buffer.push_back(static_cast<uint8_t>((buf >> bits) & 0xFF));
             }
-            char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
-            char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
-            char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
-
-            for (i = 0; (i < 3); i++) {
-                m_scratch_buffer.push_back(char_array_3[i]);
-            }
-            i = 0;
-        }
-    }
-
-    if (i) {
-        for (j = i; j < 4; j++) {
-            char_array_4[j] = 0;
-        }
-        for (j = 0; j < 4; j++) {
-            char_array_4[j] = static_cast<unsigned char>(b64_chars.find(char_array_4[j]));
-        }
-        char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
-        char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
-        char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
-
-        for (j = 0; (j < i - 1); j++) {
-            m_scratch_buffer.push_back(char_array_3[j]);
         }
     }
 }

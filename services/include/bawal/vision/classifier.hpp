@@ -81,12 +81,16 @@ private:
     Ort::Env m_env;
     Ort::SessionOptions m_session_options;
     std::unique_ptr<Ort::Session> m_session;
-    
+
     std::vector<std::string> m_input_node_names;
     std::vector<std::string> m_output_node_names;
     std::vector<const char*> m_input_names;
     std::vector<const char*> m_output_names;
     std::vector<int64_t> m_input_shape;
+
+    // Persistent zero-allocation preprocessing buffers
+    std::vector<float> m_input_tensor_values;
+    cv::Mat m_resized_buffer;
 };
 
 } // namespace bawal::vision

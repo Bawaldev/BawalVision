@@ -21,11 +21,40 @@ endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_options(-O3)
+    
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
         add_compile_options(-mavx2 -mfma)
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
         add_compile_options(-march=armv8.2-a+simd -mtune=neoverse-n1)
     endif()
+
+    # ============================================================
+    # WARNING: -ffast-math
+    # ------------------------------------------------------------
+    # This flag can BREAK the following:
+    #   - std::isnan / std::isinf / std::isfinite (may always return false)
+    #   - Softmax / normalization / log-sum-exp (reorders operations)
+    #   - Division by small epsilon (may be treated as zero)
+    #   - ML model accuracy (ONNX / NCNN inference)
+    #
+    # ONLY apply to files with simple image arithmetic.
+    # DO NOT apply to ML inference, pipeline, or control logic files.
+    # ============================================================
+
+    # Files SAFE for -ffast-math (simple image arithmetic only)
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vision/enchanter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vision/simd_food_evaluator.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffast-math"
+    )
+
+    # Files requiring HIGH PRECISION (ML inference, pipeline control)
+    # Explicitly disable fast-math to prevent override from global flags
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vision/classifier.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vision/pipeline.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-fast-math"
+    )
 endif()
 
 # Core dependencies
