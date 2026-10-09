@@ -35,8 +35,8 @@
 /** @brief SPI chip select pin. */
 #define LCD_PIN_CS -1
 
-/** @brief Backlight control pin. */
-#define LCD_PIN_BCKL 38
+/** @brief Backlight control pin (-1 = disabled / off). */
+#define LCD_PIN_BCKL -1
 
 /** @brief Horizontal resolution in pixels (128x160 SPI TFT). */
 #define LCD_H_RES 128
