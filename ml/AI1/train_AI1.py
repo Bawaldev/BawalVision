@@ -39,9 +39,9 @@ ROOT_WEIGHTS_TARGET = SCRIPT_DIR.parent.parent / "weights" / "yolo8n.onnx"
 # Ultralytics training hyperparameters (Optimized for MBG 9 Food Categories)
 MODEL_ARCH = "yolov8n.pt"  # Pretrained YOLOv8 Nano Object Detection backbone
 INPUT_RESOLUTION = 640     # Fixed 640x640 frame resolution (OpenCV DNN compatible)
-BATCH_SIZE = 16            # Recommended for 6GB VRAM (NVIDIA RTX 3050)
-MAX_EPOCHS = 50
-EARLY_STOP_PATIENCE = 12   # Extended patience for optimal mAP convergence
+BATCH_SIZE = 8             # Calibrated for 4GB VRAM (NVIDIA RTX A2000 Laptop / GTX 1650)
+MAX_EPOCHS = 100
+EARLY_STOP_PATIENCE = 15   # Extended patience for optimal mAP convergence
 ONNX_OPSET = 12            # Standard ONNX opset for OpenCV DNN & ONNX Runtime C++ engine
 NUM_CLASSES = 9            # banana, chicken, egg, orange, rice, spinach, tempeh, tofu, water_spinach
 
@@ -210,7 +210,7 @@ def main() -> None:
                 warmup_epochs=3.0,
                 amp=False,
                 box=7.5,
-                cls=1.0,
+                cls=2.0,
                 dfl=1.5,
                 hsv_h=0.015,
                 hsv_s=0.7,
@@ -235,19 +235,25 @@ def main() -> None:
             # ==============================================================================
             # [TITIK 3: SETELAH TRAINING] CATAT METRIK & PLOT ULTRALYTICS KE MLFLOW
             # ==============================================================================
-            mlflow.log_metric("training_duration_seconds", elapsed_seconds)
+            metrics_to_log = {"training_duration_seconds": elapsed_seconds}
 
             if hasattr(train_job, "results_dict") and isinstance(train_job.results_dict, dict):
                 for metric_key, metric_val in train_job.results_dict.items():
                     sanitized_key = metric_key.replace("/", "_").replace("(", "").replace(")", "").strip()
                     try:
-                        mlflow.log_metric(sanitized_key, float(metric_val))
+                        metrics_to_log[sanitized_key] = float(metric_val)
                     except (ValueError, TypeError):
                         pass
 
+            safe_mlflow_log_metrics(metrics_to_log)
+
             # Simpan visualisasi kurva loss, PR curve, dan confusion matrix ke MLflow UI
             if hasattr(train_job, "save_dir") and Path(train_job.save_dir).exists():
-                mlflow.log_artifacts(str(train_job.save_dir), artifact_path="ultralytics_outputs")
+                if MLFLOW_ENABLED and mlflow:
+                    try:
+                        mlflow.log_artifacts(str(train_job.save_dir), artifact_path="ultralytics_outputs")
+                    except Exception as e:
+                        print(f"[!] MLflow log_artifacts failed: {e}")
 
             checkpoint_best = Path(train_job.save_dir) / "weights" / "best.pt"
             if checkpoint_best.exists():
