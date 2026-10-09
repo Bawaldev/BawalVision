@@ -77,8 +77,12 @@ def main():
     session = ort.InferenceSession(str(INPUT_ONNX), providers=["CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
 
-    reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=80)
+    import onnx
+    model_proto = onnx.load(str(INPUT_ONNX))
+    nodes_to_exclude = [n.name for n in model_proto.graph.node if 'model.22' in n.name or 'Sigmoid' in n.name or 'dfl' in n.name.lower()]
+    print(f"[+] Excluding {len(nodes_to_exclude)} sensitive detection head nodes from INT8 quantization to preserve bbox/confidence precision.")
 
+    reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=80)
     print(f"\n=== Memulai Static PTQ INT8 ({INPUT_ONNX.name}) ===")
     quantize_static(
         model_input=str(INPUT_ONNX),
@@ -87,7 +91,8 @@ def main():
         quant_format=QuantFormat.QDQ,     # Format QDQ optimal for AVX2/VNNI accel
         per_channel=False,                # Universal per-tensor quantization (broad compatibility across ONNX opsets)
         weight_type=QuantType.QInt8,       
-        activation_type=QuantType.QUInt8  # UINT8 Activation
+        activation_type=QuantType.QUInt8, # UINT8 Activation
+        nodes_to_exclude=nodes_to_exclude
     )
     print(f"[✓] Kuantisasi sukses: {OUTPUT_ONNX}")
 
