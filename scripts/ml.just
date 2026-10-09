@@ -321,3 +321,8 @@ mlflow-ui:
       --default-artifact-root ./ml/mlflow_artifacts \
       --host 127.0.0.1 \
       --port 5000
+
+
+# Jalankan Post-Training Quantization INT8 untuk YOLOv8
+quantize-ai1:
+    python ml/AI1/quantize_int8.py
