@@ -1,16 +1,21 @@
 # ==============================================================================
 # BawalVision Machine Vision, ONNX ML & NCNN Super-Resolution Engine
 # Language: C++20 (OpenCV, ONNX Runtime, NCNN, OpenMP, CMake, Ninja)
-# Target OS: Ubuntu 24.04 LTS (Optimized with AVX2 & OpenMP Multithreading)
+# Target OS: Ubuntu 24.04 LTS
+#
+# Deployment target: AWS Lambda (CPU-only, x86_64, AVX2/AVX-512).
+# No GPU, no Vulkan. NCNN runs on CPU with AVX2 and OpenMP.
 # ==============================================================================
 
-# --- Stage 1: Build Environment ---
+# ------------------------------------------------------------------------------
+# Stage 1: Build environment
+# ------------------------------------------------------------------------------
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ------------------------------------------------------------------------------
-# 1. Install build dependencies: OpenCV, NCNN, Vulkan, ONNX Runtime, dll.
+# 1. Build dependencies
 # ------------------------------------------------------------------------------
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -23,25 +28,25 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libcurl4-openssl-dev \
     libomp-dev \
     nlohmann-json3-dev \
-    libvulkan-dev \
-    glslang-tools \
     ca-certificates \
     curl \
     wget \
     tar \
     unzip && \
     # --------------------------------------------------------------------------
-    # 2. Install ONNX Runtime v1.19.2 (untuk YOLOv8 classifier)
+    # 2. ONNX Runtime v1.19.2 (for YOLOv8 food classifier)
     # --------------------------------------------------------------------------
     mkdir -p /opt/onnxruntime && \
-    curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | tar -xz -C /opt/onnxruntime --strip-components=1 && \
+    curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | \
+        tar -xz -C /opt/onnxruntime --strip-components=1 && \
     cp -r /opt/onnxruntime/include/* /usr/local/include/ && \
     cp -r /opt/onnxruntime/lib/* /usr/local/lib/ && \
     # --------------------------------------------------------------------------
-    # 3. Install NCNN 20240410 (untuk RealESRGAN super-resolution)
+    # 3. NCNN 20240410 (CPU-only build; Vulkan is not used in Lambda)
     # --------------------------------------------------------------------------
     mkdir -p /opt/ncnn /tmp/ncnn_extracted && \
-    curl -fsSL https://github.com/Tencent/ncnn/releases/download/20240410/ncnn-20240410-ubuntu-2204.zip -o /tmp/ncnn.zip && \
+    curl -fsSL https://github.com/Tencent/ncnn/releases/download/20240410/ncnn-20240410-ubuntu-2204.zip \
+        -o /tmp/ncnn.zip && \
     unzip -q /tmp/ncnn.zip -d /tmp/ncnn_extracted && \
     cp -r /tmp/ncnn_extracted/ncnn-20240410-ubuntu-2204/* /opt/ncnn/ && \
     cp -r /opt/ncnn/include/* /usr/local/include/ && \
@@ -52,7 +57,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /src
 
 # ------------------------------------------------------------------------------
-# 4. Compile modular NCNN model generator
+# 4. Compile the NCNN model generator utility
 # ------------------------------------------------------------------------------
 COPY ml/ /src/ml/
 RUN mkdir -p /app/weights && \
@@ -62,46 +67,48 @@ RUN mkdir -p /app/weights && \
         -o /usr/local/bin/ncnn_generator
 
 # ------------------------------------------------------------------------------
-# 5. DOWNLOAD OFFICIAL Real-ESRGAN NCNN MODEL SUITE (realesrgan-x4plus, animevideo, etc.)
+# 5. Fetch or synthesize RealESRGAN model via scripts/fetch_ncnn_model.sh
 # ------------------------------------------------------------------------------
-RUN set -eux; \
-    echo "[INFO] Downloading official Real-ESRGAN model suite..."; \
-    mkdir -p /tmp/realesr_dl /app/weights && \
-    if curl -fsSL --connect-timeout 20 --max-time 300 -o /tmp/realesrgan.zip \
-        https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip; then \
-        unzip -q -o /tmp/realesrgan.zip -d /tmp/realesr_dl && \
-        if [ -d /tmp/realesr_dl/models ]; then \
-            cp -r /tmp/realesr_dl/models/* /app/weights/; \
-            echo "[SUCCESS] Official Real-ESRGAN models installed successfully."; \
-        fi; \
-        rm -rf /tmp/realesrgan.zip /tmp/realesr_dl; \
-    else \
-        echo "[WARN] Download failed, generating synthetic models..."; \
-        /usr/local/bin/ncnn_generator realesrgan-x4plus 4 /app/weights; \
-        /usr/local/bin/ncnn_generator realesr-animevideov3-x2 2 /app/weights; \
-    fi; \
-    echo "[INFO] Weights directory content:"; \
-    ls -la /app/weights/
+COPY scripts/ /src/scripts/
+RUN chmod +x /src/scripts/fetch_ncnn_model.sh && \
+    ALLOW_SYNTHETIC_FALLBACK=1 /src/scripts/fetch_ncnn_model.sh \
+        realesr-general-x4v3 \
+        /app/weights \
+        /usr/local/bin/ncnn_generator \
+        4
 
 # ------------------------------------------------------------------------------
-# 7. Copy C++ services source tree dan compile binary utama
+# 6. Compile the main vision service binary
+#
+#    -O3        : aggressive optimization
+#    -mavx2     : AVX2 vectorization (guaranteed on AWS Lambda x86_64)
+#    -mfma      : fused multiply-add
+#    -fopenmp   : multithreading for ISP, NCNN, and YOLO preprocessing
+#    -flto      : link-time optimization (~10% speedup)
+#    -funroll-loops : small loop unrolling
 # ------------------------------------------------------------------------------
 COPY services/ /src/services/
 
 RUN cmake -B /src/services/build -S /src/services -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_FLAGS="-O3 -mavx2 -mfma -fopenmp" \
+    -DCMAKE_CXX_FLAGS="-O3 -mavx2 -mfma -fopenmp -flto -funroll-loops" \
+    -DCMAKE_EXE_LINKER_FLAGS="-flto" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && \
     cmake --build /src/services/build --parallel $(nproc)
 
 
-# --- Stage 2: Hardened Production Runtime ---
+# ------------------------------------------------------------------------------
+# Stage 2: Production runtime (CPU-only)
+# ------------------------------------------------------------------------------
 FROM ubuntu:24.04 AS runner
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ------------------------------------------------------------------------------
-# 8. Install runtime shared libraries
+# 7. Runtime libraries only
+#
+#    No Vulkan packages. Lambda has no GPU, so Vulkan would only add
+#    image size and startup time without providing any benefit.
 # ------------------------------------------------------------------------------
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -109,40 +116,47 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libopencv-dev \
     libcurl4 \
     libgomp1 \
-    libvulkan1 \
-    mesa-vulkan-drivers \
-    vulkan-tools \
     ca-certificates \
-    && useradd -m -s /bin/bash -u 1001 visionuser
+    && useradd -m -s /bin/bash -u 1001 visionuser \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # ------------------------------------------------------------------------------
-# 9. Copy shared libraries (ONNX Runtime & NCNN) ke runtime
+# 8. Copy shared libraries (ONNX Runtime + NCNN)
 # ------------------------------------------------------------------------------
 COPY --from=builder /opt/onnxruntime/lib/ /usr/local/lib/
 COPY --from=builder /usr/local/lib/libncnn* /usr/local/lib/
 RUN ldconfig
 
 # ------------------------------------------------------------------------------
-# 10. Copy binary hasil build dan model weights yang sudah diunduh
+# 9. Copy the binary, the generator utility, and model weights
 # ------------------------------------------------------------------------------
 COPY --from=builder /src/services/build/bin/vision_service /usr/local/bin/vision_service
 COPY --from=builder /usr/local/bin/ncnn_generator /usr/local/bin/ncnn_generator
 COPY --from=builder /app/weights/ /app/weights/
 
 # ------------------------------------------------------------------------------
-# 11. Prepare directories dan ownership
+# 10. Prepare directories and ownership
 # ------------------------------------------------------------------------------
 RUN mkdir -p /app/ml/AI1/model /app/weights && \
     chown -R visionuser:visionuser /app && \
-    echo "[INFO] Model weights di dalam image:" && \
+    echo "[INFO] Model weights in image:" && \
     ls -la /app/weights/
 
+# ------------------------------------------------------------------------------
+# 11. Runtime environment (CPU-only)
+#
+#    OMP_NUM_THREADS is set conservatively. AWS Lambda typically provides
+#    2-6 vCPU depending on memory configuration. NCNN reads
+#    ncnn::get_big_cpu_count() and adjusts at runtime.
+# ------------------------------------------------------------------------------
 ENV OMP_NUM_THREADS=4 \
     OMP_SCHEDULE=static \
     OMP_PROC_BIND=true \
-    LD_LIBRARY_PATH=/usr/local/lib:/opt/onnxruntime/lib:$LD_LIBRARY_PATH \
+    OMP_WAIT_POLICY=PASSIVE \
+    LD_LIBRARY_PATH=/usr/local/lib:/opt/onnxruntime/lib \
     HEADLESS=1 \
     QT_QPA_PLATFORM=offscreen
 
