@@ -132,6 +132,19 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     if (!model_path.empty()) {
         candidate_paths.emplace_back(model_path);
     }
+    // 1. Prioritize Lightweight INT8 Quantized Models
+    candidate_paths.push_back("/app/ml/AI1/model/ai1_vision_int8.onnx");
+    candidate_paths.push_back("/app/weights/yolo8n_int8.onnx");
+    candidate_paths.push_back("/app/weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("ml/AI1/model/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../ml/AI1/model/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../ml/AI1/model/ai1_vision_int8.onnx");
+    candidate_paths.push_back("weights/yolo8n_int8.onnx");
+    candidate_paths.push_back("../weights/yolo8n_int8.onnx");
+    candidate_paths.push_back("weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../weights/ai1_vision_int8.onnx");
+
+    // 2. Fallback to Standard Models
     candidate_paths.push_back("/app/ml/AI1/model/ai1_vision.onnx");
     candidate_paths.push_back("/app/weights/yolo8n.onnx");
     candidate_paths.push_back("ml/AI1/model/ai1_vision.onnx");
@@ -150,7 +163,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     }
 
     if (resolved_path.empty()) {
-        std::cerr << "[FoodClassifier] Error: ONNX model file not found in candidate search paths.\n";
+        std::cerr << "[FoodClassifier] Error: INT8 / ONNX model file not found in candidate search paths.\n";
         return false;
     }
 
@@ -190,7 +203,8 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
 
         m_input_tensor_values.resize(1 * 3 * 640 * 640);
         m_is_ready = true;
-        std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << resolved_path << "\n";
+        std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << resolved_path 
+                  << (resolved_path.find("int8") != std::string::npos ? " [INT8 Quantized QDQ Model]" : " [FP32 Model]") << "\n";
         return true;
     } catch (const Ort::Exception& e) {
         std::cerr << "[FoodClassifier] ONNX Runtime Init Error (" << resolved_path << "): " << e.what() << "\n";
