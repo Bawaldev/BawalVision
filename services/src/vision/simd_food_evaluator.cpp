@@ -11,7 +11,15 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
         return metric;
     }
 
-    cv::Mat roi_continuous = food_roi.isContinuous() ? food_roi : food_roi.clone();
+    // Crop to inner 75% core of food ROI to prevent desk surface, plate rims, and external cables from corrupting spoilage metrics
+    int margin_x = static_cast<int>(food_roi.cols * 0.125f);
+    int margin_y = static_cast<int>(food_roi.rows * 0.125f);
+    int core_w = std::max(4, food_roi.cols - 2 * margin_x);
+    int core_h = std::max(4, food_roi.rows - 2 * margin_y);
+    cv::Rect core_rect(margin_x, margin_y, core_w, core_h);
+    cv::Mat core_roi = food_roi(core_rect);
+
+    cv::Mat roi_continuous = core_roi.isContinuous() ? core_roi : core_roi.clone();
 
     cv::Mat lab, hsv;
     cv::cvtColor(roi_continuous, lab, cv::COLOR_BGR2Lab);
