@@ -71,14 +71,19 @@ using ClassificationResult = DetectionResult;
 
 /**
  * @brief Temporal tracker container to eliminate frame-to-frame bounding box flickering.
+ * Aligned to 64 bytes (128 bytes total = exactly 2 L1 CPU cache lines).
  */
-struct TrackedItem {
-    DetectionResult result;
-    int age{0};           ///< Number of consecutive frames tracked
-    int lost_frames{0};   ///< Empty frame tolerance before track eviction
-    int stable_frames{0}; ///< Consecutive frames bounding box has remained stationary
-    cv::Point last_center{0, 0}; ///< Previous frame bounding box center coordinates
+struct alignas(64) TrackedItem {
+    DetectionResult result;       ///< 64 bytes (Cache Line 0)
+    int age{0};                   ///< 4 bytes  (Cache Line 1)
+    int lost_frames{0};           ///< 4 bytes
+    int stable_frames{0};         ///< 4 bytes
+    cv::Point last_center{0, 0};  ///< 8 bytes (x, y)
+    uint32_t reserved[11]{0};     ///< 44 bytes explicit padding
 };
+
+static_assert(sizeof(TrackedItem) == 128, "TrackedItem must be exactly 128 bytes (2 CPU cache lines)");
+static_assert(alignof(TrackedItem) == 64, "TrackedItem must be 64-byte aligned");
 
 class FoodClassifier {
 public:
