@@ -123,9 +123,8 @@ int main(int argc, char** argv) {
     }
 
     std::vector<uint8_t> raw_bytes;
-    std::vector<uint8_t> prev_raw_bytes;
     raw_bytes.reserve(256 * 1024);
-        prev_raw_bytes.reserve(256 * 1024);
+    uint64_t prev_frame_hash = 0;
     uint64_t frame_seq = 0;
     int discovery_tick = 0;
     auto last_ai_dispatch = std::chrono::steady_clock::now() - std::chrono::seconds(1);
@@ -243,7 +242,21 @@ int main(int argc, char** argv) {
 
     constexpr int kIdleBackoffMinMs = 50;
     constexpr int kIdleBackoffMaxMs = 1000;
-    int idle_backoff_ms = 0;  // 0 == currently receiving frames
+    int idle_backoff_ms = 0;  
+    
+    auto computeFastFingerprint = [](const std::vector<uint8_t>& buf) noexcept -> uint64_t {
+        const size_t len = buf.size();
+        if (len < 16) return len;
+        uint64_t head = 0, mid = 0, tail = 0;
+        std::memcpy(&head, buf.data(), 8);
+        std::memcpy(&mid, buf.data() + (len / 2), 8);
+        std::memcpy(&tail, buf.data() + len - 8, 8);
+        uint64_t h = len;
+        h ^= head + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        h ^= mid  + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        h ^= tail + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        return h;
+    };
 
     while (true) {
         bool frame_ok = false;
@@ -286,13 +299,13 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // Avoid re-processing and flood-broadcasting duplicate frames
-        if (raw_bytes.size() == prev_raw_bytes.size() && raw_bytes == prev_raw_bytes) {
+        // Avoid re-processing and flood-broadcasting duplicate frames via O(1) sampling fingerprint
+        const uint64_t cur_hash = computeFastFingerprint(raw_bytes);
+        if (cur_hash == prev_frame_hash) {
             std::this_thread::sleep_for(std::chrono::milliseconds(12));
             continue;
         }
-
-        prev_raw_bytes = raw_bytes;
+        prev_frame_hash = cur_hash;
         inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
 
         // Decode incoming JPEG frame
