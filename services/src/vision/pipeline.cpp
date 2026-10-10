@@ -8,6 +8,8 @@
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
+#include <array>
+#include <span>
 #include <opencv2/imgproc.hpp>
 
 namespace bawal::vision {
@@ -181,9 +183,13 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
         s_conf_thresh = (env_c != nullptr) ? std::stof(env_c) : 0.58f;
     }
 
-    if (!m_classifier.detect(enhanced_frame, out_detections, s_conf_thresh, 0.40f)) {
+    std::array<DetectionResult, 32> local_buf;
+    size_t count = 0;
+    if (!m_classifier.detect(enhanced_frame, local_buf, count, s_conf_thresh, 0.40f)) {
         return false;
     }
+
+    out_detections.assign(local_buf.begin(), local_buf.begin() + count);
 
     // Run RealESRGAN on each food crop for texture and spoilage analysis.
     // Typical crop size is 50x50 to 150x150 pixels, so CPU inference stays

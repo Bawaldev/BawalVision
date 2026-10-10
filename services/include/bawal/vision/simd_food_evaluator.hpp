@@ -10,10 +10,11 @@
 
 namespace bawal::vision {
 
-struct SpoilageMetric {
-    float discoloration_ratio{0.0f}; // 0.0 (fresh) - 1.0 (spoiled)
-    float avg_luminance{0.0f};        // Average luminance (L / V channel)
-    bool is_visually_spoiled{false};
+struct alignas(4) SpoilageMetric {
+    float discoloration_ratio{0.0f}; // 4 byte (0.0 fresh - 1.0 spoiled)
+    float avg_luminance{0.0f};        // 4 byte (Average luminance in L / V channel)
+    bool is_visually_spoiled{false};  // 1 byte
+    uint8_t reserved[3]{0};           // 3 byte explicit padding (12 bytes total)
 };
 
 struct TextureMetric {

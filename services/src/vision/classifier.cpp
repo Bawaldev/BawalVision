@@ -90,7 +90,21 @@ static inline void computeBGRSumsAVX2(const cv::Mat& bgr_mat, double& out_sum_b,
 
 static std::vector<TrackedItem> s_tracked_items;
 
-// Compute Intersection over Union (IoU) between two bounding boxes
+inline float computeIoU(const CompactBBox& a, const CompactBBox& b) {
+    int inter_x1 = std::max(a.x, b.x);
+    int inter_y1 = std::max(a.y, b.y);
+    int inter_x2 = std::min(a.x + a.width, b.x + b.width);
+    int inter_y2 = std::min(a.y + a.height, b.y + b.height);
+
+    int inter_w = std::max(0, inter_x2 - inter_x1);
+    int inter_h = std::max(0, inter_y2 - inter_y1);
+    float inter_area = static_cast<float>(inter_w * inter_h);
+
+    float union_area = static_cast<float>(a.width * a.height + b.width * b.height) - inter_area;
+    if (union_area <= 0.0f) return 0.0f;
+    return inter_area / union_area;
+}
+
 inline float computeIoU(const cv::Rect& a, const cv::Rect& b) {
     int inter_x1 = std::max(a.x, b.x);
     int inter_y1 = std::max(a.y, b.y);
@@ -120,8 +134,7 @@ FoodClassifier::FoodClassifier()
         "tofu",
         "water_spinach"
     },
-      m_env(ORT_LOGGING_LEVEL_WARNING, "BawalVisionYOLO"),
-      m_input_shape{1, 3, 640, 640} {
+      m_env(ORT_LOGGING_LEVEL_WARNING, "BawalVisionYOLO") {
 }
 
 bool FoodClassifier::init(std::string_view model_path, int thread_count) {
@@ -163,33 +176,10 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
 
         m_session = std::make_unique<Ort::Session>(m_env, resolved_path.c_str(), m_session_options);
 
-        Ort::AllocatorWithDefaultOptions allocator;
-
-        // Retrieve input node names
-        m_input_node_names.clear();
-        m_input_names.clear();
-        const size_t num_inputs = m_session->GetInputCount();
-        for (size_t i = 0; i < num_inputs; ++i) {
-            auto input_name_ptr = m_session->GetInputNameAllocated(i, allocator);
-            m_input_node_names.push_back(input_name_ptr.get());
-        }
-        for (const auto& name : m_input_node_names) {
-            m_input_names.push_back(name.c_str());
-        }
-
-        // Retrieve output node names
-        m_output_node_names.clear();
-        m_output_names.clear();
-        const size_t num_outputs = m_session->GetOutputCount();
-        for (size_t i = 0; i < num_outputs; ++i) {
-            auto output_name_ptr = m_session->GetOutputNameAllocated(i, allocator);
-            m_output_node_names.push_back(output_name_ptr.get());
-        }
-        for (const auto& name : m_output_node_names) {
-            m_output_names.push_back(name.c_str());
-        }
-
-        m_input_tensor_values.resize(1 * 3 * 640 * 640);
+        // Preprocessing buffer with 64-byte alignment for AVX2/AVX-512 vectorization
+        m_input_tensor_values.reset(
+            static_cast<float*>(::operator new[](K_TENSOR_ELEMENTS * sizeof(float), std::align_val_t{64}))
+        );
         m_is_ready = true;
         std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << resolved_path 
                   << (resolved_path.find("int8") != std::string::npos ? " [INT8 Quantized QDQ Model]" : " [FP32 Model]") << "\n";
@@ -204,14 +194,14 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
 }
 
 bool FoodClassifier::detect(const cv::Mat& frame, 
-                            std::vector<DetectionResult>& out_detections,
+                            std::span<DetectionResult> out_buffer,
+                            size_t& out_count,
                             float conf_threshold,
                             float nms_threshold) {
-    if (frame.empty()) {
+    out_count = 0;
+    if (frame.empty() || out_buffer.empty()) {
         return false;
     }
-
-    out_detections.clear();
 
     std::lock_guard<std::mutex> lock(m_infer_mutex);
     if (!m_is_ready || !m_session) {
@@ -243,7 +233,10 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
         // 2. Parallel Preprocessing into Persistent Buffer (HWC BGR -> CHW RGB, Standard [0.0, 1.0] Normalization)
         // Passes pure, unshifted RGB tensor to neural network matching Ultralytics training pipeline
-        float* const __restrict tensor_ptr = m_input_tensor_values.data();
+        float* const __restrict tensor_ptr = m_input_tensor_values.get();
+        if (!tensor_ptr) {
+            return false;
+        }
         constexpr float inv255 = 1.0f / 255.0f;
 
         #pragma omp parallel for schedule(static)
@@ -259,22 +252,22 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             }
         }
 
-        // 3. Execute ONNX Runtime Inference
+        // 3. Execute ONNX Runtime Inference with static node names and 64-byte aligned tensor
         auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
             mem_info, 
             tensor_ptr, 
-            m_input_tensor_values.size(), 
-            m_input_shape.data(), 
-            m_input_shape.size()
+            K_TENSOR_ELEMENTS, 
+            K_INPUT_SHAPE.data(), 
+            K_INPUT_SHAPE.size()
         );
 
         auto output_tensors = m_session->Run(
             Ort::RunOptions{nullptr}, 
-            m_input_names.data(), 
+            K_INPUT_NAMES, 
             &input_tensor, 
             1, 
-            m_output_names.data(), 
+            K_OUTPUT_NAMES, 
             1
         );
 
@@ -285,11 +278,11 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         auto type_info = output_tensors[0].GetTensorTypeAndShapeInfo();
         auto element_type = type_info.GetElementType();
 
-        // Validasi tipe data output secara runtime
+        // Runtime validation of output tensor data type
         if (element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-            std::cerr << "[FoodClassifier] Error: Tensor output bertipe " 
-                    << element_type << " (bukan FLOAT32). "
-                    << "Pastikan kuantisasi INT8 menyisakan node output sebagai dequantized float!\n";
+            std::cerr << "[FoodClassifier] Error: Output tensor has element type " 
+                    << element_type << " (expected FLOAT32). "
+                    << "Ensure INT8 quantization preserves output node as dequantized float!\n";
             return false;
         }
 
@@ -318,9 +311,6 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         if (num_classes <= 0) {
             return false;
         }
-
-        const float scale_x = static_cast<float>(frame.cols) / static_cast<float>(target_w);
-        const float scale_y = static_cast<float>(frame.rows) / static_cast<float>(target_h);
 
         std::vector<cv::Rect> boxes;
         std::vector<float> confidences;
@@ -403,8 +393,14 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                                [](const TrackedItem& item) { return item.lost_frames > 15; }),
                 s_tracked_items.end());
 
+            out_count = 0;
+            const size_t max_capacity = out_buffer.size();
             for (const auto& item : s_tracked_items) {
-                out_detections.push_back(item.result);
+                if (out_count < max_capacity) {
+                    out_buffer[out_count++] = item.result;
+                } else {
+                    break;
+                }
             }
             return true;
         }
@@ -425,7 +421,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             float yolo_score = confidences[idx];
 
             std::string predicted_name = (yolo_cls >= 0 && yolo_cls < static_cast<int>(m_class_names.size()))
-                                             ? m_class_names[yolo_cls]
+                                             ? std::string(m_class_names[yolo_cls])
                                              : "food_item";
 
             DetectionResult det;
@@ -443,6 +439,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
         if (current_detections.empty()) {
             s_tracked_items.clear();
+            out_count = 0;
             return true;
         }
 
@@ -529,10 +526,16 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                            [](const TrackedItem& item) { return item.lost_frames > 2; }),
             s_tracked_items.end());
 
-        // Copy valid tracks to output container
+        // Dispatch valid tracks directly into caller-provided span buffer
+        out_count = 0;
+        const size_t max_capacity = out_buffer.size();
         for (const auto& item : s_tracked_items) {
             if (item.lost_frames <= 1) {
-                out_detections.push_back(item.result);
+                if (out_count < max_capacity) {
+                    out_buffer[out_count++] = item.result;
+                } else {
+                    break;
+                }
             }
         }
 
@@ -546,18 +549,40 @@ bool FoodClassifier::detect(const cv::Mat& frame,
     }
 }
 
+bool FoodClassifier::detect(const cv::Mat& frame, 
+                            std::vector<DetectionResult>& out_detections,
+                            float conf_threshold,
+                            float nms_threshold) {
+    out_detections.clear();
+    std::array<DetectionResult, 32> local_buf;
+    size_t count = 0;
+    if (!detect(frame, local_buf, count, conf_threshold, nms_threshold)) {
+        return false;
+    }
+    out_detections.assign(local_buf.begin(), local_buf.begin() + count);
+    return true;
+}
+
 bool FoodClassifier::predict(const cv::Mat& bgr_image, ClassificationResult& out_result) {
     if (bgr_image.empty()) {
         return false;
     }
 
-    std::vector<DetectionResult> detections;
-    if (detect(bgr_image, detections, 0.58f, 0.45f) && !detections.empty()) {
-        auto best = std::max_element(detections.begin(), detections.end(),
-                                     [](const DetectionResult& a, const DetectionResult& b) {
-                                         return a.confidence < b.confidence;
-                                     });
-        out_result = *best;
+    std::array<DetectionResult, 16> local_buf;
+    size_t count = 0;
+
+    const bool ok = detect(bgr_image, local_buf, count, 0.58f, 0.45f);
+
+    if (ok && count > 0) {
+        float best_conf = -1.0f;
+        size_t best_idx = 0;
+        for (size_t i = 0; i < count; ++i) {
+            if (local_buf[i].confidence > best_conf) {
+                best_conf = local_buf[i].confidence;
+                best_idx = i;
+            }
+        }
+        out_result = local_buf[best_idx];
         return true;
     }
 

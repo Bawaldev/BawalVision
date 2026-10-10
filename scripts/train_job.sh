@@ -14,10 +14,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Pastikan folder log sudah ada
+# Ensure log directory exists
 mkdir -p "$PROJECT_ROOT/logs"
 
-# 2. Load HPC modules jika tersedia
+# 2. Load HPC modules if available
 if command -v module &>/dev/null; then
     echo "[+] HPC Environment detected. Loading system modules..."
     module load cuda/12.1 2>/dev/null || true
@@ -34,12 +34,12 @@ else
     exit 1
 fi
 
-# 4. Dataset Staging ke NVMe/Fast Storage dengan Cleanup Trap
+# 4. Dataset Staging to NVMe/Fast Storage with Cleanup Trap
 LOCAL_DATA_DIR="${SLURM_TMPDIR:-/tmp}/yolo_dataset_${SLURM_JOB_ID:-$$}"
 echo "[+] Staging dataset to local fast storage ($LOCAL_DATA_DIR)..."
 mkdir -p "$LOCAL_DATA_DIR"
 
-# Pasang trap agar direktori scratch otomatis dibersihkan saat job selesai/batal
+# Install cleanup trap to automatically remove scratch directory on job exit/abort
 trap 'echo "[+] Cleaning up staged data..."; rm -rf "$LOCAL_DATA_DIR"' EXIT INT TERM
 
 rsync -ah --delete ml/AI1/yolo_dataset/ "$LOCAL_DATA_DIR/"
@@ -49,15 +49,15 @@ CPUS="${SLURM_CPUS_PER_TASK:-4}"
 export OMP_NUM_THREADS="$CPUS"
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
-# Kalibrasi batch size aman
+# Calibrate safe batch size
 if [ -n "${SLURM_JOB_ID:-}" ]; then
-    BATCH_SIZE=32  # Lebih aman terhadap risiko OOM pada GPU 16GB-24GB (FP32)
+    BATCH_SIZE=32  # Safer against OOM risk on 16GB-24GB GPUs (FP32)
 else
     BATCH_SIZE=8
     echo "[!] Running locally without SLURM: defaulting batch-size to $BATCH_SIZE to avoid GPU OOM."
 fi
 
-# 6. Jalankan training
+# 6. Execute training
 echo "[+] Starting training run..."
 python3 ml/AI1/train_AI1.py \
   --epochs 100 \

@@ -67,13 +67,13 @@ DOCKER_WEIGHTS_FALLBACK = SCRIPT_DIR.parent.parent / "weights" / "yolo8n.onnx"
 
 def main():
     if not INPUT_ONNX.exists():
-        raise FileNotFoundError(f"Model sumber FP32 belum ada di: {INPUT_ONNX}")
+        raise FileNotFoundError(f"Source FP32 model not found at: {INPUT_ONNX}")
 
     if MLFLOW_ENABLED and mlflow:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
 
-    # Ambil nama layer input dari graph ONNX
+    # Retrieve input layer name from ONNX graph
     session = ort.InferenceSession(str(INPUT_ONNX), providers=["CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
 
@@ -83,7 +83,7 @@ def main():
     print(f"[+] Excluding {len(nodes_to_exclude)} sensitive detection head nodes from INT8 quantization to preserve bbox/confidence precision.")
 
     reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=80)
-    print(f"\n=== Memulai Static PTQ INT8 ({INPUT_ONNX.name}) ===")
+    print(f"\n=== Starting Static PTQ INT8 ({INPUT_ONNX.name}) ===")
     quantize_static(
         model_input=str(INPUT_ONNX),
         model_output=str(OUTPUT_ONNX),
@@ -94,15 +94,15 @@ def main():
         activation_type=QuantType.QUInt8, # UINT8 Activation
         nodes_to_exclude=nodes_to_exclude
     )
-    print(f"[✓] Kuantisasi sukses: {OUTPUT_ONNX}")
+    print(f"[✓] Quantization successful: {OUTPUT_ONNX}")
 
-    # Ukur pemangkasan ukuran file
+    # Measure file size reduction
     fp32_size_mb = os.path.getsize(INPUT_ONNX) / (1024 * 1024)
     int8_size_mb = os.path.getsize(OUTPUT_ONNX) / (1024 * 1024)
     reduction_pct = ((fp32_size_mb - int8_size_mb) / fp32_size_mb) * 100
 
-    print(f" -> Ukuran Model FP32 : {fp32_size_mb:.2f} MB")
-    print(f" -> Ukuran Model INT8 : {int8_size_mb:.2f} MB ({reduction_pct:.1f}% lebih hemat)")
+    print(f" -> FP32 Model Size : {fp32_size_mb:.2f} MB")
+    print(f" -> INT8 Model Size : {int8_size_mb:.2f} MB ({reduction_pct:.1f}% reduction)")
 
     if MLFLOW_ENABLED and mlflow:
         with mlflow.start_run(run_name="yolov8n_ptq_int8"):
@@ -122,7 +122,7 @@ def main():
     for target in (DOCKER_WEIGHTS_INT8, DOCKER_WEIGHTS_AI1_INT8, DOCKER_WEIGHTS_FALLBACK):
         if target.parent.exists():
             shutil.copy2(OUTPUT_ONNX, target)
-            print(f"[✓] Model INT8 disinkronkan ke: {target}")
+            print(f"[✓] INT8 model synced to: {target}")
 
 if __name__ == "__main__":
     main()

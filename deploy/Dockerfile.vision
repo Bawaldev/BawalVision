@@ -103,8 +103,8 @@ RUN ldconfig
 COPY --from=builder /src/services/build/bin/vision_service /usr/local/bin/vision_service
 COPY --from=builder /usr/local/bin/ncnn_generator /usr/local/bin/ncnn_generator
 
-# 10. Directori & Ownership Setup (Kunci Perbaikan Hak Akses)
-# Buat struktur direktori lengkap, salin bobot awal, dan atur izin 777/ownership
+# 10. Directory & Ownership Setup (Permission Hardening)
+# Create full directory structure, copy initial weights, and configure permissions
 RUN mkdir -p /app/ml/AI1/model /app/weights
 COPY --from=builder /app/weights/ /app/weights/
 

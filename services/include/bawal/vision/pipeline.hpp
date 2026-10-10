@@ -22,11 +22,15 @@ namespace bawal::vision {
 struct InspectionOutput {
     uint32_t frame_id{0};
     bool is_valid{false};
+    double processing_time_ms{0.0};
     cv::Mat raw_image;
     cv::Mat dewarped_image;
     cv::Mat annotated_image;
     std::vector<DetectionResult> detections;
-    double processing_time_ms{0.0};
+
+    InspectionOutput() {
+        detections.reserve(16);
+    }
 };
 
 /**

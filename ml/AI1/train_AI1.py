@@ -294,9 +294,9 @@ def main() -> None:
         exported_onnx = detection_engine.export(
             format="onnx",
             imgsz=INPUT_RESOLUTION,
-            dynamic=False,     # STATIS: Mencegah error Unsupported data type: BOOL
+            dynamic=False,     # Static shape: Prevents Unsupported data type: BOOL error
             opset=ONNX_OPSET,  # Opset 12
-            half=False,        # FP32 murni
+            half=False,        # Pure FP32 precision
             simplify=True,     # Constant folding
         )
 
