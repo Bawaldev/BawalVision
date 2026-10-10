@@ -175,7 +175,13 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
     if (enhanced_frame.empty()) return false;
     out_detections.clear();
 
-    if (!m_classifier.detect(enhanced_frame, out_detections, 0.35f, 0.40f)) {
+    static float s_conf_thresh = -1.0f;
+    if (s_conf_thresh < 0.0f) {
+        const char* env_c = std::getenv("CONF_THRESHOLD");
+        s_conf_thresh = (env_c != nullptr) ? std::stof(env_c) : 0.58f;
+    }
+
+    if (!m_classifier.detect(enhanced_frame, out_detections, s_conf_thresh, 0.40f)) {
         return false;
     }
 
@@ -190,10 +196,9 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
             cv::Mat food_crop = enhanced_frame(crop_rect);
             cv::Mat sr_crop;
 
+            // Only run super-resolution enhancement if active; preserve temporally tracked spoilage
             if (m_enhancer.process(food_crop, sr_crop) && !sr_crop.empty()) {
                 det.spoilage = evaluateSpoilageAVX2(sr_crop, det.class_name);
-            } else {
-                det.spoilage = evaluateSpoilageAVX2(food_crop, det.class_name);
             }
         }
     }
@@ -227,8 +232,14 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
 
     out_display = inspection.dewarped_image.clone();
 
+    static float s_render_conf_thresh = -1.0f;
+    if (s_render_conf_thresh < 0.0f) {
+        const char* env_c = std::getenv("CONF_THRESHOLD");
+        s_render_conf_thresh = (env_c != nullptr) ? std::stof(env_c) : 0.58f;
+    }
+
     for (const auto& det : inspection.detections) {
-        if (det.class_id < 0 || det.confidence < 0.35f ||
+        if (det.class_id < 0 || det.confidence < s_render_conf_thresh ||
             det.class_name == "no_food" || det.class_name == "no_model") {
             continue;
         }
@@ -239,10 +250,13 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         std::string status_badge = "PASS";
         cv::Scalar box_color = cv::Scalar(40, 200, 40);
 
-        if (det.spoilage.is_visually_spoiled || spoilage_pct >= 50.0f || det.confidence < 0.52f) {
+        // Quality Status Determination:
+        // REJECT is strictly reserved for confirmed spoilage / degradation.
+        // Detections with mild discoloration or near threshold (0.58 - 0.70) trigger human inspection REVIEW.
+        if (det.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f) {
             status_badge = "REJECT";
             box_color = cv::Scalar(30, 30, 235);
-        } else if (spoilage_pct >= 25.0f || det.confidence < 0.65f) {
+        } else if (spoilage_pct >= 25.0f || det.confidence < 0.70f) {
             status_badge = "REVIEW";
             box_color = cv::Scalar(0, 165, 255);
         }

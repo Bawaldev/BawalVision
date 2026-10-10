@@ -163,10 +163,15 @@ int main(int argc, char** argv) {
             if (pipeline.runInference(frame_to_process, detected)) {
                 const double infer_ms = ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
                 
-                // Collect valid food detections
+                // Collect valid food detections meeting confidence threshold (default 58%)
+                float min_conf_threshold = 0.58f;
+                if (const char* env_conf = std::getenv("CONF_THRESHOLD")) {
+                    try { min_conf_threshold = std::stof(env_conf); } catch (...) {}
+                }
+
                 std::vector<DetectionResult> valid_detections;
                 for (const auto& d : detected) {
-                    if (d.class_id >= 0 && d.confidence >= 0.35f && d.class_name != "no_food" && d.class_name != "no_model") {
+                    if (d.class_id >= 0 && d.confidence >= min_conf_threshold && d.class_name != "no_food" && d.class_name != "no_model") {
                         valid_detections.push_back(d);
                     }
                 }
@@ -209,9 +214,9 @@ int main(int argc, char** argv) {
                     for (size_t i = 0; i < valid_detections.size(); ++i) {
                         const auto& vd = valid_detections[i];
                         const float spoilage_pct = std::clamp(vd.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
-                        const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 50.0f || vd.confidence < 0.55f)
+                        const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f)
                                                        ? "REJECT"
-                                                       : ((spoilage_pct >= 25.0f || vd.confidence < 0.68f) ? "REVIEW" : "PASS");
+                                                       : ((spoilage_pct >= 25.0f || vd.confidence < 0.60f) ? "REVIEW" : "PASS");
 
                         if (i > 0) json_ss << ",";
                         json_ss << "{"
