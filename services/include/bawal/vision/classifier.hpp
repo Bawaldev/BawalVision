@@ -29,8 +29,10 @@ using ClassificationResult = DetectionResult;
  */
 struct TrackedItem {
     DetectionResult result;
-    int age{0};          ///< Number of consecutive frames tracked
-    int lost_frames{0};  ///< Empty frame tolerance before track eviction
+    int age{0};           ///< Number of consecutive frames tracked
+    int lost_frames{0};   ///< Empty frame tolerance before track eviction
+    int stable_frames{0}; ///< Consecutive frames bounding box has remained stationary
+    cv::Point last_center{0, 0}; ///< Previous frame bounding box center coordinates
 };
 
 class FoodClassifier {
@@ -58,7 +60,7 @@ public:
      */
     [[nodiscard]] bool detect(const cv::Mat& frame, 
                             std::vector<DetectionResult>& out_detections,
-                            float conf_threshold = 0.20f,
+                            float conf_threshold = 0.58f,
                             float nms_threshold = 0.45f);
 
     /**

@@ -466,6 +466,20 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 matched[best_idx] = true;
                 const auto& cur = current_detections[best_idx];
 
+                // Compute bounding box center displacement and size delta
+                const cv::Point cur_center(cur.bbox.x + cur.bbox.width / 2, cur.bbox.y + cur.bbox.height / 2);
+                const int displacement = std::abs(cur_center.x - tracked.last_center.x) + std::abs(cur_center.y - tracked.last_center.y);
+                const int size_diff = std::abs(cur.bbox.width - tracked.result.bbox.width) + std::abs(cur.bbox.height - tracked.result.bbox.height);
+                tracked.last_center = cur_center;
+
+                // Static motion stability detection:
+                // Bounding box displacement <= 8 px and size change <= 10 px counts as stationary
+                if (displacement <= 8 && size_diff <= 10) {
+                    tracked.stable_frames++;
+                } else {
+                    tracked.stable_frames = 0;
+                }
+
                 // EMA Bounding Box Smoothing
                 tracked.result.bbox.x = static_cast<int>(0.70f * cur.bbox.x + 0.30f * tracked.result.bbox.x);
                 tracked.result.bbox.y = static_cast<int>(0.70f * cur.bbox.y + 0.30f * tracked.result.bbox.y);
@@ -475,7 +489,18 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 tracked.result.class_name = cur.class_name;
                 tracked.result.class_id = cur.class_id;
                 tracked.result.confidence = 0.70f * cur.confidence + 0.30f * tracked.result.confidence;
-                tracked.result.spoilage = cur.spoilage;
+
+                // Motion / Stability Filter:
+                // Only update spoilage evaluation when the container/plate has remained static for >= 15 frames (~0.5s at 30-45 FPS).
+                // If the food container is in motion or being occluded by passing hands, lock the previous stable rating!
+                if (tracked.stable_frames >= 15) {
+                    // Smooth discoloration ratio with EMA to eliminate frame-to-frame noise
+                    tracked.result.spoilage.avg_luminance = 0.30f * cur.spoilage.avg_luminance + 0.70f * tracked.result.spoilage.avg_luminance;
+                    tracked.result.spoilage.discoloration_ratio = 0.30f * cur.spoilage.discoloration_ratio + 0.70f * tracked.result.spoilage.discoloration_ratio;
+                    tracked.result.spoilage.is_visually_spoiled = (tracked.result.spoilage.discoloration_ratio > 0.35f);
+                } else if (tracked.age <= 1) {
+                    tracked.result.spoilage = cur.spoilage;
+                }
                 tracked.lost_frames = 0;
                 tracked.age++;
             } else {
@@ -491,6 +516,9 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 new_item.result = current_detections[i];
                 new_item.age = 1;
                 new_item.lost_frames = 0;
+                new_item.stable_frames = 0;
+                new_item.last_center = cv::Point(new_item.result.bbox.x + new_item.result.bbox.width / 2,
+                                                 new_item.result.bbox.y + new_item.result.bbox.height / 2);
                 s_tracked_items.push_back(std::move(new_item));
             }
         }
@@ -524,7 +552,7 @@ bool FoodClassifier::predict(const cv::Mat& bgr_image, ClassificationResult& out
     }
 
     std::vector<DetectionResult> detections;
-    if (detect(bgr_image, detections, 0.15f, 0.45f) && !detections.empty()) {
+    if (detect(bgr_image, detections, 0.58f, 0.45f) && !detections.empty()) {
         auto best = std::max_element(detections.begin(), detections.end(),
                                      [](const DetectionResult& a, const DetectionResult& b) {
                                          return a.confidence < b.confidence;

@@ -32,50 +32,96 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
     const cv::Mat& l_channel = lab_planes[0]; // Luminance (0 - 255)
     const cv::Mat& v_channel = hsv_planes[2]; // Value (0 - 255)
 
-    const int total_pixels = food_roi.rows * food_roi.cols;
-    int bad_pixels = 0;
-    uint64_t total_l_sum = 0;
+    const int total_pixels = core_h * core_w;
+    if (total_pixels <= 0) {
+        return metric;
+    }
 
-    // Thresholds calibrated for 9 food categories:
-    // - rice: L < 115 (slimy / yellowing / grey)
-    // - spinach / water_spinach: V < 45 (dark decaying mush)
-    // - banana: V < 50 (overripe blackened peel)
-    // - tofu / tempeh: L < 70 or V < 40 (black mold / degradation)
-    // - chicken / egg: L < 60 (dark oxidation / burning)
-    uint8_t lum_thresh_val = 30;
+    // Baseline thresholds calibrated for standard illumination (~140-180 L*):
+    // - rice: L < 35 (abnormal dark discoloration)
+    // - spinach / water_spinach: V < 25 (decaying blackened leaves)
+    // - banana / orange: V < 25 (severe overripe rot)
+    // - tofu / tempeh: L < 35 (black mold / fungal spoilage)
+    // - chicken / egg: L < 30 (dark oxidation / burning)
+    uint8_t base_thresh = 30;
     bool use_v_channel = false;
 
     if (food_class == "rice") {
-        lum_thresh_val = 35;
+        base_thresh = 35;
     } else if (food_class == "spinach" || food_class == "water_spinach") {
-        lum_thresh_val = 25;
+        base_thresh = 25;
         use_v_channel = true;
     } else if (food_class == "banana" || food_class == "orange") {
-        lum_thresh_val = 25;
+        base_thresh = 25;
         use_v_channel = true;
     } else if (food_class == "tofu" || food_class == "tempeh") {
-        lum_thresh_val = 35;
+        base_thresh = 35;
     } else if (food_class == "chicken" || food_class == "egg") {
-        lum_thresh_val = 30;
+        base_thresh = 30;
     }
 
+    // Pass 1: Vectorized accumulation of total luminance to establish dynamic illumination baseline
+    uint64_t total_l_sum = 0;
 #if defined(__AVX2__)
-    const __m256i thresh_vec = _mm256_set1_epi8(static_cast<char>(lum_thresh_val));
-    const __m256i zero_vec   = _mm256_setzero_si256();
+    const __m256i zero_vec = _mm256_setzero_si256();
 
-    for (int y = 0; y < food_roi.rows; ++y) {
+    for (int y = 0; y < core_h; ++y) {
         const uint8_t* l_ptr = use_v_channel ? v_channel.ptr<uint8_t>(y) : l_channel.ptr<uint8_t>(y);
         int x = 0;
 
-        for (; x <= food_roi.cols - 32; x += 32) {
+        for (; x <= core_w - 32; x += 32) {
             __m256i pixels = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(l_ptr + x));
-
-            // Single hardware instruction PSADBW (_mm256_sad_epu8) computes 4x 64-bit horizontal sums in 1 cycle
             __m256i sad = _mm256_sad_epu8(pixels, zero_vec);
             const uint64_t sum_low = static_cast<uint64_t>(_mm256_extract_epi64(sad, 0)) + static_cast<uint64_t>(_mm256_extract_epi64(sad, 1));
             const uint64_t sum_high = static_cast<uint64_t>(_mm256_extract_epi64(sad, 2)) + static_cast<uint64_t>(_mm256_extract_epi64(sad, 3));
             total_l_sum += (sum_low + sum_high);
+        }
 
+        for (; x < core_w; ++x) {
+            total_l_sum += l_ptr[x];
+        }
+    }
+#else
+    for (int y = 0; y < core_h; ++y) {
+        const uint8_t* l_ptr = use_v_channel ? v_channel.ptr<uint8_t>(y) : l_channel.ptr<uint8_t>(y);
+        uint64_t local_sum = 0;
+
+        #pragma omp simd reduction(+:local_sum)
+        for (int x = 0; x < core_w; ++x) {
+            local_sum += l_ptr[x];
+        }
+        total_l_sum += local_sum;
+    }
+#endif
+
+    const float mean_lum = static_cast<float>(total_l_sum) / static_cast<float>(total_pixels);
+    metric.avg_luminance = mean_lum;
+
+    // Check for extreme underexposure or severe lens occlusion (e.g., hand covering camera or dark cast shadow)
+    if (mean_lum < 18.0f) {
+        metric.discoloration_ratio = 0.0f;
+        metric.is_visually_spoiled = false;
+        return metric;
+    }
+
+    // Dynamic Luminance Baseline:
+    // Scale bad-pixel threshold according to local ambient luminance so cast shadows
+    // from hands/moving objects do not cause false REJECT 100%.
+    constexpr float ref_lum = 140.0f;
+    const float scale_factor = std::clamp(mean_lum / ref_lum, 0.40f, 1.0f);
+    const uint8_t dynamic_thresh = static_cast<uint8_t>(std::clamp(base_thresh * scale_factor, 12.0f, static_cast<float>(base_thresh)));
+
+    // Pass 2: Vectorized accumulation of anomalous dark discoloration pixels using dynamic threshold
+    int bad_pixels = 0;
+#if defined(__AVX2__)
+    const __m256i thresh_vec = _mm256_set1_epi8(static_cast<char>(dynamic_thresh));
+
+    for (int y = 0; y < core_h; ++y) {
+        const uint8_t* l_ptr = use_v_channel ? v_channel.ptr<uint8_t>(y) : l_channel.ptr<uint8_t>(y);
+        int x = 0;
+
+        for (; x <= core_w - 32; x += 32) {
+            __m256i pixels = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(l_ptr + x));
             __m256i diff = _mm256_subs_epu8(thresh_vec, pixels);
             __m256i mask_bad = _mm256_cmpgt_epi8(diff, zero_vec);
 
@@ -83,39 +129,29 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
             bad_pixels += _mm_popcnt_u32(bitmask);
         }
 
-        for (; x < food_roi.cols; ++x) {
-            uint8_t val = l_ptr[x];
-            total_l_sum += val;
-            if (val < lum_thresh_val) {
+        for (; x < core_w; ++x) {
+            if (l_ptr[x] < dynamic_thresh) {
                 bad_pixels++;
             }
         }
     }
 #else
-    // OpenMP SIMD vector loop (Cross-platform x86 / ARM / Graviton fallback)
-    for (int y = 0; y < food_roi.rows; ++y) {
+    for (int y = 0; y < core_h; ++y) {
         const uint8_t* l_ptr = use_v_channel ? v_channel.ptr<uint8_t>(y) : l_channel.ptr<uint8_t>(y);
         int local_bad = 0;
-        uint64_t local_sum = 0;
 
-        #pragma omp simd reduction(+:local_bad, local_sum)
-        for (int x = 0; x < food_roi.cols; ++x) {
-            uint8_t val = l_ptr[x];
-            local_sum += val;
-            if (val < lum_thresh_val) {
+        #pragma omp simd reduction(+:local_bad)
+        for (int x = 0; x < core_w; ++x) {
+            if (l_ptr[x] < dynamic_thresh) {
                 local_bad++;
             }
         }
         bad_pixels += local_bad;
-        total_l_sum += local_sum;
     }
 #endif
 
-    if (total_pixels > 0) {
-        const float inv_total = 1.0f / static_cast<float>(total_pixels);
-        metric.avg_luminance = static_cast<float>(total_l_sum) * inv_total;
-        metric.discoloration_ratio = static_cast<float>(bad_pixels) * inv_total;
-    }
+    const float inv_total = 1.0f / static_cast<float>(total_pixels);
+    metric.discoloration_ratio = static_cast<float>(bad_pixels) * inv_total;
 
     // Food is considered visually spoiled if > 35% pixels are degraded
     metric.is_visually_spoiled = (metric.discoloration_ratio > 0.35f);
