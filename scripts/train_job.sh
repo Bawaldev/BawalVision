@@ -56,7 +56,7 @@ fi
 # 6. Execute training
 echo "[+] Starting training run..."
 python3 ml/AI1/train_AI1.py \
-  --epochs 50 \
+  --epochs 100 \
   --batch-size "$BATCH_SIZE" \
   --workers "$CPUS" \
   --data "$LOCAL_DATA_DIR/dataset.yaml"
