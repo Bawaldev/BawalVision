@@ -223,35 +223,26 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         constexpr int target_h = 640;
         constexpr int spatial_size = target_w * target_h;
 
-        // 1. Resize Frame with persistent buffer
-        cv::resize(frame, m_resized_buffer, cv::Size(target_w, target_h), 0, 0, cv::INTER_LINEAR);
+        // 1. Aspect-Ratio Preserving Letterbox Preprocessing (640x640 with 114 border pad)
+        const float scale = std::min(static_cast<float>(target_w) / frame.cols,
+                                     static_cast<float>(target_h) / frame.rows);
+        const int new_w = std::min(target_w, std::max(1, static_cast<int>(std::round(frame.cols * scale))));
+        const int new_h = std::min(target_h, std::max(1, static_cast<int>(std::round(frame.rows * scale))));
+        const int pad_x = (target_w - new_w) / 2;
+        const int pad_y = (target_h - new_h) / 2;
 
-        // Hardware AVX2 Accelerated Gray-World Balance via _mm256_sad_epu8
-        double sum_b = 0.0, sum_g = 0.0, sum_r = 0.0;
-        int sampled_count = 0;
-#if defined(__AVX2__)
-        computeBGRSumsAVX2(m_resized_buffer, sum_b, sum_g, sum_r, sampled_count);
-#else
-        for (int y = 0; y < target_h; y += 16) {
-            const auto* row_ptr = m_resized_buffer.ptr<cv::Vec3b>(y);
-            for (int x = 0; x < target_w; x += 16) {
-                sum_b += row_ptr[x][0];
-                sum_g += row_ptr[x][1];
-                sum_r += row_ptr[x][2];
-                ++sampled_count;
-            }
+        cv::Mat scaled_frame;
+        cv::resize(frame, scaled_frame, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR);
+
+        if (m_resized_buffer.empty() || m_resized_buffer.cols != target_w || m_resized_buffer.rows != target_h) {
+            m_resized_buffer = cv::Mat(target_h, target_w, CV_8UC3, cv::Scalar(114, 114, 114));
+        } else {
+            m_resized_buffer.setTo(cv::Scalar(114, 114, 114));
         }
-#endif
-        const double mean_b = sum_b / std::max(1, sampled_count);
-        const double mean_g = sum_g / std::max(1, sampled_count);
-        const double mean_r = sum_r / std::max(1, sampled_count);
-        const double mean_gray = (mean_b + mean_g + mean_r) / 3.0;
+        scaled_frame.copyTo(m_resized_buffer(cv::Rect(pad_x, pad_y, new_w, new_h)));
 
-        const float scale_b = static_cast<float>((mean_b > 1.0) ? (mean_gray / mean_b) : 1.0);
-        const float scale_g = static_cast<float>((mean_g > 1.0) ? (mean_gray / mean_g) : 1.0);
-        const float scale_r = static_cast<float>((mean_r > 1.0) ? (mean_gray / mean_r) : 1.0);
-
-        // 2. Parallel Preprocessing into Persistent Buffer (HWC BGR -> CHW RGB, Float Normalization)
+        // 2. Parallel Preprocessing into Persistent Buffer (HWC BGR -> CHW RGB, Standard [0.0, 1.0] Normalization)
+        // Passes pure, unshifted RGB tensor to neural network matching Ultralytics training pipeline
         float* const __restrict tensor_ptr = m_input_tensor_values.data();
         constexpr float inv255 = 1.0f / 255.0f;
 
@@ -262,9 +253,9 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             #pragma omp simd
             for (int w = 0; w < target_w; ++w) {
                 const auto& pixel = row_ptr[w];
-                tensor_ptr[0 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[2]) * scale_r * inv255, 0.0f, 1.0f);
-                tensor_ptr[1 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[1]) * scale_g * inv255, 0.0f, 1.0f);
-                tensor_ptr[2 * spatial_size + row_offset + w] = std::clamp(static_cast<float>(pixel[0]) * scale_b * inv255, 0.0f, 1.0f);
+                tensor_ptr[0 * spatial_size + row_offset + w] = static_cast<float>(pixel[2]) * inv255;
+                tensor_ptr[1 * spatial_size + row_offset + w] = static_cast<float>(pixel[1]) * inv255;
+                tensor_ptr[2 * spatial_size + row_offset + w] = static_cast<float>(pixel[0]) * inv255;
             }
         }
 
@@ -374,10 +365,17 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             }
 
             if (max_score >= conf_threshold) {
-                int left   = static_cast<int>((cx - 0.5f * w) * scale_x);
-                int top    = static_cast<int>((cy - 0.5f * h) * scale_y);
-                int width  = static_cast<int>(w * scale_x);
-                int height = static_cast<int>(h * scale_y);
+                const float unpad_cx = cx - static_cast<float>(pad_x);
+                const float unpad_cy = cy - static_cast<float>(pad_y);
+                const float orig_left = (unpad_cx - 0.5f * w) / scale;
+                const float orig_top  = (unpad_cy - 0.5f * h) / scale;
+                const float orig_w    = w / scale;
+                const float orig_h    = h / scale;
+
+                int left   = static_cast<int>(std::round(orig_left));
+                int top    = static_cast<int>(std::round(orig_top));
+                int width  = static_cast<int>(std::round(orig_w));
+                int height = static_cast<int>(std::round(orig_h));
 
                 cv::Rect box(left, top, width, height);
                 box &= cv::Rect(0, 0, frame.cols, frame.rows);
@@ -414,171 +412,27 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         std::vector<DetectionResult> current_detections;
         current_detections.reserve(nms_indices.size());
 
-        // 7. Evaluate Each YOLO Detection with AVX2 Texture Filter & Semantic Disambiguation
+        // 6. Build High-Precision Detections from YOLO Neural Inference
         for (int idx : nms_indices) {
-            cv::Rect yolo_box = boxes[idx];
-            yolo_box &= cv::Rect(0, 0, frame.cols, frame.rows);
+            cv::Rect final_box = boxes[idx];
+            final_box &= cv::Rect(0, 0, frame.cols, frame.rows);
 
-            if (yolo_box.width < 20 || yolo_box.height < 20) {
+            if (final_box.width < 16 || final_box.height < 16) {
                 continue;
-            }
-
-            cv::Mat food_roi = frame(yolo_box);
-
-            // AVX2 SIMD Filter: Reject flat background walls/tables without genuine food texture
-            TextureMetric tex = evaluateTextureAVX2(food_roi);
-            if (!tex.is_valid_food_texture) {
-                continue;
-            }
-
-            // Local Contour Refinement: Fit bounding box to plate/food contours if present
-            cv::Rect final_box = yolo_box;
-            cv::Mat gray_roi;
-            cv::cvtColor(food_roi, gray_roi, cv::COLOR_BGR2GRAY);
-            
-            cv::Mat blur_roi;
-            cv::GaussianBlur(gray_roi, blur_roi, cv::Size(5, 5), 0);
-            cv::Mat otsu_roi;
-            cv::threshold(blur_roi, otsu_roi, 0, 255, cv::THRESH_BINARY + cv::THRESH_OTSU);
-
-            std::vector<std::vector<cv::Point>> local_contours;
-            cv::findContours(otsu_roi, local_contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-            cv::Rect best_contour_box;
-            double max_valid_area = 0.0;
-            const double total_roi_area = static_cast<double>(yolo_box.area());
-
-            for (const auto& cnt : local_contours) {
-                double a = cv::contourArea(cnt);
-                if (a >= (total_roi_area * 0.10) && a <= (total_roi_area * 0.90)) {
-                    cv::Rect lr = cv::boundingRect(cnt);
-                    float aspect = static_cast<float>(lr.width) / static_cast<float>(lr.height);
-                    if (aspect >= 0.30f && aspect <= 3.2f && a > max_valid_area) {
-                        max_valid_area = a;
-                        best_contour_box = lr;
-                    }
-                }
-            }
-
-            if (max_valid_area > 0.0) {
-                int snap_x = yolo_box.x + best_contour_box.x;
-                int snap_y = yolo_box.y + best_contour_box.y;
-                cv::Rect snapped(snap_x, snap_y, best_contour_box.width, best_contour_box.height);
-                snapped &= cv::Rect(0, 0, frame.cols, frame.rows);
-                if (snapped.width >= 20 && snapped.height >= 20) {
-                    final_box = snapped;
-                }
-            }
-
-            // Enforce Realistic Food Portion Bounding Box Boundaries (allow close-up trays/dishes up to 70% frame)
-            const float frame_area = static_cast<float>(frame.cols * frame.rows);
-            if (final_box.area() > frame_area * 0.70f || 
-                final_box.width > frame.cols * 0.85f || 
-                final_box.height > frame.rows * 0.85f) {
-                continue;
-            }
-
-            // Spectral Color Analysis on Core ROI (Center 50%)
-            int core_w = std::max(16, static_cast<int>(final_box.width * 0.50f));
-            int core_h = std::max(16, static_cast<int>(final_box.height * 0.50f));
-            int core_x = final_box.x + (final_box.width - core_w) / 2;
-            int core_y = final_box.y + (final_box.height - core_h) / 2;
-            cv::Rect core_rect = cv::Rect(core_x, core_y, core_w, core_h) & cv::Rect(0, 0, frame.cols, frame.rows);
-
-            cv::Mat core_roi = frame(core_rect);
-            cv::Mat hsv_core;
-            cv::cvtColor(core_roi, hsv_core, cv::COLOR_BGR2HSV);
-            cv::Scalar mean_hsv = cv::mean(hsv_core);
-            cv::Scalar mean_bgr = cv::mean(core_roi);
-
-            const double h_val = mean_hsv[0];
-            const double s_val = mean_hsv[1];
-            const double v_val = mean_hsv[2];
-
-            const double b_val = mean_bgr[0];
-            const double g_val = mean_bgr[1];
-            const double r_val = mean_bgr[2];
-
-            // 2. Comprehensive Light Emitter / Lamp & Specular Glare Rejection:
-            int blown_out_count = 0;
-            const int core_total_px = core_roi.rows * core_roi.cols;
-            for (int y = 0; y < core_roi.rows; ++y) {
-                const cv::Vec3b* hsv_ptr = hsv_core.ptr<cv::Vec3b>(y);
-                for (int x = 0; x < core_roi.cols; ++x) {
-                    if (hsv_ptr[x][2] >= 235 && hsv_ptr[x][1] <= 25) {
-                        blown_out_count++;
-                    }
-                }
-            }
-            const float blown_out_ratio = (core_total_px > 0) ? (static_cast<float>(blown_out_count) / static_cast<float>(core_total_px)) : 0.0f;
-            if (blown_out_ratio > 0.15f || (v_val >= 210.0 && s_val <= 20.0)) {
-                continue; // Reject lamps, spotlights, and blown-out highlights
             }
 
             int yolo_cls = class_ids[idx];
             float yolo_score = confidences[idx];
 
-            std::string predicted_name = (yolo_cls < static_cast<int>(m_class_names.size()))
+            std::string predicted_name = (yolo_cls >= 0 && yolo_cls < static_cast<int>(m_class_names.size()))
                                              ? m_class_names[yolo_cls]
                                              : "food_item";
-            int final_class_id = yolo_cls;
-            bool is_valid_food = true;
 
-            // Semantic Food Disambiguation for Neutral White Food (Rice vs Tofu vs Egg):
-            // Authentic cooked white rice has bright organic luminance (V >= 120, RGB >= 105),
-            // low saturation (S <= 28), and neutral color balance (|R - G| <= 18, |G - B| <= 18).
-            const bool is_neutral_white_profile = (s_val <= 28.0 && v_val >= 120.0 && v_val <= 245.0 &&
-                                                   r_val >= 105.0 && g_val >= 105.0 && b_val >= 105.0 &&
-                                                   std::abs(r_val - g_val) <= 18.0 &&
-                                                   std::abs(g_val - b_val) <= 18.0);
-
-            if (is_neutral_white_profile && (predicted_name == "tofu" || predicted_name == "egg") && yolo_score >= 0.55f) {
-                predicted_name = "rice";
-                final_class_id = 4; // Index 4 is "rice"
-            }
-
-            float calibrated_conf = yolo_score;
-
-            // 3. Per-Class Physical & Chromatic Validation (Gentle Low-Bound Checks):
-            // White Rice:
-            if (predicted_name == "rice") {
-                if (v_val < 5.0) {
-                    is_valid_food = false; // Reject total blackness only
-                } else {
-                    calibrated_conf = std::clamp(yolo_score, 0.40f, 0.98f);
-                }
-            }
-            // Green Vegetables (Water Spinach / Spinach):
-            else if (predicted_name == "water_spinach" || predicted_name == "spinach") {
-                if (v_val < 5.0) {
-                    is_valid_food = false;
-                }
-            }
-            // Banana / Orange:
-            else if (predicted_name == "banana" || predicted_name == "orange") {
-                if (v_val < 5.0) {
-                    is_valid_food = false;
-                }
-            }
-            // Tofu / Tempeh / Chicken / Egg:
-            else if (predicted_name == "tofu" || predicted_name == "tempeh" || 
-                     predicted_name == "chicken" || predicted_name == "egg") {
-                if (v_val < 5.0) {
-                    is_valid_food = false;
-                }
-            }
-
-            // Reject detection if physical chromaticity/texture checks fail
-            if (!is_valid_food) {
-                continue;
-            }
-
-            // True Unbiased Confidence Score: Directly reflects actual neural probability
             DetectionResult det;
             det.bbox = final_box;
-            det.class_id = final_class_id;
+            det.class_id = yolo_cls;
             det.class_name = predicted_name;
-            det.confidence = std::clamp(calibrated_conf, 0.0f, 1.0f);
+            det.confidence = std::clamp(yolo_score, 0.0f, 1.0f);
 
             // AVX2 SIMD color spoilage and freshness assessment
             cv::Mat final_food_roi = frame(det.bbox);
