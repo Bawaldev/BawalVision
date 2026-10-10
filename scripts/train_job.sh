@@ -7,18 +7,18 @@
 #SBATCH --mem=32G
 #SBATCH --time=04:00:00
 
-set -e
+set -euo pipefail
 
-# 1. Resolve project root directory dynamically (works wherever script is called from)
+# 1. Resolve project root directory dynamically
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Create logs directory if it doesn't exist
+# Pastikan folder log sudah ada
 mkdir -p "$PROJECT_ROOT/logs"
 
-# 2. Load HPC modules only if the environment supports them
-if type module &>/dev/null; then
+# 2. Load HPC modules jika tersedia
+if command -v module &>/dev/null; then
     echo "[+] HPC Environment detected. Loading system modules..."
     module load cuda/12.1 2>/dev/null || true
     module load python/3.10 2>/dev/null || true
@@ -34,26 +34,30 @@ else
     exit 1
 fi
 
-# 4. Configure dataset staging and execution settings
-LOCAL_DATA_DIR="${SLURM_TMPDIR:-/tmp}/yolo_dataset"
+# 4. Dataset Staging ke NVMe/Fast Storage dengan Cleanup Trap
+LOCAL_DATA_DIR="${SLURM_TMPDIR:-/tmp}/yolo_dataset_${SLURM_JOB_ID:-$$}"
 echo "[+] Staging dataset to local fast storage ($LOCAL_DATA_DIR)..."
 mkdir -p "$LOCAL_DATA_DIR"
-rsync -ah ml/AI1/yolo_dataset/ "$LOCAL_DATA_DIR/"
+
+# Pasang trap agar direktori scratch otomatis dibersihkan saat job selesai/batal
+trap 'echo "[+] Cleaning up staged data..."; rm -rf "$LOCAL_DATA_DIR"' EXIT INT TERM
+
+rsync -ah --delete ml/AI1/yolo_dataset/ "$LOCAL_DATA_DIR/"
 
 # 5. Set hardware & thread environment variables
 CPUS="${SLURM_CPUS_PER_TASK:-4}"
 export OMP_NUM_THREADS="$CPUS"
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
-# Determine appropriate batch size (default: 64 on HPC with SLURM, 8 locally)
-if [ -n "$SLURM_JOB_ID" ]; then
-    BATCH_SIZE=64
+# Kalibrasi batch size aman
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+    BATCH_SIZE=32  # Lebih aman terhadap risiko OOM pada GPU 16GB-24GB (FP32)
 else
     BATCH_SIZE=8
     echo "[!] Running locally without SLURM: defaulting batch-size to $BATCH_SIZE to avoid GPU OOM."
 fi
 
-# 6. Execute training
+# 6. Jalankan training
 echo "[+] Starting training run..."
 python3 ml/AI1/train_AI1.py \
   --epochs 100 \
