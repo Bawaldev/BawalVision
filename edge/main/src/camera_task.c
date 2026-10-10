@@ -90,7 +90,7 @@ esp_err_t camera_task_init(void) {
       .frame_size = FRAMESIZE_VGA, // 640x480
 
       .jpeg_quality =
-          10, // 10 = best clarity and reduced block artifacts
+          16, // 16 = high visual clarity, compact payload (18-22 KB), prevents Wi-Fi VBR spikes
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -111,7 +111,7 @@ esp_err_t camera_task_init(void) {
     s->set_vflip(s, 0);
     s->set_hmirror(s, 0);
     s->set_framesize(s, FRAMESIZE_VGA);
-    s->set_quality(s, 10);
+    s->set_quality(s, 16);
 
     // Hardware Auto White Balance (AWB) & ISP Tuning
     s->set_whitebal(s, 1);       // Enable Hardware AWB

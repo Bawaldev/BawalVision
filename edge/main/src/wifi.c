@@ -327,18 +327,19 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
         return ESP_ERR_INVALID_ARG;
     }
 
-    camera_frame_buffer_t local_frame = {0};
-    local_frame.capacity = INITIAL_BUF_CAPACITY;
-    local_frame.data = (uint8_t *)heap_caps_malloc(local_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (local_frame.data == NULL) {
-        local_frame.data = (uint8_t *)malloc(local_frame.capacity);
+    static camera_frame_buffer_t s_local_tx_frame = {0};
+    if (s_local_tx_frame.data == NULL) {
+        s_local_tx_frame.capacity = INITIAL_BUF_CAPACITY;
+        s_local_tx_frame.data = (uint8_t *)heap_caps_malloc(s_local_tx_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_local_tx_frame.data == NULL) {
+            s_local_tx_frame.data = (uint8_t *)malloc(s_local_tx_frame.capacity);
+        }
     }
-    if (local_frame.data == NULL) {
+    if (s_local_tx_frame.data == NULL) {
         return ESP_ERR_NO_MEM;
     }
 
-    if (camera_copy_latest_frame(&local_frame) != ESP_OK || local_frame.header.buffer_len == 0) {
-        if (local_frame.data) free(local_frame.data);
+    if (camera_copy_latest_frame(&s_local_tx_frame) != ESP_OK || s_local_tx_frame.header.buffer_len == 0) {
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -353,20 +354,19 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {
-        if (local_frame.data) free(local_frame.data);
         return ESP_FAIL;
     }
 
     char frame_id_str[16];
-    snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)local_frame.header.frame_id);
+    snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)s_local_tx_frame.header.frame_id);
 
     esp_http_client_set_header(client, "Content-Type", "image/jpeg");
     esp_http_client_set_header(client, "X-Device-ID", device_id);
     esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
-    esp_http_client_set_post_field(client, (const char *)local_frame.data, local_frame.header.buffer_len);
+    esp_http_client_set_post_field(client, (const char *)s_local_tx_frame.data, s_local_tx_frame.header.buffer_len);
 
-    ESP_LOGI(TAG, "Dispatching Logitech camera frame to: %s (Device: %s, Frame ID: %lu, Size: %u bytes)", 
-             url, device_id, (unsigned long)local_frame.header.frame_id, (unsigned int)local_frame.header.buffer_len);
+    ESP_LOGI(TAG, "Dispatching camera frame to: %s (Device: %s, Frame ID: %lu, Size: %u bytes)", 
+             url, device_id, (unsigned long)s_local_tx_frame.header.frame_id, (unsigned int)s_local_tx_frame.header.buffer_len);
 
     lcd_update_http_status("STREAM JPEG...", false);
     esp_err_t err = esp_http_client_perform(client);
@@ -382,8 +382,6 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     }
 
     esp_http_client_cleanup(client);
-    if (local_frame.data) free(local_frame.data);
-
     return err;
 }
 
