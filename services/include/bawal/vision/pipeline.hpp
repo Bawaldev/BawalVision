@@ -20,9 +20,10 @@ namespace bawal::vision {
  * @brief Complete inspection output container.
  */
 struct InspectionOutput {
-    uint32_t frame_id{0};
-    bool is_valid{false};
-    double processing_time_ms{0.0};
+    double processing_time_ms{0.0}; // 8 bytes (offset 0)
+    uint32_t frame_id{0};           // 4 bytes (offset 8)
+    bool is_valid{false};           // 1 byte  (offset 12)
+    uint8_t reserved[3]{0, 0, 0};   // 3 bytes explicit padding (16 bytes aligned)
     cv::Mat raw_image;
     cv::Mat dewarped_image;
     cv::Mat annotated_image;

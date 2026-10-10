@@ -14,14 +14,18 @@ namespace bawal::vision {
  * @brief Hot data parameters packed tightly without compiler padding bytes.
  * Designed to fit within a single CPU cache line slice for high-throughput inference loops.
  */
-struct __attribute__((packed)) RealESRGANParams {
+struct alignas(4) RealESRGANParams {
     int32_t tile_size{192};   ///< Tile dimension in pixels (0 for un-tiled full frame processing)
     int32_t prepadding{10};   ///< Tile overlap boundary padding to eliminate border seam artifacts
     int16_t scale{2};         ///< Upscaling factor multiplier (typically 2x or 4x)
     int16_t gpu_device{0};    ///< Target Vulkan physical device index (e.g., 0 for dedicated GPU)
     uint8_t use_gpu{1};       ///< Flag to enable Vulkan compute acceleration (1 = GPU, 0 = CPU SIMD)
     uint8_t use_fp16{1};      ///< Flag to enable half-precision FP16 arithmetic on supported GPUs
+    uint8_t reserved[2]{0, 0};///< Explicit 2-byte padding for clean 16-byte natural alignment
 };
+
+static_assert(sizeof(RealESRGANParams) == 16, "RealESRGANParams must be exactly 16 bytes");
+static_assert(alignof(RealESRGANParams) == 4, "RealESRGANParams must be 4-byte aligned");
 
 /**
  * @brief Cold configuration data containing model paths and runtime parameters.

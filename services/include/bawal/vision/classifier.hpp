@@ -17,7 +17,7 @@ namespace bawal::vision {
 /**
  * @brief Compact, cache-friendly bounding box POD (16 bytes, zero OpenCV class overhead).
  */
-struct alignas(4) CompactBBox {
+struct alignas(16) CompactBBox {
     int32_t x{0};
     int32_t y{0};
     int32_t width{0};
@@ -42,24 +42,30 @@ struct alignas(4) CompactBBox {
     }
 };
 
+static_assert(sizeof(CompactBBox) == 16, "CompactBBox must be exactly 16 bytes");
+static_assert(alignof(CompactBBox) == 16, "CompactBBox must be 16-byte aligned for SSE/AVX registers");
+
 /**
- * @brief Cache-friendly food detection outcome fitting within a single 64-byte L1 CPU cache line.
+ * @brief Cache-aligned food detection outcome fitting exactly within one 64-byte L1 CPU cache line.
  * [0..15]  std::string_view class_name (16 bytes)
- * [16..31] CompactBBox bbox           (16 bytes)
- * [32..43] SpoilageMetric spoilage    (12 bytes)
+ * [16..31] CompactBBox bbox           (16 bytes, 16-byte aligned for SSE/AVX)
+ * [32..43] SpoilageMetric spoilage    (12 bytes, 4-byte aligned)
  * [44..47] float confidence           (4 bytes)
  * [48..51] int32_t class_id           (4 bytes)
- * [52..55] uint32_t reserved          (4 bytes)
- * Total: 56 bytes <= 64 bytes (1 CPU Cache Line)
+ * [52..63] uint32_t reserved[3]       (12 bytes explicit cache line padding)
+ * Total: Exactly 64 bytes (1 CPU Cache Line, ZERO cache-line splitting across array indices)
  */
-struct alignas(8) DetectionResult {
+struct alignas(64) DetectionResult {
     std::string_view class_name{"no_food"}; 
     CompactBBox bbox;                        
     SpoilageMetric spoilage;                 
     float confidence{0.0f};                  
     int32_t class_id{-1};                    
-    uint32_t reserved{0};
+    uint32_t reserved[3]{0, 0, 0};
 };
+
+static_assert(sizeof(DetectionResult) == 64, "DetectionResult must be exactly 64 bytes (1 CPU cache line)");
+static_assert(alignof(DetectionResult) == 64, "DetectionResult must be 64-byte aligned");
 
 using ClassificationResult = DetectionResult;
 
