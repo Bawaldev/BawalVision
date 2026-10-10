@@ -217,12 +217,9 @@ just run-edge /dev/ttyACM0
 
 ## 📜 Competition Compliance & Ethical Safeguards
 
-1. **OpenCV AI Competition 2026 Compliance:**
-   - All AI-assisted modifications and autonomous pipeline executions are logged transparently in [`OUTPUT.md`](file:///home/faris-wirakusuma/Projectmandiri/BawalVision/OUTPUT.md).
-   - Dataset splits guarantee zero data leakage between train, validation, and test subsets.
-2. **Privacy & Security:**
+1. **Privacy & Security:**
    - No sensitive credentials, private API keys, or private datasets are tracked in git repository commits.
-3. **Reproducibility:**
+2. **Reproducibility:**
    - DVC dataset versioning ensures exact dataset and weights checkpoints can be pulled and reproduced across environments.
 
 ---
