@@ -1,16 +1,21 @@
 #pragma once
 
+#include <cstdint>
 #include <opencv2/core.hpp>
 #include <vector>
 #include <span>
 
 namespace bawal::vision {
 
-struct DewarpConfig {
-    cv::Size target_size{640, 480};
-    bool enable_undistort{false};
-    bool enable_perspective{false};
+struct alignas(4) DewarpConfig {
+    cv::Size target_size{640, 480};  ///< 8 bytes (width, height)
+    bool enable_undistort{false};    ///< 1 byte
+    bool enable_perspective{false};  ///< 1 byte
+    uint8_t reserved[2]{0, 0};       ///< 2 bytes explicit padding
 };
+
+static_assert(sizeof(DewarpConfig) == 12, "DewarpConfig must be exactly 12 bytes");
+static_assert(alignof(DewarpConfig) == 4, "DewarpConfig must be 4-byte aligned");
 
 class DewarpEngine {
 public:

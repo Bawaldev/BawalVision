@@ -13,20 +13,29 @@ namespace bawal::vision {
 /**
  * @brief Configuration parameters for CameraReceiver.
  */
-struct ReceiverConfig {
-    bool auto_convert_bgr = true;              ///< Automatically convert RGB/RGB565 to standard OpenCV BGR
-    size_t prealloc_buffer_size = 256 * 1024;  ///< Pre-allocate 256 KB scratch buffer to avoid heap reallocation
-    bool track_telemetry = true;
+struct alignas(8) ReceiverConfig {
+    size_t prealloc_buffer_size{256 * 1024};  ///< 8 bytes
+    bool auto_convert_bgr{true};              ///< 1 byte
+    bool track_telemetry{true};               ///< 1 byte
+    uint8_t reserved[6]{0, 0, 0, 0, 0, 0};    ///< 6 bytes explicit padding
 };
+
+static_assert(sizeof(ReceiverConfig) == 16, "ReceiverConfig must be exactly 16 bytes");
+static_assert(alignof(ReceiverConfig) == 8, "ReceiverConfig must be 8-byte aligned");
 
 /**
  * @brief Performance statistics tracking state for high-throughput video ingestion.
+ * Aligned to 64 bytes to eliminate false sharing with concurrent telemetry reads.
  */
-struct ReceiverMetrics {
-    uint64_t total_received_frames{0};
-    uint64_t corrupted_frames{0};
-    int64_t  last_timestamp_ms{0};
+struct alignas(64) ReceiverMetrics {
+    uint64_t total_received_frames{0};        ///< 8 bytes
+    uint64_t corrupted_frames{0};             ///< 8 bytes
+    int64_t  last_timestamp_ms{0};            ///< 8 bytes
+    uint64_t reserved[5]{0, 0, 0, 0, 0};      ///< 40 bytes padding to 64 bytes
 };
+
+static_assert(sizeof(ReceiverMetrics) == 64, "ReceiverMetrics must be exactly 64 bytes (1 cache line)");
+static_assert(alignof(ReceiverMetrics) == 64, "ReceiverMetrics must be 64-byte aligned to prevent false sharing");
 
 /**
  * @brief High-performance stateful Camera Receiver using mixed struct + OOP model.
