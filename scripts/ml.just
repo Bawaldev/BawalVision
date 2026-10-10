@@ -323,6 +323,6 @@ mlflow-ui:
       --port 5000
 
 
-# Jalankan Post-Training Quantization INT8 untuk YOLOv8
+# Run INT8 Post-Training Quantization for YOLOv8
 quantize-ai1:
     python ml/AI1/quantize_int8.py

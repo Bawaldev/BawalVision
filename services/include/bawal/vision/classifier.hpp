@@ -6,20 +6,59 @@
 #include <vector>
 #include <string>
 #include <string_view>
+#include <span>
 #include <memory>
 #include <mutex>
+#include <array>
+#include <new>
 
 namespace bawal::vision {
 
 /**
- * @brief Detection outcome for an individual food bounding box with SIMD freshness metrics.
+ * @brief Compact, cache-friendly bounding box POD (16 bytes, zero OpenCV class overhead).
  */
-struct DetectionResult {
-    int class_id{-1};
-    std::string class_name{"no_food"};
-    float confidence{0.0f};
-    cv::Rect bbox;
-    SpoilageMetric spoilage;
+struct alignas(4) CompactBBox {
+    int32_t x{0};
+    int32_t y{0};
+    int32_t width{0};
+    int32_t height{0};
+
+    constexpr CompactBBox() noexcept = default;
+    constexpr CompactBBox(int32_t x_, int32_t y_, int32_t w_, int32_t h_) noexcept
+        : x(x_), y(y_), width(w_), height(h_) {}
+    CompactBBox(const cv::Rect& r) noexcept
+        : x(r.x), y(r.y), width(r.width), height(r.height) {}
+
+    operator cv::Rect() const noexcept {
+        return cv::Rect(x, y, width, height);
+    }
+
+    cv::Rect toCvRect() const noexcept {
+        return cv::Rect(x, y, width, height);
+    }
+
+    cv::Rect operator&(const cv::Rect& r) const noexcept {
+        return toCvRect() & r;
+    }
+};
+
+/**
+ * @brief Cache-friendly food detection outcome fitting within a single 64-byte L1 CPU cache line.
+ * [0..15]  std::string_view class_name (16 bytes)
+ * [16..31] CompactBBox bbox           (16 bytes)
+ * [32..43] SpoilageMetric spoilage    (12 bytes)
+ * [44..47] float confidence           (4 bytes)
+ * [48..51] int32_t class_id           (4 bytes)
+ * [52..55] uint32_t reserved          (4 bytes)
+ * Total: 56 bytes <= 64 bytes (1 CPU Cache Line)
+ */
+struct alignas(8) DetectionResult {
+    std::string_view class_name{"no_food"}; 
+    CompactBBox bbox;                        
+    SpoilageMetric spoilage;                 
+    float confidence{0.0f};                  
+    int32_t class_id{-1};                    
+    uint32_t reserved{0};
 };
 
 using ClassificationResult = DetectionResult;
@@ -50,18 +89,28 @@ public:
     [[nodiscard]] bool init(std::string_view model_path, int thread_count = 4);
 
     /**
-     * @brief Multi-object food detection using YOLOv8 fused with AVX2 SIMD freshness evaluation.
+     * @brief Zero-allocation multi-object food detection writing directly to a caller-provided span.
      * 
      * @param frame Input BGR frame matrix.
-     * @param out_detections Output vector of validated food detections.
+     * @param out_buffer Output span slice (e.g. backed by std::array on the CPU stack).
+     * @param out_count Number of valid detections written into out_buffer.
      * @param conf_threshold Minimum detection confidence threshold.
      * @param nms_threshold Non-Maximum Suppression IoU threshold.
      * @return true if inference and post-processing completed successfully.
      */
     [[nodiscard]] bool detect(const cv::Mat& frame, 
-                            std::vector<DetectionResult>& out_detections,
-                            float conf_threshold = 0.58f,
-                            float nms_threshold = 0.45f);
+                              std::span<DetectionResult> out_buffer,
+                              size_t& out_count,
+                              float conf_threshold = 0.58f,
+                              float nms_threshold = 0.45f);
+
+    /**
+     * @brief Overload populating an output vector of detections for callers preferring a container.
+     */
+    [[nodiscard]] bool detect(const cv::Mat& frame, 
+                              std::vector<DetectionResult>& out_detections,
+                              float conf_threshold = 0.58f,
+                              float nms_threshold = 0.45f);
 
     /**
      * @brief Single-ROI prediction returning the candidate with highest confidence score.
@@ -75,7 +124,9 @@ public:
     [[nodiscard]] bool isReady() const noexcept { return m_is_ready; }
 
 private:
-    std::vector<std::string> m_class_names;
+
+    // Model metadata (static, zero heap overhead)
+    std::vector<std::string_view> m_class_names;
     std::mutex m_infer_mutex;
     bool m_is_ready{false};
 
@@ -84,14 +135,20 @@ private:
     Ort::SessionOptions m_session_options;
     std::unique_ptr<Ort::Session> m_session;
 
-    std::vector<std::string> m_input_node_names;
-    std::vector<std::string> m_output_node_names;
-    std::vector<const char*> m_input_names;
-    std::vector<const char*> m_output_names;
-    std::vector<int64_t> m_input_shape;
+    // ONNX node names: constant pointer literals without std::vector overhead
+    static constexpr const char* K_INPUT_NAMES[]  = {"images"};
+    static constexpr const char* K_OUTPUT_NAMES[] = {"output0"};
 
-    // Persistent zero-allocation preprocessing buffers
-    std::vector<float> m_input_tensor_values;
+    // Fixed input tensor dimensions in stack/inline memory (1x3x640x640)
+    static constexpr std::array<int64_t, 4> K_INPUT_SHAPE{1, 3, 640, 640};
+    static constexpr size_t K_TENSOR_ELEMENTS = 1 * 3 * 640 * 640;
+
+    // 64-byte aligned preprocessing buffer (AVX2/AVX-512 friendly)
+    // Allocated once on heap during init() to prevent stack overflow
+    struct AlignedDeleter {
+        void operator()(float* p) const noexcept { ::operator delete[](p, std::align_val_t{64}); }
+    };
+    std::unique_ptr<float[], AlignedDeleter> m_input_tensor_values;
     cv::Mat m_resized_buffer;
 };
 
