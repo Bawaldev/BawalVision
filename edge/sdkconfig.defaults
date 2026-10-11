@@ -24,7 +24,6 @@ CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_MEMTEST=y
 
 # =========================================================================
-# USB Host & USB-OTG Configuration (Resolves Logitech Descriptor Overflow)
 # =========================================================================
 # Increase descriptor transfer buffer to prevent CHECK_SHORT_CONFIG_DESC error
 CONFIG_USB_OTG_CONTROL_TRANSFER_MAX_SIZE=2048
@@ -32,7 +31,6 @@ CONFIG_USB_OTG_CONTROL_TRANSFER_MAX_SIZE=2048
 # Increase USB host stack default endpoint control transfer size
 CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
 
-# Allocate maximum HW FIFO buffer bias to IN endpoints (allows EP MPS >= 512 for Logitech UVC stream)
 CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
 
 # =========================================================================
