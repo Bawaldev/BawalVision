@@ -1,0 +1,68 @@
+name: Security & Secret Scanner
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Gitleaks Secret Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository (Full History)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  repo-hygiene:
+    name: Block Large Files & Sensitive Data
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Block Prohibited Credential and Environment Files
+        run: |
+          echo "Scanning git index for sensitive credential/environment files..."
+          FORBIDDEN_FILES=$(git ls-files | grep -E '(\.env($|\.)|\.dvc/config$|wifi_credentials\.h$|.*\.pem$|.*\.key$)' || true)
+          if [ -n "$FORBIDDEN_FILES" ]; then
+            echo "::error::Prohibited sensitive files detected in git tree:"
+            echo "$FORBIDDEN_FILES"
+            exit 1
+          fi
+          echo "✓ No sensitive credential files tracked in Git."
+
+      - name: Check for Oversized Files (> 25MB)
+        run: |
+          echo "Scanning git tree for oversized files (> 25MB)..."
+          OVERSIZED=$(git ls-files -z | xargs -0 -I{} find {} -type f -size +25M 2>/dev/null || true)
+          if [ -n "$OVERSIZED" ]; then
+            echo "::error::Files exceeding 25MB threshold detected in Git tree (use external artifact storage):"
+            echo "$OVERSIZED"
+            exit 1
+          fi
+          echo "✓ Git tree contains no oversized binaries or models."
+
+      - name: Check for Unintended Raw Dataset Bloat
+        run: |
+          echo "Scanning for accidentally committed raw dataset images..."
+          COMMITTED_DATASET_IMAGES=$(git ls-files "ml/dataset/*" "ml/AI1/dataset/*" 2>/dev/null | grep -E '\.(jpg|jpeg|png|webp|bmp|tar|gz|zip)$' || true)
+          if [ -n "$COMMITTED_DATASET_IMAGES" ]; then
+            echo "::error::Raw dataset images detected in git tree. Datasets must be stored externally and ignored in .gitignore:"
+            echo "$COMMITTED_DATASET_IMAGES"
+            exit 1
+          fi
+          echo "✓ No raw dataset images tracked in git index."
+

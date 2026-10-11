@@ -1,0 +1,53 @@
+name: Multi-Arch Docker Build & Validation
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - 'deploy/**'
+      - 'backend/**'
+      - 'services/**'
+      - 'ml/**'
+      - '.github/workflows/docker-ci.yml'
+  pull_request:
+    branches: [ "main", "master" ]
+    paths:
+      - 'deploy/**'
+      - 'backend/**'
+      - 'services/**'
+      - 'ml/**'
+      - '.github/workflows/docker-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: docker-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-build:
+    name: Build ${{ matrix.target.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: bawal-backend
+            dockerfile: deploy/Dockerfile.backend
+          - name: bawal-vision
+            dockerfile: deploy/Dockerfile.vision
+    steps:
+      - name: Checkout Monorepo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.target.name }} via BuildKit Cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.target.dockerfile }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.target.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target.name }}
+
