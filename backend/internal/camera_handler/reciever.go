@@ -58,7 +58,13 @@ func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte
 
 	subs := make([]chan []byte, 0, len(s.subscribers))
 	for _, sub := range s.subscribers {
-		if sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*" {
+		isMatch := sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*"
+		if !isMatch {
+			if f, exists := s.rawFrames[sub.deviceID]; !exists || (now-f.TimestampMS > 2500) {
+				isMatch = true
+			}
+		}
+		if isMatch {
 			subs = append(subs, sub.ch)
 		}
 	}
@@ -83,16 +89,23 @@ func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte
 
 func (s *CameraStore) StoreAnnotatedFrame(deviceID string, frameID uint32, data []byte) {
 	s.Lock()
+	now := time.Now().UnixMilli()
 	s.annotatedFrames[deviceID] = CachedFrame{
 		DeviceID:    deviceID,
 		FrameID:     frameID,
 		ImageBytes:  data,
-		TimestampMS: time.Now().UnixMilli(),
+		TimestampMS: now,
 	}
 
 	subs := make([]chan []byte, 0, len(s.subscribers))
 	for _, sub := range s.subscribers {
-		if sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*" {
+		isMatch := sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*"
+		if !isMatch {
+			if f, exists := s.annotatedFrames[sub.deviceID]; !exists || (now-f.TimestampMS > 2500) {
+				isMatch = true
+			}
+		}
+		if isMatch {
 			subs = append(subs, sub.ch)
 		}
 	}
@@ -178,53 +191,51 @@ func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {
 	defer s.RUnlock()
 
 	now := time.Now().UnixMilli()
-	if deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*" {
-		var latestAnn *CachedFrame
-		for _, f := range s.annotatedFrames {
-			if latestAnn == nil || f.TimestampMS > latestAnn.TimestampMS {
-				curr := f
-				latestAnn = &curr
-			}
+
+	// 1. Try exact device match for fresh annotated frame
+	if deviceID != "" && deviceID != "latest" && deviceID != "UNKNOWN_DEVICE" && deviceID != "*" {
+		if f, ok := s.annotatedFrames[deviceID]; ok && len(f.ImageBytes) > 0 && (now-f.TimestampMS < 2500) {
+			return f.ImageBytes, true
 		}
-		if latestAnn != nil && len(latestAnn.ImageBytes) > 0 && (now-latestAnn.TimestampMS < 2500) {
-			return latestAnn.ImageBytes, true
-		}
-	} else if f, ok := s.annotatedFrames[deviceID]; ok && len(f.ImageBytes) > 0 && (now-f.TimestampMS < 2500) {
-		return f.ImageBytes, true
 	}
 
+	// 2. Fallback to latest active annotated frame across any device
+	var latestAnn *CachedFrame
+	for _, f := range s.annotatedFrames {
+		if latestAnn == nil || f.TimestampMS > latestAnn.TimestampMS {
+			curr := f
+			latestAnn = &curr
+		}
+	}
+	if latestAnn != nil && len(latestAnn.ImageBytes) > 0 && (now-latestAnn.TimestampMS < 2500) {
+		return latestAnn.ImageBytes, true
+	}
+
+	// 3. Fallback to raw frame
 	return s.getRawFrameLocked(deviceID)
 }
 
 func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
-	if deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "ESP32-S3-BENCH-01" {
-		var latestFrame *CachedFrame
-		for _, f := range s.rawFrames {
-			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
-				curr := f
-				latestFrame = &curr
-			}
-		}
-		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
-			return latestFrame.ImageBytes, true
+	// Try exact device match first
+	if deviceID != "" && deviceID != "latest" && deviceID != "UNKNOWN_DEVICE" && deviceID != "*" {
+		if f, ok := s.rawFrames[deviceID]; ok && len(f.ImageBytes) > 0 {
+			return f.ImageBytes, true
 		}
 	}
 
-	frame, exists := s.rawFrames[deviceID]
-	if !exists || len(frame.ImageBytes) == 0 {
-		var latestFrame *CachedFrame
-		for _, f := range s.rawFrames {
-			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
-				curr := f
-				latestFrame = &curr
-			}
+	// Fallback to latest raw frame across all devices
+	var latestFrame *CachedFrame
+	for _, f := range s.rawFrames {
+		if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+			curr := f
+			latestFrame = &curr
 		}
-		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
-			return latestFrame.ImageBytes, true
-		}
-		return nil, false
 	}
-	return frame.ImageBytes, true
+	if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
+		return latestFrame.ImageBytes, true
+	}
+
+	return nil, false
 }
 
 func (s *CameraStore) GetActiveDeviceID() string {
