@@ -1,0 +1,34 @@
+# ==============================================================================
+# BawalVision Codeowners Configuration
+# ==============================================================================
+
+# Global Default Owner
+*                                   @fariswirakusuma  @OurangIlang @pondwatr
+
+# Machine Learning, YOLO Model & Dataset Pipeline
+/ml/                                @OurangIlang @fariswirakusuma
+
+# Database Migrations & SQL Templates
+/backend/internal/data/templates/   @OurangIlang @fariswirakusuma
+
+# Frontend Web Application (SvelteKit 5 Dashboard)
+/frontend/                          @OurangIlang @fariswirakusuma
+
+# Embedded Hardware & Edge Node (ESP32-S3, LVGL, ST7789 Display, OV5640)
+/edge/                              @fariswirakusuma @pondwatr
+
+# Hardware Schematic & Wiring Pin Mapping
+/edge/main/include/pins.h           @pondwatr @fariswirakusuma
+
+# C++20 Vision Microservice & Inference Engine
+/services/                          @fariswirakusuma
+
+# Go Backend Ingress Gateway & REST API
+/backend/                           @fariswirakusuma
+
+# DevOps, Docker & CI/CD Workflows
+/deploy/                            @fariswirakusuma
+/.github/                           @fariswirakusuma
+/scripts/                           @fariswirakusuma
+Justfile                            @fariswirakusuma
+
