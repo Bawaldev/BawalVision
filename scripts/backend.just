@@ -73,43 +73,17 @@ check-frontend:
 # ----------------------------------------
 
 # --- CONTAINER & DOCKER ORCHESTRATION ---
-docker-build-backend:
-    cd {{ justfile_directory() }} && docker build -f deploy/Dockerfile.backend -t bawal-backend:latest .
-
-docker-build-vision:
-    cd {{ justfile_directory() }} && docker build -f deploy/Dockerfile.vision -t bawal-vision:latest .
-
-docker-build-frontend:
-    cd {{ justfile_directory() }} && docker build -f deploy/Dockerfile.frontend -t bawal-frontend:latest .
-
-docker-build-all: docker-build-backend docker-build-vision docker-build-frontend
-
-docker-run-vision:
-    docker run --rm -it -p 8080:8080 bawal-vision:latest
-
 compose-up service="":
-    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} up {{ service }}
-
-compose-up-d service="":
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} up -d {{ service }}
-
-compose-backend:
-    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} up backend
 
 compose-down:
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} down
 
-compose-down-v:
-    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} down -v
+compose-build service="":
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} build {{ service }}
 
 compose-logs service="":
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} logs -f {{ service }}
-
-compose-ps:
-    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} ps
-
-compose-restart service="":
-    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} restart {{ service }}
 
 allow-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
     #!/usr/bin/env bash
