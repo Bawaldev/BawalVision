@@ -21,10 +21,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks Scanner
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install & Run Gitleaks CLI
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks detect --verbose --redact
 
   repo-hygiene:
     name: Block Large Files & Sensitive Data
@@ -36,7 +37,7 @@ jobs:
       - name: Block Prohibited Credential and Environment Files
         run: |
           echo "Scanning git index for sensitive credential/environment files..."
-          FORBIDDEN_FILES=$(git ls-files | grep -E '((^|/)\.env($|\.)|\.dvc/config$|wifi_credentials\.h$|.*\.pem$|.*\.key$)' | grep -v -E '\.env(\.[a-zA-Z0-9_-]+)?\.example$|\.env\.example$' || true)
+          FORBIDDEN_FILES=$(git ls-files | grep -E '((^|/)\.env($|\.)|\.dvc/config$|wifi.*\.h$|.*\.pem$|.*\.key$)' | grep -v -E '\.env(\.[a-zA-Z0-9_-]+)?\.example$|\.env\.example$' || true)
           if [ -n "$FORBIDDEN_FILES" ]; then
             echo "::error::Prohibited sensitive files detected in git tree:"
             echo "$FORBIDDEN_FILES"
@@ -65,4 +66,3 @@ jobs:
             exit 1
           fi
           echo "✓ No raw dataset images tracked in git index."
-
