@@ -410,7 +410,10 @@ void http_stream_sender_task(void *pvParameters) {
             continue;
         }
 
-        esp_err_t err = send_camera_frame_to_backend(backend_ip, backend_port, DEVICE_ID);
+        char dev_id[32] = {0};
+        get_internal_device_id(dev_id, sizeof(dev_id));
+        const char *target_device_id = (dev_id[0] != '\0') ? dev_id : DEVICE_ID;
+        esp_err_t err = send_camera_frame_to_backend(backend_ip, backend_port, target_device_id);
         if (err == ESP_ERR_NOT_FOUND) {
             /* No new frame ready yet from camera ISP, yield briefly */
             vTaskDelay(pdMS_TO_TICKS(10));

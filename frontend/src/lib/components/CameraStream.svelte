@@ -33,7 +33,7 @@
     let streamEpoch = $state(Date.now());
 
     let activeStreamUrl = $derived(
-        streamUrl || (deviceId ? `/api/v1/camera/stream/${deviceId}?t=${streamEpoch}` : `/api/v1/camera/stream?t=${streamEpoch}`)
+        streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`
     );
 
     $effect(() => {
