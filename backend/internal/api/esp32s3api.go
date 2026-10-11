@@ -169,106 +169,118 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			tSafeHours = 0.0
 		}
 
-		err := db.Transaction(func(tx *gorm.DB) error {
-			// Auto-provision device if not exists
-			dev := device.Device{
-				ID:              req.DeviceID,
-				DeviceType:      "ESP32-S3",
-				FirmwareVersion: fwVer,
-				Status:          "ACTIVE",
-				LastSeenAt:      &now,
-				UpdatedAt:       now,
-			}
-			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "id"}},
-				DoUpdates: clause.AssignmentColumns([]string{"firmware_version", "last_seen_at", "updated_at", "status"}),
-			}).Create(&dev).Error; err != nil {
-				return err
-			}
+		task := inspection.BatchInspectionTask{
+			RecordID:        recordID,
+			Request:         req,
+			FoodTemp:        foodTemp,
+			CPUTemp:         cpuTemp,
+			CPULoad:         cpu,
+			FirmwareVersion: fwVer,
+			IsSpoiled:       anySpoiled,
+			TSafeHours:      tSafeHours,
+			CreatedAt:       now,
+		}
 
-			// Insert Inspection Record
-			record := inspection.InspectionRecord{
-				ID:              recordID,
-				UserID:          req.UserID,
-				DeviceID:        req.DeviceID,
-				FirmwareVersion: fwVer,
-				CreatedAt:       now,
-				ImageS3URI:      req.ImageS3URI,
-				FoodTemperature: foodTemp,
-				CPUTemperature:  cpuTemp,
-				Temperature:     foodTemp,
-				CPULoad:         cpu,
-				IsSpoiled:       anySpoiled,
-				TSafeHours:      tSafeHours,
-			}
-			if err := tx.Create(&record).Error; err != nil {
-				return err
-			}
-
-			// Insert detected food items into food_items and inspection_foods with CV+ML quality analytics
-			insertedFoodMap := make(map[int]bool)
-			for _, det := range req.Detections {
-				foodName := strings.TrimSpace(strings.ToLower(det.FoodName))
-				if foodName == "" || foodName == "no_food" || foodName == "no_model" {
-					continue
+		// Asynchronous non-blocking enqueue to Batch Worker
+		if inspection.GlobalBatchWorker != nil {
+			inspection.GlobalBatchWorker.Enqueue(task)
+		} else {
+			// Fallback synchronous write if worker is not yet initialized
+			err := db.Transaction(func(tx *gorm.DB) error {
+				dev := device.Device{
+					ID:              req.DeviceID,
+					DeviceType:      "ESP32-S3",
+					FirmwareVersion: fwVer,
+					Status:          "ACTIVE",
+					LastSeenAt:      &now,
+					UpdatedAt:       now,
+				}
+				if err := tx.Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "id"}},
+					DoUpdates: clause.AssignmentColumns([]string{"firmware_version", "last_seen_at", "updated_at", "status"}),
+				}).Create(&dev).Error; err != nil {
+					return err
 				}
 
-				var foodItem food.FoodItem
-				if err := tx.Where("LOWER(name) = ?", foodName).First(&foodItem).Error; err != nil {
-					if errors.Is(err, gorm.ErrRecordNotFound) {
-						foodItem = food.FoodItem{Name: foodName}
-						if err := tx.Create(&foodItem).Error; err != nil {
-							// In case of unique constraint race
-							if err := tx.Where("LOWER(name) = ?", foodName).First(&foodItem).Error; err != nil {
-								return err
+				record := inspection.InspectionRecord{
+					ID:              recordID,
+					UserID:          req.UserID,
+					DeviceID:        req.DeviceID,
+					FirmwareVersion: fwVer,
+					CreatedAt:       now,
+					ImageS3URI:      req.ImageS3URI,
+					FoodTemperature: foodTemp,
+					CPUTemperature:  cpuTemp,
+					Temperature:     foodTemp,
+					CPULoad:         cpu,
+					IsSpoiled:       anySpoiled,
+					TSafeHours:      tSafeHours,
+				}
+				if err := tx.Create(&record).Error; err != nil {
+					return err
+				}
+
+				insertedFoodMap := make(map[int]bool)
+				for _, det := range req.Detections {
+					foodName := strings.TrimSpace(strings.ToLower(det.FoodName))
+					if foodName == "" || foodName == "no_food" || foodName == "no_model" {
+						continue
+					}
+
+					var foodItem food.FoodItem
+					if err := tx.Where("LOWER(name) = ?", foodName).First(&foodItem).Error; err != nil {
+						if errors.Is(err, gorm.ErrRecordNotFound) {
+							foodItem = food.FoodItem{Name: foodName}
+							if err := tx.Create(&foodItem).Error; err != nil {
+								if err := tx.Where("LOWER(name) = ?", foodName).First(&foodItem).Error; err != nil {
+									return err
+								}
 							}
+						} else {
+							return err
 						}
-					} else {
+					}
+
+					if insertedFoodMap[foodItem.ID] {
+						continue
+					}
+					insertedFoodMap[foodItem.ID] = true
+
+					itemTemp := foodTemp
+					if det.Temperature > 0 {
+						itemTemp = det.Temperature
+					}
+
+					conf, spoilage, evaluatedTemp, itemStatus := EvaluateFoodQuality(
+						foodName,
+						det.SimilarityRate,
+						det.SpoilageScore,
+						itemTemp,
+						det.Status,
+					)
+
+					inspFood := inspection.InspectionFood{
+						ID:             uuid.New().String(),
+						InspectionID:   recordID,
+						FoodItemID:     foodItem.ID,
+						Temperature:    evaluatedTemp,
+						SimilarityRate: conf,
+						SpoilageScore:  spoilage,
+						Status:         itemStatus,
+					}
+					if err := tx.Create(&inspFood).Error; err != nil {
 						return err
 					}
 				}
-
-				// Avoid duplicate food item insertions for the same inspection ID (constraint uq_inspection_food)
-				if insertedFoodMap[foodItem.ID] {
-					continue
-				}
-				insertedFoodMap[foodItem.ID] = true
-
-				itemTemp := foodTemp
-				if det.Temperature > 0 {
-					itemTemp = det.Temperature
-				}
-
-				conf, spoilage, evaluatedTemp, itemStatus := EvaluateFoodQuality(
-					foodName,
-					det.SimilarityRate,
-					det.SpoilageScore,
-					itemTemp,
-					det.Status,
-				)
-
-				inspFood := inspection.InspectionFood{
-					ID:             uuid.New().String(),
-					InspectionID:   recordID,
-					FoodItemID:     foodItem.ID,
-					Temperature:    evaluatedTemp,
-					SimilarityRate: conf,
-					SpoilageScore:  spoilage,
-					Status:         itemStatus,
-				}
-				if err := tx.Create(&inspFood).Error; err != nil {
-					return err
-				}
-			}
-
-			return nil
-		})
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to save inspection transaction: %v", err)
-			return c.Status(500).JSON(fiber.Map{
-				"error": "Failed to save inspection and detected food records to database",
+				return nil
 			})
+
+			if err != nil {
+				log.Printf("[ERROR] Failed to save fallback inspection transaction: %v", err)
+				return c.Status(500).JSON(fiber.Map{
+					"error": "Failed to save inspection to database",
+				})
+			}
 		}
 
 		return c.Status(201).JSON(fiber.Map{
