@@ -75,20 +75,13 @@
     });
 
     // Chart SVG Coordinates Calculations (Range: 15°C to 45°C)
-    const CHART_WIDTH = 680;
-    const CHART_HEIGHT = 200;
-    const PAD_LEFT = 45;
-    const PAD_RIGHT = 20;
-    const PAD_TOP = 25;
-    const PAD_BOTTOM = 35;
-
-    const plotW = CHART_WIDTH - PAD_LEFT - PAD_RIGHT;
-    const plotH = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
+    const CHART_WIDTH = 1000;
+    const CHART_HEIGHT = 300;
 
     function getCoords(index: number, total: number, tempVal: number) {
-        const x = PAD_LEFT + (index / Math.max(1, total - 1)) * plotW;
+        const x = (index / Math.max(1, total - 1)) * CHART_WIDTH;
         const norm = Math.max(0, Math.min(1, (tempVal - 15) / 30)); // 15 to 45°C
-        const y = PAD_TOP + plotH - (norm * plotH);
+        const y = CHART_HEIGHT - (norm * CHART_HEIGHT);
         return { x, y };
     }
 
@@ -166,150 +159,138 @@
                 </div>
             </div>
 
-            <!-- Chart Container with SVG Line Plot -->
-            <div class="chart-wrapper">
-                <!-- Floating Interactive Tooltip -->
-                {#if hoveredPoint}
-                    <div class="chart-tooltip">
-                        <span class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString()}</span>
-                        <div class="tooltip-metrics">
-                            <span class="chip food">🥗 Food: {(hoveredPoint.food_temperature || hoveredPoint.temperature || 25.0).toFixed(1)}°C</span>
-                            <span class="chip mcu">💻 MCU: {(hoveredPoint.cpu_temperature || 36.5).toFixed(1)}°C</span>
-                            <span class="chip cpu">⚡ Load: {hoveredPoint.cpu_load || 18}%</span>
+            <!-- Chart Container with HTML Layout & SVG Vector Line Plot -->
+            <div class="chart-layout-box">
+                <div class="chart-main-row">
+                    <!-- Left Y-Axis Container (HTML: crisp typography, no SVG distortion) -->
+                    <div class="y-axis-container">
+                        <div class="y-axis-title-wrap">
+                            <span class="y-axis-title">Temperature</span>
+                        </div>
+                        <div class="y-ticks-column">
+                            <span class="y-tick">45°C</span>
+                            <span class="y-tick">35°C</span>
+                            <span class="y-tick">25°C</span>
+                            <span class="y-tick">15°C</span>
                         </div>
                     </div>
-                {/if}
 
-                <svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" class="temperature-svg" preserveAspectRatio="none">
-                    <defs>
-                        <!-- Linear Gradient for Food Temperature Fill -->
-                        <linearGradient id="foodGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                            <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.35" />
-                            <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.0" />
-                        </linearGradient>
-                    </defs>
+                    <!-- Center Plot Area (Vector Canvas + Hover Overlay) -->
+                    <div class="plot-canvas-area">
+                        <!-- Floating Interactive Tooltip -->
+                        {#if hoveredPoint}
+                            <div
+                                class="chart-tooltip"
+                                style="left: {hoveredIdx !== null && displayHistory.length > 1 ? `${Math.min(85, Math.max(15, (hoveredIdx / (displayHistory.length - 1)) * 100))}%` : '50%'};"
+                            >
+                                <span class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString()}</span>
+                                <div class="tooltip-metrics">
+                                    <span class="chip food">🥗 Food: {(hoveredPoint.food_temperature || hoveredPoint.temperature || 25.0).toFixed(1)}°C</span>
+                                    <span class="chip mcu">💻 MCU: {(hoveredPoint.cpu_temperature || 36.5).toFixed(1)}°C</span>
+                                    <span class="chip cpu">⚡ Load: {hoveredPoint.cpu_load || 18}%</span>
+                                </div>
+                            </div>
+                        {/if}
 
-                    <!-- Horizontal Grid Lines & Y-Axis Labels -->
-                    {#each [45, 35, 25, 15] as tempMark}
-                        {@const yPos = PAD_TOP + plotH - (((tempMark - 15) / 30) * plotH)}
-                        <line
-                            x1={PAD_LEFT}
-                            y1={yPos}
-                            x2={CHART_WIDTH - PAD_RIGHT}
-                            y2={yPos}
-                            stroke="rgba(255, 255, 255, 0.08)"
-                            stroke-dasharray="3 3"
-                        />
-                        <text
-                            x={PAD_LEFT - 8}
-                            y={yPos + 4}
-                            text-anchor="end"
-                            class="axis-tick-text"
-                        >
-                            {tempMark}°C
-                        </text>
-                    {/each}
+                        <svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" class="temperature-svg" preserveAspectRatio="none">
+                            <defs>
+                                <!-- Linear Gradient for Food Temperature Fill -->
+                                <linearGradient id="foodGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                    <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.28" />
+                                    <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.0" />
+                                </linearGradient>
+                            </defs>
 
-                    <!-- Y-Axis Vertical Line -->
-                    <line
-                        x1={PAD_LEFT}
-                        y1={PAD_TOP}
-                        x2={PAD_LEFT}
-                        y2={PAD_TOP + plotH}
-                        stroke="rgba(255, 255, 255, 0.3)"
-                        stroke-width="1.5"
-                    />
+                            <!-- Horizontal Grid Lines corresponding to 45°C, 35°C, 25°C, 15°C -->
+                            <line x1="0" y1="0" x2={CHART_WIDTH} y2="0" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                            <line x1="0" y1="100" x2={CHART_WIDTH} y2="100" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                            <line x1="0" y1="200" x2={CHART_WIDTH} y2="200" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                            <line x1="0" y1="300" x2={CHART_WIDTH} y2="300" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
 
-                    <!-- X-Axis Horizontal Line -->
-                    <line
-                        x1={PAD_LEFT}
-                        y1={PAD_TOP + plotH}
-                        x2={CHART_WIDTH - PAD_RIGHT}
-                        y2={PAD_TOP + plotH}
-                        stroke="rgba(255, 255, 255, 0.3)"
-                        stroke-width="1.5"
-                    />
+                            <!-- Active Hover Vertical Cursor Guide -->
+                            {#if hoveredIdx !== null && displayHistory.length > 1}
+                                {@const hoverX = (hoveredIdx / (displayHistory.length - 1)) * CHART_WIDTH}
+                                <line
+                                    x1={hoverX}
+                                    y1={0}
+                                    x2={hoverX}
+                                    y2={CHART_HEIGHT}
+                                    stroke="rgba(245, 158, 11, 0.4)"
+                                    stroke-dasharray="3 3"
+                                    stroke-width="1.5"
+                                    vector-effect="non-scaling-stroke"
+                                />
+                            {/if}
 
-                    <!-- Y-Axis Vertical Label: "Temperature" -->
-                    <text
-                        x={16}
-                        y={PAD_TOP + plotH / 2}
-                        transform="rotate(-90, 16, {PAD_TOP + plotH / 2})"
-                        text-anchor="middle"
-                        class="axis-title"
-                    >
-                        Temperature
-                    </text>
+                            <!-- Area Under Curve (Food Temp) -->
+                            {#if foodTempPoints}
+                                <polygon
+                                    points={`0,${CHART_HEIGHT} ${foodTempPoints} ${CHART_WIDTH},${CHART_HEIGHT}`}
+                                    fill="url(#foodGrad)"
+                                />
+                            {/if}
 
-                    <!-- X-Axis Horizontal Label: "operational shift timeline" -->
-                    <text
-                        x={PAD_LEFT + plotW / 2}
-                        y={CHART_HEIGHT - 8}
-                        text-anchor="middle"
-                        class="axis-title"
-                    >
-                        operational shift timeline
-                    </text>
+                            <!-- Curve 1: Food Temperature Line (Amber) -->
+                            {#if foodTempPoints}
+                                <polyline
+                                    points={foodTempPoints}
+                                    fill="none"
+                                    stroke="#f59e0b"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    vector-effect="non-scaling-stroke"
+                                />
+                            {/if}
 
-                    <!-- Area Under Curve (Food Temp) -->
-                    {#if foodTempPoints}
-                        <polygon
-                            points={`${PAD_LEFT},${PAD_TOP + plotH} ${foodTempPoints} ${CHART_WIDTH - PAD_RIGHT},${PAD_TOP + plotH}`}
-                            fill="url(#foodGrad)"
-                        />
-                    {/if}
+                            <!-- Curve 2: MCU Temperature Line (Blue/Cyan) -->
+                            {#if mcuTempPoints}
+                                <polyline
+                                    points={mcuTempPoints}
+                                    fill="none"
+                                    stroke="#38bdf8"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-dasharray="6 4"
+                                    vector-effect="non-scaling-stroke"
+                                />
+                            {/if}
 
-                    <!-- Curve 1: Food Temperature Line (Amber) -->
-                    {#if foodTempPoints}
-                        <polyline
-                            points={foodTempPoints}
-                            fill="none"
-                            stroke="#f59e0b"
-                            stroke-width="2.5"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                        />
-                    {/if}
+                            <!-- Interactive Data Points -->
+                            {#if displayHistory}
+                                {#each displayHistory as pt, idx}
+                                    {@const c = getCoords(idx, displayHistory.length, pt.food_temperature || pt.temperature || 25.0)}
+                                    <circle
+                                        cx={c.x}
+                                        cy={c.y}
+                                        r={hoveredIdx === idx ? 5.5 : 3.5}
+                                        fill="#f59e0b"
+                                        stroke="#14171d"
+                                        stroke-width="2"
+                                        vector-effect="non-scaling-stroke"
+                                    />
+                                {/each}
+                            {/if}
+                        </svg>
 
-                    <!-- Curve 2: MCU Temperature Line (Blue/Cyan) -->
-                    {#if mcuTempPoints}
-                        <polyline
-                            points={mcuTempPoints}
-                            fill="none"
-                            stroke="#38bdf8"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-dasharray="5 3"
-                        />
-                    {/if}
+                        <!-- Invisible Full-Height Hover Trigger Columns -->
+                        <div class="hover-detector-overlay">
+                            {#each displayHistory as _, idx}
+                                <div
+                                    class="hover-trigger-slice"
+                                    role="presentation"
+                                    onmouseenter={() => (hoveredIdx = idx)}
+                                    onmouseleave={() => (hoveredIdx = null)}
+                                ></div>
+                            {/each}
+                        </div>
+                    </div>
+                </div>
 
-                    <!-- Interactive Data Points -->
-                    {#if displayHistory}
-                        {#each displayHistory as pt, idx}
-                            {@const c = getCoords(idx, displayHistory.length, pt.food_temperature || pt.temperature || 25.0)}
-                            <circle
-                                cx={c.x}
-                                cy={c.y}
-                                r={hoveredIdx === idx ? 6 : 3.5}
-                                fill="#f59e0b"
-                                stroke="#14171d"
-                                stroke-width="2"
-                            />
-                        {/each}
-                    {/if}
-                </svg>
-
-                <!-- Invisible Full-Height Hover Trigger Columns -->
-                <div class="hover-detector-overlay" style="left: {PAD_LEFT}px; width: {plotW}px;">
-                    {#each displayHistory as _, idx}
-                        <div
-                            class="hover-trigger-slice"
-                            role="presentation"
-                            onmouseenter={() => (hoveredIdx = idx)}
-                            onmouseleave={() => (hoveredIdx = null)}
-                        ></div>
-                    {/each}
+                <!-- Bottom X-Axis Row (HTML: crisp typography, centered under plot) -->
+                <div class="x-axis-row">
+                    <span class="x-axis-title">operational shift timeline</span>
                 </div>
             </div>
         </div>
@@ -579,8 +560,6 @@
         flex-direction: column;
         gap: 16px;
         width: 100%;
-        max-width: 1380px;
-        margin: 0 auto;
     }
 
     /* Base Card Styling matching wireframe */
@@ -605,12 +584,12 @@
     /* ------------------------------------------------------------------------- */
     .telemetry-top-grid {
         display: grid;
-        grid-template-columns: 1fr 310px;
+        grid-template-columns: minmax(0, 1fr) 360px;
         gap: 16px;
         align-items: stretch;
     }
 
-    @media (max-width: 1024px) {
+    @media (max-width: 1200px) {
         .telemetry-top-grid {
             grid-template-columns: 1fr;
         }
@@ -620,6 +599,8 @@
     .temperature-chart-card {
         display: flex;
         flex-direction: column;
+        min-height: 380px;
+        height: 100%;
         padding-bottom: 12px;
     }
 
@@ -627,7 +608,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-bottom: 10px;
+        margin-bottom: 12px;
         padding-bottom: 8px;
         border-bottom: 1px solid var(--border-subtle);
     }
@@ -655,13 +636,75 @@
     .legend-item .dot.food { background: #f59e0b; }
     .legend-item .dot.mcu { background: #38bdf8; }
 
-    .chart-wrapper {
-        position: relative;
+    /* New Unsquished Chart Layout */
+    .chart-layout-box {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
         width: 100%;
-        height: 220px;
+        min-height: 0;
+    }
+
+    .chart-main-row {
+        display: flex;
+        flex: 1;
+        min-height: 280px;
+        gap: 8px;
+        position: relative;
+    }
+
+    .y-axis-container {
+        display: flex;
+        align-items: stretch;
+        gap: 6px;
+        user-select: none;
+        flex-shrink: 0;
+        padding: 0;
+    }
+
+    .y-axis-title-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+    }
+
+    .y-axis-title {
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        color: var(--text-secondary);
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: capitalize;
+        white-space: nowrap;
+    }
+
+    .y-ticks-column {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        align-items: flex-end;
+        width: 36px;
+        margin: -6px 0;
+        padding-right: 6px;
+    }
+
+    .y-tick {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        font-family: var(--font-mono);
+        line-height: 1;
+    }
+
+    .plot-canvas-area {
+        position: relative;
+        flex: 1;
+        min-height: 280px;
         background: var(--bg-inset);
-        border: 1px solid var(--border-subtle);
-        border-radius: var(--radius-sm);
+        border-left: 1.5px solid var(--border-medium);
+        border-bottom: 1.5px solid var(--border-medium);
+        border-radius: 0 var(--radius-sm) 0 0;
         overflow: hidden;
     }
 
@@ -671,26 +714,28 @@
         display: block;
     }
 
-    .axis-title {
-        fill: var(--text-secondary);
-        font-size: 0.65rem;
-        font-family: var(--font-sans);
-        font-weight: 600;
-        letter-spacing: 0.04em;
+    .x-axis-row {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding-top: 10px;
+        padding-left: 60px; /* Offset to center title under plot area */
     }
 
-    .axis-tick-text {
-        fill: var(--text-muted);
-        font-size: 0.62rem;
-        font-family: var(--font-mono);
+    .x-axis-title {
+        color: var(--text-secondary);
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        user-select: none;
     }
 
     /* Hover tooltips */
     .chart-tooltip {
         position: absolute;
-        top: 10px;
-        left: 55px;
-        background: rgba(20, 24, 32, 0.94);
+        top: 12px;
+        transform: translateX(-50%);
+        background: rgba(20, 24, 32, 0.95);
         border: 1px solid var(--border-highlight);
         border-radius: var(--radius-sm);
         padding: 6px 12px;
@@ -698,7 +743,9 @@
         align-items: center;
         gap: 10px;
         z-index: 10;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+        pointer-events: none;
+        white-space: nowrap;
     }
 
     .tooltip-time {
@@ -726,10 +773,10 @@
 
     .hover-detector-overlay {
         position: absolute;
-        top: 0;
-        bottom: 0;
+        inset: 0;
         display: flex;
         cursor: crosshair;
+        z-index: 5;
     }
 
     .hover-trigger-slice {

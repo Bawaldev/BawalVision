@@ -33,7 +33,27 @@
     }
 
     // State Variables
+    const VALID_TABS = [
+        'Dashboard',
+        'Telemetry Analytics & Result Log',
+        'System & Cloud Settings'
+    ];
+
     let activeTab = $state('Dashboard');
+
+    function handleSelectTab(tab: string) {
+        if (!VALID_TABS.includes(tab)) return;
+        activeTab = tab;
+        if (typeof window !== 'undefined') {
+            try {
+                localStorage.setItem('bawal_active_tab', tab);
+                const slug = tab === 'Telemetry Analytics & Result Log'
+                    ? 'telemetry'
+                    : (tab === 'System & Cloud Settings' ? 'settings' : 'dashboard');
+                window.location.hash = slug;
+            } catch {}
+        }
+    }
     let isOnline = $state(false);
     let hasCamera = $state(false);
     let isInspecting = $state(false);
@@ -183,6 +203,25 @@
     }
 
     onMount(async () => {
+        // Restore active tab from URL hash or localStorage so refresh maintains current view
+        if (typeof window !== 'undefined') {
+            try {
+                const hash = window.location.hash.toLowerCase();
+                if (hash.includes('telemetry') || hash.includes('result')) {
+                    activeTab = 'Telemetry Analytics & Result Log';
+                } else if (hash.includes('setting')) {
+                    activeTab = 'System & Cloud Settings';
+                } else if (hash.includes('dashboard')) {
+                    activeTab = 'Dashboard';
+                } else {
+                    const savedTab = localStorage.getItem('bawal_active_tab');
+                    if (savedTab && VALID_TABS.includes(savedTab)) {
+                        activeTab = savedTab;
+                    }
+                }
+            } catch {}
+        }
+
         // Initial polling
         await pollBackendData();
 
@@ -315,7 +354,7 @@
     <!-- Left Navigation Sidebar -->
     <Sidebar
         {activeTab}
-        onSelectTab={(tab) => (activeTab = tab)}
+        onSelectTab={handleSelectTab}
         activeDevice={systemConfig.deviceId}
         {isOnline}
     />
