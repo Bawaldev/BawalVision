@@ -124,6 +124,13 @@ bool get_backend_ip(char *out_ip, size_t max_len);
  */
 void WiFi_Server_Task(void *pvParameters);
 
+/**
+ * @brief FreeRTOS task to continuously stream JPEG frames to the backend REST API via HTTP POST.
+ * 
+ * @param pvParameters Optional task parameters.
+ */
+void http_stream_sender_task(void *pvParameters);
+
 #ifdef __cplusplus
 }
 #endif
