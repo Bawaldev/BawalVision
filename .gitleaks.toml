@@ -1,0 +1,11 @@
+# ==============================================================================
+# Gitleaks Configuration & Secret Allowlist
+# ==============================================================================
+
+[allowlist]
+description = "Monorepo template allowlist for example environment files"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\..*\.example$'''
+]
+
