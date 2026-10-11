@@ -18,7 +18,7 @@ jobs:
     continue-on-error: true # Mode santai: jangan batalkan pipeline jika ada deteksi
     steps:
       - name: Checkout Repository (Full History)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -34,7 +34,7 @@ jobs:
     continue-on-error: true # Mode santai: catat isu sebagai warning tanpa membuat status merah
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Block Prohibited Credential and Environment Files
         run: |
