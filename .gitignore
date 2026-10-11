@@ -112,15 +112,10 @@ ml/AI1/dataset/
 ml/AI1/yolo_dataset/
 yolo_dataset*/
 **/yolo_dataset_OLD*/
-ml/AI1/.dvc
-# ==========================================
-# DVC Metadata Tracking (Wajib di Git)
-# ==========================================
-!*.dvc
-!.dvc/
-!.dvc/config
-!.dvc/.gitignore
-!.dvcignore
+.dvc/
+*.dvc
+.dvcignore
+ml/AI1/.dvc/
 
 # ==========================================
 # Dataset Structure Preservation (.gitkeep)
