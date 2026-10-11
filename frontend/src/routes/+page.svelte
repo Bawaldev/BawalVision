@@ -3,8 +3,7 @@
     import Sidebar from '$lib/components/Sidebar.svelte';
     import TopBar from '$lib/components/TopBar.svelte';
     import DashboardView from '$lib/views/DashboardView.svelte';
-    import TelemetryView from '$lib/views/TelemetryView.svelte';
-    import ResultLogView from '$lib/views/ResultLogView.svelte';
+    import TelemetryResultLogView from '$lib/views/TelemetryResultLogView.svelte';
     import SettingsView from '$lib/views/SettingsView.svelte';
 
     import {
@@ -366,15 +365,11 @@
                 />
             </div>
 
-            <div class="view-panel" class:is-hidden={activeTab !== 'Telemetry Analytics'}>
-                <TelemetryView
+            <div class="view-panel" class:is-hidden={activeTab !== 'Telemetry Analytics & Result Log'}>
+                <TelemetryResultLogView
                     currentTelemetry={telemetry}
                     history={telemetryHistory}
                 />
-            </div>
-
-            <div class="view-panel" class:is-hidden={activeTab !== 'Result Log'}>
-                <ResultLogView />
             </div>
 
             <div class="view-panel" class:is-hidden={activeTab !== 'System & Cloud Settings'}>
