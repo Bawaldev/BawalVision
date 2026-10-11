@@ -11,5 +11,5 @@ tqdm>=4.65.0
 icrawler>=0.6.6
 bing-image-downloader
 opencv-python>=4.8.0
-dvc>=3.0.0
+dvc>=3.67.1
 mlflow>=3.0.0
