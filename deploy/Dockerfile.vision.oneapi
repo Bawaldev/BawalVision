@@ -1,0 +1,84 @@
+# ==============================================================================
+# BawalVision Machine Vision Engine - Intel oneAPI & Xeon Silicon Optimization
+# Target: Intel Xeon Scalable Processors (AVX2 / AVX-512 / oneDNN / oneTBB)
+# Compiler: Intel oneAPI DPC++/C++ Compiler (icpx) & Intel OpenMP (libiomp5)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Stage 1: Build environment using Intel oneAPI HPC Toolkit
+# ------------------------------------------------------------------------------
+FROM intel/oneapi-hpckit:latest AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libopencv-dev \
+    libcurl4-openssl-dev \
+    nlohmann-json3-dev \
+    curl \
+    tar \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ONNX Runtime with oneDNN Execution Provider
+WORKDIR /opt/onnxruntime
+RUN curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | \
+    tar -xz --strip-components=1 && \
+    cp -r include/* /usr/local/include/ && \
+    cp -r lib/* /usr/local/lib/ && \
+    ldconfig
+
+WORKDIR /src
+COPY ml/ /src/ml/
+COPY scripts/ /src/scripts/
+COPY services/ /src/services/
+
+# Build vision_service using icpx (IntelLLVM)
+RUN /bin/bash -c "source /opt/intel/oneapi/setvars.sh && \
+    cmake -B /src/services/build -S /src/services -G Ninja \
+          -DCMAKE_CXX_COMPILER=icpx \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_FLAGS='-O3 -mavx2 -mfma -fiopenmp -qopt-zmm-usage=low' \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && \
+    cmake --build /src/services/build --parallel $(nproc)"
+
+# ------------------------------------------------------------------------------
+# Stage 2: Minimal Production Runtime
+# ------------------------------------------------------------------------------
+FROM ubuntu:24.04 AS runner
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopencv-core406 \
+    libopencv-imgproc406 \
+    libopencv-calib3d406 \
+    libopencv-dnn406 \
+    libcurl4 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Intel OpenMP Runtime (libiomp5) & compiler libraries
+COPY --from=builder /opt/intel/oneapi/compiler/latest/lib/libiomp5.so /usr/local/lib/
+COPY --from=builder /opt/onnxruntime/lib/ /usr/local/lib/
+COPY --from=builder /src/services/build/bin/vision_service /usr/local/bin/
+
+RUN ldconfig && \
+    useradd -m -u 1000 -s /bin/bash visionuser && \
+    mkdir -p /app/ml/AI1/model /app/weights && \
+    chown -R visionuser:visionuser /app
+
+# Intel Xeon Threading & NUMA Affinity Tuning
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+ENV KMP_AFFINITY=granularity=fine,compact,1,0
+ENV KMP_BLOCKTIME=0
+ENV OMP_NUM_THREADS=4
+
+USER visionuser
+WORKDIR /app
+
+ENTRYPOINT ["vision_service"]
+

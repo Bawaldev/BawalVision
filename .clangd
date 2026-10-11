@@ -13,6 +13,16 @@ If:
   PathMatch: .*/edge/.*
 CompileFlags:
   CompilationDatabase: edge/build
+  Add:
+    - -Iedge/main/include
+    - -Iedge/main/src
+    - -Iedge/main
+    - -iquoteedge/main/include
+    - -iquoteedge/main/src
+    - --target=riscv32
+    - -std=gnu17
+    - -D__XTENSA__=1
+    - -DESP_PLATFORM=1
   Remove:
     - -fno-tree-switch-conversion
     - -fno-shrink-wrap
@@ -26,6 +36,10 @@ CompileFlags:
     - -fno-jump-tables
     - -fno-rtti
     - -fno-exceptions
+    - --target=xtensa-esp32s3-elf
+    - -target
+    - xtensa-esp32s3-elf
+    - -fno-reorder-blocks
 
 ---
 If:

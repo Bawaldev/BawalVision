@@ -19,24 +19,23 @@
 
 static const char *TAG = "CAMERA_OV5640";
 
-static SemaphoreHandle_t s_camera_mutex = NULL;
-static camera_frame_buffer_t s_shared_frame = {0};
+#define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY /* 64 KB atau 128 KB tetap */
 
+typedef struct {
+  camera_frame_header_t header;
+  uint8_t *data;
+} frame_slot_t;
+
+/* Double-buffering slots */
+static frame_slot_t s_slots[2] = {0};
+static volatile int s_ready_idx = 0;       /* Buffer siap kirim untuk HTTP */
+static volatile int s_write_idx = 1;       /* Buffer kerja untuk penangkap kamera */
+static volatile bool s_has_new_frame = false;
+
+static SemaphoreHandle_t s_camera_mutex = NULL;
 static uint32_t s_frame_counter = 0;
 static bool s_is_initialized = false;
 static bool s_is_streaming = false;
-
-static bool camera_lock_frame(TickType_t timeout_ticks) {
-  if (s_camera_mutex == NULL)
-    return false;
-  return (xSemaphoreTake(s_camera_mutex, timeout_ticks) == pdTRUE);
-}
-
-static void camera_unlock_frame(void) {
-  if (s_camera_mutex != NULL) {
-    xSemaphoreGive(s_camera_mutex);
-  }
-}
 
 bool is_camera_streaming(void) { return s_is_streaming; }
 
@@ -48,18 +47,19 @@ esp_err_t camera_task_init(void) {
   if (s_camera_mutex == NULL)
     return ESP_ERR_NO_MEM;
 
-  s_shared_frame.capacity = INITIAL_BUF_CAPACITY;
-  s_shared_frame.data = (uint8_t *)heap_caps_malloc(
-      s_shared_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (s_shared_frame.data == NULL) {
-    s_shared_frame.data = (uint8_t *)malloc(s_shared_frame.capacity);
+  /* Pre-alokasi 2 slot buffer tetap di PSRAM sekali saat boot */
+  for (int i = 0; i < 2; i++) {
+    s_slots[i].data = (uint8_t *)heap_caps_malloc(
+        FIXED_FRAME_CAPACITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_slots[i].data == NULL) {
+      s_slots[i].data = (uint8_t *)malloc(FIXED_FRAME_CAPACITY);
+    }
+    if (s_slots[i].data == NULL) {
+      vSemaphoreDelete(s_camera_mutex);
+      return ESP_ERR_NO_MEM;
+    }
+    memset(&s_slots[i].header, 0, sizeof(camera_frame_header_t));
   }
-  if (s_shared_frame.data == NULL) {
-    vSemaphoreDelete(s_camera_mutex);
-    return ESP_ERR_NO_MEM;
-  }
-
-  memset(&s_shared_frame.header, 0, sizeof(camera_frame_header_t));
 
   camera_config_t config = {
       .pin_pwdn = CAM_PIN_PWDN,
@@ -80,17 +80,13 @@ esp_err_t camera_task_init(void) {
       .pin_href = CAM_PIN_HREF,
       .pin_pclk = CAM_PIN_PCLK,
 
-      // XCLK 12 MHz clock for OV5640 (optimal for DVP DMA stability on
-      // ESP32-S3)
       .xclk_freq_hz = 12000000,
       .ledc_timer = LEDC_TIMER_0,
       .ledc_channel = LEDC_CHANNEL_0,
 
       .pixel_format = PIXFORMAT_JPEG,
       .frame_size = FRAMESIZE_VGA, // 640x480
-
-      .jpeg_quality =
-          16, // 16 = high visual clarity, compact payload (18-22 KB), prevents Wi-Fi VBR spikes
+      .jpeg_quality = 16,
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -99,62 +95,64 @@ esp_err_t camera_task_init(void) {
   ESP_LOGI(TAG, "Initializing OV5640 CSP via esp_camera_init...");
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Camera init failed with error: %s (0x%x)",
-             esp_err_to_name(err), err);
+    ESP_LOGE(TAG, "Camera init failed with error: %s (0x%x)", esp_err_to_name(err), err);
     return err;
   }
 
   sensor_t *s = esp_camera_sensor_get();
   if (s != NULL) {
-    ESP_LOGI(TAG, "OV5640 sensor detected successfully (PID: 0x%02x)",
-             s->id.PID);
+    ESP_LOGI(TAG, "OV5640 sensor detected successfully (PID: 0x%02x)", s->id.PID);
     s->set_vflip(s, 0);
     s->set_hmirror(s, 0);
     s->set_framesize(s, FRAMESIZE_VGA);
     s->set_quality(s, 16);
 
-    // Hardware Auto White Balance (AWB) & ISP Tuning
-    s->set_whitebal(s, 1);       // Enable Hardware AWB
-    s->set_awb_gain(s, 1);       // Enable AWB Gain
-    s->set_wb_mode(s, 0);        // 0 = Auto White Balance
-    s->set_exposure_ctrl(s, 1);  // Enable AEC
-    s->set_aec2(s, 1);           // Enable AEC DSP
-    s->set_ae_level(s, -1);      // -1 reduces central spotlight overexposure
-    s->set_gain_ctrl(s, 1);      // Enable AGC
+    s->set_whitebal(s, 1);
+    s->set_awb_gain(s, 1);
+    s->set_wb_mode(s, 0);
+    s->set_exposure_ctrl(s, 1);
+    s->set_aec2(s, 1);
+    s->set_ae_level(s, -1);
+    s->set_gain_ctrl(s, 1);
     s->set_gainceiling(s, (gainceiling_t)2);
-    s->set_bpc(s, 0);            // Black Pixel Correction OFF (suppresses speckle noise)
-    s->set_wpc(s, 1);            // Enable White Pixel Correction
-    s->set_raw_gma(s, 1);        // Enable Gamma curve
-    s->set_lenc(s, 1);           // Enable Lens Correction
-    s->set_dcw(s, 0);            // Downsize OFF (full crisp resolution)
-    s->set_brightness(s, 0);     // Balanced brightness
-    s->set_contrast(s, 1);       // Contrast boost (+1)
-    s->set_saturation(s, 1);     // Color saturation boost (+1)
-    s->set_sharpness(s, 1);      // Optical sharpness boost (+1)
+    s->set_bpc(s, 0);
+    s->set_wpc(s, 1);
+    s->set_raw_gma(s, 1);
+    s->set_lenc(s, 1);
+    s->set_dcw(s, 0);
+    s->set_brightness(s, 0);
+    s->set_contrast(s, 1);
+    s->set_saturation(s, 1);
+    s->set_sharpness(s, 1);
   }
 
   s_is_initialized = true;
+  ESP_LOGI(TAG, "Pre-allocated 2x %d KB PSRAM frame buffers OK", FIXED_FRAME_CAPACITY / 1024);
   return ESP_OK;
 }
 
+/* Mengambil salinan frame untuk HTTP sender dengan durasi lock seminimal mungkin */
 esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
   if (out_frame == NULL || out_frame->data == NULL)
     return ESP_ERR_INVALID_ARG;
 
-  if (!camera_lock_frame(pdMS_TO_TICKS(50))) {
+  /* Timeout pendek (10ms): jangan biarkan task pengirim menahan pipeline */
+  if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
     return ESP_ERR_TIMEOUT;
   }
 
-  if (s_shared_frame.header.buffer_len > 0 && s_shared_frame.data != NULL) {
-    uint32_t copy_len = s_shared_frame.header.buffer_len;
+  frame_slot_t *slot = &s_slots[s_ready_idx];
+
+  if (s_has_new_frame && slot->header.buffer_len > 0) {
+    uint32_t copy_len = slot->header.buffer_len;
     if (copy_len > out_frame->capacity) {
       copy_len = out_frame->capacity;
     }
 
-    memcpy(&out_frame->header, &s_shared_frame.header,
-           sizeof(camera_frame_header_t));
-    memcpy(out_frame->data, s_shared_frame.data, copy_len);
+    memcpy(&out_frame->header, &slot->header, sizeof(camera_frame_header_t));
+    memcpy(out_frame->data, slot->data, copy_len);
     out_frame->header.buffer_len = copy_len;
+    s_has_new_frame = false;
   } else {
     uint32_t fallback_len = sizeof(s_fallback_jpeg);
     if (fallback_len > out_frame->capacity) {
@@ -168,14 +166,13 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
     out_frame->header.frame_id = ++s_frame_counter;
     out_frame->header.timestamp_ms = esp_timer_get_time() / 1000;
 
-    if (out_frame->data != NULL) {
-      memcpy(out_frame->data, s_fallback_jpeg, fallback_len);
-    }
+    memcpy(out_frame->data, s_fallback_jpeg, fallback_len);
   }
 
-  camera_unlock_frame();
+  xSemaphoreGive(s_camera_mutex);
   return ESP_OK;
 }
+
 void Camera_Capture_Task(void *pvParameters) {
   (void)pvParameters;
   ESP_LOGI(TAG, "OV5640 CSP Frame Ingestion Task running");
@@ -192,15 +189,10 @@ void Camera_Capture_Task(void *pvParameters) {
       continue;
     }
 
-    // Validate JPEG SOI marker (0xFF, 0xD8) to filter out corrupted DMA/DVP
-    // transfers
+    /* Validasi penanda JPEG SOI (0xFF, 0xD8) */
     if (fb->format == PIXFORMAT_JPEG) {
       if (fb->len < 4 || fb->buf[0] != 0xFF || fb->buf[1] != 0xD8) {
-        ESP_LOGW(TAG,
-                 "Dropping corrupted JPEG frame (len: %u, SOI missing: 0x%02X "
-                 "0x%02X)",
-                 (unsigned)fb->len, (fb->len > 0) ? fb->buf[0] : 0,
-                 (fb->len > 1) ? fb->buf[1] : 0);
+        ESP_LOGW(TAG, "Dropping corrupted JPEG frame (len: %u)", (unsigned)fb->len);
         esp_camera_fb_return(fb);
         vTaskDelay(pdMS_TO_TICKS(20));
         continue;
@@ -209,33 +201,38 @@ void Camera_Capture_Task(void *pvParameters) {
 
     s_is_streaming = true;
 
-    if (camera_lock_frame(pdMS_TO_TICKS(40))) {
-      if (s_shared_frame.capacity < fb->len) {
-        uint8_t *new_buf = (uint8_t *)heap_caps_realloc(
-            s_shared_frame.data, fb->len + 8192, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (new_buf != NULL) {
-          s_shared_frame.data = new_buf;
-          s_shared_frame.capacity = fb->len + 8192;
-        }
-      }
-
-      if (s_shared_frame.capacity >= fb->len && s_shared_frame.data != NULL) {
-        memcpy(s_shared_frame.data, fb->buf, fb->len);
-        s_shared_frame.header.buffer_len = fb->len;
-        s_shared_frame.header.width =
-            fb->width ? fb->width : DEFAULT_FRAME_WIDTH;
-        s_shared_frame.header.height =
-            fb->height ? fb->height : DEFAULT_FRAME_HEIGHT;
-        s_shared_frame.header.format = (fb->format == PIXFORMAT_JPEG)
-                                           ? FRAME_FORMAT_JPEG
-                                           : FRAME_FORMAT_RAW;
-        s_shared_frame.header.frame_id = ++s_frame_counter;
-        s_shared_frame.header.timestamp_ms = esp_timer_get_time() / 1000;
-      }
-      camera_unlock_frame();
+    /* Clamping ukuran frame tanpa realloc dinamis */
+    uint32_t payload_len = fb->len;
+    if (payload_len > FIXED_FRAME_CAPACITY) {
+      ESP_LOGW(TAG, "Frame melebihi alokasi (%u > %d), clamped", (unsigned)payload_len, FIXED_FRAME_CAPACITY);
+      payload_len = FIXED_FRAME_CAPACITY;
     }
 
+    /* Tulis frame ke slot kerja saat ini */
+    frame_slot_t *slot = &s_slots[s_write_idx];
+    memcpy(slot->data, fb->buf, payload_len);
+
+    slot->header.buffer_len = payload_len;
+    slot->header.width = fb->width ? fb->width : DEFAULT_FRAME_WIDTH;
+    slot->header.height = fb->height ? fb->height : DEFAULT_FRAME_HEIGHT;
+    slot->header.format = (fb->format == PIXFORMAT_JPEG) ? FRAME_FORMAT_JPEG : FRAME_FORMAT_RAW;
+    slot->header.frame_id = ++s_frame_counter;
+    slot->header.timestamp_ms = esp_timer_get_time() / 1000;
+
+    /* Kembalikan buffer hardware DMA DVP secepat mungkin */
     esp_camera_fb_return(fb);
+
+    /* Pointer Swap instan: tukar indeks slot kerja dengan slot ready */
+    if (xSemaphoreTake(s_camera_mutex, 0) == pdTRUE) {
+      int temp = s_ready_idx;
+      s_ready_idx = s_write_idx;
+      s_write_idx = temp;
+      s_has_new_frame = true;
+      xSemaphoreGive(s_camera_mutex);
+    } else {
+      /* Jika consumer sedang membaca, frame berikutnya akan menimpa slot kerja (Non-blocking Drop Stale Frame) */
+      ESP_LOGD(TAG, "HTTP task sedang membaca, frame ditimpa tanpa blocking");
+    }
 
     TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
     if (elapsed_ticks < frame_interval_ticks) {
@@ -259,141 +256,4 @@ TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id) {
   return xTaskCreateStaticPinnedToCore(
       Camera_Capture_Task, "Cam_Capture_Task", CAM_TASK_STACK_SIZE, NULL,
       priority, s_cam_task_stack, &s_cam_task_buffer, core_id);
-}
-
-void http_stream_sender_task(void *pvParameters) {
-  (void)pvParameters;
-
-  camera_frame_buffer_t local_frame = {0};
-  local_frame.capacity = INITIAL_BUF_CAPACITY;
-  local_frame.data = (uint8_t *)heap_caps_malloc(
-      local_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (local_frame.data == NULL) {
-    local_frame.data = (uint8_t *)malloc(local_frame.capacity);
-  }
-
-  if (local_frame.data == NULL) {
-    ESP_LOGE(TAG, "Failed to allocate memory for local frame buffer");
-    vTaskDelete(NULL);
-    return;
-  }
-
-  char device_id[32] = {0};
-  get_internal_device_id(device_id, sizeof(device_id));
-  if (g_wifi_event_group != NULL) {
-    xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE,
-                        portMAX_DELAY);
-  }
-
-  char backend_ip[64] = {0};
-  char full_url[URL_BUFFER_SIZE] = {0};
-  if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
-    strncpy(backend_ip, CONFIG_BACKEND_IP, sizeof(backend_ip) - 1);
-  }
-  snprintf(full_url, sizeof(full_url), "http://%s:%s%s", backend_ip,
-           CONFIG_BACKEND_PORT, CAMERA_FRAME_ENDPOINT);
-
-  esp_http_client_config_t config = {
-      .url = full_url,
-      .method = HTTP_METHOD_POST,
-      .timeout_ms = 1500,
-      .buffer_size_tx = 8192,
-      .buffer_size = 512,
-      .keep_alive_enable = true,
-  };
-
-  esp_http_client_handle_t client = esp_http_client_init(&config);
-  if (client == NULL) {
-    ESP_LOGE(TAG, "Failed to initialize HTTP client");
-    if (local_frame.data)
-      free(local_frame.data);
-    vTaskDelete(NULL);
-    return;
-  }
-
-  esp_http_client_set_header(client, "Connection", "keep-alive");
-  esp_http_client_set_header(client, "X-Device-ID", device_id);
-
-  uint32_t last_sent_frame_id = 0;
-  char frame_id_str[16];
-  const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
-
-  ESP_LOGI(TAG, "HTTP Stream sender started. Streaming frames continuously.");
-
-  for (;;) {
-    TickType_t start_tick = xTaskGetTickCount();
-
-    if (g_wifi_event_group != NULL) {
-      EventBits_t bits = xEventGroupWaitBits(
-          g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, 0);
-      if (!(bits & WIFI_CONNECTED_BIT)) {
-        vTaskDelay(pdMS_TO_TICKS(200));
-        continue;
-      }
-    }
-
-    esp_err_t copy_status = camera_copy_latest_frame(&local_frame);
-    if (copy_status == ESP_OK) {
-      if (local_frame.header.buffer_len > 0 &&
-          local_frame.header.frame_id != last_sent_frame_id) {
-        last_sent_frame_id = local_frame.header.frame_id;
-
-        // Set dynamic headers per frame
-        snprintf(frame_id_str, sizeof(frame_id_str), "%lu",
-                 (unsigned long)local_frame.header.frame_id);
-        esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
-
-        if (local_frame.header.format == FRAME_FORMAT_JPEG) {
-          esp_http_client_set_header(client, "Content-Type", "image/jpeg");
-        } else {
-          esp_http_client_set_header(client, "Content-Type",
-                                     "application/octet-stream");
-          esp_http_client_set_header(client, "X-Pixel-Format", "YUYV");
-        }
-
-        // Attach binary payload directly
-        esp_http_client_set_post_field(client, (const char *)local_frame.data,
-                                       local_frame.header.buffer_len);
-
-        // Perform HTTP POST over the established TCP socket
-        esp_err_t err = esp_http_client_perform(client);
-        if (err == ESP_OK) {
-          int status_code = esp_http_client_get_status_code(client);
-          // Drain any response data to keep socket clean
-          char drain_buf[128];
-          while (esp_http_client_read(client, drain_buf, sizeof(drain_buf)) > 0) {}
-
-          if (status_code == 200 || status_code == 201 || status_code == 202) {
-            ESP_LOGD(TAG, "Frame #%lu sent (%u bytes, HTTP %d)",
-                     (unsigned long)last_sent_frame_id,
-                     (unsigned)local_frame.header.buffer_len, status_code);
-          } else {
-            ESP_LOGW(TAG, "Frame #%lu rejected with HTTP %d",
-                     (unsigned long)last_sent_frame_id, status_code);
-          }
-        } else {
-          ESP_LOGW(
-              TAG,
-              "Transmission failed (%s), resetting socket...",
-              esp_err_to_name(err));
-          esp_http_client_close(client);
-          vTaskDelay(pdMS_TO_TICKS(50));
-        }
-      }
-    } else {
-      ESP_LOGW(TAG, "Failed to copy frame: %s", esp_err_to_name(copy_status));
-    }
-
-    TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
-    if (elapsed_ticks < frame_interval_ticks) {
-      vTaskDelay(frame_interval_ticks - elapsed_ticks);
-    } else {
-      taskYIELD();
-    }
-  }
-
-  esp_http_client_cleanup(client);
-  if (local_frame.data)
-    free(local_frame.data);
-  vTaskDelete(NULL);
 }

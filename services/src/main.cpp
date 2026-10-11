@@ -142,6 +142,7 @@ int main(int argc, char** argv) {
     std::thread ai_worker([&]() {
         CURL* curl_db = curl_easy_init();
         auto last_dispatch_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+        std::string last_state_signature;
 
         while (ai_worker_running.load()) {
             cv::Mat frame_to_process;
@@ -201,11 +202,29 @@ int main(int argc, char** argv) {
                     std::cout << "\n";
                 }
 
-                // Periodic Inspection Ingress Dispatch to Backend & Database
+                // State-Change Hysteresis & Selective Sync Gatekeeper:
+                // Only dispatch if the food detection state has changed (new item or status change)
+                // or if 15 seconds have passed (periodic heartbeat). Enforces a 1.0s minimum debounce.
                 const auto current_time = std::chrono::steady_clock::now();
                 const auto elapsed_since_dispatch = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_dispatch_time).count();
 
-                if (!valid_detections.empty() && elapsed_since_dispatch >= 800 && !dev_id.empty() && curl_db) {
+                std::string current_state_sig;
+                for (const auto& vd : valid_detections) {
+                    const float spoilage_pct = std::clamp(vd.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
+                    const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f)
+                                                   ? "REJECT"
+                                                   : ((spoilage_pct >= 25.0f || vd.confidence < 0.60f) ? "REVIEW" : "PASS");
+                    current_state_sig += vd.class_name;
+                    current_state_sig += ":";
+                    current_state_sig += status;
+                    current_state_sig += ";";
+                }
+
+                const bool state_changed = (current_state_sig != last_state_signature);
+                const bool heartbeat_sync = (elapsed_since_dispatch >= 15000);
+                const bool debounce_ok = (elapsed_since_dispatch >= 1000);
+
+                if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty() && curl_db) {
                     std::ostringstream json_ss;
                     json_ss << "{"
                             << "\"device_id\":\"" << dev_id << "\","
@@ -231,8 +250,10 @@ int main(int argc, char** argv) {
                     const std::string payload_json = json_ss.str();
                     if (bawal::server::postInspectionPayload(curl_db, backend_base_url, payload_json)) {
                         last_dispatch_time = current_time;
+                        last_state_signature = current_state_sig;
                         std::cout << "[DISPATCH] Inspection payload saved to PostgreSQL (" 
-                                  << valid_detections.size() << " detected foods)\n";
+                                  << valid_detections.size() << " detected foods | "
+                                  << (state_changed ? "STATE CHANGE" : "HEARTBEAT") << ")\n";
                     }
                 }
             }
