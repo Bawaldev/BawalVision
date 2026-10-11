@@ -72,3 +72,4 @@ type IngressInspectionRequest struct {
 	ImageS3URI      *string         `json:"image_s3_uri,omitempty"`
 	Detections      []FoodDetection `json:"detections"`
 }
+
