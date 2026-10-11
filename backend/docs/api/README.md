@@ -8,10 +8,10 @@ This directory contains modular test suites and cURL documentation designed for 
 
 | Module | Document | Description |
 | :--- | :--- | :--- |
-| **01. Authentication & Sessions** | [01_auth_sessions.md](file:///home/faris-wirakusuma/Projectmandiri/BawalVision/backend/docs/api/01_auth_sessions.md) | User registration, login, cryptographic key validation, and encrypted session cookie management. |
-| **02. Edge Telemetry Ingress** | [02_telemetry_ingress.md](file:///home/faris-wirakusuma/Projectmandiri/BawalVision/backend/docs/api/02_telemetry_ingress.md) | ESP32-S3 IoT sensor data streaming (temperature, humidity, VOC gas, atmospheric pressure, CPU load). |
-| **03. Inspection & Food Records** | [03_inspection_food.md](file:///home/faris-wirakusuma/Projectmandiri/BawalVision/backend/docs/api/03_inspection_food.md) | Querying historical inspection logs, food item linkages, and record details. |
-| **04. Database Audit & Schema** | [04_database_audit.md](file:///home/faris-wirakusuma/Projectmandiri/BawalVision/backend/docs/api/04_database_audit.md) | Direct PostgreSQL database integrity checks, table verification, and key inspection. |
+| **01. Authentication & Sessions** | [01_auth_sessions.md](01_auth_sessions.md) | User registration, login, cryptographic key validation, and encrypted session cookie management. |
+| **02. Edge Telemetry Ingress** | [02_telemetry_ingress.md](02_telemetry_ingress.md) | ESP32-S3 IoT sensor data streaming (temperature, humidity, VOC gas, atmospheric pressure, CPU load). |
+| **03. Inspection & Food Records** | [03_inspection_food.md](03_inspection_food.md) | Querying historical inspection logs, food item linkages, and record details. |
+| **04. Database Audit & Schema** | [04_database_audit.md](04_database_audit.md) | Direct PostgreSQL database integrity checks, table verification, and key inspection. |
 
 ---
 
