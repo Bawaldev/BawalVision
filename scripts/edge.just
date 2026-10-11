@@ -4,8 +4,6 @@ build-edge:
 configure-edge:
     @just _idf-exec "reconfigure"
 
-build-edge-wifi:
-    @just _idf-exec "build"
 
 flash-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
     @just _idf-exec "-p {{ port }} flash monitor"
