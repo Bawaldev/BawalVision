@@ -32,6 +32,9 @@ var GlobalCameraStore = &CameraStore{
 }
 
 func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte) {
+	if deviceID == "" || deviceID == "\\" || deviceID == "/" || deviceID == "null" {
+		deviceID = "DEFAULT_CAMERA"
+	}
 	s.Lock()
 	now := time.Now().UnixMilli()
 	s.rawFrames[deviceID] = CachedFrame{
@@ -245,7 +248,7 @@ func (s *CameraStore) GetActiveDeviceID() string {
 	var latestID string
 	var maxTime int64 = 0
 	for id, f := range s.rawFrames {
-		if f.TimestampMS > maxTime {
+		if id != "" && id != "\\" && id != "/" && id != "null" && f.TimestampMS > maxTime {
 			maxTime = f.TimestampMS
 			latestID = id
 		}

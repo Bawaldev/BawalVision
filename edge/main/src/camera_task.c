@@ -13,7 +13,6 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "pins.h"
-#include "standby_jpeg.h"
 #include "system_monitor.h"
 #include "wifi.h"
 
@@ -136,38 +135,28 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
   if (out_frame == NULL || out_frame->data == NULL)
     return ESP_ERR_INVALID_ARG;
 
-  /* Timeout pendek (10ms): jangan biarkan task pengirim menahan pipeline */
-  if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+  /* Timeout 25ms: cukup untuk menunggu giliran swap tanpa menahan pipeline */
+  if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(25)) != pdTRUE) {
     return ESP_ERR_TIMEOUT;
   }
 
   frame_slot_t *slot = &s_slots[s_ready_idx];
 
-  if (s_has_new_frame && slot->header.buffer_len > 0) {
-    uint32_t copy_len = slot->header.buffer_len;
-    if (copy_len > out_frame->capacity) {
-      copy_len = out_frame->capacity;
-    }
-
-    memcpy(&out_frame->header, &slot->header, sizeof(camera_frame_header_t));
-    memcpy(out_frame->data, slot->data, copy_len);
-    out_frame->header.buffer_len = copy_len;
-    s_has_new_frame = false;
-  } else {
-    uint32_t fallback_len = sizeof(s_fallback_jpeg);
-    if (fallback_len > out_frame->capacity) {
-      fallback_len = out_frame->capacity;
-    }
-
-    out_frame->header.buffer_len = fallback_len;
-    out_frame->header.width = DEFAULT_FRAME_WIDTH;
-    out_frame->header.height = DEFAULT_FRAME_HEIGHT;
-    out_frame->header.format = FRAME_FORMAT_JPEG;
-    out_frame->header.frame_id = ++s_frame_counter;
-    out_frame->header.timestamp_ms = esp_timer_get_time() / 1000;
-
-    memcpy(out_frame->data, s_fallback_jpeg, fallback_len);
+  /* Hanya kirim frame riil dari sensor kamera */
+  if (!s_has_new_frame || slot->header.buffer_len == 0) {
+    xSemaphoreGive(s_camera_mutex);
+    return ESP_ERR_NOT_FOUND;
   }
+
+  uint32_t copy_len = slot->header.buffer_len;
+  if (copy_len > out_frame->capacity) {
+    copy_len = out_frame->capacity;
+  }
+
+  memcpy(&out_frame->header, &slot->header, sizeof(camera_frame_header_t));
+  memcpy(out_frame->data, slot->data, copy_len);
+  out_frame->header.buffer_len = copy_len;
+  s_has_new_frame = false;
 
   xSemaphoreGive(s_camera_mutex);
   return ESP_OK;
@@ -222,15 +211,15 @@ void Camera_Capture_Task(void *pvParameters) {
     /* Kembalikan buffer hardware DMA DVP secepat mungkin */
     esp_camera_fb_return(fb);
 
-    /* Pointer Swap instan: tukar indeks slot kerja dengan slot ready */
-    if (xSemaphoreTake(s_camera_mutex, 0) == pdTRUE) {
+    /* Pointer Swap instan: tunggu mutex hingga 10ms jika consumer sedang menyalin frame */
+    if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
       int temp = s_ready_idx;
       s_ready_idx = s_write_idx;
       s_write_idx = temp;
       s_has_new_frame = true;
       xSemaphoreGive(s_camera_mutex);
     } else {
-      /* Jika consumer sedang membaca, frame berikutnya akan menimpa slot kerja (Non-blocking Drop Stale Frame) */
+      /* Jika consumer sedang membaca terlalu lama, frame berikutnya akan menimpa slot kerja */
       ESP_LOGD(TAG, "HTTP task sedang membaca, frame ditimpa tanpa blocking");
     }
 
