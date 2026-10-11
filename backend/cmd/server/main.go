@@ -74,6 +74,7 @@ func main() {
 	batchWorker := inspection.InitGlobalBatchWorker(db, 512, 25, 1*time.Second)
 
 	app := fiber.New(fiber.Config{
+		AppName:      fmt.Sprintf("BawalVision Gateway v%s", version),
 		ServerHeader: "Bawal-Vision-Backend",
 	})
 
@@ -100,7 +101,7 @@ func main() {
 		log.Println("[SHUTDOWN] Batch worker flushed and stopped.")
 	}()
 
-	log.Println("Server running on http://0.0.0.0:8080...")
+	log.Printf("Server running on http://0.0.0.0:8080 (version: %s)...", version)
 	if err := app.Listen(":8080"); err != nil {
 		log.Printf("[SERVER] Server stopped: %v", err)
 	}
