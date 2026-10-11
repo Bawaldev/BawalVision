@@ -385,6 +385,47 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     return err;
 }
 
+void http_stream_sender_task(void *pvParameters) {
+    (void)pvParameters;
+    char backend_ip[32] = {0};
+    uint16_t backend_port = (uint16_t)atoi(CONFIG_BACKEND_PORT);
+    const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
+
+    ESP_LOGI(TAG, "Dedicated HTTP stream sender task running (Target: %d FPS)", STREAM_FPS);
+
+    for (;;) {
+        TickType_t start_tick = xTaskGetTickCount();
+
+        /* Wait for Wi-Fi station connectivity before attempting HTTP transmission */
+        if (g_wifi_event_group != NULL) {
+            EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(500));
+            if (!(bits & WIFI_CONNECTED_BIT)) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+                continue;
+            }
+        }
+
+        if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        esp_err_t err = send_camera_frame_to_backend(backend_ip, backend_port, DEVICE_ID);
+        if (err == ESP_ERR_NOT_FOUND) {
+            /* No new frame ready yet from camera ISP, yield briefly */
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
+        if (elapsed_ticks < frame_interval_ticks) {
+            vTaskDelay(frame_interval_ticks - elapsed_ticks);
+        } else {
+            taskYIELD();
+        }
+    }
+}
+
 void WiFi_Server_Task(void *pvParameters) {
     QueueHandle_t data_queue = (QueueHandle_t)pvParameters;
     telemetry_data_t telemetry;
