@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 GitHub Discussions
+    url: https://github.com/fariswirakusuma/BawalVision/discussions
+    about: Ask questions, discuss architecture, or share project showcases.
+  - name: 🛡️ Security Vulnerability Reporting
+    url: https://github.com/fariswirakusuma/BawalVision/security/advisories/new
+    about: Please report security vulnerabilities privately.
+
