@@ -1,0 +1,49 @@
+name: "✨ Feature Request"
+description: Suggest an idea or enhancement for BawalVision
+title: "[FEAT]: "
+labels: ["enhancement", "proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an improvement for BawalVision! Please explain the motivation and architecture considerations below.
+
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Target Subsystem
+      description: Where does this feature belong?
+      options:
+        - "C++20 SIMD / OpenCV Pipeline (services/)"
+        - "Go Backend Gateway & Streaming (backend/)"
+        - "Edge Firmware & Sensors (edge/)"
+        - "Frontend Dashboard & Telemetry UI (frontend/)"
+        - "AI Model / Super-Resolution / Spoilage Evaluator (ml/)"
+        - "CI/CD & Developer Experience"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement / Motivation
+      description: Is your feature request related to a problem or bottleneck? Please describe.
+      placeholder: "I'm always frustrated when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution & Technical Design
+      description: Describe your proposed solution or algorithmic approach.
+      placeholder: Describe the changes, APIs, or data structures...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions or workarounds you've considered.
+

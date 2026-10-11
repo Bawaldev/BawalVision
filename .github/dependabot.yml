@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # Maintain GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci/cd"
+
+  # Maintain Go Backend dependencies
+  - package-ecosystem: "gomod"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "backend"
+
+  # Maintain Frontend SvelteKit / npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "frontend"
+
+  # Maintain Python ML dependencies
+  - package-ecosystem: "pip"
+    directory: "/ml"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "ml"
+
