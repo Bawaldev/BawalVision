@@ -58,3 +58,4 @@ type FrameQueryResponse struct {
 	ImageBase64 string    `json:"image_base64,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
+

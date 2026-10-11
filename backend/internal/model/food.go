@@ -6,3 +6,4 @@ type FoodItem struct {
 }
 
 func (FoodItem) TableName() string { return "food_items" }
+
