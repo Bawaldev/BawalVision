@@ -174,6 +174,15 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
         m_session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         m_session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
 
+#if defined(USE_DNNL) || defined(HAVE_DNNL)
+        try {
+            Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_Dnnl(m_session_options, 1));
+            std::cout << "[FoodClassifier] Intel oneDNN (DNNL) Execution Provider registered for Xeon acceleration.\n";
+        } catch (const std::exception& e) {
+            std::cout << "[FoodClassifier] Note: oneDNN Provider not available, using high-performance CPU execution provider.\n";
+        }
+#endif
+
         m_session = std::make_unique<Ort::Session>(m_env, resolved_path.c_str(), m_session_options);
 
         // Preprocessing buffer with 64-byte alignment for AVX2/AVX-512 vectorization

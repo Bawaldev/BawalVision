@@ -19,7 +19,11 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
+if(CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
+    message(STATUS "Detected Intel oneAPI DPC++/C++ Compiler (icpx) - Activating Xeon silicon optimizations")
+    add_compile_options(-O3 -mavx2 -mfma -fiopenmp -qopt-zmm-usage=low)
+    add_compile_definitions(BAWAL_USE_INTEL_ICPX=1)
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_options(-O3)
     
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
@@ -27,6 +31,27 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
         add_compile_options(-march=armv8.2-a+simd -mtune=neoverse-n1)
     endif()
+endif()
+
+# Optional Intel oneDNN (DNNL) execution provider support for Intel Xeon acceleration
+option(ENABLE_ONEDNN "Enable oneDNN (DNNL) execution provider in ONNX Runtime" OFF)
+if(ENABLE_ONEDNN OR CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
+    find_path(DNNL_INCLUDE_DIR
+        NAMES dnnl.h dnnl.hpp dnnl_provider_factory.h
+        PATHS
+            /opt/intel/oneapi/dnnl/latest/include
+            /opt/onnxruntime/include
+            /usr/local/include
+            /usr/include
+    )
+    if(DNNL_INCLUDE_DIR)
+        message(STATUS "Found oneDNN (DNNL) at: ${DNNL_INCLUDE_DIR}")
+        add_compile_definitions(USE_DNNL=1 HAVE_DNNL=1)
+        include_directories(${DNNL_INCLUDE_DIR})
+    endif()
+endif()
+
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
 
     # ============================================================
     # WARNING: -ffast-math
