@@ -243,68 +243,6 @@ test-model-ai1 model="ml/AI1/model/ai1_vision.onnx":
     fi
     $PY_BIN -c "import onnxruntime as ort, numpy as np; sess = ort.InferenceSession('{{ model }}', providers=['CPUExecutionProvider']); in_meta = sess.get_inputs()[0]; print(f'[✓] ONNX Model Verified: {{ model }}'); print(f'    Input : {in_meta.name} {in_meta.shape} {in_meta.type}'); dummy = np.zeros([1, 3, 640, 640], dtype=np.float32); out = sess.run(None, {in_meta.name: dummy}); print(f'    Output Shape: {out[0].shape}'); print('[✓] Model forward pass successful via ONNX Runtime CPU.')"
 
-# Track dataset artifacts with DVC and stage git pointers
-dvc-track dir="ml/AI1/dataset":
-    #!/usr/bin/env bash
-    cd {{ justfile_directory() }}
-    DVC_CMD="dvc"
-    if command -v dvc >/dev/null 2>&1; then
-        DVC_CMD="dvc"
-    elif [ -f ~/.local/bin/dvc ]; then
-        DVC_CMD=~/.local/bin/dvc
-    elif [ -f .venv/bin/dvc ]; then
-        DVC_CMD=.venv/bin/dvc
-    elif [ -f .venv/Scripts/dvc.exe ]; then
-        DVC_CMD=.venv/Scripts/dvc.exe
-    else
-        echo "[ERROR] DVC not found in PATH or virtual environment" >&2
-        exit 1
-    fi
-    $DVC_CMD add {{ dir }}
-    git add {{ dir }}.dvc .gitignore
-    echo "[SUCCESS] Dataset tracked with DVC: {{ dir }}.dvc"
-
-# Pull dataset checkpoints from remote DVC storage
-dvc-pull:
-    #!/usr/bin/env bash
-    cd {{ justfile_directory() }}
-    if command -v dvc >/dev/null 2>&1; then
-        dvc pull
-    elif [ -f ~/.local/bin/dvc ]; then
-        ~/.local/bin/dvc pull
-    elif [ -f .venv/bin/dvc ]; then
-        .venv/bin/dvc pull
-    elif [ -f .venv/Scripts/dvc.exe ]; then
-        .venv/Scripts/dvc.exe pull
-    fi
-
-# Push dataset checkpoints to remote DVC storage
-dvc-push:
-    #!/usr/bin/env bash
-    cd {{ justfile_directory() }}
-    if command -v dvc >/dev/null 2>&1; then
-        dvc push
-    elif [ -f ~/.local/bin/dvc ]; then
-        ~/.local/bin/dvc push
-    elif [ -f .venv/bin/dvc ]; then
-        .venv/bin/dvc push
-    elif [ -f .venv/Scripts/dvc.exe ]; then
-        .venv/Scripts/dvc.exe push
-    fi
-
-# Show status of DVC tracked datasets
-dvc-status:
-    #!/usr/bin/env bash
-    cd {{ justfile_directory() }}
-    if command -v dvc >/dev/null 2>&1; then
-        dvc status
-    elif [ -f ~/.local/bin/dvc ]; then
-        ~/.local/bin/dvc status
-    elif [ -f .venv/bin/dvc ]; then
-        .venv/bin/dvc status
-    elif [ -f .venv/Scripts/dvc.exe ]; then
-        .venv/Scripts/dvc.exe status
-    fi
 
 # Clean training run caches, temporary weights, and intermediate predictions
 clean-ml:
