@@ -57,7 +57,9 @@ RUN mkdir -p /app/weights && \
 
 # 5. Fetch RealESRGAN model weights
 COPY scripts/ /src/scripts/
-RUN chmod +x /src/scripts/fetch_ncnn_model.sh && \
+RUN apt-get update && apt-get install -y --no-install-recommends dos2unix && \
+    dos2unix /src/scripts/*.sh && \
+    chmod +x /src/scripts/fetch_ncnn_model.sh && \
     ALLOW_SYNTHETIC_FALLBACK=1 /src/scripts/fetch_ncnn_model.sh \
         realesr-general-x4v3 \
         /app/weights \
