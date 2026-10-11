@@ -6,7 +6,7 @@ torchvision>=0.17.0
 onnx>=1.15.0
 onnxruntime>=1.16.0
 ultralytics>=8.4.174
-pyyaml>=6.0
+pyyaml>=6.0.3
 tqdm>=4.70.1
 icrawler>=0.6.6
 bing-image-downloader
