@@ -1,0 +1,105 @@
+name: Native C++20 Vision Build Matrix
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - 'services/**'
+      - 'ml/include/**'
+      - 'ml/src/**'
+      - '.github/workflows/vision-ci.yml'
+  pull_request:
+    branches: [ "main", "master" ]
+    paths:
+      - 'services/**'
+      - 'ml/include/**'
+      - 'ml/src/**'
+      - '.github/workflows/vision-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: vision-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-vision:
+    name: C++20 Vision Matrix (${{ matrix.compiler.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - name: GCC 14
+            cc: gcc-14
+            cxx: g++-14
+            pkg: gcc-14 g++-14
+          - name: Clang 18
+            cc: clang-18
+            cxx: clang++-18
+            pkg: clang-18
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install System Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libopencv-dev \
+            libomp-dev \
+            libcurl4-openssl-dev \
+            nlohmann-json3-dev \
+            curl \
+            tar \
+            ${{ matrix.compiler.pkg }}
+
+      - name: Cache ONNX Runtime v1.19.2 C++
+        id: cache-ort
+        uses: actions/cache@v4
+        with:
+          path: /opt/onnxruntime
+          key: onnxruntime-linux-x64-1.19.2
+
+      - name: Install ONNX Runtime C++ Library
+        if: steps.cache-ort.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/onnxruntime
+          sudo curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | \
+            sudo tar -xz -C /opt/onnxruntime --strip-components=1
+          sudo cp -r /opt/onnxruntime/include/* /usr/local/include/
+          sudo cp -r /opt/onnxruntime/lib/* /usr/local/lib/
+          sudo ldconfig
+
+      - name: Setup Cached ONNX Runtime Symlinks
+        if: steps.cache-ort.outputs.cache-hit == 'true'
+        run: |
+          sudo cp -r /opt/onnxruntime/include/* /usr/local/include/
+          sudo cp -r /opt/onnxruntime/lib/* /usr/local/lib/
+          sudo ldconfig
+
+      - name: Verify Architecture Portability (No -march=native)
+        run: |
+          echo "Verifying no machine-specific -march=native flag exists in C++ build scripts..."
+          if grep -rn --exclude-dir=build "\-march=native" services/CMakeLists.txt services/include services/src; then
+            echo "::error::Found -march=native in C++ build configuration. Binary must remain portable across CPU architectures."
+            exit 1
+          fi
+          echo "✓ Compiler architecture flags are portable (-mavx2 / -march=armv8.2-a+simd)."
+
+      - name: Configure CMake (Release)
+        env:
+          CC: ${{ matrix.compiler.cc }}
+          CXX: ${{ matrix.compiler.cxx }}
+        run: |
+          cmake -B services/build -S services \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DONNXRUNTIME_INCLUDE_DIR=/usr/local/include \
+            -DONNXRUNTIME_LIB=/usr/local/lib/libonnxruntime.so
+
+      - name: Build Vision Service Binary
+        run: cmake --build services/build --parallel $(nproc)
+
