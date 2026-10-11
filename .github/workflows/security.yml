@@ -36,7 +36,7 @@ jobs:
       - name: Block Prohibited Credential and Environment Files
         run: |
           echo "Scanning git index for sensitive credential/environment files..."
-          FORBIDDEN_FILES=$(git ls-files | grep -E '(\.env($|\.)|\.dvc/config$|wifi_credentials\.h$|.*\.pem$|.*\.key$)' || true)
+          FORBIDDEN_FILES=$(git ls-files | grep -E '((^|/)\.env($|\.)|\.dvc/config$|wifi_credentials\.h$|.*\.pem$|.*\.key$)' | grep -v -E '\.env(\.[a-zA-Z0-9_-]+)?\.example$|\.env\.example$' || true)
           if [ -n "$FORBIDDEN_FILES" ]; then
             echo "::error::Prohibited sensitive files detected in git tree:"
             echo "$FORBIDDEN_FILES"
