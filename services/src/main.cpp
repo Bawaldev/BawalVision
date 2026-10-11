@@ -285,7 +285,7 @@ int main(int argc, char** argv) {
 
         if (device_id.empty() || idle_backoff_ms > 0 || (discovery_tick++ % 30 == 0)) {
             const std::string discovered = discoverActiveDeviceID(curl_fetch, backend_base_url);
-            if (!discovered.empty() && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
+            if (!discovered.empty() && discovered != "\\" && discovered != "/" && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
                 device_id = discovered;
                 {
                     std::lock_guard<std::mutex> lock(ai_mutex);

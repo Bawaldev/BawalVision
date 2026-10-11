@@ -346,42 +346,45 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     char url[URL_BUFFER_SIZE];
     snprintf(url, sizeof(url), "http://%s:%d%s", backend_ip, port, CAMERA_FRAME_ENDPOINT);
 
-    esp_http_client_config_t config = {
-        .url = url,
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = 3000,
-        .buffer_size_tx = 4096,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (client == NULL) {
-        return ESP_FAIL;
+    static esp_http_client_handle_t s_stream_client = NULL;
+    static char s_cached_stream_url[URL_BUFFER_SIZE] = {0};
+
+    /* Reuse persistent HTTP client with TCP Keep-Alive to eliminate per-frame socket handshakes */
+    if (s_stream_client == NULL || strcmp(s_cached_stream_url, url) != 0) {
+        if (s_stream_client != NULL) {
+            esp_http_client_cleanup(s_stream_client);
+            s_stream_client = NULL;
+        }
+        esp_http_client_config_t config = {
+            .url = url,
+            .method = HTTP_METHOD_POST,
+            .timeout_ms = 1500,
+            .buffer_size_tx = 8192,
+            .keep_alive_enable = true,
+        };
+        s_stream_client = esp_http_client_init(&config);
+        if (s_stream_client == NULL) {
+            return ESP_FAIL;
+        }
+        strncpy(s_cached_stream_url, url, sizeof(s_cached_stream_url) - 1);
     }
 
     char frame_id_str[16];
     snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)s_local_tx_frame.header.frame_id);
 
-    esp_http_client_set_header(client, "Content-Type", "image/jpeg");
-    esp_http_client_set_header(client, "X-Device-ID", device_id);
-    esp_http_client_set_header(client, "X-Frame-ID", frame_id_str);
-    esp_http_client_set_post_field(client, (const char *)s_local_tx_frame.data, s_local_tx_frame.header.buffer_len);
+    esp_http_client_set_header(s_stream_client, "Content-Type", "image/jpeg");
+    esp_http_client_set_header(s_stream_client, "Connection", "keep-alive");
+    esp_http_client_set_header(s_stream_client, "X-Device-ID", device_id);
+    esp_http_client_set_header(s_stream_client, "X-Frame-ID", frame_id_str);
+    esp_http_client_set_post_field(s_stream_client, (const char *)s_local_tx_frame.data, s_local_tx_frame.header.buffer_len);
 
-    ESP_LOGI(TAG, "Dispatching camera frame to: %s (Device: %s, Frame ID: %lu, Size: %u bytes)", 
-             url, device_id, (unsigned long)s_local_tx_frame.header.frame_id, (unsigned int)s_local_tx_frame.header.buffer_len);
-
-    lcd_update_http_status("STREAM JPEG...", false);
-    esp_err_t err = esp_http_client_perform(client);
-    if (err == ESP_OK) {
-        int status_code = esp_http_client_get_status_code(client);
-        ESP_LOGI(TAG, "Camera frame ingest completed. Status = %d", status_code);
-        char status_buf[32];
-        snprintf(status_buf, sizeof(status_buf), "STREAM %d OK", status_code);
-        lcd_update_http_status(status_buf, false);
-    } else {
-        ESP_LOGE(TAG, "Camera frame ingest failed: %s", esp_err_to_name(err));
-        lcd_update_http_status("STREAM: ERR", true);
+    esp_err_t err = esp_http_client_perform(s_stream_client);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Stream socket error (%s), reconnecting on next frame", esp_err_to_name(err));
+        esp_http_client_cleanup(s_stream_client);
+        s_stream_client = NULL;
     }
 
-    esp_http_client_cleanup(client);
     return err;
 }
 
