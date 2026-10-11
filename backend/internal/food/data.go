@@ -1,8 +1,8 @@
 package food
 
-type FoodItem struct {
-	ID   int    `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name string `json:"name" gorm:"type:varchar(100);unique;not null"`
-}
+import (
+	"bawal_vision_backend/internal/model"
+)
 
-func (FoodItem) TableName() string { return "food_items" }
+// Re-export centralized FoodItem model for backward compatibility
+type FoodItem = model.FoodItem

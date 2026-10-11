@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -67,6 +70,9 @@ func main() {
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'PASS'")
 	_ = db.Exec("DELETE FROM inspections WHERE id NOT IN (SELECT DISTINCT inspection_id FROM inspection_foods)")
 
+	// Initialize Asynchronous Inspection Batch Worker (Buffer: 512, Batch: 25, Flush: 1s)
+	batchWorker := inspection.InitGlobalBatchWorker(db, 512, 25, 1*time.Second)
+
 	app := fiber.New(fiber.Config{
 		ServerHeader: "Bawal-Vision-Backend",
 	})
@@ -80,6 +86,22 @@ func main() {
 	api.RegisterFrontendRoutes(apiGroup, db)
 	api.RegisterCameraRoutes(apiGroup, db)
 
+	// Graceful shutdown handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		log.Println("[SHUTDOWN] Signal received, shutting down gracefully...")
+		if err := app.Shutdown(); err != nil {
+			log.Printf("[SHUTDOWN ERROR] Fiber app shutdown failed: %v", err)
+		}
+		batchWorker.Stop()
+		log.Println("[SHUTDOWN] Batch worker flushed and stopped.")
+	}()
+
 	log.Println("Server running on http://0.0.0.0:8080...")
-	log.Fatal(app.Listen(":8080"))
+	if err := app.Listen(":8080"); err != nil {
+		log.Printf("[SERVER] Server stopped: %v", err)
+	}
 }
