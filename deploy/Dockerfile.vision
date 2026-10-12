@@ -27,7 +27,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     curl \
     wget \
     tar \
-    unzip && \
+    unzip \
+    dos2unix && \
     # 2. ONNX Runtime v1.19.2
     mkdir -p /opt/onnxruntime && \
     curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | \
@@ -57,8 +58,7 @@ RUN mkdir -p /app/weights && \
 
 # 5. Fetch RealESRGAN model weights
 COPY scripts/ /src/scripts/
-RUN apt-get update && apt-get install -y --no-install-recommends dos2unix && \
-    dos2unix /src/scripts/*.sh && \
+RUN dos2unix /src/scripts/*.sh && \
     chmod +x /src/scripts/fetch_ncnn_model.sh && \
     ALLOW_SYNTHETIC_FALLBACK=1 /src/scripts/fetch_ncnn_model.sh \
         realesr-general-x4v3 \
