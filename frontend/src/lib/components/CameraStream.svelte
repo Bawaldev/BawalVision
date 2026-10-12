@@ -41,7 +41,7 @@
     let mockVideoSrc = $state('/examples/sample_tray.mp4');
     let mockFileName = $state('sample_tray.mp4');
     let isCustomUpload = $state(false);
-    let fileInputRef: HTMLInputElement | null = null;
+    let fileInputRef = $state<HTMLInputElement | null>(null);
 
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
@@ -413,10 +413,10 @@
 
     .source-mode-switcher {
         display: flex;
-        background: var(--bg-chip, #1a202c);
+        background: #f1f5f9;
         padding: 2px;
-        border-radius: var(--radius-pill, 9999px);
-        border: 1px solid var(--border-subtle, #2d3748);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-subtle);
         gap: 2px;
     }
 
@@ -427,24 +427,24 @@
         font-size: 0.68rem;
         font-weight: 600;
         padding: 4px 10px;
-        border-radius: var(--radius-pill, 9999px);
+        border-radius: var(--radius-sm);
         background: transparent;
-        color: var(--text-muted, #94a3b8);
+        color: var(--text-secondary);
         border: none;
         cursor: pointer;
         transition: all 0.15s ease;
     }
 
     .mode-pill-btn:hover {
-        color: var(--text-primary, #f8fafc);
-        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-primary);
+        background: #e2e8f0;
     }
 
     .mode-pill-btn.active {
-        background: var(--accent-blue, #3b82f6);
+        background: #3679a8;
         color: #ffffff;
         font-weight: 700;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 1px 2px rgba(54, 121, 168, 0.25);
     }
 
     .pill-icon {
@@ -456,8 +456,8 @@
         align-items: center;
         justify-content: space-between;
         padding: 8px 16px;
-        background: var(--bg-chip, #181c24);
-        border-top: 1px solid var(--border-subtle, #2d3748);
+        background: #f8fafc;
+        border-top: 1px solid var(--border-subtle);
         font-size: 0.75rem;
         gap: 12px;
     }
@@ -471,16 +471,17 @@
     }
 
     .mock-label {
-        color: var(--text-secondary, #cbd5e1);
+        color: var(--text-secondary);
         white-space: nowrap;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
+        font-weight: 600;
     }
 
     .example-select {
-        background: var(--bg-card, #1e293b);
-        color: var(--text-primary, #f8fafc);
-        border: 1px solid var(--border-subtle, #334155);
-        border-radius: var(--radius-sm, 6px);
+        background: #ffffff;
+        color: var(--text-primary);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-sm);
         padding: 4px 10px;
         font-size: 0.75rem;
         font-weight: 600;
@@ -492,7 +493,7 @@
 
     .example-select:hover,
     .example-select:focus {
-        border-color: var(--accent-blue, #3b82f6);
+        border-color: #3679a8;
     }
 
     .mock-actions {
@@ -507,10 +508,10 @@
     }
 
     .upload-btn {
-        background: var(--bg-card, #1e293b);
-        color: var(--accent-blue, #60a5fa);
-        border: 1px solid var(--border-subtle, #334155);
-        border-radius: var(--radius-pill, 9999px);
+        background: #ffffff;
+        color: #3679a8;
+        border: 1px solid #cbd5e1;
+        border-radius: var(--radius-sm);
         padding: 4px 12px;
         font-size: 0.72rem;
         font-weight: 600;
@@ -519,17 +520,17 @@
     }
 
     .upload-btn:hover {
-        background: var(--accent-blue, #3b82f6);
+        background: #3679a8;
         color: #ffffff;
     }
 
     .pill-badge {
         font-size: 0.7rem;
         font-weight: 600;
-        background: var(--bg-chip);
+        background: #e2e8f0;
         color: var(--text-secondary);
         padding: 3px 10px;
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-sm);
     }
 
     .canvas-container {
@@ -549,15 +550,6 @@
         object-fit: contain;
         display: block;
         margin: auto;
-    }
-
-    .detection-svg-overlay {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        z-index: 5;
     }
 
     .standby-box {
@@ -728,16 +720,6 @@
         align-items: center;
         gap: 6px;
         margin-top: 1px;
-    }
-
-    .entity-state {
-        font-size: 0.65rem;
-        color: var(--text-muted);
-    }
-
-    .entity-item.on .entity-state {
-        color: var(--text-secondary);
-        font-weight: 600;
     }
 
     .freshness-tag {

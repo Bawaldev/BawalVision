@@ -26,9 +26,10 @@
             type="button"
             class="action-btn reject"
             onclick={onForceReject}
+            title="Actuate pneumatic diverter valve to reject meal tray"
         >
             <div class="btn-icon-circle red">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-svg">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="btn-svg">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
             </div>
@@ -45,11 +46,12 @@
             class:loading={isInspecting}
             disabled={isInspecting}
             onclick={onInspectTray}
+            title="Trigger single-cycle optical camera acquisition and AI inference"
         >
             <div class="btn-icon-circle green">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-svg">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="btn-svg">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <circle cx="12" cy="12" r="9" />
                 </svg>
             </div>
             <div class="btn-text">
@@ -62,7 +64,7 @@
 
 <style>
     .actions-card {
-        background: var(--bg-card);
+        background: #ffffff;
         border: 1px solid var(--border-card);
         border-radius: var(--radius-lg);
         padding: 16px;
@@ -104,11 +106,12 @@
 
     .armed-pill {
         font-size: 0.68rem;
-        font-weight: 600;
-        background: var(--accent-amber-dim);
-        color: var(--accent-amber);
+        font-weight: 700;
+        background: #fef3c7;
+        color: #d97706;
         padding: 2px 8px;
         border-radius: var(--radius-pill);
+        border: 1px solid #fde68a;
     }
 
     .buttons-grid {
@@ -122,8 +125,8 @@
         align-items: center;
         gap: 10px;
         padding: 10px 12px;
-        background: var(--bg-inset);
-        border: 1px solid var(--border-subtle);
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
         border-radius: var(--radius-md);
         cursor: pointer;
         text-align: left;
@@ -131,8 +134,9 @@
     }
 
     .action-btn:hover {
-        background: var(--bg-card-hover);
-        border-color: var(--border-highlight);
+        background: #ffffff;
+        border-color: #cbd5e1;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
     }
 
     .action-btn:disabled {
@@ -151,13 +155,13 @@
     }
 
     .btn-icon-circle.red {
-        background: var(--accent-red-dim);
-        color: var(--accent-red);
+        background: #fee2e2;
+        color: #dc2626;
     }
 
     .btn-icon-circle.green {
-        background: var(--accent-green-dim);
-        color: var(--accent-green);
+        background: #dcfce7;
+        color: #16a34a;
     }
 
     .btn-svg {

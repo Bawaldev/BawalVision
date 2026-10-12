@@ -8,6 +8,7 @@
         activeDevice?: string;
         fps?: number;
         latencyMs?: number;
+        isOnline?: boolean;
         onToggleGraviton?: () => void;
         onToggleLocal?: () => void;
     }
@@ -19,17 +20,21 @@
         localEngineEnabled = true,
         localEngineAvailable = true,
         activeDevice = 'ESP32S3_441BF6C95678',
-        fps = 30.0,
-        latencyMs = 5.5,
+        fps = 29.8,
+        latencyMs = 5.4,
+        isOnline = true,
         onToggleGraviton,
         onToggleLocal
     }: Props = $props();
 
-    let currentTime = $state(new Date().toLocaleTimeString());
+    let currentTime = $state(new Date().toLocaleTimeString('en-US', { hour12: true }));
 
-    setInterval(() => {
-        currentTime = new Date().toLocaleTimeString();
-    }, 1000);
+    $effect(() => {
+        const interval = setInterval(() => {
+            currentTime = new Date().toLocaleTimeString('en-US', { hour12: true });
+        }, 1000);
+        return () => clearInterval(interval);
+    });
 </script>
 
 <header class="topbar-container">
@@ -41,13 +46,13 @@
             </svg>
             <h1>{currentTitle}</h1>
         </div>
-        <div class="status-chip">
-            <span class="pulse-dot"></span>
-            <span>Live Ingress</span>
+        <div class="status-chip" class:offline={!isOnline}>
+            <span class="pulse-dot" class:online={isOnline}></span>
+            <span>{isOnline ? 'Live Ingress' : 'Offline'}</span>
         </div>
     </div>
 
-    <!-- Compute Engine Toggle Chips (Lovelace Entity Buttons) -->
+    <!-- Compute Engine Toggle Chips -->
     <div class="engine-selectors">
         <button
             type="button"
@@ -58,6 +63,7 @@
             onclick={() => {
                 if (gravitonAvailable && onToggleGraviton) onToggleGraviton();
             }}
+            title={gravitonAvailable ? 'Toggle AWS Graviton3 Cloud Inference' : 'Cloud Graviton3 Offline'}
         >
             <div class="chip-circle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="chip-svg">
@@ -79,6 +85,7 @@
             onclick={() => {
                 if (localEngineAvailable && onToggleLocal) onToggleLocal();
             }}
+            title="Toggle Local C++ SIMD Inference Engine"
         >
             <div class="chip-circle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="chip-svg">
@@ -92,19 +99,28 @@
         </button>
     </div>
 
-    <!-- Horizontal Telemetry Quick Glance (Home Assistant Style Metric Strip) -->
+    <!-- Horizontal Telemetry Quick Glance -->
     <div class="horizontal-metrics-strip">
-        <div class="metric-item">
-            <span class="metric-icon">📹</span>
-            <span class="metric-val">{fps.toFixed(1)} <small>FPS</small></span>
+        <div class="metric-item memory-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="metric-svg">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            <span class="metric-val">Memory usage: 382 MB</span>
         </div>
-        <div class="metric-item">
-            <span class="metric-icon">⚡</span>
-            <span class="metric-val">{latencyMs.toFixed(1)} <small>ms</small></span>
+        <div class="metric-item fps-item">
+            <span class="metric-dot green"></span>
+            <span class="metric-val"><strong>{fps.toFixed(1)}</strong> <small>FPS</small></span>
+        </div>
+        <div class="metric-item latency-item">
+            <span class="metric-dot blue"></span>
+            <span class="metric-val"><strong>{latencyMs.toFixed(1)}</strong> <small>ms</small></span>
         </div>
         <div class="metric-item clock-item">
-            <span class="metric-icon">⏱</span>
-            <span class="metric-val">{currentTime}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="metric-svg clock-svg">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 3" />
+            </svg>
+            <span class="metric-val clock-val">{currentTime}</span>
         </div>
     </div>
 </header>
@@ -114,58 +130,69 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 14px 22px;
-        background: var(--bg-sidebar);
+        padding: 12px 24px;
+        background: #ffffff;
         border-bottom: 1px solid var(--border-card);
         gap: 16px;
         flex-wrap: wrap;
-        z-index: 5;
+        z-index: 10;
+        min-height: 60px;
     }
 
     .title-group {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 14px;
+        flex-shrink: 0;
     }
 
     .title-chip {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
     }
 
     .title-icon {
         width: 20px;
         height: 20px;
-        color: var(--accent-blue);
+        color: #3679a8;
     }
 
     .title-chip h1 {
         font-size: 1.15rem;
         font-weight: 700;
         margin: 0;
-        color: var(--text-primary);
+        color: #1e293b;
+        letter-spacing: -0.01em;
     }
 
     .status-chip {
         display: flex;
         align-items: center;
         gap: 6px;
-        background: var(--bg-card);
-        border: 1px solid var(--border-subtle);
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
         padding: 4px 10px;
         border-radius: var(--radius-pill);
-        font-size: 0.7rem;
+        font-size: 0.72rem;
         font-weight: 600;
-        color: var(--accent-green);
+        color: #16a34a;
+    }
+
+    .status-chip.offline {
+        color: #64748b;
     }
 
     .pulse-dot {
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: var(--accent-green);
-        box-shadow: 0 0 6px var(--accent-green);
+        background: #64748b;
+    }
+
+    .pulse-dot.online {
+        background: #16a34a;
+        box-shadow: 0 0 6px rgba(22, 163, 74, 0.6);
     }
 
     .engine-selectors {
@@ -178,50 +205,53 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 6px 12px;
-        background: var(--bg-card);
-        border: 1px solid var(--border-card);
-        border-radius: var(--radius-md);
+        padding: 6px 14px;
+        background: #f8fafc;
+        border: 1px solid #d8e0ea;
+        border-radius: 6px;
         cursor: pointer;
         text-align: left;
-        color: var(--text-secondary);
+        color: #475569;
         transition: all 0.15s ease;
     }
 
     .entity-chip:hover:not(.disabled) {
-        background: var(--bg-card-hover);
-        border-color: var(--border-highlight);
-        color: var(--text-primary);
+        background: #ffffff;
+        border-color: #3679a8;
+        color: #1e293b;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
     }
 
     .entity-chip.active {
-        background: var(--bg-card);
-        border-color: var(--accent-blue);
-        color: var(--text-primary);
-        box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+        background: #f0f7fc;
+        border-color: #3679a8;
+        color: #1e293b;
+        box-shadow: 0 1px 3px rgba(54, 121, 168, 0.15);
     }
 
     .entity-chip.disabled {
-        opacity: 0.45;
+        opacity: 0.5;
         cursor: not-allowed;
-        pointer-events: none;
+        background: #f1f5f9;
+        border-color: #e2e8f0;
     }
 
     .chip-circle {
         width: 28px;
         height: 28px;
         border-radius: 50%;
-        background: var(--bg-chip);
+        background: #e2e8f0;
         display: flex;
         align-items: center;
         justify-content: center;
-        color: var(--text-secondary);
+        color: #64748b;
         transition: all 0.15s ease;
+        flex-shrink: 0;
     }
 
     .entity-chip.active .chip-circle {
-        background: var(--accent-blue);
-        color: #0f172a;
+        background: #3679a8;
+        color: #ffffff;
     }
 
     .chip-svg {
@@ -237,50 +267,100 @@
     .chip-text strong {
         font-size: 0.78rem;
         font-weight: 700;
-        line-height: 1.1;
+        line-height: 1.15;
+        color: #1e293b;
     }
 
     .chip-text small {
         font-size: 0.65rem;
-        color: var(--text-muted);
+        color: #64748b;
+        font-weight: 500;
+    }
+
+    .entity-chip.active .chip-text small {
+        color: #3679a8;
+        font-weight: 600;
     }
 
     .horizontal-metrics-strip {
         display: flex;
         align-items: center;
-        gap: 12px;
-        background: var(--bg-card);
-        border: 1px solid var(--border-card);
+        gap: 14px;
+        background: #f8fafc;
+        border: 1px solid #d8e0ea;
         padding: 6px 14px;
         border-radius: var(--radius-pill);
+        flex-shrink: 0;
     }
 
     .metric-item {
         display: flex;
         align-items: center;
         gap: 6px;
-        font-size: 0.78rem;
+        font-size: 0.75rem;
         font-weight: 600;
-        color: var(--text-primary);
+        color: #1e293b;
     }
 
-    .metric-icon {
-        font-size: 0.85rem;
+    .metric-svg {
+        width: 14px;
+        height: 14px;
+        color: #64748b;
+    }
+
+    .metric-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+    }
+
+    .metric-dot.green {
+        background: #16a34a;
+    }
+
+    .metric-dot.blue {
+        background: #3679a8;
     }
 
     .metric-val {
         font-family: var(--font-mono);
+        font-size: 0.75rem;
+    }
+
+    .metric-val strong {
+        font-weight: 700;
+        color: #1e293b;
     }
 
     .metric-val small {
-        font-size: 0.68rem;
-        color: var(--text-muted);
+        font-size: 0.65rem;
+        color: #64748b;
         font-weight: 500;
     }
 
     .clock-item {
-        padding-left: 6px;
-        border-left: 1px solid var(--border-subtle);
-        color: var(--text-secondary);
+        padding-left: 10px;
+        border-left: 1px solid #d8e0ea;
+        color: #475569;
+    }
+
+    .clock-svg {
+        width: 13px;
+        height: 13px;
+        color: #64748b;
+    }
+
+    .clock-val {
+        font-size: 0.74rem;
+        color: #475569;
+        font-weight: 600;
+    }
+
+    @media (max-width: 1050px) {
+        .engine-selectors {
+            order: 3;
+            width: 100%;
+            justify-content: flex-start;
+        }
     }
 </style>
