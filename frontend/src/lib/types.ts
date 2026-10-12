@@ -86,3 +86,14 @@ export interface SystemConfig {
     localEngineEnabled: boolean;
     localEngineAvailable?: boolean;
 }
+
+export interface EspConnectionResult {
+    success: boolean;
+    deviceId: string;
+    firmwareVersion?: string;
+    rssi?: number;
+    latencyMs?: number;
+    ipAddress?: string;
+    message?: string;
+}
+
