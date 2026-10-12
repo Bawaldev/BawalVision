@@ -89,6 +89,23 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 	camGroup.Post("/frame", ingressHandler)
 	camGroup.Post("/annotated", annotatedIngressHandler)
 
+	videoIngressHandler := func(c *fiber.Ctx) error {
+		body := c.Body()
+		if len(body) == 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Empty video payload"})
+		}
+		deviceID := c.Get("X-Device-ID", "DEFAULT_DEVICE")
+		contentType := c.Get("Content-Type", "video/mp4")
+		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+			"status":       "success",
+			"device_id":    deviceID,
+			"content_type": contentType,
+			"bytes":        len(body),
+		})
+	}
+	router.Post("/video", videoIngressHandler)
+	camGroup.Post("/video", videoIngressHandler)
+
 	camGroup.Get("/active", func(c *fiber.Ctx) error {
 		activeID := camera_handler.GlobalCameraStore.GetActiveDeviceID()
 		if activeID == "" {
@@ -166,6 +183,8 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		return c.Status(http.StatusOK).Send(rawBytes)
 	}
 
+	camGroup.Get("/frame", rawFrameHandler)
+	camGroup.Get("/frame/:device_id", rawFrameHandler)
 	camGroup.Get("/latest/raw", rawFrameHandler)
 	camGroup.Get("/latest/:device_id/raw", rawFrameHandler)
 	camGroup.Get("/latest/:device_id", rawFrameHandler)
