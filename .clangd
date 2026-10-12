@@ -17,6 +17,7 @@ CompileFlags:
     - -Iedge/main/include
     - -Iedge/main/src
     - -Iedge/main
+    - -Iedge/include
     - -iquoteedge/main/include
     - -iquoteedge/main/src
     - --target=riscv32
@@ -57,6 +58,7 @@ CompileFlags:
     - -I/opt/onnxruntime/include
     - -I/usr/local/include
     - -I/usr/include/opencv4
+    - -I/usr/include/ncnn
 
 ---
 If:
@@ -73,3 +75,5 @@ CompileFlags:
     - -mavx2
     - -mfma
     - -fopenmp
+    - -I/usr/include/opencv4
+    - -I/usr/include/ncnn
