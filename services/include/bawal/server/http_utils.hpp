@@ -14,10 +14,10 @@ namespace bawal::server {
  * @brief Remote camera connection parameters.
  */
 struct alignas(8) CameraConfig {
-    std::string backend_url;        
-    std::string device_id;         
-    int32_t timeout_ms{400};       
-    uint8_t reserved[4]{0};  
+    std::string backend_url;        ///< 32 bytes (offset 0..31)
+    std::string device_id;          ///< 32 bytes (offset 32..63)
+    int32_t timeout_ms{400};        ///< 4 bytes (offset 64..67)
+    uint8_t reserved[4]{0};         ///< 4 bytes padding (offset 68..71)
 };
 
 static_assert(alignof(CameraConfig) == 8, "CameraConfig must be 8-byte aligned");
@@ -47,6 +47,8 @@ static_assert(sizeof(CameraConfig) == 72, "CameraConfig must have 72 bytes in 64
 /**
  * @brief Sends an inspection JSON payload with food detections to the backend service.
  * 
+ * Target endpoint: POST {backend_base_url}/api/v1/inspections
+ * 
  * @param curl Active libcurl easy handle.
  * @param backend_base_url Base URL of the backend service (e.g. http://localhost:8080).
  * @param json_payload JSON string containing device_id and detections array.
@@ -57,6 +59,8 @@ static_assert(sizeof(CameraConfig) == 72, "CameraConfig must have 72 bytes in 64
 /**
  * @brief Transmits an annotated JPEG frame with visual bounding boxes to the backend.
  * 
+ * Target endpoint: POST {backend_base_url}/api/v1/camera/annotated
+ * 
  * @param curl Active libcurl easy handle.
  * @param backend_base_url Base URL of the backend service.
  * @param device_id Target device identifier.
@@ -65,5 +69,46 @@ static_assert(sizeof(CameraConfig) == 72, "CameraConfig must have 72 bytes in 64
  * @return true if backend returned HTTP 200 OK.
  */
 [[nodiscard]] bool postAnnotatedFrame(CURL* curl, std::string_view backend_base_url, std::string_view device_id, uint32_t frame_id, const std::vector<uint8_t>& jpeg_bytes);
+
+/**
+ * @brief Transmits a recorded video container (MP4/H.264 binary) to the backend service.
+ * 
+ * Target endpoint: POST {backend_base_url}/api/v1/video
+ * Sends raw video binary stream with custom metadata headers.
+ * 
+ * @param curl Active libcurl easy handle.
+ * @param backend_base_url Base URL of backend service (e.g. "http://localhost:8080").
+ * @param device_id Unique identifier of transmitting device (attached in X-Device-ID header).
+ * @param video_bytes Binary buffer containing full video file (e.g. encoded MP4).
+ * @param content_type MIME type of the video (default: "video/mp4").
+ * @param timeout_ms Upload transfer timeout in milliseconds (default: 5000 ms).
+ * @return true if server responds with HTTP 200 OK or HTTP 201 Created, false on error.
+ */
+[[nodiscard]] bool postVideoPayload(
+    CURL* curl,
+    std::string_view backend_base_url,
+    std::string_view device_id,
+    const std::vector<uint8_t>& video_bytes,
+    std::string_view content_type = "video/mp4",
+    long timeout_ms = 5000
+);
+
+/**
+ * @brief Sends video manifest metadata in JSON format to /api/v1/video.
+ * 
+ * Used when video upload utilizes presigned S3 URLs or streaming metadata manifests.
+ * 
+ * @param curl Active libcurl easy handle.
+ * @param backend_base_url Base URL of backend service.
+ * @param json_payload JSON string containing video metadata information.
+ * @param timeout_ms Transmission timeout limit in milliseconds (default: 1500 ms).
+ * @return true if server responds with HTTP 200 OK or HTTP 201 Created.
+ */
+[[nodiscard]] bool postVideoMetadata(
+    CURL* curl,
+    std::string_view backend_base_url,
+    std::string_view json_payload,
+    long timeout_ms = 1500
+);
 
 } // namespace bawal::server
