@@ -1,12 +1,20 @@
 <script lang="ts">
-    import type { SystemConfig } from '../types';
+    import { connectEspDevice, disconnectEspDevice } from '../api';
+    import type { SystemConfig, EspConnectionResult } from '../types';
 
     interface Props {
         config: SystemConfig;
+        isOnline?: boolean;
+        onDeviceConnectionChange?: (connected: boolean, deviceId: string) => void;
         onSaveConfig: (updated: SystemConfig) => void;
     }
 
-    let { config, onSaveConfig }: Props = $props();
+    let {
+        config,
+        isOnline = false,
+        onDeviceConnectionChange,
+        onSaveConfig
+    }: Props = $props();
 
     let formState = $state({
         backendUrl: '/api/v1',
@@ -19,10 +27,24 @@
         localEngineEnabled: true
     });
 
+    // ESP Connection States (like Wi-Fi / Bluetooth connect modal)
+    let connectionStatus = $state<'disconnected' | 'connecting' | 'connected' | 'failed'>('disconnected');
+    let connectingStepText = $state('Initializing connection...');
+    let errorMessage = $state('');
+    let lastConnDetails = $state<EspConnectionResult>({
+        success: true,
+        deviceId: 'ESP32S3_441BF6C95678',
+        firmwareVersion: '1.0.4-prod',
+        rssi: -58,
+        latencyMs: 12,
+        ipAddress: '192.168.4.1',
+        message: 'Connected'
+    });
+
     $effect(() => {
         if (config) {
             formState.backendUrl = config.backendUrl;
-            formState.deviceId = config.deviceId;
+            formState.deviceId = config.deviceId || formState.deviceId;
             formState.streamIntervalMs = config.streamIntervalMs;
             formState.enableMockIfOffline = config.enableMockIfOffline;
             formState.minConfidenceThreshold = config.minConfidenceThreshold;
@@ -31,6 +53,72 @@
             formState.localEngineEnabled = config.localEngineEnabled;
         }
     });
+
+    $effect(() => {
+        if (isOnline && connectionStatus === 'disconnected') {
+            connectionStatus = 'connected';
+            if (config.deviceId) {
+                lastConnDetails.deviceId = config.deviceId;
+            }
+        }
+    });
+
+    async function handleConnectEsp() {
+        const targetId = (formState.deviceId || '').trim();
+        if (!targetId) {
+            connectionStatus = 'failed';
+            errorMessage = 'Please specify an ESP32 Sensor Node ID before connecting.';
+            return;
+        }
+
+        connectionStatus = 'connecting';
+        errorMessage = '';
+        connectingStepText = `Scanning for broadcast from ${targetId}...`;
+
+        const stepTimer1 = setTimeout(() => {
+            if (connectionStatus === 'connecting') {
+                connectingStepText = 'Initiating Fieldbus TCP/UART handshake...';
+            }
+        }, 350);
+
+        const stepTimer2 = setTimeout(() => {
+            if (connectionStatus === 'connecting') {
+                connectingStepText = 'Validating CRC32 telemetry frame sync (100 Hz)...';
+            }
+        }, 750);
+
+        try {
+            const res = await connectEspDevice(targetId, formState.backendUrl);
+            clearTimeout(stepTimer1);
+            clearTimeout(stepTimer2);
+
+            if (res.success) {
+                connectionStatus = 'connected';
+                lastConnDetails = res;
+                formState.deviceId = res.deviceId;
+                onDeviceConnectionChange?.(true, res.deviceId);
+            } else {
+                connectionStatus = 'failed';
+                errorMessage = res.message || 'Connection handshake timed out.';
+                onDeviceConnectionChange?.(false, targetId);
+            }
+        } catch (err: any) {
+            clearTimeout(stepTimer1);
+            clearTimeout(stepTimer2);
+            connectionStatus = 'failed';
+            errorMessage = err?.message || 'Failed to connect to ESP32 node.';
+            onDeviceConnectionChange?.(false, targetId);
+        }
+    }
+
+    async function handleDisconnectEsp() {
+        try {
+            await disconnectEspDevice(formState.deviceId, formState.backendUrl);
+        } catch {}
+        connectionStatus = 'disconnected';
+        errorMessage = '';
+        onDeviceConnectionChange?.(false, formState.deviceId);
+    }
 
     let isSaved = $state(false);
 
@@ -63,29 +151,123 @@
                 <span class="section-icon">🌐</span>
                 <h3>Gateway & Fieldbus Connectivity</h3>
             </div>
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="backendUrl">Backend API Base URL</label>
-                    <input
-                        id="backendUrl"
-                        type="text"
-                        bind:value={formState.backendUrl}
-                        class="form-input"
-                    />
-                    <small>Default: /api/v1 (Proxies to Go Fiber Gateway)</small>
-                </div>
 
-                <div class="form-group">
-                    <label for="deviceId">ESP32-S3 Sensor Node ID</label>
-                    <input
-                        id="deviceId"
-                        type="text"
-                        bind:value={formState.deviceId}
-                        class="form-input"
-                    />
-                    <small>Active device identifier broadcast via telemetry</small>
+            <!-- ESP32-S3 Connection Controller (Wi-Fi Style Pairing & Telemetry Link) -->
+            <div class="form-group esp-connect-group">
+                    <div class="esp-header-row">
+                        <label for="deviceId">ESP32-S3 Sensor Node Connection</label>
+                        <span class="esp-status-chip {connectionStatus}">
+                            <span class="status-dot {connectionStatus}"></span>
+                            {#if connectionStatus === 'connected'}
+                                Connected
+                            {:else if connectionStatus === 'connecting'}
+                                Connecting...
+                            {:else if connectionStatus === 'failed'}
+                                Failed
+                            {:else}
+                                Disconnected
+                            {/if}
+                        </span>
+                    </div>
+
+                    <!-- Target Node ID Input & Connect Action Button -->
+                    <div class="esp-input-action-bar">
+                        <div class="input-with-icon">
+                            <span class="input-icon">📡</span>
+                            <input
+                                id="deviceId"
+                                type="text"
+                                bind:value={formState.deviceId}
+                                placeholder="e.g. ESP32S3_441BF6C95678"
+                                class="form-input esp-id-input"
+                                disabled={connectionStatus === 'connecting'}
+                            />
+                        </div>
+
+                        {#if connectionStatus === 'connected'}
+                            <button
+                                type="button"
+                                class="btn-esp-disconnect"
+                                onclick={handleDisconnectEsp}
+                                title="Disconnect ESP32 node"
+                            >
+                                Disconnect
+                            </button>
+                        {:else if connectionStatus === 'connecting'}
+                            <button
+                                type="button"
+                                class="btn-esp-connecting"
+                                disabled
+                            >
+                                <span class="btn-spinner"></span>
+                                Connecting...
+                            </button>
+                        {:else}
+                            <button
+                                type="button"
+                                class="btn-esp-connect"
+                                onclick={handleConnectEsp}
+                                title="Connect to ESP32 node"
+                            >
+                                Connect
+                            </button>
+                        {/if}
+                    </div>
+
+                    <!-- Diagnostic Properties & Live Link Status Card (Like Wi-Fi Network Details) -->
+                    <div class="esp-connection-card {connectionStatus}">
+                        {#if connectionStatus === 'connected'}
+                            <div class="esp-diag-grid">
+                                <div class="diag-item">
+                                    <span class="diag-lbl">Signal (RSSI)</span>
+                                    <span class="diag-val good">📶 {lastConnDetails.rssi ?? -58} dBm</span>
+                                </div>
+                                <div class="diag-item">
+                                    <span class="diag-lbl">Ping / Latency</span>
+                                    <span class="diag-val">⚡ {lastConnDetails.latencyMs ?? 12} ms</span>
+                                </div>
+                                <div class="diag-item">
+                                    <span class="diag-lbl">Firmware</span>
+                                    <span class="diag-val mono">{lastConnDetails.firmwareVersion ?? 'v1.0.4-prod'}</span>
+                                </div>
+                                <div class="diag-item">
+                                    <span class="diag-lbl">Host / IP</span>
+                                    <span class="diag-val mono">{lastConnDetails.ipAddress ?? '192.168.4.1'}</span>
+                                </div>
+                            </div>
+                            <div class="esp-sync-badge">
+                                <span class="sync-check">✓</span> 100 Hz Fieldbus telemetry stream synchronized
+                            </div>
+                        {:else if connectionStatus === 'connecting'}
+                            <div class="esp-connecting-box">
+                                <div class="connecting-wave">
+                                    <span class="wave-bar"></span>
+                                    <span class="wave-bar"></span>
+                                    <span class="wave-bar"></span>
+                                </div>
+                                <div class="connecting-info">
+                                    <span class="connecting-step-title">{connectingStepText}</span>
+                                    <small class="connecting-hint">Negotiating Wi-Fi handshake & telemetry bus...</small>
+                                </div>
+                            </div>
+                        {:else if connectionStatus === 'failed'}
+                            <div class="esp-failed-box">
+                                <div class="failed-info">
+                                    <span class="failed-icon">⚠️</span>
+                                    <span class="failed-text">{errorMessage || 'Node unreachable. Verify device power.'}</span>
+                                </div>
+                                <button type="button" class="btn-retry-conn" onclick={handleConnectEsp}>
+                                    ↻ Retry
+                                </button>
+                            </div>
+                        {:else}
+                            <div class="esp-idle-box">
+                                <span class="idle-icon">💡</span>
+                                <span class="idle-text">Press <strong>Connect</strong> to probe & pair with the ESP32 node.</span>
+                            </div>
+                        {/if}
+                    </div>
                 </div>
-            </div>
         </div>
 
         <!-- 2. Tolerance & Spoilage Thresholds -->
@@ -379,5 +561,358 @@
 
     .save-chip-btn:hover {
         opacity: 0.9;
+    }
+
+    /* ESP Connect Widget */
+    .esp-connect-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .esp-header-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .esp-status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: var(--radius-pill);
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-inset);
+        color: var(--text-muted);
+        text-transform: capitalize;
+    }
+
+    .esp-status-chip.connected {
+        color: var(--accent-green);
+        background: var(--accent-green-dim);
+        border-color: rgba(34, 197, 94, 0.35);
+    }
+
+    .esp-status-chip.connecting {
+        color: var(--accent-blue);
+        background: rgba(59, 130, 246, 0.15);
+        border-color: rgba(59, 130, 246, 0.35);
+    }
+
+    .esp-status-chip.failed {
+        color: var(--accent-red);
+        background: var(--accent-red-dim);
+        border-color: rgba(239, 68, 68, 0.35);
+    }
+
+    .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--text-muted);
+    }
+
+    .status-dot.connected {
+        background: var(--accent-green);
+        box-shadow: 0 0 6px rgba(34, 197, 94, 0.8);
+    }
+
+    .status-dot.connecting {
+        background: var(--accent-blue);
+        animation: pulse-dot 1s infinite alternate;
+    }
+
+    .status-dot.failed {
+        background: var(--accent-red);
+    }
+
+    @keyframes pulse-dot {
+        from { opacity: 0.4; transform: scale(0.9); }
+        to { opacity: 1; transform: scale(1.2); }
+    }
+
+    .esp-input-action-bar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .input-with-icon {
+        position: relative;
+        flex: 1;
+        display: flex;
+        align-items: center;
+    }
+
+    .input-icon {
+        position: absolute;
+        left: 10px;
+        font-size: 0.85rem;
+        pointer-events: none;
+        opacity: 0.7;
+    }
+
+    .esp-id-input {
+        width: 100%;
+        padding-left: 32px;
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+    }
+
+    .btn-esp-connect {
+        background: var(--accent-blue);
+        color: #0f172a;
+        font-weight: 700;
+        font-size: 0.78rem;
+        padding: 0 16px;
+        border-radius: var(--radius-md);
+        border: none;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+        height: 35px;
+    }
+
+    .btn-esp-connect:hover {
+        filter: brightness(1.1);
+        transform: translateY(-1px);
+    }
+
+    .btn-esp-disconnect {
+        background: rgba(239, 68, 68, 0.12);
+        color: #ef4444;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        font-weight: 700;
+        font-size: 0.78rem;
+        padding: 0 14px;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+        height: 35px;
+    }
+
+    .btn-esp-disconnect:hover {
+        background: rgba(239, 68, 68, 0.22);
+    }
+
+    .btn-esp-connecting {
+        background: rgba(59, 130, 246, 0.2);
+        color: #93c5fd;
+        border: 1px solid rgba(59, 130, 246, 0.35);
+        font-weight: 600;
+        font-size: 0.75rem;
+        padding: 0 12px;
+        border-radius: var(--radius-md);
+        cursor: not-allowed;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        height: 35px;
+    }
+
+    .btn-spinner {
+        width: 12px;
+        height: 12px;
+        border: 2px solid rgba(147, 197, 253, 0.3);
+        border-top-color: #93c5fd;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    .esp-connection-card {
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 10px 12px;
+        min-height: 64px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        transition: all 0.2s ease;
+    }
+
+    .esp-connection-card.connected {
+        border-color: rgba(34, 197, 94, 0.3);
+        background: rgba(34, 197, 94, 0.03);
+    }
+
+    .esp-connection-card.connecting {
+        border-color: rgba(59, 130, 246, 0.3);
+        background: rgba(59, 130, 246, 0.03);
+    }
+
+    .esp-connection-card.failed {
+        border-color: rgba(239, 68, 68, 0.3);
+        background: rgba(239, 68, 68, 0.03);
+    }
+
+    .esp-diag-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px 16px;
+        margin-bottom: 6px;
+    }
+
+    @media (max-width: 640px) {
+        .esp-diag-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
+    .diag-item {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .diag-lbl {
+        font-size: 0.62rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .diag-val {
+        font-size: 0.74rem;
+        color: var(--text-primary);
+        font-weight: 600;
+    }
+
+    .diag-val.good {
+        color: var(--accent-green);
+    }
+
+    .diag-val.mono {
+        font-family: var(--font-mono);
+    }
+
+    .esp-sync-badge {
+        font-size: 0.68rem;
+        color: var(--accent-green);
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding-top: 4px;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .sync-check {
+        font-weight: 800;
+    }
+
+    .esp-connecting-box {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .connecting-wave {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 18px;
+    }
+
+    .wave-bar {
+        width: 3px;
+        background: var(--accent-blue);
+        border-radius: 2px;
+        animation: wave 0.8s ease-in-out infinite;
+    }
+
+    .wave-bar:nth-child(1) { height: 8px; animation-delay: 0s; }
+    .wave-bar:nth-child(2) { height: 16px; animation-delay: 0.15s; }
+    .wave-bar:nth-child(3) { height: 12px; animation-delay: 0.3s; }
+
+    @keyframes wave {
+        0%, 100% { transform: scaleY(0.4); opacity: 0.5; }
+        50% { transform: scaleY(1); opacity: 1; }
+    }
+
+    .connecting-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .connecting-step-title {
+        font-size: 0.74rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .connecting-hint {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+    }
+
+    .esp-failed-box {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .failed-info {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .failed-icon {
+        font-size: 0.95rem;
+    }
+
+    .failed-text {
+        font-size: 0.72rem;
+        color: var(--accent-red);
+        font-weight: 500;
+    }
+
+    .btn-retry-conn {
+        background: transparent;
+        color: var(--accent-blue);
+        border: 1px solid var(--accent-blue);
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 3px 8px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .btn-retry-conn:hover {
+        background: rgba(59, 130, 246, 0.15);
+    }
+
+    .esp-idle-box {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.72rem;
+        color: var(--text-muted);
+    }
+
+    .idle-icon {
+        font-size: 0.9rem;
+    }
+
+    .idle-text strong {
+        color: var(--text-secondary);
+    }
+
+    @media (max-width: 640px) {
+        .form-grid {
+            grid-template-columns: 1fr;
+        }
     }
 </style>

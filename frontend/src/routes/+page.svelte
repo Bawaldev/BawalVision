@@ -414,6 +414,11 @@
             <div class="view-panel" class:is-hidden={activeTab !== 'System & Cloud Settings'}>
                 <SettingsView
                     config={systemConfig}
+                    {isOnline}
+                    onDeviceConnectionChange={(connected, devId) => {
+                        isOnline = connected;
+                        if (devId) systemConfig.deviceId = devId;
+                    }}
                     onSaveConfig={handleSaveConfig}
                 />
             </div>
