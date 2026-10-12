@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -32,12 +33,13 @@ func RegisterFrontendRoutes(router fiber.Router, db *gorm.DB) {
 	router.Get("/system/engines", h.GetEngineStatus)
 	router.Get("/examples", h.GetExampleVideos)
 	router.Get("/examples/videos", h.GetExampleVideos)
+	router.Get("/examples/file/:filename", h.ServeExampleVideo)
 }
 
 func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
 	paths := []string{"./examples", "../examples", "./frontend/static/examples", "../frontend/static/examples"}
 	foundMap := make(map[string]bool)
-	var videoFiles []string
+	videoFiles := make([]string, 0)
 
 	for _, p := range paths {
 		entries, err := os.ReadDir(p)
@@ -57,14 +59,32 @@ func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
 		}
 	}
 
-	if len(videoFiles) == 0 {
-		videoFiles = []string{"sample_tray.mp4"}
-	}
-
 	return c.JSON(fiber.Map{
 		"status": "success",
 		"videos": videoFiles,
 	})
+}
+
+func (h *Handler) ServeExampleVideo(c *fiber.Ctx) error {
+	filename := c.Params("filename")
+	if filename == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Filename required"})
+	}
+
+	paths := []string{
+		filepath.Join("./examples", filename),
+		filepath.Join("../examples", filename),
+		filepath.Join("./frontend/static/examples", filename),
+		filepath.Join("../frontend/static/examples", filename),
+	}
+
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return c.SendFile(p)
+		}
+	}
+
+	return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Video file not found"})
 }
 
 func (h *Handler) GetRecords(c *fiber.Ctx) error {
