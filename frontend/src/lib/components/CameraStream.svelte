@@ -29,12 +29,45 @@
         { id: 'water_spinach', aliases: ['water_spinach', 'waterspinach', 'kangkung'], label: 'Water Spinach (Kangkung)', icon: '🌱' }
     ];
 
+    type SourceModeType = 'live' | 'snapshot' | 'mock';
+    let sourceMode = $state<SourceModeType>('live');
+    let snapshotEpoch = $state(Date.now());
+    let mockVideoSrc = $state('/examples/sample_tray.mp4');
+    let mockFileName = $state('sample_tray.mp4');
+    let fileInputRef: HTMLInputElement | null = null;
+
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
 
     let activeStreamUrl = $derived(
         streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`
     );
+
+    let activeSnapshotUrl = $derived(
+        deviceId ? `/api/v1/camera/frame/${deviceId}?t=${snapshotEpoch}` : `/api/v1/camera/frame?t=${snapshotEpoch}`
+    );
+
+    // Snapshot polling loop
+    $effect(() => {
+        if (sourceMode !== 'snapshot') return;
+        const interval = setInterval(() => {
+            snapshotEpoch = Date.now();
+        }, 750);
+        return () => clearInterval(interval);
+    });
+
+    function handleFileUpload(event: Event) {
+        const input = event.target as HTMLInputElement;
+        if (input.files && input.files[0]) {
+            const file = input.files[0];
+            mockFileName = file.name;
+            if (mockVideoSrc.startsWith('blob:')) {
+                URL.revokeObjectURL(mockVideoSrc);
+            }
+            mockVideoSrc = URL.createObjectURL(file);
+            streamError = false;
+        }
+    }
 
     $effect(() => {
         if (hasCamera) {
@@ -73,7 +106,7 @@
 
     // Auto-recovery watchdog: auto-reconnect stream if stalled
     $effect(() => {
-        if (!hasCamera) return;
+        if (!hasCamera || sourceMode !== 'live') return;
         const interval = setInterval(() => {
             if (streamError) {
                 streamEpoch = Date.now();
@@ -89,40 +122,132 @@
     <div class="viewport-card">
         <div class="viewport-header">
             <div class="header-left">
-                <span class="live-dot" class:offline={!hasCamera || streamError}></span>
+                <span class="live-dot" class:offline={sourceMode === 'live' && (!hasCamera || streamError)}></span>
                 <strong>Live Inspection View</strong>
             </div>
-            <span class="pill-badge">{hasCamera && !streamError ? 'MJPEG Stream (Active HUD)' : 'Standby'}</span>
+
+            <!-- Video / Camera Ingestion Source Mode Switcher -->
+            <div class="source-mode-switcher">
+                <button
+                    type="button"
+                    class="mode-pill-btn"
+                    class:active={sourceMode === 'live'}
+                    onclick={() => (sourceMode = 'live')}
+                    title="Live continuous multipart MJPEG stream push"
+                >
+                    <span class="pill-icon">📹</span> Live Stream
+                </button>
+                <button
+                    type="button"
+                    class="mode-pill-btn"
+                    class:active={sourceMode === 'snapshot'}
+                    onclick={() => (sourceMode = 'snapshot')}
+                    title="Discrete snapshot pull via /camera/frame (zero latency buffer)"
+                >
+                    <span class="pill-icon">📸</span> Snapshot (/frame)
+                </button>
+                <button
+                    type="button"
+                    class="mode-pill-btn"
+                    class:active={sourceMode === 'mock'}
+                    onclick={() => (sourceMode = 'mock')}
+                    title="Mock local MP4 test video loop (examples/)"
+                >
+                    <span class="pill-icon">🎬</span> Mock Video
+                </button>
+            </div>
+
+            <span class="pill-badge">
+                {#if sourceMode === 'live'}
+                    {hasCamera && !streamError ? 'MJPEG Push (Active HUD)' : 'Standby'}
+                {:else if sourceMode === 'snapshot'}
+                    Snapshot Pull (/frame)
+                {:else}
+                    Mock MP4 Loop
+                {/if}
+            </span>
         </div>
 
         <div class="canvas-container">
-            {#if hasCamera && !streamError}
-                <!-- Native Browser MJPEG Stream with C++ Hardware-Accelerated Dynamic Bounding Boxes -->
+            {#if sourceMode === 'live'}
+                {#if hasCamera && !streamError}
+                    <!-- Native Browser MJPEG Stream with C++ Hardware-Accelerated Dynamic Bounding Boxes -->
+                    <img
+                        src={activeStreamUrl}
+                        alt="Live Video Stream"
+                        class="feed-video"
+                        onload={() => (streamError = false)}
+                        onerror={() => (streamError = true)}
+                    />
+                {:else}
+                    <!-- Standby State -->
+                    <div class="standby-box">
+                        <span class="standby-icon">📷</span>
+                        <h4>No Camera Stream Connected</h4>
+                        <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
+                        {#if streamError}
+                            <button type="button" class="retry-btn" onclick={() => { streamError = false; streamEpoch = Date.now(); }}>
+                                ↻ Reconnect Stream
+                            </button>
+                        {/if}
+                    </div>
+                {/if}
+            {:else if sourceMode === 'snapshot'}
+                <!-- Discrete Pull Snapshot Mode (/camera/frame) -->
                 <img
-                    src={activeStreamUrl}
-                    alt="Live Video Stream"
+                    src={activeSnapshotUrl}
+                    alt="Discrete Snapshot Feed"
                     class="feed-video"
                     onload={() => (streamError = false)}
                     onerror={() => (streamError = true)}
                 />
-            {:else}
-                <!-- Standby State -->
-                <div class="standby-box">
-                    <span class="standby-icon">📷</span>
-                    <h4>No Camera Stream Connected</h4>
-                    <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
-                    {#if streamError}
-                        <button type="button" class="retry-btn" onclick={() => { streamError = false; streamEpoch = Date.now(); }}>
-                            ↻ Reconnect Stream
-                        </button>
-                    {/if}
-                </div>
+            {:else if sourceMode === 'mock'}
+                <!-- Mock MP4 Video Loop Mode -->
+                <video
+                    src={mockVideoSrc}
+                    autoplay
+                    loop
+                    muted
+                    playsinline
+                    class="feed-video"
+                    onerror={() => (streamError = true)}
+                >
+                    <track kind="captions" />
+                </video>
             {/if}
         </div>
 
+        {#if sourceMode === 'mock'}
+            <div class="mock-control-bar">
+                <span class="mock-label">📁 File: <strong>{mockFileName}</strong></span>
+                <input
+                    type="file"
+                    accept="video/mp4,video/webm"
+                    class="hidden-file-input"
+                    bind:this={fileInputRef}
+                    onchange={handleFileUpload}
+                />
+                <button
+                    type="button"
+                    class="upload-btn"
+                    onclick={() => fileInputRef?.click()}
+                >
+                    Select Test MP4 Video
+                </button>
+            </div>
+        {/if}
+
         <div class="viewport-footer">
             <span>📷 Device: {deviceId || 'ESP32S3_CAM'}</span>
-            <span>⚡ Stream: MJPEG Multipart Push</span>
+            <span>
+                {#if sourceMode === 'live'}
+                    ⚡ Ingestion: MJPEG Push (/api/v1/camera/stream)
+                {:else if sourceMode === 'snapshot'}
+                    ⚡ Ingestion: Pull Polling (/api/v1/camera/frame)
+                {:else}
+                    ⚡ Ingestion: Local MP4 Mock Loop (examples/)
+                {/if}
+            </span>
         </div>
     </div>
 
@@ -240,6 +365,85 @@
     .live-dot.offline {
         background: var(--text-muted);
         box-shadow: none;
+    }
+
+    .source-mode-switcher {
+        display: flex;
+        background: var(--bg-chip, #1a202c);
+        padding: 2px;
+        border-radius: var(--radius-pill, 9999px);
+        border: 1px solid var(--border-subtle, #2d3748);
+        gap: 2px;
+    }
+
+    .mode-pill-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: var(--radius-pill, 9999px);
+        background: transparent;
+        color: var(--text-muted, #94a3b8);
+        border: none;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .mode-pill-btn:hover {
+        color: var(--text-primary, #f8fafc);
+        background: rgba(255, 255, 255, 0.05);
+    }
+
+    .mode-pill-btn.active {
+        background: var(--accent-blue, #3b82f6);
+        color: #ffffff;
+        font-weight: 700;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    }
+
+    .pill-icon {
+        font-size: 0.75rem;
+    }
+
+    .mock-control-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 16px;
+        background: var(--bg-chip, #181c24);
+        border-top: 1px solid var(--border-subtle, #2d3748);
+        font-size: 0.75rem;
+    }
+
+    .mock-label {
+        color: var(--text-secondary, #cbd5e1);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 65%;
+    }
+
+    .hidden-file-input {
+        display: none;
+    }
+
+    .upload-btn {
+        background: var(--bg-card, #1e293b);
+        color: var(--accent-blue, #60a5fa);
+        border: 1px solid var(--border-subtle, #334155);
+        border-radius: var(--radius-pill, 9999px);
+        padding: 4px 12px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .upload-btn:hover {
+        background: var(--accent-blue, #3b82f6);
+        color: #ffffff;
     }
 
     .pill-badge {
