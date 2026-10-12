@@ -13,11 +13,17 @@ namespace bawal::server {
 /**
  * @brief Remote camera connection parameters.
  */
-struct CameraConfig {
-    std::string backend_url;
-    std::string device_id;
-    int timeout_ms{400};
+struct alignas(8) CameraConfig {
+    std::string backend_url;        
+    std::string device_id;         
+    int32_t timeout_ms{400};       
+    uint8_t reserved[4]{0};  
 };
+
+static_assert(alignof(CameraConfig) == 8, "CameraConfig must be 8-byte aligned");
+#if defined(__GLIBCXX__) || defined(__x86_64__)
+static_assert(sizeof(CameraConfig) == 72, "CameraConfig must have 72 bytes in 64-bit ABI");
+#endif
 
 /**
  * @brief Synchronously fetches the latest frame byte payload from the specified endpoint URL.
