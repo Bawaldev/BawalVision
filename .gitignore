@@ -202,3 +202,6 @@ OUTPUT.md
 daffa.md
 
 *.onnx
+examples/*.mp4
+!examples/.gitkeep
+!examples/README.md
