@@ -203,5 +203,9 @@ daffa.md
 
 *.onnx
 examples/*.mp4
+examples/*.webm
 !examples/.gitkeep
 !examples/README.md
+frontend/static/examples/*.mp4
+frontend/static/examples/*.webm
+!frontend/static/examples/.gitkeep
