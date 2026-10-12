@@ -12,12 +12,12 @@
         if (lower.includes('rice') || lower.includes('nasi')) return '🍚';
         if (lower.includes('chicken') || lower.includes('ayam')) return '🍗';
         if (lower.includes('egg') || lower.includes('telur')) return '🥚';
-        if (lower.includes('tempeh') || lower.includes('tempe')) return '🧇';
-        if (lower.includes('tofu') || lower.includes('tahu')) return '🧊';
+        if (lower.includes('tempeh') || lower.includes('tempe')) return '🥢';
+        if (lower.includes('tofu') || lower.includes('tahu')) return '🧈';
         if (lower.includes('banana') || lower.includes('pisang')) return '🍌';
         if (lower.includes('orange') || lower.includes('jeruk')) return '🍊';
-        if (lower.includes('water_spinach') || lower.includes('kangkung')) return '🌱';
-        if (lower.includes('spinach') || lower.includes('bayam')) return '🥬';
+        if (lower.includes('water_spinach') || lower.includes('kangkung')) return '🥬';
+        if (lower.includes('spinach') || lower.includes('bayam')) return '🥗';
         return '🍱';
     }
 </script>
@@ -33,8 +33,8 @@
         </div>
         <div class="header-stats">
             <span class="stat-pill">{detections.length} Detected</span>
-            <span class="stat-pill">Thermal Limit: ≤38°C</span>
-            <span class="stat-pill">CV Threshold: ≥40%</span>
+            <span class="stat-pill">Thermal Limit: &le;38°C</span>
+            <span class="stat-pill">CV Threshold: &ge;40%</span>
         </div>
     </div>
 
@@ -66,7 +66,7 @@
                             <td class="food-cell">
                                 <div class="food-name-row">
                                     <span class="food-icon">{getFoodIcon(det.food_name)}</span>
-                                    <div>
+                                    <div class="food-info-text">
                                         <strong class="food-name">{det.food_name}</strong>
                                         <small class="cat-label">{det.category || 'Food'}</small>
                                     </div>
@@ -113,7 +113,7 @@
 
 <style>
     .breakdown-card {
-        background: var(--bg-card);
+        background: #ffffff;
         border: 1px solid var(--border-card);
         border-radius: var(--radius-lg);
         padding: 16px;
@@ -127,6 +127,8 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 10px;
     }
 
     .header-left {
@@ -155,22 +157,25 @@
 
     .header-stats {
         display: flex;
+        align-items: center;
         gap: 8px;
+        flex-wrap: wrap;
     }
 
     .stat-pill {
         font-size: 0.68rem;
         font-weight: 600;
-        background: var(--bg-chip);
-        color: var(--text-secondary);
+        background: #f1f5f9;
+        color: #475569;
         padding: 3px 8px;
         border-radius: var(--radius-pill);
+        border: 1px solid #e2e8f0;
     }
 
     .table-container {
         overflow-x: auto;
-        background: var(--bg-inset);
-        border: 1px solid var(--border-subtle);
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
         border-radius: var(--radius-md);
     }
 
@@ -182,18 +187,20 @@
     }
 
     .styled-table th {
-        background: var(--bg-chip);
-        color: var(--text-secondary);
+        background: #f8fafc;
+        color: #475569;
         font-weight: 700;
         font-size: 0.68rem;
         padding: 10px 14px;
-        border-bottom: 1px solid var(--border-subtle);
+        border-bottom: 1px solid #e2e8f0;
         white-space: nowrap;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
     }
 
     .styled-table td {
         padding: 10px 14px;
-        border-bottom: 1px solid var(--border-subtle);
+        border-bottom: 1px solid #e2e8f0;
         vertical-align: middle;
         white-space: nowrap;
     }
@@ -202,24 +209,44 @@
         border-bottom: none;
     }
 
-    .styled-table tr:hover {
-        background: rgba(255, 255, 255, 0.02);
+    .styled-table tr.has-item:hover {
+        background: #f8fafc;
     }
 
     .slot-tag {
         font-size: 0.72rem;
-        font-weight: 600;
-        color: var(--text-secondary);
+        font-weight: 700;
+        color: #64748b;
+        font-family: var(--font-mono);
+    }
+
+    .food-name-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .food-icon {
+        font-size: 1.1rem;
+    }
+
+    .food-info-text {
+        display: flex;
+        flex-direction: column;
     }
 
     .food-name {
-        color: var(--text-primary);
+        color: #1e293b;
         font-size: 0.82rem;
+        font-weight: 700;
     }
 
-    .empty-name {
-        color: var(--text-muted);
-        font-size: 0.75rem;
+    .cat-label {
+        font-size: 0.62rem;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 600;
     }
 
     .sim-bar-box {
@@ -231,22 +258,46 @@
     .sim-track {
         width: 60px;
         height: 6px;
-        background: var(--bg-chip);
+        background: #e2e8f0;
         border-radius: var(--radius-pill);
         overflow: hidden;
     }
 
     .sim-fill {
         height: 100%;
-        background: var(--accent-green);
+        background: #16a34a;
         border-radius: var(--radius-pill);
     }
 
     .sim-num {
         font-family: var(--font-mono);
         font-size: 0.75rem;
-        color: var(--text-primary);
+        color: #1e293b;
         font-weight: 700;
+    }
+
+    .temp-num, .spoilage-num {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: #1e293b;
+    }
+
+    .temp-num.warn {
+        color: #d97706;
+    }
+
+    .temp-num.danger {
+        color: #dc2626;
+    }
+
+    .temp-num small {
+        color: #64748b;
+        font-weight: normal;
+    }
+
+    .spoilage-num.danger {
+        color: #dc2626;
     }
 
     .badge {
@@ -256,74 +307,28 @@
         border-radius: var(--radius-pill);
     }
 
-    .food-cell {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-    }
-
-    .cat-label {
-        font-size: 0.65rem;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-
-    .temp-num, .spoilage-num {
-        font-family: var(--font-mono);
-        font-size: 0.78rem;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-
-    .temp-num.warn {
-        color: var(--accent-amber);
-    }
-
-    .temp-num.danger {
-        color: var(--accent-red);
-    }
-
-    .temp-num small {
-        color: var(--text-muted);
-        font-weight: normal;
-    }
-
-    .spoilage-num.danger {
-        color: var(--accent-red);
-    }
-
     .badge.reject {
-        background: var(--accent-red-dim);
-        color: var(--accent-red);
-        border: 1px solid rgba(244, 63, 94, 0.3);
+        background: #fee2e2;
+        color: #dc2626;
+        border: 1px solid #fecaca;
     }
 
     .badge.pass {
-        background: var(--accent-green-dim);
-        color: var(--accent-green);
-        border: 1px solid rgba(34, 197, 94, 0.3);
+        background: #dcfce7;
+        color: #16a34a;
+        border: 1px solid #bbf7d0;
     }
 
     .badge.hold {
-        background: var(--accent-amber-dim);
-        color: var(--accent-amber);
-        border: 1px solid rgba(245, 158, 11, 0.3);
-    }
-
-    .badge.idle {
-        background: var(--bg-chip);
-        color: var(--text-muted);
+        background: #fef3c7;
+        color: #d97706;
+        border: 1px solid #fde68a;
     }
 
     .empty-row {
         text-align: center;
         padding: 24px;
-        color: var(--text-muted);
+        color: #64748b;
         font-size: 0.78rem;
-    }
-
-    .muted-dash {
-        color: var(--text-muted);
     }
 </style>

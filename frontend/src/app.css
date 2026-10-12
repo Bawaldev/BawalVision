@@ -4,46 +4,52 @@
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
 
-    /* Modern Smart IoT / Home Assistant Lovelace Dark Matte Palette */
-    --bg-main: #14171d;
-    --bg-sidebar: #181c24;
-    --bg-card: #202530;
-    --bg-card-hover: #262c39;
-    --bg-inset: #181c24;
-    --bg-chip: #2a3140;
+    /* Coperion Industrial White-Gray OEM HMI Palette */
+    --bg-main: #f0f3f7;
+    --bg-sidebar: #ffffff;
+    --bg-sidebar-hover: #f8fafc;
+    --bg-sidebar-active: #f1f5f9;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f8fafc;
+    --bg-inset: #f8fafc;
+    --bg-chip: #f1f5f9;
 
-    /* Clean Borders */
-    --border-card: #2d3444;
-    --border-subtle: #242a37;
-    --border-highlight: #3b4458;
+    /* Clean Crisp Light Borders */
+    --border-card: #d8e0ea;
+    --border-subtle: #e2e8f0;
+    --border-highlight: #94a3b8;
     
-    /* Rounded Lovelace Radius */
-    --radius-lg: 16px;
-    --radius-md: 12px;
-    --radius-sm: 8px;
-    --radius-pill: 9999px;
+    /* Clean Industrial Radii */
+    --radius-lg: 6px;
+    --radius-md: 4px;
+    --radius-sm: 3px;
+    --radius-pill: 20px;
 
-    /* Modern IoT Accents */
-    --accent-blue: #38bdf8;
-    --accent-blue-dim: rgba(56, 189, 248, 0.15);
-    --accent-amber: #f59e0b;
-    --accent-amber-dim: rgba(245, 158, 11, 0.15);
-    --accent-green: #22c55e;
-    --accent-green-dim: rgba(34, 197, 94, 0.15);
-    --accent-red: #f43f5e;
-    --accent-red-dim: rgba(244, 63, 94, 0.15);
-    --accent-purple: #c084fc;
-    --accent-purple-dim: rgba(192, 132, 252, 0.15);
+    /* Coperion Industrial Blue & Status Accents */
+    --accent-blue: #3679a8;
+    --accent-blue-light: #4a8cbe;
+    --accent-blue-dim: #e8f2f9;
+    --accent-blue-num: #2e719f;
+    --accent-amber: #d97706;
+    --accent-amber-dim: #fef3c7;
+    --accent-green: #16a34a;
+    --accent-green-dim: #dcfce7;
+    --accent-red: #dc2626;
+    --accent-red-dim: #fee2e2;
+    --accent-purple: #7c3aed;
+    --accent-purple-dim: #f3e8ff;
+    --accent-charcoal: #2d323b;
 
-    /* Text Hierarchy */
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
+    /* High-Contrast Crisp Typography on Light Backgrounds */
+    --text-primary: #1e293b;
+    --text-secondary: #475569;
     --text-muted: #64748b;
-    --text-dim: #475569;
+    --text-dim: #94a3b8;
+    --text-white: #ffffff;
 
-    /* Card Shadows */
-    --shadow-card: 0 4px 14px rgba(0, 0, 0, 0.25);
-    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.15);
+    /* Subtle Technical Card Shadows */
+    --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
 }
 
 * {
@@ -76,12 +82,12 @@ button, input, select, textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #334155;
+    background: #cbd5e1;
     border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #475569;
+    background: #94a3b8;
 }
 
 .app-root {

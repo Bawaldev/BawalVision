@@ -56,8 +56,8 @@
 </script>
 
 <div class="dashboard-main-grid">
-    <!-- Left / Center Column (Wireframe: Camera Stream, Detected Object, Food Breakdown Table, Inference Log) -->
-    <div class="center-column">
+    <!-- Left Column (Wide: Live Camera Stream, Detected Food Items Table, Inference Log) -->
+    <div class="left-column">
         <!-- 1. Live Camera Stream & Detected Object Checklist -->
         <CameraStream
             {detections}
@@ -78,15 +78,15 @@
         />
     </div>
 
-    <!-- Right Column (Wireframe: Status, Chemical Spoilage Bar, Telemetry, Action & Trigger, Batch, Cloud Sync) -->
+    <!-- Right Column (Stacked Cards: Yield, Freshness, Telemetry, Controls, Batch Sync) -->
     <div class="right-column">
-        <!-- 1. Status (Accepted / Rejected Ring) -->
+        <!-- 1. QC Inspection Yield (Accepted / Rejected Ring) -->
         <StatusSummary
             {totalAccepted}
             {totalRejected}
         />
 
-        <!-- 2. Chemical / Thermal Spoilage & Freshness Bar -->
+        <!-- 2. Food Quality & Freshness (Chemical / Thermal Spoilage & Freshness Bar) -->
         <ChemicalSpoilageBar
             temperature={telemetry?.food_temperature || telemetry?.temperature}
             isSpoiled={(telemetry?.food_temperature || telemetry?.temperature || 0) > 40 || (detections && detections.some(d => d.status === 'REJECT'))}
@@ -95,7 +95,7 @@
             qualityScore={avgFreshness}
         />
 
-        <!-- 3. Physical Environmental Telemetry -->
+        <!-- 3. Thermal & Hardware Telemetry (Physical Environmental Telemetry) -->
         <EnvironmentalTelemetry
             foodTemperature={telemetry?.food_temperature || telemetry?.temperature}
             cpuTemperature={telemetry?.cpu_temperature}
@@ -104,14 +104,14 @@
             firmwareVersion={telemetry?.firmware_version}
         />
 
-        <!-- 4. Action & Trigger Bar -->
+        <!-- 4. Manual Controls (Action & Trigger Bar) -->
         <ActionTriggerBar
             {onForceReject}
             {onInspectTray}
             {isInspecting}
         />
 
-        <!-- 5. Batch Summary & Cloud Sync Status -->
+        <!-- 5. Batch Summary & Database Sync Status -->
         <BatchAndCloudSync
             {totalPlates}
             {passRate}
@@ -127,18 +127,21 @@
         grid-template-columns: minmax(0, 1fr) 360px;
         gap: 16px;
         align-items: start;
+        width: 100%;
     }
 
-    .center-column {
+    .left-column {
         display: flex;
         flex-direction: column;
         gap: 16px;
+        min-width: 0;
     }
 
     .right-column {
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 16px;
+        min-width: 0;
     }
 
     @media (max-width: 1200px) {

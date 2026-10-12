@@ -12,7 +12,7 @@
         cpuTemperature = 36.5,
         temperature,
         cpuLoad = 18,
-        firmwareVersion = '1.0.0'
+        firmwareVersion = '1.0.4'
     }: Props = $props();
 
     let displayFoodTemp = $derived(
@@ -61,7 +61,7 @@
         <div class="stat-item">
             <span class="icon">⚡</span>
             <div class="stat-text">
-                <span class="val">{cpuLoad > 0 ? cpuLoad : '18'} <small>%</small></span>
+                <span class="val">{cpuLoad > 0 ? cpuLoad : 18} <small>%</small></span>
                 <span class="stat-tag">Load</span>
             </div>
         </div>
@@ -103,7 +103,7 @@
 
 <style>
     .env-card {
-        background: var(--bg-card);
+        background: #ffffff;
         border: 1px solid var(--border-card);
         border-radius: var(--radius-lg);
         padding: 16px;
@@ -146,34 +146,35 @@
     .bus-badge {
         font-size: 0.68rem;
         font-weight: 600;
-        background: var(--bg-chip);
-        color: var(--text-secondary);
+        background: #f1f5f9;
+        color: #475569;
         padding: 2px 8px;
         border-radius: var(--radius-pill);
+        border: 1px solid #e2e8f0;
     }
 
     .metrics-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        background: var(--bg-inset);
+        background: #f8fafc;
         padding: 10px 14px;
         border-radius: var(--radius-md);
-        border: 1px solid var(--border-subtle);
+        border: 1px solid #e2e8f0;
     }
 
     .stat-item {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
     }
 
     .stat-item .icon {
-        font-size: 0.9rem;
+        font-size: 0.95rem;
     }
 
     .stat-item .val {
-        font-size: 0.85rem;
+        font-size: 0.88rem;
         font-weight: 700;
         color: var(--text-primary);
         font-family: var(--font-mono);
@@ -191,10 +192,11 @@
     }
 
     .stat-tag {
-        font-size: 0.65rem;
+        font-size: 0.62rem;
         color: var(--text-muted);
         text-transform: uppercase;
-        font-weight: 600;
+        font-weight: 700;
+        letter-spacing: 0.02em;
     }
 
     .meters-container {
@@ -214,16 +216,18 @@
         justify-content: space-between;
         font-size: 0.72rem;
         color: var(--text-secondary);
+        font-weight: 500;
     }
 
     .meter-labels strong {
         color: var(--text-primary);
         font-family: var(--font-mono);
+        font-weight: 700;
     }
 
     .progress-track {
         height: 6px;
-        background: var(--bg-chip);
+        background: #e2e8f0;
         border-radius: var(--radius-pill);
         overflow: hidden;
     }
@@ -235,14 +239,14 @@
     }
 
     .progress-fill.food-temp {
-        background: var(--accent-amber);
+        background: #d97706;
     }
 
     .progress-fill.cpu-temp {
-        background: #ec4899;
+        background: #3679a8;
     }
 
     .progress-fill.cpu {
-        background: var(--accent-blue);
+        background: #16a34a;
     }
 </style>

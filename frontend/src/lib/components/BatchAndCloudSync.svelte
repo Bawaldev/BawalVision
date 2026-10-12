@@ -6,7 +6,7 @@
         bufferedRecords?: number;
     }
 
-    let { totalPlates = 1297, passRate = 96.2, isOnline = true, bufferedRecords = 0 }: Props = $props();
+    let { totalPlates = 100, passRate = 99.0, isOnline = true, bufferedRecords = 0 }: Props = $props();
 </script>
 
 <div class="batch-cloud-grid">
@@ -68,10 +68,10 @@
     }
 
     .entity-card {
-        background: var(--bg-card);
+        background: #ffffff;
         border: 1px solid var(--border-card);
         border-radius: var(--radius-lg);
-        padding: 16px;
+        padding: 14px;
         display: flex;
         flex-direction: column;
         gap: 12px;
@@ -96,48 +96,53 @@
 
     .header-left h4 {
         margin: 0;
-        font-size: 0.88rem;
+        font-size: 0.85rem;
         font-weight: 700;
         color: var(--text-primary);
+        line-height: 1.2;
     }
 
     .lot-pill, .ping-pill {
-        font-size: 0.65rem;
+        font-size: 0.62rem;
         font-weight: 600;
-        background: var(--bg-chip);
-        color: var(--text-secondary);
-        padding: 2px 8px;
+        background: #f1f5f9;
+        color: #475569;
+        padding: 2px 7px;
         border-radius: var(--radius-pill);
+        border: 1px solid #e2e8f0;
     }
 
     .stats-rows {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 6px;
     }
 
     .stat-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        background: var(--bg-inset);
+        background: #f8fafc;
         padding: 6px 10px;
         border-radius: var(--radius-sm);
+        border: 1px solid #e2e8f0;
     }
 
     .row-label {
-        font-size: 0.72rem;
+        font-size: 0.7rem;
         color: var(--text-secondary);
+        font-weight: 500;
     }
 
     .row-val {
-        font-size: 0.85rem;
+        font-size: 0.82rem;
         font-family: var(--font-mono);
         color: var(--text-primary);
+        font-weight: 700;
     }
 
     .row-val.green {
-        color: var(--accent-green);
+        color: #16a34a;
     }
 
     .row-val small {
@@ -156,21 +161,22 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        background: var(--bg-inset);
+        background: #f8fafc;
         padding: 6px 10px;
         border-radius: var(--radius-sm);
+        border: 1px solid #e2e8f0;
     }
 
     .status-circle {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: var(--text-muted);
+        background: #94a3b8;
     }
 
     .status-circle.active {
-        background: var(--accent-blue);
-        box-shadow: 0 0 6px var(--accent-blue);
+        background: #16a34a;
+        box-shadow: 0 0 6px rgba(22, 163, 74, 0.5);
     }
 
     .sync-info {

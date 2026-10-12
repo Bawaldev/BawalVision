@@ -142,7 +142,7 @@
                     const spoilage = Number(det.spoilage_score) || 0;
                     const conf = Number(det.similarity_rate) || 0.0;
                     let st: 'PASS' | 'REVIEW' | 'REJECT' = det.status;
-                    if (!st || st === '') {
+                    if (!st || (st as string) === '') {
                         st = (spoilage >= 50 || conf < 0.55) ? 'REJECT' : ((spoilage >= 25 || conf < 0.68) ? 'REVIEW' : 'PASS');
                     }
                     return {
@@ -178,7 +178,7 @@
                             const sp = Number(item.spoilage_score) || 0;
                             const cf = Number(item.similarity_rate) || 0.0;
                             let st: 'PASS' | 'REVIEW' | 'REJECT' = (item.status as any);
-                            if (!st || st === '') {
+                            if (!st || (st as string) === '') {
                                 st = (sp >= 50 || cf < 0.55) ? 'REJECT' : ((sp >= 25 || cf < 0.68) ? 'REVIEW' : 'PASS');
                             }
                             return {

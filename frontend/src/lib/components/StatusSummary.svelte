@@ -30,14 +30,15 @@
         <!-- Circular Progress Ring Gauge -->
         <div class="gauge-box">
             <svg viewBox="0 0 100 100" class="ring-svg">
-                <circle cx="50" cy="50" r="40" fill="none" stroke="#2a3140" stroke-width="8" />
+                <!-- Inactive Track -->
+                <circle cx="50" cy="50" r="40" fill="none" stroke="#e2e8f0" stroke-width="8" />
                 {#if total > 0}
                     <circle
                         cx="50"
                         cy="50"
                         r="40"
                         fill="none"
-                        stroke={passRate >= 80 ? '#22c55e' : '#f43f5e'}
+                        stroke={passRate >= 80 ? '#16a34a' : '#dc2626'}
                         stroke-width="8"
                         stroke-dasharray="251.2"
                         stroke-dashoffset={251.2 * (1 - passRate / 100)}
@@ -89,7 +90,7 @@
 
 <style>
     .summary-card {
-        background: var(--bg-card);
+        background: #ffffff;
         border: 1px solid var(--border-card);
         border-radius: var(--radius-lg);
         padding: 16px;
@@ -132,23 +133,23 @@
     .yield-tag {
         font-size: 0.7rem;
         font-weight: 700;
-        background: var(--accent-green-dim);
-        color: var(--accent-green);
+        background: #dcfce7;
+        color: #16a34a;
         padding: 3px 10px;
         border-radius: var(--radius-pill);
-        border: 1px solid rgba(34, 197, 94, 0.3);
+        border: 1px solid #bbf7d0;
     }
 
     .yield-tag.standby {
-        background: var(--bg-chip);
-        color: var(--text-muted);
-        border-color: var(--border-subtle);
+        background: #f1f5f9;
+        color: #64748b;
+        border-color: #e2e8f0;
     }
 
     .yield-tag.warn {
-        background: var(--accent-red-dim);
-        color: var(--accent-red);
-        border-color: rgba(244, 63, 94, 0.3);
+        background: #fee2e2;
+        color: #dc2626;
+        border-color: #fecaca;
     }
 
     .gauge-and-counters {
@@ -186,7 +187,7 @@
     }
 
     .gauge-center small {
-        font-size: 0.6rem;
+        font-size: 0.62rem;
         color: var(--text-muted);
         font-weight: 600;
     }
@@ -201,18 +202,18 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        background: var(--bg-inset);
-        border: 1px solid var(--border-subtle);
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
         border-radius: var(--radius-md);
         padding: 8px 12px;
     }
 
     .counter-chip.pass {
-        border-left: 3px solid var(--accent-green);
+        border-left: 3px solid #16a34a;
     }
 
     .counter-chip.fail {
-        border-left: 3px solid var(--accent-red);
+        border-left: 3px solid #dc2626;
     }
 
     .chip-circle {
@@ -228,13 +229,13 @@
     }
 
     .chip-circle.green {
-        background: var(--accent-green-dim);
-        color: var(--accent-green);
+        background: #dcfce7;
+        color: #16a34a;
     }
 
     .chip-circle.red {
-        background: var(--accent-red-dim);
-        color: var(--accent-red);
+        background: #fee2e2;
+        color: #dc2626;
     }
 
     .counter-info {
@@ -262,17 +263,17 @@
         grid-template-columns: 1fr 1fr;
         gap: 8px;
         padding-top: 10px;
-        border-top: 1px solid var(--border-subtle);
+        border-top: 1px solid #e2e8f0;
     }
 
     .footer-stat {
         display: flex;
         flex-direction: column;
         gap: 2px;
-        background: var(--bg-inset);
+        background: #f8fafc;
         padding: 6px 10px;
         border-radius: var(--radius-sm);
-        border: 1px solid var(--border-subtle);
+        border: 1px solid #e2e8f0;
     }
 
     .stat-k {
@@ -290,10 +291,10 @@
     }
 
     .stat-v.green {
-        color: var(--accent-green);
+        color: #16a34a;
     }
 
     .stat-v.red {
-        color: var(--accent-red);
+        color: #dc2626;
     }
 </style>
