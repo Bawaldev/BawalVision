@@ -29,38 +29,73 @@
         { id: 'water_spinach', aliases: ['water_spinach', 'waterspinach', 'kangkung'], label: 'Water Spinach (Kangkung)', icon: '🌱' }
     ];
 
-    type SourceModeType = 'live' | 'snapshot' | 'mock';
+    type SourceModeType = 'live' | 'mock';
     let sourceMode = $state<SourceModeType>('live');
-    let snapshotEpoch = $state(Date.now());
+
+    let exampleVideos = $state<string[]>([
+        'sample_tray.mp4',
+        'sample_conveyor.mp4',
+        'fish_freshness_eval.mp4'
+    ]);
+    let selectedVideo = $state('sample_tray.mp4');
     let mockVideoSrc = $state('/examples/sample_tray.mp4');
     let mockFileName = $state('sample_tray.mp4');
+    let isCustomUpload = $state(false);
     let fileInputRef: HTMLInputElement | null = null;
 
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
+    let retryCount = $state(0);
+    const MAX_RETRIES = 3;
 
     let activeStreamUrl = $derived(
         streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`
     );
 
-    let activeSnapshotUrl = $derived(
-        deviceId ? `/api/v1/camera/frame/${deviceId}?t=${snapshotEpoch}` : `/api/v1/camera/frame?t=${snapshotEpoch}`
-    );
-
-    // Snapshot polling loop
+    // Fetch list of examples from backend /examples directory (lightweight & Lambda safe)
     $effect(() => {
-        if (sourceMode !== 'snapshot') return;
-        const interval = setInterval(() => {
-            snapshotEpoch = Date.now();
-        }, 750);
-        return () => clearInterval(interval);
+        fetch('/api/v1/examples')
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                if (data && Array.isArray(data.videos) && data.videos.length > 0) {
+                    const merged = Array.from(new Set([...data.videos, ...exampleVideos]));
+                    exampleVideos = merged;
+                }
+            })
+            .catch(() => {
+                // Fallback to presets if backend is unavailable or running serverless
+            });
     });
+
+    function setSourceMode(mode: SourceModeType) {
+        sourceMode = mode;
+        if (mode === 'mock') {
+            // Cleanly suspend live stream tracking to avoid burning Lambda execution/bandwidth
+            streamError = false;
+        } else {
+            retryCount = 0;
+            streamEpoch = Date.now();
+        }
+    }
+
+    function selectExample(name: string) {
+        selectedVideo = name;
+        mockFileName = name;
+        isCustomUpload = false;
+        if (mockVideoSrc.startsWith('blob:')) {
+            URL.revokeObjectURL(mockVideoSrc);
+        }
+        mockVideoSrc = `/examples/${name}`;
+        streamError = false;
+    }
 
     function handleFileUpload(event: Event) {
         const input = event.target as HTMLInputElement;
         if (input.files && input.files[0]) {
             const file = input.files[0];
             mockFileName = file.name;
+            selectedVideo = 'custom';
+            isCustomUpload = true;
             if (mockVideoSrc.startsWith('blob:')) {
                 URL.revokeObjectURL(mockVideoSrc);
             }
@@ -104,16 +139,19 @@
         };
     });
 
-    // Auto-recovery watchdog: auto-reconnect stream if stalled
+    // Auto-recovery watchdog: auto-reconnect stream if stalled (Lambda safe: bounded backoff, max 3 retries)
     $effect(() => {
-        if (!hasCamera || sourceMode !== 'live') return;
-        const interval = setInterval(() => {
-            if (streamError) {
-                streamEpoch = Date.now();
-                streamError = false;
-            }
-        }, 3500);
-        return () => clearInterval(interval);
+        if (!hasCamera || sourceMode !== 'live' || !streamError) return;
+        if (retryCount >= MAX_RETRIES) return; // Halt auto-retries to prevent Lambda execution loop exhaustion
+
+        const backoffMs = Math.min(3000 * Math.pow(1.5, retryCount), 10000);
+        const timer = setTimeout(() => {
+            retryCount += 1;
+            streamEpoch = Date.now();
+            streamError = false;
+        }, backoffMs);
+
+        return () => clearTimeout(timer);
     });
 </script>
 
@@ -132,25 +170,16 @@
                     type="button"
                     class="mode-pill-btn"
                     class:active={sourceMode === 'live'}
-                    onclick={() => (sourceMode = 'live')}
-                    title="Live continuous multipart MJPEG stream push"
+                    onclick={() => setSourceMode('live')}
+                    title="Live continuous stream push from camera"
                 >
                     <span class="pill-icon">📹</span> Live Stream
                 </button>
                 <button
                     type="button"
                     class="mode-pill-btn"
-                    class:active={sourceMode === 'snapshot'}
-                    onclick={() => (sourceMode = 'snapshot')}
-                    title="Discrete snapshot pull via /camera/frame (zero latency buffer)"
-                >
-                    <span class="pill-icon">📸</span> Snapshot (/frame)
-                </button>
-                <button
-                    type="button"
-                    class="mode-pill-btn"
                     class:active={sourceMode === 'mock'}
-                    onclick={() => (sourceMode = 'mock')}
+                    onclick={() => setSourceMode('mock')}
                     title="Mock local MP4 test video loop (examples/)"
                 >
                     <span class="pill-icon">🎬</span> Mock Video
@@ -159,11 +188,9 @@
 
             <span class="pill-badge">
                 {#if sourceMode === 'live'}
-                    {hasCamera && !streamError ? 'MJPEG Push (Active HUD)' : 'Standby'}
-                {:else if sourceMode === 'snapshot'}
-                    Snapshot Pull (/frame)
+                    {hasCamera && !streamError ? 'Live Push (Active HUD)' : 'Standby'}
                 {:else}
-                    Mock MP4 Loop
+                    Mock Video Loop
                 {/if}
             </span>
         </div>
@@ -176,7 +203,7 @@
                         src={activeStreamUrl}
                         alt="Live Video Stream"
                         class="feed-video"
-                        onload={() => (streamError = false)}
+                        onload={() => { streamError = false; retryCount = 0; }}
                         onerror={() => (streamError = true)}
                     />
                 {:else}
@@ -186,21 +213,12 @@
                         <h4>No Camera Stream Connected</h4>
                         <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
                         {#if streamError}
-                            <button type="button" class="retry-btn" onclick={() => { streamError = false; streamEpoch = Date.now(); }}>
+                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
                                 ↻ Reconnect Stream
                             </button>
                         {/if}
                     </div>
                 {/if}
-            {:else if sourceMode === 'snapshot'}
-                <!-- Discrete Pull Snapshot Mode (/camera/frame) -->
-                <img
-                    src={activeSnapshotUrl}
-                    alt="Discrete Snapshot Feed"
-                    class="feed-video"
-                    onload={() => (streamError = false)}
-                    onerror={() => (streamError = true)}
-                />
             {:else if sourceMode === 'mock'}
                 <!-- Mock MP4 Video Loop Mode -->
                 <video
@@ -219,21 +237,49 @@
 
         {#if sourceMode === 'mock'}
             <div class="mock-control-bar">
-                <span class="mock-label">📁 File: <strong>{mockFileName}</strong></span>
-                <input
-                    type="file"
-                    accept="video/mp4,video/webm"
-                    class="hidden-file-input"
-                    bind:this={fileInputRef}
-                    onchange={handleFileUpload}
-                />
-                <button
-                    type="button"
-                    class="upload-btn"
-                    onclick={() => fileInputRef?.click()}
-                >
-                    Select Test MP4 Video
-                </button>
+                <div class="mock-select-group">
+                    <label for="example-select-input" class="mock-label">
+                        📁 <strong>examples/</strong>
+                    </label>
+                    <select
+                        id="example-select-input"
+                        class="example-select"
+                        value={selectedVideo}
+                        onchange={(e) => {
+                            const val = (e.target as HTMLSelectElement).value;
+                            if (val === 'custom') {
+                                fileInputRef?.click();
+                            } else {
+                                selectExample(val);
+                            }
+                        }}
+                    >
+                        {#each exampleVideos as ex}
+                            <option value={ex}>{ex}</option>
+                        {/each}
+                        {#if isCustomUpload}
+                            <option value="custom">📎 {mockFileName} (Custom)</option>
+                        {/if}
+                    </select>
+                </div>
+
+                <div class="mock-actions">
+                    <input
+                        type="file"
+                        accept="video/mp4,video/webm"
+                        class="hidden-file-input"
+                        bind:this={fileInputRef}
+                        onchange={handleFileUpload}
+                    />
+                    <button
+                        type="button"
+                        class="upload-btn"
+                        onclick={() => fileInputRef?.click()}
+                        title="Upload custom MP4/WebM file from disk"
+                    >
+                        + Upload Custom Video
+                    </button>
+                </div>
             </div>
         {/if}
 
@@ -242,10 +288,8 @@
             <span>
                 {#if sourceMode === 'live'}
                     ⚡ Ingestion: MJPEG Push (/api/v1/camera/stream)
-                {:else if sourceMode === 'snapshot'}
-                    ⚡ Ingestion: Pull Polling (/api/v1/camera/frame)
                 {:else}
-                    ⚡ Ingestion: Local MP4 Mock Loop (examples/)
+                    ⚡ Ingestion: Local MP4 Mock Loop (examples/{mockFileName})
                 {/if}
             </span>
         </div>
@@ -415,14 +459,47 @@
         background: var(--bg-chip, #181c24);
         border-top: 1px solid var(--border-subtle, #2d3748);
         font-size: 0.75rem;
+        gap: 12px;
+    }
+
+    .mock-select-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
     }
 
     .mock-label {
         color: var(--text-secondary, #cbd5e1);
-        overflow: hidden;
-        text-overflow: ellipsis;
         white-space: nowrap;
-        max-width: 65%;
+        font-size: 0.75rem;
+    }
+
+    .example-select {
+        background: var(--bg-card, #1e293b);
+        color: var(--text-primary, #f8fafc);
+        border: 1px solid var(--border-subtle, #334155);
+        border-radius: var(--radius-sm, 6px);
+        padding: 4px 10px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        outline: none;
+        cursor: pointer;
+        max-width: 260px;
+        transition: border-color 0.15s ease;
+    }
+
+    .example-select:hover,
+    .example-select:focus {
+        border-color: var(--accent-blue, #3b82f6);
+    }
+
+    .mock-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
     }
 
     .hidden-file-input {

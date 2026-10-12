@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"bawal_vision_backend/internal/inspection"
@@ -29,6 +30,41 @@ func RegisterFrontendRoutes(router fiber.Router, db *gorm.DB) {
 	router.Get("/records", h.GetRecords)
 	router.Get("/records/:id", h.GetRecordByID)
 	router.Get("/system/engines", h.GetEngineStatus)
+	router.Get("/examples", h.GetExampleVideos)
+	router.Get("/examples/videos", h.GetExampleVideos)
+}
+
+func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
+	paths := []string{"./examples", "../examples", "./frontend/static/examples", "../frontend/static/examples"}
+	foundMap := make(map[string]bool)
+	var videoFiles []string
+
+	for _, p := range paths {
+		entries, err := os.ReadDir(p)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			lower := strings.ToLower(name)
+			if (strings.HasSuffix(lower, ".mp4") || strings.HasSuffix(lower, ".webm")) && !foundMap[name] {
+				foundMap[name] = true
+				videoFiles = append(videoFiles, name)
+			}
+		}
+	}
+
+	if len(videoFiles) == 0 {
+		videoFiles = []string{"sample_tray.mp4"}
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"videos": videoFiles,
+	})
 }
 
 func (h *Handler) GetRecords(c *fiber.Ctx) error {
