@@ -33,7 +33,6 @@
         </div>
         <div class="header-stats">
             <span class="stat-pill">{detections.length} Detected</span>
-            <span class="stat-pill">Thermal Limit: &le;38°C</span>
             <span class="stat-pill">CV Threshold: &ge;40%</span>
         </div>
     </div>
@@ -44,7 +43,6 @@
                 <tr>
                     <th>#</th>
                     <th>Detected Item</th>
-                    <th>Food Temp</th>
                     <th>CV Match</th>
                     <th>ML Spoilage</th>
                     <th>Decision</th>
@@ -53,7 +51,7 @@
             <tbody>
                 {#if detections.length === 0}
                     <tr>
-                        <td colspan="6" class="empty-row">
+                        <td colspan="5" class="empty-row">
                             <span class="empty-msg">No food items detected in camera view.</span>
                         </td>
                     </tr>
@@ -71,15 +69,6 @@
                                         <small class="cat-label">{det.category || 'Food'}</small>
                                     </div>
                                 </div>
-                            </td>
-                            <td class="temp-cell">
-                                <span
-                                    class="temp-num"
-                                    class:warn={(det.temperature || 25) > 35}
-                                    class:danger={(det.temperature || 25) > 42}
-                                >
-                                    {det.temperature ? det.temperature.toFixed(1) : '24.5'} <small>°C</small>
-                                </span>
                             </td>
                             <td class="sim-cell">
                                 <div class="sim-bar-box">
@@ -276,24 +265,11 @@
         font-weight: 700;
     }
 
-    .temp-num, .spoilage-num {
+    .spoilage-num {
         font-family: var(--font-mono);
         font-size: 0.78rem;
         font-weight: 700;
         color: #1e293b;
-    }
-
-    .temp-num.warn {
-        color: #d97706;
-    }
-
-    .temp-num.danger {
-        color: #dc2626;
-    }
-
-    .temp-num small {
-        color: #64748b;
-        font-weight: normal;
     }
 
     .spoilage-num.danger {

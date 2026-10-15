@@ -162,12 +162,12 @@ void lcd_update_wifi_status(bool connected, const char *ip_address) {
   }
 }
 
-void lcd_update_telemetry_display(float food_temp, float cpu_temp,
+void lcd_update_telemetry_display(float real_temp, float cpu_temp,
                                   uint8_t cpu_load) {
   if (lvgl_port_lock(0)) {
     if (s_food_temp_label) {
-      lv_label_set_text_fmt(s_food_temp_label, "FOOD: %.1f C",
-                            food_temp > 0 ? food_temp : 24.5f);
+      lv_label_set_text_fmt(s_food_temp_label, "ESP32: %.1f C",
+                            real_temp > 0 ? real_temp : 36.5f);
     }
     if (s_mcu_temp_label) {
       lv_label_set_text_fmt(s_mcu_temp_label, "MCU : %.1f C",
@@ -249,7 +249,7 @@ static void create_dashboard_ui(void) {
   lv_obj_clear_flag(sensor_box, LV_OBJ_FLAG_SCROLLABLE);
 
   s_food_temp_label = lv_label_create(sensor_box);
-  lv_label_set_text(s_food_temp_label, "FOOD: 25.0 C");
+  lv_label_set_text(s_food_temp_label, "ESP32: 36.5 C");
   lv_obj_set_style_text_color(s_food_temp_label, lv_color_hex(0xfb923c),
                               0); // Orange
   lv_obj_set_style_text_font(s_food_temp_label, LV_FONT_DEFAULT, 0);

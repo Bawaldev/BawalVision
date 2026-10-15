@@ -39,7 +39,7 @@
         }
 
         // Generate smooth operational shift timeline (e.g. 10 sampled points over shift)
-        const baseTemp = currentTelemetry?.food_temperature || currentTelemetry?.temperature || 28.5;
+        const baseTemp = currentTelemetry?.temperature || 28.5;
         const baseMcu = currentTelemetry?.cpu_temperature || 36.8;
         const now = Math.floor(Date.now() / 1000);
         const points: TelemetryPayload[] = [];
@@ -52,7 +52,6 @@
                 device_id: currentTelemetry?.device_id || 'ESP32S3_441BF6C95678',
                 firmware_version: currentTelemetry?.firmware_version || '1.0.4-prod',
                 device_core: 2,
-                food_temperature: Math.max(20.0, Math.min(45.0, baseTemp + delta)),
                 cpu_temperature: Math.max(30.0, Math.min(50.0, baseMcu + delta * 0.6)),
                 temperature: baseTemp + delta,
                 cpu_load: Math.min(65, Math.max(12, Math.round(18 + Math.abs(delta) * 8))),
@@ -63,15 +62,15 @@
     });
 
     // Computed Stats for Upper-Right Card
-    let avgFoodTemp = $derived.by(() => {
+    let avgTemp = $derived.by(() => {
         if (!displayHistory || displayHistory.length === 0) return 26.5;
-        const sum = displayHistory.reduce((acc, pt) => acc + (pt.food_temperature || pt.temperature || 25), 0);
+        const sum = displayHistory.reduce((acc, pt) => acc + (pt.temperature || 25), 0);
         return (sum / displayHistory.length).toFixed(1);
     });
 
     let peakVoc = $derived.by(() => {
         // Estimated VOC reading derived from temperature & environmental index
-        const currentTemp = currentTelemetry?.food_temperature || currentTelemetry?.temperature || 28.5;
+        const currentTemp = currentTelemetry?.temperature || 28.5;
         const basePpb = 42 + Math.round(Math.max(0, currentTemp - 25) * 6.5);
         return `${basePpb} ppb`;
     });
@@ -87,10 +86,10 @@
         return { x, y };
     }
 
-    let foodTempPoints = $derived.by(() => {
+    let ambientTempPoints = $derived.by(() => {
         if (!displayHistory || displayHistory.length < 2) return '';
         return displayHistory.map((pt, idx) => {
-            const val = pt.food_temperature || pt.temperature || 25.0;
+            const val = pt.temperature || 25.0;
             const c = getCoords(idx, displayHistory.length, val);
             return `${c.x.toFixed(1)},${c.y.toFixed(1)}`;
         }).join(' ');
@@ -98,8 +97,10 @@
 
     let mcuTempPoints = $derived.by(() => {
         if (!displayHistory || displayHistory.length < 2) return '';
+        const hasAnyCpu = displayHistory.some(pt => pt.cpu_temperature != null && pt.cpu_temperature > 0);
+        if (!hasAnyCpu) return '';
         return displayHistory.map((pt, idx) => {
-            const val = pt.cpu_temperature || 36.5;
+            const val = pt.cpu_temperature != null ? pt.cpu_temperature : 36.5;
             const c = getCoords(idx, displayHistory.length, val);
             return `${c.x.toFixed(1)},${c.y.toFixed(1)}`;
         }).join(' ');
@@ -156,7 +157,7 @@
             <div class="card-title-bar">
                 <span class="card-heading">temperature</span>
                 <div class="legend-strip">
-                    <span class="legend-item food"><span class="dot food"></span> Food Temp</span>
+                    <span class="legend-item esp32"><span class="dot esp32"></span> ESP32-S3 Real Temp</span>
                     <span class="legend-item mcu"><span class="dot mcu"></span> MCU Core Temp</span>
                 </div>
             </div>
@@ -187,17 +188,25 @@
                             >
                                 <span class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString()}</span>
                                 <div class="tooltip-metrics">
-                                    <span class="chip food">🥗 Food: {(hoveredPoint.food_temperature || hoveredPoint.temperature || 25.0).toFixed(1)}°C</span>
-                                    <span class="chip mcu">💻 MCU: {(hoveredPoint.cpu_temperature || 36.5).toFixed(1)}°C</span>
-                                    <span class="chip cpu">⚡ Load: {hoveredPoint.cpu_load || 18}%</span>
+                                    <span class="chip esp32">🌡️ ESP32-S3: {(hoveredPoint.temperature || 25.0).toFixed(1)}°C</span>
+                                    {#if hoveredPoint.cpu_temperature != null}
+                                        <span class="chip mcu">💻 MCU: {hoveredPoint.cpu_temperature.toFixed(1)}°C</span>
+                                    {:else}
+                                        <span class="chip mcu offline">💻 MCU: Offline</span>
+                                    {/if}
+                                    {#if hoveredPoint.cpu_load != null}
+                                        <span class="chip cpu">⚡ Load: {hoveredPoint.cpu_load}%</span>
+                                    {:else}
+                                        <span class="chip cpu offline">⚡ Load: Offline</span>
+                                    {/if}
                                 </div>
                             </div>
                         {/if}
 
                         <svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" class="temperature-svg" preserveAspectRatio="none">
                             <defs>
-                                <!-- Linear Gradient for Food Temperature Fill -->
-                                <linearGradient id="foodGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <!-- Linear Gradient for Ambient Temperature Fill -->
+                                <linearGradient id="ambientGrad" x1="0%" y1="0%" x2="0%" y2="100%">
                                     <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.28" />
                                     <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.0" />
                                 </linearGradient>
@@ -224,18 +233,18 @@
                                 />
                             {/if}
 
-                            <!-- Area Under Curve (Food Temp) -->
-                            {#if foodTempPoints}
+                            <!-- Area Under Curve (Ambient Temp) -->
+                            {#if ambientTempPoints}
                                 <polygon
-                                    points={`0,${CHART_HEIGHT} ${foodTempPoints} ${CHART_WIDTH},${CHART_HEIGHT}`}
-                                    fill="url(#foodGrad)"
+                                    points={`0,${CHART_HEIGHT} ${ambientTempPoints} ${CHART_WIDTH},${CHART_HEIGHT}`}
+                                    fill="url(#ambientGrad)"
                                 />
                             {/if}
 
-                            <!-- Curve 1: Food Temperature Line (Amber) -->
-                            {#if foodTempPoints}
+                            <!-- Curve 1: Ambient Temperature Line (Amber) -->
+                            {#if ambientTempPoints}
                                 <polyline
-                                    points={foodTempPoints}
+                                    points={ambientTempPoints}
                                     fill="none"
                                     stroke="#f59e0b"
                                     stroke-width="2.5"
@@ -262,7 +271,7 @@
                             <!-- Interactive Data Points -->
                             {#if displayHistory}
                                 {#each displayHistory as pt, idx}
-                                    {@const c = getCoords(idx, displayHistory.length, pt.food_temperature || pt.temperature || 25.0)}
+                                    {@const c = getCoords(idx, displayHistory.length, pt.temperature || 25.0)}
                                     <circle
                                         cx={c.x}
                                         cy={c.y}
@@ -302,9 +311,9 @@
             <!-- Upper Card: Avg. Temp & Peak VOC -->
             <div class="card metric-mini-card">
                 <div class="metric-row">
-                    <span class="metric-label">Avg. Temp</span>
+                    <span class="metric-label">Avg. ESP32 Temp</span>
                     <div class="value-box">
-                        <span class="value-text">{avgFoodTemp} °C</span>
+                        <span class="value-text">{avgTemp} °C</span>
                     </div>
                 </div>
 
@@ -521,9 +530,9 @@
 
                                 <!-- Temperature Column -->
                                 <td class="col-temp">
-                                    <div class="temp-badge" class:hot={(rec.food_temperature || rec.temperature || 25) > 38}>
+                                    <div class="temp-badge" class:hot={(rec.temperature || 25) > 38}>
                                         <span class="temp-icon">🌡️</span>
-                                        <span class="temp-val">{(rec.food_temperature || rec.temperature || 24.5).toFixed(1)}°C</span>
+                                        <span class="temp-val">{(rec.temperature || 24.5).toFixed(1)}°C</span>
                                     </div>
                                 </td>
 
@@ -573,12 +582,12 @@
                             <strong class="val">{selectedRecord.firmware_version}</strong>
                         </div>
                         <div class="detail-item">
-                            <span class="label">Food Temp:</span>
-                            <strong class="val">{(selectedRecord.food_temperature || selectedRecord.temperature || 25.0).toFixed(1)}°C</strong>
+                            <span class="label">ESP32-S3 Temp:</span>
+                            <strong class="val">{(selectedRecord.temperature || 36.5).toFixed(1)}°C</strong>
                         </div>
                         <div class="detail-item">
                             <span class="label">CPU Temp:</span>
-                            <strong class="val">{(selectedRecord.cpu_temperature || 36.5).toFixed(1)}°C</strong>
+                            <strong class="val">{selectedRecord.cpu_temperature != null ? `${selectedRecord.cpu_temperature.toFixed(1)}°C` : 'N/A (Disconnected)'}</strong>
                         </div>
                     </div>
 
@@ -737,7 +746,7 @@
         border-radius: 50%;
     }
 
-    .legend-item .dot.food { background: #f59e0b; }
+    .legend-item .dot.esp32 { background: #f59e0b; }
     .legend-item .dot.mcu { background: #38bdf8; }
 
     /* New Unsquished Chart Layout */
@@ -871,9 +880,10 @@
         font-family: var(--font-mono);
     }
 
-    .tooltip-metrics .chip.food { color: #f59e0b; }
+    .tooltip-metrics .chip.esp32 { color: #f59e0b; }
     .tooltip-metrics .chip.mcu { color: #38bdf8; }
     .tooltip-metrics .chip.cpu { color: var(--accent-green); }
+    .tooltip-metrics .chip.offline { color: #dc2626 !important; opacity: 0.75; }
 
     .hover-detector-overlay {
         position: absolute;

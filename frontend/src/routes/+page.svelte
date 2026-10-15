@@ -126,17 +126,21 @@
             const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
             if (tel) {
                 telemetry = tel;
+                if (tel.is_connected) {
+                    isOnline = true;
+                }
                 if (!telemetryHistory.some(h => h.timestamp === tel.timestamp)) {
                     telemetryHistory = [...telemetryHistory.slice(-19), tel];
                 }
-                isOnline = true;
             }
 
             // 4. Live Real-time Inspections & Dynamic Bounding Boxes
             const latestLive: any = await fetchLatestInspection(systemConfig.backendUrl);
             let hasLiveDetections = false;
             if (latestLive && latestLive.detections && latestLive.detections.length > 0) {
-                isOnline = true;
+                if (latestLive.is_live) {
+                    isOnline = true;
+                }
                 hasLiveDetections = true;
                 detections = latestLive.detections.map((det: any) => {
                     const spoilage = Number(det.spoilage_score) || 0;
@@ -148,7 +152,6 @@
                     return {
                         food_name: det.food_name || 'food_item',
                         similarity_rate: conf,
-                        temperature: Number(det.temperature) || Number(latestLive.food_temperature) || Number(latestLive.temperature) || 25,
                         spoilage_score: spoilage,
                         status: st,
                         category: getCategory(det.food_name || ''),
@@ -164,7 +167,6 @@
             );
 
             if (validRecords.length > 0) {
-                isOnline = true;
                 const spoiled = validRecords.filter(r => r.is_spoiled || (r.inspection_foods && r.inspection_foods.some(f => f.status === 'REJECT'))).length;
                 const accepted = validRecords.length - spoiled;
                 totalRejected = Math.max(totalRejected, spoiled);
@@ -184,7 +186,6 @@
                             return {
                                 food_name: name,
                                 similarity_rate: cf,
-                                temperature: Number(item.temperature) || Number(latest.food_temperature) || Number(latest.temperature) || 25,
                                 spoilage_score: sp,
                                 status: st,
                                 category: getCategory(name)
@@ -291,7 +292,7 @@
         }
 
         const avgFreshness = detections.length > 0 ? totalFreshness / detections.length : 100;
-        const isTrayRejected = anyReject || avgFreshness < 55.0 || (telemetry?.food_temperature || 0) > 42.0;
+        const isTrayRejected = anyReject || avgFreshness < 55.0 || (telemetry?.temperature || 0) > 42.0;
 
         if (isTrayRejected) {
             totalRejected++;

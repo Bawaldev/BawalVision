@@ -57,15 +57,20 @@ export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<Telemetr
         });
         if (response.ok) {
             const data = await response.json();
+            const isConnected = data.is_connected !== undefined
+                ? Boolean(data.is_connected)
+                : (data.cpu_temperature != null && data.cpu_load != null);
             return {
                 device_id: data.device_id || '',
                 firmware_version: data.firmware_version || '1.0.0',
                 device_core: data.device_core || 2,
-                food_temperature: data.food_temperature || data.temperature || 24.5,
-                cpu_temperature: data.cpu_temperature || 36.5,
-                temperature: data.temperature || data.food_temperature || 24.5,
-                cpu_load: data.cpu_load || 0,
-                timestamp: data.created_at ? Math.floor(new Date(data.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000)
+                cpu_temperature: isConnected && data.cpu_temperature != null ? Number(data.cpu_temperature) : null,
+                temperature: data.temperature != null ? Number(data.temperature) : 25.0,
+                cpu_load: isConnected && data.cpu_load != null ? Number(data.cpu_load) : null,
+                timestamp: data.timestamp
+                    ? Number(data.timestamp)
+                    : (data.created_at ? Math.floor(new Date(data.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000)),
+                is_connected: isConnected
             };
         }
     } catch {

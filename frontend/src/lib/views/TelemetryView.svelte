@@ -38,9 +38,14 @@
                 <div class="room-title-box">
                     <h3>Inspection Station 01</h3>
                     <div class="room-meta-strip">
-                        <span class="stat-meta">🥗 Food: {currentTelemetry?.food_temperature != null && currentTelemetry.food_temperature > 0 ? currentTelemetry.food_temperature.toFixed(1) : (currentTelemetry?.temperature != null && currentTelemetry.temperature > 0 ? currentTelemetry.temperature.toFixed(1) : '24.5')} °C</span>
-                        <span class="stat-meta">💻 MCU: {currentTelemetry?.cpu_temperature != null && currentTelemetry.cpu_temperature > 0 ? currentTelemetry.cpu_temperature.toFixed(1) : '36.5'} °C</span>
-                        <span class="stat-meta">⚡ {currentTelemetry?.cpu_load != null && currentTelemetry.cpu_load > 0 ? currentTelemetry.cpu_load : '18'} % Load</span>
+                        <span class="stat-meta">🌡️ ESP32-S3: {currentTelemetry?.temperature != null && currentTelemetry.temperature > 0 ? currentTelemetry.temperature.toFixed(1) : '25.0'} °C</span>
+                        {#if currentTelemetry?.is_connected && currentTelemetry?.cpu_temperature != null}
+                            <span class="stat-meta">💻 MCU: {currentTelemetry.cpu_temperature.toFixed(1)} °C</span>
+                            <span class="stat-meta">⚡ {currentTelemetry.cpu_load ?? 0} % Load</span>
+                        {:else}
+                            <span class="stat-meta dim">💻 MCU: N/A (Offline)</span>
+                            <span class="stat-meta dim">⚡ CPU: Offline</span>
+                        {/if}
                         <span class="stat-meta">📡 100 Hz Bus</span>
                         <span class="stat-meta">🏷️ {currentTelemetry?.firmware_version || 'v1.0.0'}</span>
                     </div>
@@ -51,8 +56,8 @@
                 <div class="status-indicator-badge">
                     <span class="status-bulb">💡</span>
                     <div class="status-info">
-                        <strong>Dual Thermals</strong>
-                        <small>Calibrated</small>
+                        <strong>ESP-IDF Node</strong>
+                        <small>{currentTelemetry?.is_connected ? 'Connected' : 'Standby'}</small>
                     </div>
                 </div>
             </div>
@@ -67,17 +72,17 @@
                     <div class="tooltip-row">
                         <span class="tooltip-dot blue"></span>
                         <span class="tooltip-label">CPU Load:</span>
-                        <strong class="tooltip-val">{hoveredPoint.cpu_load || 18} %</strong>
+                        <strong class="tooltip-val">{hoveredPoint.cpu_load != null ? `${hoveredPoint.cpu_load} %` : 'N/A (Offline)'}</strong>
                     </div>
                     <div class="tooltip-row">
                         <span class="tooltip-dot orange"></span>
-                        <span class="tooltip-label">Food Temp:</span>
-                        <strong class="tooltip-val">{(hoveredPoint.food_temperature || hoveredPoint.temperature || 24.5).toFixed(1)} °C</strong>
+                        <span class="tooltip-label">ESP32-S3 Temp:</span>
+                        <strong class="tooltip-val">{(hoveredPoint.temperature || 25.0).toFixed(1)} °C</strong>
                     </div>
                     <div class="tooltip-row">
                         <span class="tooltip-dot pink"></span>
                         <span class="tooltip-label">MCU Temp:</span>
-                        <strong class="tooltip-val">{(hoveredPoint.cpu_temperature || 36.5).toFixed(1)} °C</strong>
+                        <strong class="tooltip-val">{hoveredPoint.cpu_temperature != null ? `${hoveredPoint.cpu_temperature.toFixed(1)} °C` : 'N/A (Offline)'}</strong>
                     </div>
                 </div>
             {/if}
@@ -258,6 +263,11 @@
         font-weight: 600;
         color: var(--text-primary);
         font-family: var(--font-mono);
+    }
+
+    .stat-meta.dim {
+        opacity: 0.55;
+        color: var(--text-muted);
     }
 
     .status-indicator-badge {
