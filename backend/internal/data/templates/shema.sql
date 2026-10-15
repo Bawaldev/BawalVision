@@ -65,6 +65,19 @@ CREATE INDEX IF NOT EXISTS idx_inspections_device_created ON inspections(device_
 CREATE INDEX IF NOT EXISTS idx_inspections_spoilage_true ON inspections(created_at DESC) WHERE is_spoiled = TRUE;
 CREATE INDEX IF NOT EXISTS idx_inspections_firmware ON inspections(firmware_version);
 
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'inspections'
+          AND column_name = 'food_temperature'
+    ) THEN
+        UPDATE inspections SET temperature = food_temperature;
+        ALTER TABLE inspections DROP COLUMN food_temperature;
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS inspection_foods (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     inspection_id UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
@@ -85,3 +98,20 @@ ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NUL
 CREATE INDEX IF NOT EXISTS idx_inspection_foods_inspection ON inspection_foods(inspection_id);
 CREATE INDEX IF NOT EXISTS idx_inspection_foods_item ON inspection_foods(food_item_id);
 CREATE INDEX IF NOT EXISTS idx_inspection_foods_status ON inspection_foods(status);
+CREATE TABLE IF NOT EXISTS camera_frames (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id VARCHAR(64) NOT NULL,
+    frame_id BIGINT NOT NULL,
+    width BIGINT NOT NULL DEFAULT 320,
+    height BIGINT NOT NULL DEFAULT 240,
+    format BIGINT NOT NULL DEFAULT 0,
+    buffer_len BIGINT NOT NULL,
+    timestamp_ms BIGINT NOT NULL,
+    image_bytes BYTEA,
+    image_s3_uri TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_camera_frames_device_id ON camera_frames(device_id);
+CREATE INDEX IF NOT EXISTS idx_camera_frames_deleted_at ON camera_frames(deleted_at);
