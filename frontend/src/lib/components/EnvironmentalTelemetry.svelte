@@ -1,32 +1,30 @@
 <script lang="ts">
     interface Props {
-        foodTemperature?: number;
-        cpuTemperature?: number;
+        isConnected?: boolean;
+        cpuTemperature?: number | null;
         temperature?: number;
-        cpuLoad?: number;
+        cpuLoad?: number | null;
         firmwareVersion?: string;
     }
 
     let {
-        foodTemperature,
-        cpuTemperature = 36.5,
+        isConnected = true,
+        cpuTemperature = null,
         temperature,
-        cpuLoad = 18,
+        cpuLoad = null,
         firmwareVersion = '1.0.4'
     }: Props = $props();
 
-    let displayFoodTemp = $derived(
-        foodTemperature != null && foodTemperature > 0
-            ? foodTemperature
-            : temperature != null && temperature > 0
+    // The live temperature is ESP-IDF telemetry (ESP32-S3 real temperature)
+    let displayRealTemp = $derived(
+        temperature != null && temperature > 0
             ? temperature
-            : 24.5
+            : 25.0
     );
 
-    let displayCpuTemp = $derived(
-        cpuTemperature != null && cpuTemperature > 0
-            ? cpuTemperature
-            : 36.5
+    // CPU temp and CPU utility are ONLY available if the ESP device is connected
+    let isDeviceActive = $derived(
+        isConnected && cpuTemperature != null && cpuLoad != null
     );
 </script>
 
@@ -36,33 +34,43 @@
             <span class="room-icon">🌡️</span>
             <div>
                 <h4>Thermal & Hardware Telemetry</h4>
-                <p class="sub-label">Food Surface vs ESP32-S3 Core</p>
+                <p class="sub-label">{isDeviceActive ? 'ESP-IDF Live ESP32-S3 Real Temperature' : 'ESP-IDF Device Disconnected'}</p>
             </div>
         </div>
-        <span class="bus-badge">v{firmwareVersion}</span>
+        <span class="bus-badge" class:offline={!isDeviceActive}>{isDeviceActive ? `v${firmwareVersion}` : 'Offline'}</span>
     </div>
 
     <!-- Horizontal IoT Metrics Strip -->
     <div class="metrics-row">
         <div class="stat-item">
-            <span class="icon">🥗</span>
+            <span class="icon">🌡️</span>
             <div class="stat-text">
-                <span class="val">{displayFoodTemp.toFixed(1)} <small>°C</small></span>
-                <span class="stat-tag">Food</span>
+                <span class="val">{displayRealTemp.toFixed(1)} <small>°C</small></span>
+                <span class="stat-tag">ESP32-S3</span>
             </div>
         </div>
-        <div class="stat-item">
+        <div class="stat-item" class:is-disabled={!isDeviceActive}>
             <span class="icon">💻</span>
             <div class="stat-text">
-                <span class="val">{displayCpuTemp.toFixed(1)} <small>°C</small></span>
-                <span class="stat-tag">MCU</span>
+                {#if isDeviceActive && cpuTemperature != null}
+                    <span class="val">{cpuTemperature.toFixed(1)} <small>°C</small></span>
+                    <span class="stat-tag">MCU Core</span>
+                {:else}
+                    <span class="val na">-- <small>°C</small></span>
+                    <span class="stat-tag offline">Offline</span>
+                {/if}
             </div>
         </div>
-        <div class="stat-item">
+        <div class="stat-item" class:is-disabled={!isDeviceActive}>
             <span class="icon">⚡</span>
             <div class="stat-text">
-                <span class="val">{cpuLoad > 0 ? cpuLoad : 18} <small>%</small></span>
-                <span class="stat-tag">Load</span>
+                {#if isDeviceActive && cpuLoad != null}
+                    <span class="val">{cpuLoad} <small>%</small></span>
+                    <span class="stat-tag">Load</span>
+                {:else}
+                    <span class="val na">-- <small>%</small></span>
+                    <span class="stat-tag offline">Offline</span>
+                {/if}
             </div>
         </div>
     </div>
@@ -71,31 +79,25 @@
     <div class="meters-container">
         <div class="meter-bar-item">
             <div class="meter-labels">
-                <span>Food Surface Temperature</span>
-                <strong>{displayFoodTemp.toFixed(1)} °C</strong>
+                <span>ESP32-S3 Real Temperature</span>
+                <strong>{displayRealTemp.toFixed(1)} °C</strong>
             </div>
             <div class="progress-track">
-                <div class="progress-fill food-temp" style={`width: ${Math.min(100, Math.max(0, (displayFoodTemp / 50) * 100))}%`}></div>
+                <div class="progress-fill esp-temp" style={`width: ${Math.min(100, Math.max(0, (displayRealTemp / 80) * 100))}%`}></div>
             </div>
         </div>
 
-        <div class="meter-bar-item">
-            <div class="meter-labels">
-                <span>ESP32-S3 CPU Temperature</span>
-                <strong>{displayCpuTemp.toFixed(1)} °C</strong>
-            </div>
-            <div class="progress-track">
-                <div class="progress-fill cpu-temp" style={`width: ${Math.min(100, Math.max(0, (displayCpuTemp / 80) * 100))}%`}></div>
-            </div>
-        </div>
-
-        <div class="meter-bar-item">
+        <div class="meter-bar-item" class:meter-disabled={!isDeviceActive}>
             <div class="meter-labels">
                 <span>Core CPU Utilization</span>
-                <strong>{cpuLoad > 0 ? cpuLoad : 18} %</strong>
+                {#if isDeviceActive && cpuLoad != null}
+                    <strong>{cpuLoad} %</strong>
+                {:else}
+                    <strong class="na-label">Unavailable (Disconnected)</strong>
+                {/if}
             </div>
             <div class="progress-track">
-                <div class="progress-fill cpu" style={`width: ${Math.min(100, Math.max(0, cpuLoad || 18))}%`}></div>
+                <div class="progress-fill cpu" style={`width: ${isDeviceActive && cpuLoad != null ? Math.min(100, Math.max(0, cpuLoad)) : 0}%`}></div>
             </div>
         </div>
     </div>
@@ -151,6 +153,34 @@
         padding: 2px 8px;
         border-radius: var(--radius-pill);
         border: 1px solid #e2e8f0;
+    }
+
+    .bus-badge.offline {
+        background: #fef2f2;
+        color: #dc2626;
+        border-color: #fecaca;
+    }
+
+    .stat-item.is-disabled {
+        opacity: 0.7;
+    }
+
+    .stat-item .val.na {
+        color: var(--text-muted);
+    }
+
+    .stat-tag.offline {
+        color: #dc2626;
+    }
+
+    .meter-bar-item.meter-disabled {
+        opacity: 0.7;
+    }
+
+    .na-label {
+        font-size: 0.72rem;
+        color: #dc2626 !important;
+        font-weight: 600;
     }
 
     .metrics-row {
@@ -238,7 +268,7 @@
         transition: width 0.4s ease;
     }
 
-    .progress-fill.food-temp {
+    .progress-fill.esp-temp {
         background: #d97706;
     }
 

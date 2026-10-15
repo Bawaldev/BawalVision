@@ -19,7 +19,7 @@ import (
 type BatchInspectionTask struct {
 	RecordID        string
 	Request         IngressInspectionRequest
-	FoodTemp        float64
+	Temperature     float64
 	CPUTemp         float64
 	CPULoad         uint8
 	FirmwareVersion string
@@ -266,7 +266,7 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 				CreatedAt:       task.CreatedAt,
 				ImageS3URI:      task.Request.ImageS3URI,
 				CPUTemperature:  task.CPUTemp,
-				Temperature:     task.FoodTemp,
+				Temperature:     task.Temperature,
 				CPULoad:         task.CPULoad,
 				IsSpoiled:       task.IsSpoiled,
 				TSafeHours:      task.TSafeHours,
@@ -281,7 +281,7 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 				}
 				insertedForTask[foodID] = true
 
-				itemTemp := task.FoodTemp
+				itemTemp := task.Temperature
 				if det.Temperature > 0 {
 					itemTemp = det.Temperature
 				}

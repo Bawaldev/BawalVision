@@ -268,9 +268,8 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     cJSON_AddStringToObject(root, "device_id", data->device_id);
     cJSON_AddStringToObject(root, "firmware_version", data->firmware_version);
     cJSON_AddNumberToObject(root, "timestamp", (double)data->timestamp);
-    cJSON_AddNumberToObject(root, "food_temperature", data->food_temperature > 0 ? data->food_temperature : data->temperature);
     cJSON_AddNumberToObject(root, "cpu_temperature", data->cpu_temperature > 0 ? data->cpu_temperature : 36.5);
-    cJSON_AddNumberToObject(root, "temperature", data->temperature);
+    cJSON_AddNumberToObject(root, "temperature", data->temperature > 0 ? data->temperature : (data->cpu_temperature > 0 ? data->cpu_temperature : 36.5));
     cJSON_AddNumberToObject(root, "cpu_load", data->current_cpu_load);
     cJSON_AddStringToObject(root, "device_name", data->device_name);
     cJSON_AddNumberToObject(root, "device_core", data->device_core);
@@ -298,7 +297,7 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     esp_http_client_set_post_field(client, json_string, strlen(json_string));
 
     lcd_update_http_status("POST TELEMETRY...", false);
-    lcd_update_telemetry_display(data->food_temperature, data->cpu_temperature, data->current_cpu_load);
+    lcd_update_telemetry_display(data->temperature > 0 ? data->temperature : data->cpu_temperature, data->cpu_temperature, data->current_cpu_load);
 
     ESP_LOGI(TAG, "Dispatching telemetry to: %s (CPU Load: %u%%)", url, data->current_cpu_load);
     esp_err_t err = esp_http_client_perform(client);

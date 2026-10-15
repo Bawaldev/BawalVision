@@ -95,16 +95,20 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		// Retrieve latest telemetry cache for this device as fallback for missing sensor values
 		latestTelemetry, hasCached := inspection.GlobalInspectionStore.GetLatestTelemetry(req.DeviceID)
 
-		foodTemp := 25.0
-		if req.FoodTemperature != nil {
-			foodTemp = *req.FoodTemperature
-		} else if req.Temperature != nil {
-			foodTemp = *req.Temperature
+		realTemp := 25.0
+		if req.Temperature != nil {
+			realTemp = *req.Temperature
+		} else if req.CPUTemperature != nil {
+			realTemp = *req.CPUTemperature
+		} else if req.FoodTemperature != nil {
+			realTemp = *req.FoodTemperature
 		} else if hasCached {
-			if latestTelemetry.FoodTemperature > 0 {
-				foodTemp = latestTelemetry.FoodTemperature
-			} else if latestTelemetry.Temperature > 0 {
-				foodTemp = latestTelemetry.Temperature
+			if latestTelemetry.Temperature > 0 {
+				realTemp = latestTelemetry.Temperature
+			} else if latestTelemetry.CPUTemperature > 0 {
+				realTemp = latestTelemetry.CPUTemperature
+			} else if latestTelemetry.FoodTemperature > 0 {
+				realTemp = latestTelemetry.FoodTemperature
 			}
 		}
 
@@ -145,8 +149,8 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			if spoilage <= 0 {
 				// Food science thermal & confidence decay model
 				spoilage = (1.0 - conf) * 30.0
-				if foodTemp > 28.0 {
-					spoilage += (foodTemp - 28.0) * 2.2
+				if realTemp > 28.0 {
+					spoilage += (realTemp - 28.0) * 2.2
 				}
 				if spoilage > 100.0 {
 					spoilage = 100.0
@@ -162,8 +166,8 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 		// Calculate remaining safe shelf life based on thermal index
 		tSafeHours := 8.0
-		if foodTemp > 20.0 {
-			tSafeHours = 8.0 * (1.0 / (1.0 + 0.05*(foodTemp-20.0)))
+		if realTemp > 20.0 {
+			tSafeHours = 8.0 * (1.0 / (1.0 + 0.05*(realTemp-20.0)))
 		}
 		if anySpoiled {
 			tSafeHours = 0.0
@@ -172,7 +176,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		task := inspection.BatchInspectionTask{
 			RecordID:        recordID,
 			Request:         req,
-			FoodTemp:        foodTemp,
+			Temperature:     realTemp,
 			CPUTemp:         cpuTemp,
 			CPULoad:         cpu,
 			FirmwareVersion: fwVer,
@@ -210,7 +214,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					CreatedAt:       now,
 					ImageS3URI:      req.ImageS3URI,
 					CPUTemperature:  cpuTemp,
-					Temperature:     foodTemp,
+					Temperature:     realTemp,
 					CPULoad:         cpu,
 					IsSpoiled:       anySpoiled,
 					TSafeHours:      tSafeHours,
@@ -245,7 +249,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					}
 					insertedFoodMap[foodItem.ID] = true
 
-					itemTemp := foodTemp
+					itemTemp := realTemp
 					if det.Temperature > 0 {
 						itemTemp = det.Temperature
 					}
@@ -299,26 +303,43 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 	// 3. GET Latest Environmental Telemetry
 	router.Get("/telemetry/latest", func(c *fiber.Ctx) error {
 		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok {
-			foodT := live.FoodTemperature
-			if foodT <= 0 {
-				foodT = live.Temperature
+			nowUnix := time.Now().Unix()
+			// Device is actively connected if telemetry was received within the last 30 seconds
+			isLiveConnected := (nowUnix - live.Timestamp) <= 30
+
+			realT := live.Temperature
+			if realT <= 0 {
+				realT = live.CPUTemperature
 			}
-			if foodT <= 0 {
-				foodT = 24.5
+			if realT <= 0 {
+				realT = live.FoodTemperature
 			}
-			cpuT := live.CPUTemperature
-			if cpuT <= 0 {
-				cpuT = 36.5
+			if realT <= 0 {
+				realT = 25.0
 			}
-			return c.JSON(fiber.Map{
+
+			resp := fiber.Map{
 				"device_id":        live.DeviceID,
 				"firmware_version": live.FirmwareVersion,
-				"food_temperature": foodT,
-				"cpu_temperature":  cpuT,
-				"temperature":      foodT,
-				"cpu_load":         live.CurrentCPULoad,
+				"temperature":      realT,
 				"timestamp":        live.Timestamp,
-			})
+				"is_connected":     isLiveConnected,
+			}
+
+			// CPU temperature and CPU utility are only available if the ESP device is connected
+			if isLiveConnected {
+				cpuT := live.CPUTemperature
+				if cpuT <= 0 {
+					cpuT = 36.5
+				}
+				resp["cpu_temperature"] = cpuT
+				resp["cpu_load"] = live.CurrentCPULoad
+			} else {
+				resp["cpu_temperature"] = nil
+				resp["cpu_load"] = nil
+			}
+
+			return c.JSON(resp)
 		}
 
 		var record inspection.InspectionRecord
@@ -328,26 +349,33 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		return c.JSON(fiber.Map{
 			"device_id":        record.DeviceID,
 			"firmware_version": record.FirmwareVersion,
-			"food_temperature": record.Temperature,
-			"cpu_temperature":  record.CPUTemperature,
+			"cpu_temperature":  nil, // Not available: ESP device not actively connected
 			"temperature":      record.Temperature,
-			"cpu_load":         record.CPULoad,
+			"cpu_load":         nil, // Not available: ESP device not actively connected
 			"is_spoiled":       record.IsSpoiled,
 			"t_safe_hours":     record.TSafeHours,
 			"created_at":       record.CreatedAt,
+			"is_connected":     false,
 		})
 	})
 
 	// 4. GET Latest Inspection with Detections & Real-time Bounding Boxes
 	router.Get("/inspections/latest", func(c *fiber.Ctx) error {
 		if live, ok := inspection.GlobalInspectionStore.GetLatestInspection(""); ok && len(live.Detections) > 0 {
+			realT := 36.5
+			if live.Temperature != nil && *live.Temperature > 0 {
+				realT = *live.Temperature
+			} else if live.CPUTemperature != nil && *live.CPUTemperature > 0 {
+				realT = *live.CPUTemperature
+			} else if live.FoodTemperature != nil && *live.FoodTemperature > 0 {
+				realT = *live.FoodTemperature
+			}
 			return c.JSON(fiber.Map{
-				"device_id":        live.DeviceID,
-				"food_temperature": live.FoodTemperature,
-				"temperature":      live.Temperature,
-				"cpu_temperature":  live.CPUTemperature,
-				"detections":       live.Detections,
-				"is_live":          true,
+				"device_id":       live.DeviceID,
+				"temperature":     realT,
+				"cpu_temperature": live.CPUTemperature,
+				"detections":      live.Detections,
+				"is_live":         true,
 			})
 		}
 
