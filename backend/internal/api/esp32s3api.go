@@ -209,7 +209,6 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					FirmwareVersion: fwVer,
 					CreatedAt:       now,
 					ImageS3URI:      req.ImageS3URI,
-					FoodTemperature: foodTemp,
 					CPUTemperature:  cpuTemp,
 					Temperature:     foodTemp,
 					CPULoad:         cpu,
@@ -329,7 +328,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		return c.JSON(fiber.Map{
 			"device_id":        record.DeviceID,
 			"firmware_version": record.FirmwareVersion,
-			"food_temperature": record.FoodTemperature,
+			"food_temperature": record.Temperature,
 			"cpu_temperature":  record.CPUTemperature,
 			"temperature":      record.Temperature,
 			"cpu_load":         record.CPULoad,

@@ -265,7 +265,6 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 				FirmwareVersion: task.FirmwareVersion,
 				CreatedAt:       task.CreatedAt,
 				ImageS3URI:      task.Request.ImageS3URI,
-				FoodTemperature: task.FoodTemp,
 				CPUTemperature:  task.CPUTemp,
 				Temperature:     task.FoodTemp,
 				CPULoad:         task.CPULoad,

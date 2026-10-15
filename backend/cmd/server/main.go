@@ -61,7 +61,6 @@ func main() {
 
 	// Clean up legacy columns if they exist in existing database volumes and ensure new sensor columns exist
 	_ = db.Exec("ALTER TABLE inspections DROP COLUMN IF EXISTS humidity, DROP COLUMN IF EXISTS gas_voc, DROP COLUMN IF EXISTS pressure")
-	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS food_temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00")
 	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS cpu_temperature NUMERIC(5, 2) NOT NULL DEFAULT 35.00")
 	_ = db.Exec("ALTER TABLE inspection_foods DROP COLUMN IF EXISTS weight_grams")
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00")
@@ -69,6 +68,20 @@ func main() {
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS spoilage_score NUMERIC(5, 2) NOT NULL DEFAULT 0.00")
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'PASS'")
 	_ = db.Exec("DELETE FROM inspections WHERE id NOT IN (SELECT DISTINCT inspection_id FROM inspection_foods)")
+	if err := db.Exec(`DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'inspections'
+          AND column_name = 'food_temperature'
+    ) THEN
+        UPDATE inspections SET temperature = food_temperature;
+        ALTER TABLE inspections DROP COLUMN food_temperature;
+    END IF;
+END $$;`).Error; err != nil {
+		log.Fatalf("Database migration failed while removing legacy food_temperature column: %v", err)
+	}
 
 	// Initialize Asynchronous Inspection Batch Worker (Buffer: 512, Batch: 25, Flush: 1s)
 	batchWorker := inspection.InitGlobalBatchWorker(db, 512, 25, 1*time.Second)
