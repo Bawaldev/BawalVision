@@ -211,7 +211,7 @@ just setup-ml
 # Run end-to-end parallel training pipeline
 just pipeline-ai1
 ```
-The trained model will be automatically validated and saved as `ml/AI1/model/ai1_vision.onnx`.
+The trained model will be automatically validated and saved as `ml/AI1/model/yolov8n/ai1_vision.onnx`.
 
 ### 4. Build & Flash Edge Firmware
 ```bash
