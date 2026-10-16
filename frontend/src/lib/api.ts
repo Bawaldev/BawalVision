@@ -1,4 +1,4 @@
-import type { InspectionRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult } from './types';
+import type { InspectionRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult, DeviceHardwareStatus } from './types';
 
 const BASE_URL = '/api/v1';
 
@@ -119,18 +119,26 @@ export async function triggerManualInspection(
     return { status: 'error' };
 }
 
+export async function fetchDeviceStatus(baseUrl = BASE_URL): Promise<DeviceHardwareStatus | null> {
+    try {
+        const response = await fetch(`${baseUrl}/devices/status`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (response.ok) {
+            return await response.json();
+        }
+    } catch {
+        // backend unreachable
+    }
+    return null;
+}
+
 export async function connectEspDevice(
     deviceId: string,
-    baseUrl = BASE_URL
+    baseUrl = BASE_URL,
+    options?: { usbPort?: string; ssid?: string; password?: string }
 ): Promise<EspConnectionResult> {
     const cleanId = (deviceId || '').trim();
-    if (!cleanId) {
-        return {
-            success: false,
-            deviceId: '',
-            message: 'Device Node ID cannot be empty.'
-        };
-    }
 
     try {
         const response = await fetch(`${baseUrl}/devices/connect`, {
@@ -139,36 +147,89 @@ export async function connectEspDevice(
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             },
-            body: JSON.stringify({ device_id: cleanId })
+            body: JSON.stringify({
+                device_id: cleanId,
+                usb_port: options?.usbPort || '',
+                ssid: options?.ssid || '',
+                password: options?.password || ''
+            })
         });
-        if (response.ok) {
-            const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.success) {
             return {
                 success: true,
                 deviceId: data.device_id || cleanId,
-                firmwareVersion: data.firmware_version || '1.0.4-prod',
-                rssi: data.rssi || -56,
-                latencyMs: data.latency_ms || 14,
-                ipAddress: data.ip_address || '192.168.4.1',
-                message: data.message || 'Connected successfully'
+                firmwareVersion: data.firmware_version || '1.0.0',
+                latencyMs: data.latency_ms ?? 8,
+                ipAddress: data.ip_address || '',
+                usbPort: data.usb_port || '',
+                provisionedSsid: data.provisioned_ssid || '',
+                connectionMode: data.connection_mode || 'wifi_lan',
+                message: data.message || 'Connected to ESP32-S3 hardware'
             };
         }
-    } catch (err) {
-        console.warn('[ESP CONNECT] Backend endpoint /devices/connect unavailable, using simulated fieldbus handshake:', err);
+        return {
+            success: false,
+            deviceId: cleanId,
+            connectionMode: 'disconnected',
+            message: data.message || data.error || 'No ESP32-S3 detected on the server Wi-Fi network or USB serial slots (/dev/ttyACM*, /dev/ttyUSB*).'
+        };
+    } catch (err: any) {
+        return {
+            success: false,
+            deviceId: cleanId,
+            connectionMode: 'disconnected',
+            message: err?.message || 'Unable to reach backend server to probe ESP32-S3 hardware.'
+        };
     }
+}
 
-    // Realistic Handshake Simulation Fallback for Frontend/Demo (1.2s delay like Wi-Fi connecting)
-    await new Promise(resolve => setTimeout(resolve, 1200));
-
-    return {
-        success: true,
-        deviceId: cleanId,
-        firmwareVersion: '1.0.4-prod',
-        rssi: -58,
-        latencyMs: 12,
-        ipAddress: '192.168.4.1',
-        message: 'Connected via Fieldbus (100 Hz Sync)'
-    };
+export async function provisionEspViaUsb(
+    usbPort: string,
+    ssid: string,
+    password: string,
+    baseUrl = BASE_URL
+): Promise<EspConnectionResult> {
+    try {
+        const response = await fetch(`${baseUrl}/devices/usb/provision`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+                usb_port: usbPort,
+                ssid,
+                password
+            })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.success) {
+            return {
+                success: true,
+                deviceId: data.device_id || 'ESP32S3_USB',
+                firmwareVersion: data.firmware_version || '1.0.0',
+                ipAddress: data.usb_port || usbPort,
+                usbPort: data.usb_port || usbPort,
+                provisionedSsid: data.provisioned_ssid || ssid,
+                connectionMode: 'usb_serial',
+                message: data.message || `Provisioned server Wi-Fi '${ssid}' over ${usbPort}`
+            };
+        }
+        return {
+            success: false,
+            deviceId: '',
+            connectionMode: 'disconnected',
+            message: data.message || 'USB Wi-Fi provisioning failed.'
+        };
+    } catch (err: any) {
+        return {
+            success: false,
+            deviceId: '',
+            connectionMode: 'disconnected',
+            message: err?.message || 'Network error while provisioning ESP32-S3 over USB.'
+        };
+    }
 }
 
 export async function disconnectEspDevice(
@@ -189,4 +250,5 @@ export async function disconnectEspDevice(
         return true;
     }
 }
+
 

@@ -84,6 +84,32 @@ export interface SystemConfig {
     localEngineAvailable?: boolean;
 }
 
+export interface USBPortInfo {
+    port: string;
+    name: string;
+    driver?: string;
+    vendor_id?: string;
+    product_id?: string;
+    manufacturer?: string;
+    product?: string;
+    is_esp32: boolean;
+}
+
+export interface DeviceHardwareStatus {
+    connected: boolean;
+    connection_mode: 'wifi_lan' | 'usb_serial' | 'disconnected';
+    device_id: string;
+    firmware_version: string;
+    ip_address: string;
+    usb_ports: USBPortInfo[];
+    server_wifi: {
+        ssid: string;
+        has_password: boolean;
+        backend_ip: string;
+        backend_port: string;
+    };
+}
+
 export interface EspConnectionResult {
     success: boolean;
     deviceId: string;
@@ -91,6 +117,9 @@ export interface EspConnectionResult {
     rssi?: number;
     latencyMs?: number;
     ipAddress?: string;
+    usbPort?: string;
+    provisionedSsid?: string;
+    connectionMode?: 'wifi_lan' | 'usb_serial' | 'disconnected';
     message?: string;
 }
 

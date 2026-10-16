@@ -99,3 +99,13 @@ func (s *InspectionStore) GetAnyLatestTelemetry() (TelemetryIngressPayload, bool
 	return latest, false
 }
 
+func (s *InspectionStore) DisconnectDevice(deviceID string) {
+	s.Lock()
+	defer s.Unlock()
+	if deviceID == "" || deviceID == "*" {
+		s.readings = make(map[string]TelemetryIngressPayload)
+		return
+	}
+	delete(s.readings, deviceID)
+}
+
