@@ -28,6 +28,7 @@ struct InspectionOutput {
     cv::Mat dewarped_image;
     cv::Mat annotated_image;
     std::vector<DetectionResult> detections;
+    SceneOpticalMetrics scene_optical;
 
     InspectionOutput() {
         detections.reserve(16);

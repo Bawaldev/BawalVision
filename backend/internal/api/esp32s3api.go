@@ -249,18 +249,36 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					return err
 				}
 
+				lux := 120.0
+				wb := "BALANCED"
+				cct := 6500
+				if req.SceneOptical != nil {
+					if req.SceneOptical.LuxLuminance > 0 {
+						lux = req.SceneOptical.LuxLuminance
+					}
+					if req.SceneOptical.WhiteBalanceStatus != "" {
+						wb = req.SceneOptical.WhiteBalanceStatus
+					}
+					if req.SceneOptical.ColorTemperature > 0 {
+						cct = req.SceneOptical.ColorTemperature
+					}
+				}
+
 				record := inspection.InspectionRecord{
-					ID:              recordID,
-					UserID:          req.UserID,
-					DeviceID:        req.DeviceID,
-					FirmwareVersion: fwVer,
-					CreatedAt:       now,
-					ImageS3URI:      req.ImageS3URI,
-					CPUTemperature:  cpuTemp,
-					Temperature:     realTemp,
-					CPULoad:         cpu,
-					IsSpoiled:       anySpoiled,
-					TSafeHours:      tSafeHours,
+					ID:                 recordID,
+					UserID:             req.UserID,
+					DeviceID:           req.DeviceID,
+					FirmwareVersion:    fwVer,
+					CreatedAt:          now,
+					ImageS3URI:         req.ImageS3URI,
+					CPUTemperature:     cpuTemp,
+					Temperature:        realTemp,
+					CPULoad:            cpu,
+					IsSpoiled:          anySpoiled,
+					TSafeHours:         tSafeHours,
+					LuxLuminance:       lux,
+					WhiteBalanceStatus: wb,
+					ColorTemperature:   cct,
 				}
 				if err := tx.Create(&record).Error; err != nil {
 					return err
@@ -405,6 +423,11 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				if live.RSSI != 0 {
 					resp["rssi"] = live.RSSI
 				}
+				if live.SceneOptical != nil {
+					resp["scene_optical"] = live.SceneOptical
+				} else if liveInsp, ok := inspection.GlobalInspectionStore.GetLatestInspection(""); ok && liveInsp.SceneOptical != nil {
+					resp["scene_optical"] = liveInsp.SceneOptical
+				}
 			} else {
 				resp["temperature"] = nil
 				resp["cpu_temperature"] = nil
@@ -425,7 +448,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			if camID == "MOCK_VIDEO_CAM" || strings.HasPrefix(camID, "MOCK_") {
 				connMode = "mock_video"
 			}
-			return c.JSON(fiber.Map{
+			resp := fiber.Map{
 				"device_id":        camID,
 				"firmware_version": "1.0.0",
 				"timestamp":        nowUnix,
@@ -435,7 +458,11 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				"temperature":      realT,
 				"cpu_temperature":  realT,
 				"cpu_load":         cpuLoad,
-			})
+			}
+			if liveInsp, ok := inspection.GlobalInspectionStore.GetLatestInspection(""); ok && liveInsp.SceneOptical != nil {
+				resp["scene_optical"] = liveInsp.SceneOptical
+			}
+			return c.JSON(resp)
 		}
 
 		var record inspection.InspectionRecord
@@ -474,13 +501,17 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			} else if live.FoodTemperature != nil && *live.FoodTemperature > 0 {
 				realT = *live.FoodTemperature
 			}
-			return c.JSON(fiber.Map{
+			resp := fiber.Map{
 				"device_id":       live.DeviceID,
 				"temperature":     realT,
 				"cpu_temperature": live.CPUTemperature,
 				"detections":      live.Detections,
 				"is_live":         true,
-			})
+			}
+			if live.SceneOptical != nil {
+				resp["scene_optical"] = live.SceneOptical
+			}
+			return c.JSON(resp)
 		}
 
 		var record inspection.InspectionRecord

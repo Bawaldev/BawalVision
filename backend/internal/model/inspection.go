@@ -27,28 +27,41 @@ type InspectionRecord struct {
 	CPUTemperature  float64          `json:"cpu_temperature" gorm:"column:cpu_temperature;type:numeric(5,2);not null;default:35.00"`
 	Temperature     float64          `json:"temperature" gorm:"column:temperature;type:numeric(5,2);not null;default:25.00"`
 	CPULoad         uint8            `json:"cpu_load" gorm:"column:cpu_load;type:smallint;not null;default:0"`
-	IsSpoiled       bool             `json:"is_spoiled" gorm:"column:is_spoiled;not null;default:false"`
-	TSafeHours      float64          `json:"t_safe_hours" gorm:"column:t_safe_hours;type:numeric(5,2);not null;default:0.00"`
-	InspectionFoods []InspectionFood `json:"inspection_foods,omitempty" gorm:"foreignKey:InspectionID"`
+	IsSpoiled          bool                 `json:"is_spoiled" gorm:"column:is_spoiled;not null;default:false"`
+	TSafeHours         float64              `json:"t_safe_hours" gorm:"column:t_safe_hours;type:numeric(5,2);not null;default:0.00"`
+	LuxLuminance       float64              `json:"lux_luminance" gorm:"column:lux_luminance;type:numeric(5,2);not null;default:120.00"`
+	WhiteBalanceStatus string               `json:"white_balance_status" gorm:"column:white_balance_status;type:varchar(32);not null;default:'BALANCED'"`
+	ColorTemperature   int                  `json:"color_temperature" gorm:"column:color_temperature;type:int;not null;default:6500"`
+	InspectionFoods    []InspectionFood     `json:"inspection_foods,omitempty" gorm:"foreignKey:InspectionID"`
 }
 
 func (InspectionRecord) TableName() string { return "inspections" }
 
+type SceneOpticalMetrics struct {
+	AvgR               float64 `json:"avg_r"`
+	AvgG               float64 `json:"avg_g"`
+	AvgB               float64 `json:"avg_b"`
+	LuxLuminance       float64 `json:"lux_luminance"`
+	ColorTemperature   int     `json:"color_temperature"`
+	WhiteBalanceStatus string  `json:"white_balance_status"`
+}
+
 type TelemetryIngressPayload struct {
-	DeviceID        string  `json:"device_id"`
-	FirmwareVersion string  `json:"firmware_version"`
-	DeviceName      string  `json:"device_name"`
-	DeviceCore      uint8   `json:"device_core"`
-	Timestamp       int64   `json:"timestamp"`
-	FoodTemperature float64 `json:"food_temperature,omitempty"`
-	Temperature     float64 `json:"temperature"`
-	CPUTemperature  float64 `json:"cpu_temperature,omitempty"`
-	CurrentCPULoad  uint8   `json:"cpu_load"`
-	IPAddress       string  `json:"ip_address,omitempty"`
-	ConnectionMode  string  `json:"connection_mode,omitempty"`
-	FreeHeap        uint32  `json:"free_heap,omitempty"`
-	HeapFree        uint32  `json:"heap_free,omitempty"`
-	RSSI            int     `json:"rssi,omitempty"`
+	DeviceID        string               `json:"device_id"`
+	FirmwareVersion string               `json:"firmware_version"`
+	DeviceName      string               `json:"device_name"`
+	DeviceCore      uint8                `json:"device_core"`
+	Timestamp       int64                `json:"timestamp"`
+	FoodTemperature float64              `json:"food_temperature,omitempty"`
+	Temperature     float64              `json:"temperature"`
+	CPUTemperature  float64              `json:"cpu_temperature,omitempty"`
+	CurrentCPULoad  uint8                `json:"cpu_load"`
+	IPAddress       string               `json:"ip_address,omitempty"`
+	ConnectionMode  string               `json:"connection_mode,omitempty"`
+	FreeHeap        uint32               `json:"free_heap,omitempty"`
+	HeapFree        uint32               `json:"heap_free,omitempty"`
+	RSSI            int                  `json:"rssi,omitempty"`
+	SceneOptical    *SceneOpticalMetrics `json:"scene_optical,omitempty"`
 }
 
 type PredictionResult struct {
@@ -66,14 +79,15 @@ type FoodDetection struct {
 }
 
 type IngressInspectionRequest struct {
-	DeviceID        string          `json:"device_id"`
-	FirmwareVersion string          `json:"firmware_version,omitempty"`
-	UserID          *string         `json:"user_id,omitempty"`
-	FoodTemperature *float64        `json:"food_temperature,omitempty"`
-	Temperature     *float64        `json:"temperature,omitempty"`
-	CPUTemperature  *float64        `json:"cpu_temperature,omitempty"`
-	CPULoad         *uint8          `json:"cpu_load,omitempty"`
-	ImageS3URI      *string         `json:"image_s3_uri,omitempty"`
-	Detections      []FoodDetection `json:"detections"`
+	DeviceID        string                `json:"device_id"`
+	FirmwareVersion string                `json:"firmware_version,omitempty"`
+	UserID          *string               `json:"user_id,omitempty"`
+	FoodTemperature *float64              `json:"food_temperature,omitempty"`
+	Temperature     *float64              `json:"temperature,omitempty"`
+	CPUTemperature  *float64              `json:"cpu_temperature,omitempty"`
+	CPULoad         *uint8                `json:"cpu_load,omitempty"`
+	ImageS3URI      *string               `json:"image_s3_uri,omitempty"`
+	SceneOptical    *SceneOpticalMetrics  `json:"scene_optical,omitempty"`
+	Detections      []FoodDetection       `json:"detections"`
 }
 

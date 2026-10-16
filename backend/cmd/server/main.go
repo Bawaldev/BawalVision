@@ -62,6 +62,9 @@ func main() {
 	// Clean up legacy columns if they exist in existing database volumes and ensure new sensor columns exist
 	_ = db.Exec("ALTER TABLE inspections DROP COLUMN IF EXISTS humidity, DROP COLUMN IF EXISTS gas_voc, DROP COLUMN IF EXISTS pressure")
 	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS cpu_temperature NUMERIC(5, 2) NOT NULL DEFAULT 35.00")
+	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS lux_luminance NUMERIC(5, 2) NOT NULL DEFAULT 120.00")
+	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS white_balance_status VARCHAR(32) NOT NULL DEFAULT 'BALANCED'")
+	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS color_temperature INT NOT NULL DEFAULT 6500")
 	_ = db.Exec("ALTER TABLE inspection_foods DROP COLUMN IF EXISTS weight_grams")
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00")
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS similarity_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0000")

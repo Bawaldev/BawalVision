@@ -8,7 +8,7 @@
     import ActionTriggerBar from '../components/ActionTriggerBar.svelte';
     import BatchAndCloudSync from '../components/BatchAndCloudSync.svelte';
 
-    import type { FoodDetection, TelemetryPayload, InferenceLogEntry } from '../types';
+    import type { FoodDetection, TelemetryPayload, InferenceLogEntry, SceneOpticalMetrics } from '../types';
 
     interface Props {
         detections: FoodDetection[];
@@ -22,6 +22,7 @@
         hasCamera?: boolean;
         bufferedRecords: number;
         isInspecting: boolean;
+        sceneOptical?: SceneOpticalMetrics;
         onForceReject: () => void;
         onInspectTray: () => void;
         onClearLogs: () => void;
@@ -39,6 +40,7 @@
         hasCamera = false,
         bufferedRecords = 0,
         isInspecting = false,
+        sceneOptical = undefined,
         onForceReject,
         onInspectTray,
         onClearLogs
@@ -64,6 +66,7 @@
             deviceId={telemetry?.device_id}
             isLive={isOnline}
             {hasCamera}
+            sceneOptical={sceneOptical || telemetry?.scene_optical}
         />
 
         <!-- 2. Dynamic Detected Food Items Table -->
@@ -102,6 +105,7 @@
             temperature={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.temperature : null}
             cpuLoad={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.cpu_load : null}
             firmwareVersion={telemetry?.firmware_version}
+            sceneOptical={sceneOptical || telemetry?.scene_optical}
         />
 
         <!-- 4. Manual Controls (Action & Trigger Bar) -->
