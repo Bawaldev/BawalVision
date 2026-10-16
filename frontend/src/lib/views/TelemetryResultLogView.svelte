@@ -164,8 +164,7 @@
             <div class="card-title-bar">
                 <span class="card-heading">temperature</span>
                 <div class="legend-strip">
-                    <span class="legend-item esp32"><span class="dot esp32"></span> ESP32-S3 Real Temp</span>
-                    <span class="legend-item mcu"><span class="dot mcu"></span> MCU Core Temp</span>
+                    <span class="legend-item esp32"><span class="dot esp32"></span> ESP32-S3 Temperature</span>
                 </div>
             </div>
 
@@ -206,11 +205,6 @@
                                     {:else}
                                         <span class="chip esp32 offline">🌡️ ESP32-S3: Offline</span>
                                     {/if}
-                                    {#if hoveredPoint.cpu_temperature != null}
-                                        <span class="chip mcu">💻 MCU: {hoveredPoint.cpu_temperature.toFixed(1)}°C</span>
-                                    {:else}
-                                        <span class="chip mcu offline">💻 MCU: Offline</span>
-                                    {/if}
                                     {#if hoveredPoint.cpu_load != null}
                                         <span class="chip cpu">⚡ Load: {hoveredPoint.cpu_load}%</span>
                                     {:else}
@@ -250,7 +244,7 @@
                                 />
                             {/if}
 
-                            <!-- Area Under Curve (Ambient Temp) -->
+                            <!-- Area Under Curve (ESP32-S3 Temperature) -->
                             {#if isDeviceConnected && ambientTempPoints}
                                 <polygon
                                     points={`0,${CHART_HEIGHT} ${ambientTempPoints} ${CHART_WIDTH},${CHART_HEIGHT}`}
@@ -258,7 +252,7 @@
                                 />
                             {/if}
 
-                            <!-- Curve 1: Ambient Temperature Line (Amber) -->
+                            <!-- ESP32-S3 Temperature Line (Amber) -->
                             {#if isDeviceConnected && ambientTempPoints}
                                 <polyline
                                     points={ambientTempPoints}
@@ -267,20 +261,6 @@
                                     stroke-width="2.5"
                                     stroke-linecap="round"
                                     stroke-linejoin="round"
-                                    vector-effect="non-scaling-stroke"
-                                />
-                            {/if}
-
-                            <!-- Curve 2: MCU Temperature Line (Blue/Cyan) -->
-                            {#if isDeviceConnected && mcuTempPoints}
-                                <polyline
-                                    points={mcuTempPoints}
-                                    fill="none"
-                                    stroke="#38bdf8"
-                                    stroke-width="2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-dasharray="6 4"
                                     vector-effect="non-scaling-stroke"
                                 />
                             {/if}
