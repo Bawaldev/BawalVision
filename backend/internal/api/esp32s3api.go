@@ -421,13 +421,17 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			jitter := float64(int(camFrameID%7)-3) * 0.1
 			realT := 38.4 + jitter
 			cpuLoad := uint8(22 + (camFrameID % 9))
+			connMode := "wifi_lan"
+			if camID == "MOCK_VIDEO_CAM" || strings.HasPrefix(camID, "MOCK_") {
+				connMode = "mock_video"
+			}
 			return c.JSON(fiber.Map{
 				"device_id":        camID,
 				"firmware_version": "1.0.0",
 				"timestamp":        nowUnix,
 				"is_connected":     true,
 				"ip_address":       camIP,
-				"connection_mode":  "wifi_lan",
+				"connection_mode":  connMode,
 				"temperature":      realT,
 				"cpu_temperature":  realT,
 				"cpu_load":         cpuLoad,
@@ -513,6 +517,9 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			fwVer = "1.0.0"
 			ipAddr = camIP
 			connMode = "wifi_lan"
+			if camID == "MOCK_VIDEO_CAM" || strings.HasPrefix(camID, "MOCK_") {
+				connMode = "mock_video"
+			}
 		}
 
 		lastAck := device.GetLastUSBAck()
@@ -834,4 +841,3 @@ func EvaluateFoodQuality(foodName string, cvConf float64, mlSpoilage float64, fo
 
 	return cvConf, mlSpoilage, foodTemp, status
 }
-
