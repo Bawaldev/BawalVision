@@ -66,7 +66,6 @@
         streamIntervalMs: 1500,
         enableMockIfOffline: false,
         minConfidenceThreshold: 0.35,
-        tempWarningThreshold: 35.0,
         gravitonEngineEnabled: false,
         gravitonEngineAvailable: false,
         localEngineEnabled: true,
