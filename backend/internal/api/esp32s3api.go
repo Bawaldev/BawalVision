@@ -522,12 +522,19 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"firmware_version": fwVer,
 			"ip_address":       ipAddr,
 			"usb_ports":        usbPorts,
+			"wifi_networks":    device.ScanAvailableWiFiNetworks(),
 			"server_wifi": fiber.Map{
 				"ssid":         wifiCfg.SSID,
 				"has_password": wifiCfg.HasPassword,
 				"backend_ip":   wifiCfg.BackendIP,
 				"backend_port": wifiCfg.BackendPort,
 			},
+		})
+	})
+
+	router.Get("/devices/wifi/networks", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"networks": device.ScanAvailableWiFiNetworks(),
 		})
 	})
 
