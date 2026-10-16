@@ -283,7 +283,7 @@ int main(int argc, char** argv) {
         bool frame_ok = false;
         InspectionOutput inspection;
 
-        if (device_id.empty() || idle_backoff_ms > 0 || (discovery_tick++ % 30 == 0)) {
+        if (device_id.empty() || idle_backoff_ms > 0 || (discovery_tick++ % 15 == 0)) {
             const std::string discovered = discoverActiveDeviceID(curl_fetch, backend_base_url);
             if (!discovered.empty() && discovered != "\\" && discovered != "/" && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
                 device_id = discovered;
@@ -294,6 +294,9 @@ int main(int argc, char** argv) {
                 stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
                 std::cout << "[SUCCESS] Active camera stream connected: " << device_id << "\n";
                 std::cout << "[INFO] Ingestion URL: " << stream_url << "\n";
+            } else if (discovered.empty() && idle_backoff_ms > 200 && !device_id.empty()) {
+                device_id = "";
+                stream_url = backend_base_url + "/api/v1/camera/latest/raw";
             }
         }
 

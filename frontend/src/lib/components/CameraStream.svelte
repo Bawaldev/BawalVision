@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onDestroy } from 'svelte';
     import type { FoodDetection } from '../types';
 
     interface Props {
@@ -43,6 +44,18 @@
     let isCustomUpload = $state(false);
     let fileInputRef = $state<HTMLInputElement | null>(null);
 
+    // Mock Video AI Frame Ingestion Pipeline State & Hardware Handlers
+    let mockVideoEl = $state<HTMLVideoElement | null>(null);
+    let mockCanvasEl = $state<HTMLCanvasElement | null>(null);
+    let mockIsPlaying = $state(false);
+    let mockCurrentTime = $state(0);
+    let mockDuration = $state(0);
+    let mockPlaybackRate = $state(1.0);
+    let mockPushedFrames = $state(0);
+    let isPushingFrame = false;
+    let pushInterval: any = null;
+    let mockFrameSeq = 0;
+
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
     let retryCount = $state(0);
@@ -52,7 +65,7 @@
         streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`
     );
 
-    // Fetch list of examples from backend /examples directory (lightweight & Lambda safe)
+    // Fetch list of examples from backend /examples directory (lightweight & safe)
     $effect(() => {
         fetch('/api/v1/examples')
             .then(res => res.ok ? res.json() : null)
@@ -63,16 +76,115 @@
                 }
             })
             .catch(() => {
-                // Fallback to presets if backend is unavailable or running serverless
+                // Fallback to presets if backend is unavailable
             });
     });
+
+    function captureAndPushFrame() {
+        if (!mockVideoEl || !mockCanvasEl || isPushingFrame) return;
+        if (mockVideoEl.paused || mockVideoEl.ended || mockVideoEl.readyState < 2) return;
+
+        const ctx = mockCanvasEl.getContext('2d');
+        if (!ctx) return;
+
+        isPushingFrame = true;
+        try {
+            ctx.drawImage(mockVideoEl, 0, 0, mockCanvasEl.width, mockCanvasEl.height);
+            mockCanvasEl.toBlob((blob) => {
+                if (!blob) {
+                    isPushingFrame = false;
+                    return;
+                }
+                const currentSeq = ++mockFrameSeq;
+                fetch('/api/v1/camera/frame', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'image/jpeg',
+                        'X-Device-ID': 'MOCK_VIDEO_CAM',
+                        'X-Frame-ID': String(currentSeq)
+                    },
+                    body: blob
+                })
+                .then((res) => {
+                    if (res.ok) {
+                        mockPushedFrames++;
+                        streamError = false;
+                    }
+                })
+                .catch(() => {})
+                .finally(() => {
+                    isPushingFrame = false;
+                });
+            }, 'image/jpeg', 0.85);
+        } catch {
+            isPushingFrame = false;
+        }
+    }
+
+    function pushCurrentFrameOnce() {
+        if (!mockVideoEl || !mockCanvasEl) return;
+        if (mockVideoEl.readyState < 2) return;
+        const ctx = mockCanvasEl.getContext('2d');
+        if (!ctx) return;
+        try {
+            ctx.drawImage(mockVideoEl, 0, 0, mockCanvasEl.width, mockCanvasEl.height);
+            mockCanvasEl.toBlob((blob) => {
+                if (!blob) return;
+                fetch('/api/v1/camera/frame', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'image/jpeg',
+                        'X-Device-ID': 'MOCK_VIDEO_CAM',
+                        'X-Frame-ID': String(++mockFrameSeq)
+                    },
+                    body: blob
+                }).then(() => {
+                    mockPushedFrames++;
+                    streamError = false;
+                }).catch(() => {});
+            }, 'image/jpeg', 0.85);
+        } catch {}
+    }
+
+    function startMockPushing() {
+        stopMockPushing();
+        // Run continuous ~16 FPS frame capture into AI vision pipeline
+        pushInterval = setInterval(() => {
+            if (sourceMode === 'mock') {
+                captureAndPushFrame();
+            }
+        }, 60);
+    }
+
+    function stopMockPushing() {
+        if (pushInterval) {
+            clearInterval(pushInterval);
+            pushInterval = null;
+        }
+    }
 
     function setSourceMode(mode: SourceModeType) {
         sourceMode = mode;
         if (mode === 'mock') {
-            // Cleanly suspend live stream tracking to avoid burning Lambda execution/bandwidth
             streamError = false;
+            streamEpoch = Date.now();
+            setTimeout(() => {
+                if (mockVideoEl) {
+                    mockVideoEl.play().catch(() => {});
+                }
+                startMockPushing();
+            }, 60);
         } else {
+            stopMockPushing();
+            if (mockVideoEl) {
+                mockVideoEl.pause();
+            }
+            // Disconnect MOCK_VIDEO_CAM so live camera immediately becomes the active device
+            fetch('/api/v1/devices/disconnect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ device_id: 'MOCK_VIDEO_CAM' })
+            }).catch(() => {});
             retryCount = 0;
             streamEpoch = Date.now();
         }
@@ -87,6 +199,14 @@
         }
         mockVideoSrc = `/examples/${name}`;
         streamError = false;
+        streamEpoch = Date.now();
+        setTimeout(() => {
+            if (mockVideoEl) {
+                mockVideoEl.currentTime = 0;
+                mockVideoEl.play().catch(() => {});
+                pushCurrentFrameOnce();
+            }
+        }, 80);
     }
 
     function handleFileUpload(event: Event) {
@@ -101,8 +221,76 @@
             }
             mockVideoSrc = URL.createObjectURL(file);
             streamError = false;
+            streamEpoch = Date.now();
+            setTimeout(() => {
+                if (mockVideoEl) {
+                    mockVideoEl.currentTime = 0;
+                    mockVideoEl.play().catch(() => {});
+                    pushCurrentFrameOnce();
+                }
+            }, 80);
         }
     }
+
+    function handleVideoLoaded() {
+        if (mockVideoEl) {
+            mockDuration = mockVideoEl.duration || 0;
+            mockCurrentTime = mockVideoEl.currentTime || 0;
+            if (sourceMode === 'mock') {
+                mockVideoEl.play().catch(() => {});
+                startMockPushing();
+                setTimeout(pushCurrentFrameOnce, 50);
+            }
+        }
+    }
+
+    function handleVideoTimeUpdate() {
+        if (mockVideoEl) {
+            mockCurrentTime = mockVideoEl.currentTime;
+        }
+    }
+
+    function togglePlayPause() {
+        if (!mockVideoEl) return;
+        if (mockVideoEl.paused) {
+            mockVideoEl.play().catch(() => {});
+            startMockPushing();
+        } else {
+            mockVideoEl.pause();
+            stopMockPushing();
+            pushCurrentFrameOnce();
+        }
+    }
+
+    function handleSeek(e: Event) {
+        const val = parseFloat((e.target as HTMLInputElement).value);
+        if (mockVideoEl && !isNaN(val)) {
+            mockVideoEl.currentTime = val;
+            mockCurrentTime = val;
+            pushCurrentFrameOnce();
+        }
+    }
+
+    function setPlaybackRate(rate: number) {
+        mockPlaybackRate = rate;
+        if (mockVideoEl) {
+            mockVideoEl.playbackRate = rate;
+        }
+    }
+
+    function formatTime(seconds: number): string {
+        if (isNaN(seconds) || seconds < 0) return '00:00';
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+
+    onDestroy(() => {
+        stopMockPushing();
+        if (mockVideoSrc.startsWith('blob:')) {
+            URL.revokeObjectURL(mockVideoSrc);
+        }
+    });
 
     $effect(() => {
         if (hasCamera) {
@@ -161,7 +349,7 @@
         <div class="viewport-header">
             <div class="header-left">
                 <span class="live-dot" class:offline={sourceMode === 'live' && (!hasCamera || streamError)}></span>
-                <strong>Live Inspection View</strong>
+                <strong>{sourceMode === 'live' ? 'Live Inspection View' : 'Mock Video Inspection View (AI Connected)'}</strong>
             </div>
 
             <!-- Video / Camera Ingestion Source Mode Switcher -->
@@ -180,116 +368,181 @@
                     class="mode-pill-btn"
                     class:active={sourceMode === 'mock'}
                     onclick={() => setSourceMode('mock')}
-                    title="Mock local MP4 test video loop (examples/)"
+                    title="Mock local MP4 test video with real ONNX AI pipeline"
                 >
                     <span class="pill-icon">🎬</span> Mock Video
                 </button>
             </div>
 
-            <span class="pill-badge">
+            <span class="pill-badge" class:badge-active={sourceMode === 'mock' || (hasCamera && !streamError)}>
                 {#if sourceMode === 'live'}
                     {hasCamera && !streamError ? 'Live Push (Active HUD)' : 'Standby'}
                 {:else}
-                    Mock Video Loop
+                    🎬 MP4 -> ONNX AI Pipeline ({mockPlaybackRate}x)
                 {/if}
             </span>
         </div>
 
         <div class="canvas-container">
-            {#if sourceMode === 'live'}
-                {#if hasCamera && !streamError}
-                    <!-- Native Browser MJPEG Stream with C++ Hardware-Accelerated Dynamic Bounding Boxes -->
-                    <img
-                        src={activeStreamUrl}
-                        alt="Live Video Stream"
-                        class="feed-video"
-                        onload={() => { streamError = false; retryCount = 0; }}
-                        onerror={() => (streamError = true)}
-                    />
-                {:else}
-                    <!-- Standby State -->
-                    <div class="standby-box">
-                        <span class="standby-icon">📷</span>
-                        <h4>No Camera Stream Connected</h4>
-                        <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
-                        {#if streamError}
-                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
-                                ↻ Reconnect Stream
-                            </button>
-                        {/if}
-                    </div>
-                {/if}
-            {:else if sourceMode === 'mock'}
-                <!-- Mock MP4 Video Loop Mode -->
-                <video
-                    src={mockVideoSrc}
-                    autoplay
-                    loop
-                    muted
-                    playsinline
+            <!-- Hidden Offscreen Video & Canvas for Mock Video AI Frame Ingestion -->
+            <video
+                bind:this={mockVideoEl}
+                src={mockVideoSrc}
+                crossorigin="anonymous"
+                playsinline
+                muted
+                loop
+                style="display: none;"
+                onloadedmetadata={handleVideoLoaded}
+                ontimeupdate={handleVideoTimeUpdate}
+                onplay={() => (mockIsPlaying = true)}
+                onpause={() => (mockIsPlaying = false)}
+            ></video>
+            <canvas
+                bind:this={mockCanvasEl}
+                width="640"
+                height="480"
+                style="display: none;"
+            ></canvas>
+
+            {#if (hasCamera || sourceMode === 'mock') && !streamError}
+                <!-- Unified MJPEG Stream: Live or Mock frames processed identically by C++ YOLOv8 & Real-ESRGAN -->
+                <img
+                    src={activeStreamUrl}
+                    alt="AI Inspection Stream"
                     class="feed-video"
-                    onerror={() => (streamError = true)}
-                >
-                    <track kind="captions" />
-                </video>
+                    onload={() => { streamError = false; retryCount = 0; }}
+                    onerror={() => {
+                        if (sourceMode === 'live') streamError = true;
+                    }}
+                />
+            {:else}
+                <!-- Standby State -->
+                <div class="standby-box">
+                    <span class="standby-icon">📷</span>
+                    <h4>No Camera Stream Connected</h4>
+                    <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
+                    {#if streamError}
+                        <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
+                            ↻ Reconnect Stream
+                        </button>
+                    {/if}
+                </div>
             {/if}
         </div>
 
         {#if sourceMode === 'mock'}
-            <div class="mock-control-bar">
-                <div class="mock-select-group">
-                    <label for="example-select-input" class="mock-label">
-                        📁 <strong>examples/</strong>
-                    </label>
-                    <select
-                        id="example-select-input"
-                        class="example-select"
-                        value={selectedVideo}
-                        onchange={(e) => {
-                            const val = (e.target as HTMLSelectElement).value;
-                            if (val === 'custom') {
-                                fileInputRef?.click();
-                            } else {
-                                selectExample(val);
-                            }
-                        }}
-                    >
-                        {#each exampleVideos as ex}
-                            <option value={ex}>{ex}</option>
-                        {/each}
-                        {#if isCustomUpload}
-                            <option value="custom">📎 {mockFileName} (Custom)</option>
-                        {/if}
-                    </select>
-                </div>
-
-                <div class="mock-actions">
-                    <input
-                        type="file"
-                        accept="video/mp4,video/webm"
-                        class="hidden-file-input"
-                        bind:this={fileInputRef}
-                        onchange={handleFileUpload}
-                    />
+            <div class="mock-playback-panel">
+                <!-- Play / Pause / Progress Scrubber Bar -->
+                <div class="mock-player-row">
                     <button
                         type="button"
-                        class="upload-btn"
-                        onclick={() => fileInputRef?.click()}
-                        title="Upload custom MP4/WebM file from disk"
+                        class="play-toggle-btn"
+                        onclick={togglePlayPause}
+                        title={mockIsPlaying ? 'Pause AI Video Processing' : 'Play Video Frame Ingestion'}
                     >
-                        + Upload Custom Video
+                        {#if mockIsPlaying}
+                            <span>⏸ Pause</span>
+                        {:else}
+                            <span>▶ Play</span>
+                        {/if}
                     </button>
+
+                    <div class="scrubber-wrapper">
+                        <input
+                            type="range"
+                            min="0"
+                            max={mockDuration || 100}
+                            step="0.05"
+                            value={mockCurrentTime}
+                            oninput={handleSeek}
+                            class="mock-scrubber"
+                            title="Seek video timeline"
+                        />
+                    </div>
+
+                    <div class="time-readout">
+                        <span>{formatTime(mockCurrentTime)}</span>
+                        <span class="time-divider">/</span>
+                        <span>{formatTime(mockDuration)}</span>
+                    </div>
+
+                    <!-- Speed Selector -->
+                    <div class="speed-switcher">
+                        {#each [0.5, 1.0, 1.5, 2.0] as rate}
+                            <button
+                                type="button"
+                                class="speed-btn"
+                                class:active={mockPlaybackRate === rate}
+                                onclick={() => setPlaybackRate(rate)}
+                            >
+                                {rate}x
+                            </button>
+                        {/each}
+                    </div>
+                </div>
+
+                <!-- Source Selection Bar -->
+                <div class="mock-control-bar">
+                    <div class="mock-select-group">
+                        <label for="example-select-input" class="mock-label">
+                            📁 <strong>examples/</strong>
+                        </label>
+                        <select
+                            id="example-select-input"
+                            class="example-select"
+                            value={selectedVideo}
+                            onchange={(e) => {
+                                const val = (e.target as HTMLSelectElement).value;
+                                if (val === 'custom') {
+                                    fileInputRef?.click();
+                                } else {
+                                    selectExample(val);
+                                }
+                            }}
+                        >
+                            {#each exampleVideos as ex}
+                                <option value={ex}>{ex}</option>
+                            {/each}
+                            {#if isCustomUpload}
+                                <option value="custom">📎 {mockFileName} (Custom)</option>
+                            {/if}
+                        </select>
+                    </div>
+
+                    <div class="mock-actions">
+                        <input
+                            type="file"
+                            accept="video/mp4,video/webm"
+                            class="hidden-file-input"
+                            bind:this={fileInputRef}
+                            onchange={handleFileUpload}
+                        />
+                        <button
+                            type="button"
+                            class="upload-btn"
+                            onclick={() => fileInputRef?.click()}
+                            title="Upload custom MP4/WebM file from disk"
+                        >
+                            + Upload Custom Video
+                        </button>
+                    </div>
+
+                    <div class="ai-status-indicator">
+                        <span class="ai-dot-pulse"></span>
+                        <span>AI Pipeline: {mockIsPlaying ? 'Active Ingest' : 'Paused'} ({mockPushedFrames} frames)</span>
+                    </div>
                 </div>
             </div>
         {/if}
 
         <div class="viewport-footer">
-            <span>📷 Device: {deviceId || 'ESP32S3_CAM'}</span>
+            <span>📷 Device: {sourceMode === 'mock' ? 'MOCK_VIDEO_CAM' : (deviceId || 'ESP32S3_CAM')}</span>
             <span>
                 {#if sourceMode === 'live'}
                     ⚡ Ingestion: MJPEG Push (/api/v1/camera/stream)
                 {:else}
-                    ⚡ Ingestion: Local MP4 Mock Loop (examples/{mockFileName})
+                    ⚡ Ingestion: MP4 Frame Ingestion -> ONNX YOLOv8 & Super-Resolution ({mockFileName})
                 {/if}
             </span>
         </div>
@@ -449,6 +702,135 @@
 
     .pill-icon {
         font-size: 0.75rem;
+    }
+
+    .pill-badge.badge-active {
+        background: rgba(16, 185, 129, 0.15);
+        color: #059669;
+        font-weight: 700;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .mock-playback-panel {
+        display: flex;
+        flex-direction: column;
+        background: #f8fafc;
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .mock-player-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 16px;
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .play-toggle-btn {
+        background: #3679a8;
+        color: #ffffff;
+        border: none;
+        border-radius: var(--radius-sm);
+        padding: 5px 12px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.15s ease;
+        flex-shrink: 0;
+    }
+
+    .play-toggle-btn:hover {
+        background: #2b6187;
+    }
+
+    .scrubber-wrapper {
+        flex: 1;
+        display: flex;
+        align-items: center;
+    }
+
+    .mock-scrubber {
+        width: 100%;
+        accent-color: #3679a8;
+        cursor: pointer;
+        height: 6px;
+    }
+
+    .time-readout {
+        font-family: monospace;
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: var(--text-secondary);
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        flex-shrink: 0;
+    }
+
+    .time-divider {
+        color: #94a3b8;
+    }
+
+    .speed-switcher {
+        display: flex;
+        gap: 2px;
+        background: #e2e8f0;
+        padding: 2px;
+        border-radius: var(--radius-sm);
+        flex-shrink: 0;
+    }
+
+    .speed-btn {
+        background: transparent;
+        border: none;
+        border-radius: 2px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        color: #475569;
+        padding: 2px 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .speed-btn:hover {
+        background: #cbd5e1;
+        color: #0f172a;
+    }
+
+    .speed-btn.active {
+        background: #3679a8;
+        color: #ffffff;
+        font-weight: 700;
+    }
+
+    .ai-status-indicator {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #059669;
+        margin-left: auto;
+        white-space: nowrap;
+    }
+
+    .ai-dot-pulse {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #10b981;
+        box-shadow: 0 0 6px #10b981;
+        animation: pulse-dot 1.5s infinite;
+    }
+
+    @keyframes pulse-dot {
+        0% { transform: scale(0.95); opacity: 0.8; }
+        50% { transform: scale(1.2); opacity: 1; }
+        100% { transform: scale(0.95); opacity: 0.8; }
     }
 
     .mock-control-bar {

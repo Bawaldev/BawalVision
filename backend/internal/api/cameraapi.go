@@ -74,6 +74,11 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		fwVer = hdrFw
 	}
 
+	connMode := "wifi_lan"
+	if deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_") {
+		connMode = "mock_video"
+	}
+
 	inspection.GlobalInspectionStore.StoreTelemetry(inspection.TelemetryIngressPayload{
 		DeviceID:        deviceID,
 		FirmwareVersion: fwVer,
@@ -83,7 +88,7 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		CPUTemperature:  cpuTemp,
 		CurrentCPULoad:  cpuLoad,
 		IPAddress:       clientIP,
-		ConnectionMode:  "wifi_lan",
+		ConnectionMode:  connMode,
 	})
 }
 
