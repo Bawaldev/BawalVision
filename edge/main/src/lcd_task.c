@@ -243,13 +243,13 @@ static void create_dashboard_ui(void) {
   lv_obj_clear_flag(sensor_box, LV_OBJ_FLAG_SCROLLABLE);
 
   s_esp_temp_label = lv_label_create(sensor_box);
-  lv_label_set_text(s_esp_temp_label, "TEMP: 36.5 C");
+  lv_label_set_text(s_esp_temp_label, "ESP32: -- C");
   lv_obj_set_style_text_color(s_esp_temp_label, lv_color_hex(0xfb923c),
                               0); // Orange
   lv_obj_set_style_text_font(s_esp_temp_label, LV_FONT_DEFAULT, 0);
 
   s_cpu_load_label = lv_label_create(sensor_box);
-  lv_label_set_text(s_cpu_load_label, "CPU : 10%");
+  lv_label_set_text(s_cpu_load_label, "CPU : --%");
   lv_obj_set_style_text_color(s_cpu_load_label, lv_color_hex(0x38bdf8),
                               0); // Cyan
   lv_obj_set_style_text_font(s_cpu_load_label, LV_FONT_DEFAULT, 0);
@@ -273,9 +273,7 @@ void lcd_monitor_heartbeat_task(void *pvParameters) {
     uint32_t mins = (seconds % 3600) / 60;
     uint32_t secs = seconds % 60;
 
-    float cpu_t = 36.5f;
-    (void)cpu_t; // Prevent unused variable warning
-
+    float real_temp = get_esp32_cpu_temperature();
     uint8_t cpu_load = get_cpu_usage_percentage();
 
     if (lvgl_port_lock(0)) {
@@ -283,6 +281,9 @@ void lcd_monitor_heartbeat_task(void *pvParameters) {
         lv_label_set_text_fmt(s_uptime_label, "UP %02u:%02u:%02u",
                               (unsigned int)hrs, (unsigned int)mins,
                               (unsigned int)secs);
+      }
+      if (s_esp_temp_label) {
+        lv_label_set_text_fmt(s_esp_temp_label, "ESP32: %.1f C", real_temp);
       }
       if (s_cpu_load_label) {
         lv_label_set_text_fmt(s_cpu_load_label, "CPU : %u%%",

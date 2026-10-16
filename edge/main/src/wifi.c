@@ -371,7 +371,11 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     cJSON_AddStringToObject(root, "device_id", data->device_id);
     cJSON_AddStringToObject(root, "firmware_version", data->firmware_version);
     cJSON_AddNumberToObject(root, "timestamp", (double)data->timestamp);
-    cJSON_AddNumberToObject(root, "temperature", data->temperature > 0 ? data->temperature : 36.5);
+    float send_temp = data->temperature;
+    if (send_temp <= 0.0f) {
+        send_temp = get_esp32_cpu_temperature();
+    }
+    cJSON_AddNumberToObject(root, "temperature", send_temp);
     cJSON_AddNumberToObject(root, "cpu_load", data->current_cpu_load);
     cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "heap_free", (double)esp_get_free_heap_size());
@@ -483,7 +487,7 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     char load_str[16];
     float real_temp = get_esp32_cpu_temperature();
     uint8_t cpu_load = get_cpu_usage_percentage();
-    snprintf(temp_str, sizeof(temp_str), "%.2f", real_temp > 0 ? real_temp : 38.4f);
+    snprintf(temp_str, sizeof(temp_str), "%.2f", real_temp);
     snprintf(load_str, sizeof(load_str), "%u", cpu_load);
 
     esp_http_client_set_header(s_stream_client, "Content-Type", "image/jpeg");

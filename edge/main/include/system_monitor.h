@@ -12,9 +12,10 @@ extern "C" {
 #endif
 
 /**
- * @brief Calculate actual CPU core utilization over a 100ms sample window.
+ * @brief Calculate actual CPU core utilization across active physical cores.
  *
- * Measures runtime counters across tasks compared against the FreeRTOS idle tasks.
+ * Measures runtime counters across tasks compared against FreeRTOS idle tasks
+ * ("IDLE0" and "IDLE1") using non-blocking snapshot deltas without artificial delays.
  * Requires CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS to be enabled.
  *
  * @return uint8_t Estimated CPU usage percentage (0 - 100).
@@ -48,11 +49,11 @@ void get_internal_device_id(char *out_id, size_t max_len);
 void init_device_metadata(telemetry_data_t *data);
 
 /**
- * @brief Estimate approximate system memory pressure as a percentage.
+ * @brief Retrieve actual system CPU load percentage.
  *
- * Calculates the delta between current free heap and historic lowest heap watermark.
+ * Alias to get_cpu_usage_percentage().
  *
- * @return uint8_t Heap memory utilization percentage (0 - 100).
+ * @return uint8_t CPU utilization percentage (0 - 100).
  */
 uint8_t get_system_cpu_load(void);
 
