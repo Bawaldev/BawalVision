@@ -104,7 +104,7 @@ yolo-train model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="50
     fi
 
 # Validate and compute mAP50 / mAP50-95 metrics on validation set
-yolo-val model="ml/AI1/weights/best.pt" data="ml/AI1/yolo_dataset/dataset.yaml" batch="16" imgsz="640" device="0":
+yolo-val model="ml/AI1/model/yolov8n/best.pt" data="ml/AI1/yolo_dataset/dataset.yaml" batch="16" imgsz="640" device="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Validating YOLO checkpoint: {{ model }} on dataset: {{ data }}"
@@ -119,7 +119,7 @@ yolo-val model="ml/AI1/weights/best.pt" data="ml/AI1/yolo_dataset/dataset.yaml" 
     fi
 
 # Export PyTorch weights to dynamic ONNX binary (Ultralytics Dynamic Detection)
-yolo-export model="ml/AI1/weights/best.pt" format="onnx" imgsz="640" opset="12" dynamic="True":
+yolo-export model="ml/AI1/model/yolov8n/best.pt" format="onnx" imgsz="640" opset="12" dynamic="True":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Exporting YOLO checkpoint: {{ model }} to {{ format }} format (Dynamic: {{ dynamic }}, Opset: {{ opset }})"
@@ -134,14 +134,14 @@ yolo-export model="ml/AI1/weights/best.pt" format="onnx" imgsz="640" opset="12" 
     fi
     ONNX_SRC="${model%.pt}.onnx"
     if [ -f "$ONNX_SRC" ]; then
-        mkdir -p weights ml/AI1/model
-        cp -f "$ONNX_SRC" weights/yolo8n.onnx
-        cp -f "$ONNX_SRC" ml/AI1/model/ai1_vision.onnx
-        echo "[✓] Synced dynamic ONNX binary to weights/yolo8n.onnx and ml/AI1/model/ai1_vision.onnx"
+        mkdir -p ml/AI1/model/yolov8n
+        cp -f "$ONNX_SRC" ml/AI1/model/yolov8n/yolo8n.onnx
+        cp -f "$ONNX_SRC" ml/AI1/model/yolov8n/ai1_vision.onnx
+        echo "[✓] Synced dynamic ONNX binary to ml/AI1/model/yolov8n/yolo8n.onnx and ml/AI1/model/yolov8n/ai1_vision.onnx"
     fi
 
 # Run inference / prediction on test images
-yolo-predict model="ml/AI1/weights/best.pt" source="ml/AI1/yolo_dataset/images/test" conf="0.25" device="0":
+yolo-predict model="ml/AI1/model/yolov8n/best.pt" source="ml/AI1/yolo_dataset/images/test" conf="0.25" device="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Running YOLO Inference: model={{ model }} source={{ source }} (Conf: {{ conf }})"
@@ -221,7 +221,7 @@ generate-ncnn-cpp model="realesr-animevideov3-x2" scale="2" out="weights":
 
 
 # Sanity check and inspect ONNX model tensors and execution provider
-test-model-ai1 model="ml/AI1/model/ai1_vision.onnx":
+test-model-ai1 model="ml/AI1/model/yolov8n/ai1_vision.onnx":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     PY_BIN="python3"
