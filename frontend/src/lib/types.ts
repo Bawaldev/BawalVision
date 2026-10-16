@@ -105,6 +105,15 @@ export interface USBPortInfo {
     is_esp32: boolean;
 }
 
+export interface WiFiNetworkInfo {
+    ssid: string;
+    signal: number;
+    security: string;
+    is_server?: boolean;
+    is_saved?: boolean;
+    bssid?: string;
+}
+
 export interface DeviceHardwareStatus {
     connected: boolean;
     connection_mode: 'wifi_lan' | 'usb_serial' | 'disconnected';
@@ -112,6 +121,7 @@ export interface DeviceHardwareStatus {
     firmware_version: string;
     ip_address: string;
     usb_ports: USBPortInfo[];
+    wifi_networks?: WiFiNetworkInfo[];
     server_wifi: {
         ssid: string;
         has_password: boolean;

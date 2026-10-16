@@ -20,8 +20,12 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 # --- Stage 2: Minimal Alpine Runtime ---
 FROM alpine:3.20 AS runner
 
-RUN apk --no-cache add ca-certificates tzdata \
-    && addgroup -S appgroup && adduser -S appuser -G appgroup
+# Create application user/group locally (offline, zero-network)
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Copy CA certificates and time zone data directly from cached builder (zero network delay)
+COPY --from=builder /etc/ssl/certs /etc/ssl/certs
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
 WORKDIR /app
 

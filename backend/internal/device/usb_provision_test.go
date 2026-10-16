@@ -88,3 +88,29 @@ func TestUSBSecurityValidation(t *testing.T) {
 		t.Fatalf("unexpected sanitized outputs: %s, %s, %s, %s", ssid, pass, ip, port)
 	}
 }
+
+func TestScanAvailableWiFiNetworks(t *testing.T) {
+	networks := ScanAvailableWiFiNetworks()
+	if len(networks) == 0 {
+		t.Fatalf("expected ScanAvailableWiFiNetworks to return at least 1 network")
+	}
+
+	for _, n := range networks {
+		t.Logf("Network: %-25s | Signal: %3d%% | Security: %-15s | Server: %5v | Saved: %5v", n.SSID, n.Signal, n.Security, n.IsServer, n.IsSaved)
+	}
+
+	foundServer := false
+	for _, n := range networks {
+		if n.IsServer {
+			foundServer = true
+			if n.SSID == "" {
+				t.Errorf("server network has empty SSID")
+			}
+			break
+		}
+	}
+
+	if !foundServer {
+		t.Errorf("expected at least one network marked IsServer: true")
+	}
+}

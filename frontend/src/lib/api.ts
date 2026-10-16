@@ -254,4 +254,19 @@ export async function disconnectEspDevice(
     }
 }
 
+export async function fetchWiFiNetworks(baseUrl = BASE_URL): Promise<WiFiNetworkInfo[]> {
+    try {
+        const response = await fetch(`${baseUrl}/devices/wifi/networks`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (response.ok) {
+            const data = await response.json();
+            return data.networks || [];
+        }
+    } catch {
+        // fallback
+    }
+    return [];
+}
+
 

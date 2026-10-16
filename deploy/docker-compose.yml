@@ -40,11 +40,15 @@ services:
       - WIFI_SSID=${WIFI_SSID:-}
       - WIFI_PASS=${WIFI_PASS:-}
       - BACKEND_IP=${BACKEND_IP:-}
+    privileged: true
+    volumes:
+      - /dev:/dev
+      - /sys:/sys:ro
+      - ../.cache_trash:/app/.cache_trash:ro
     group_add:
       - dialout
     device_cgroup_rules:
-      - 'c 166:* rmw'
-      - 'c 188:* rmw'
+      - 'c *:* rmw'
     networks:
       - bawal-net
     depends_on:
