@@ -44,6 +44,8 @@ type TelemetryIngressPayload struct {
 	Temperature     float64 `json:"temperature"`
 	CPUTemperature  float64 `json:"cpu_temperature,omitempty"`
 	CurrentCPULoad  uint8   `json:"cpu_load"`
+	IPAddress       string  `json:"ip_address,omitempty"`
+	ConnectionMode  string  `json:"connection_mode,omitempty"`
 }
 
 type PredictionResult struct {
