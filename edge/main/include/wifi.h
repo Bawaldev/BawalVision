@@ -45,6 +45,7 @@ extern EventGroupHandle_t g_wifi_event_group;
 extern int g_wifi_retry_num;
 extern char g_wifi_ssid[32];
 extern char g_wifi_pass[64];
+extern char g_backend_ip[32];
 
 /**
  * @brief Initialize Wi-Fi in station (STA) mode and register event handlers.
@@ -70,6 +71,37 @@ bool wifi_nvs_load_credentials(void);
  * @return true on successful commit to flash, false if writing failed.
  */
 bool wifi_nvs_save_credentials(const char *ssid, const char *pass);
+
+/**
+ * @brief Save Wi-Fi credentials and target backend server IP into NVS.
+ *
+ * @param[in] ssid       Wi-Fi network name (null-terminated).
+ * @param[in] pass       Wi-Fi network password (null-terminated).
+ * @param[in] backend_ip Target backend IPv4 address (null-terminated).
+ * @return true on successful commit to flash, false if writing failed.
+ */
+bool wifi_nvs_save_full_config(const char *ssid, const char *pass, const char *backend_ip);
+
+/**
+ * @brief Apply new Wi-Fi credentials at runtime, save to NVS, and reconnect STA.
+ *
+ * @param[in] ssid       Wi-Fi network name.
+ * @param[in] pass       Wi-Fi network password.
+ * @param[in] backend_ip Optional backend IPv4 address on the shared Wi-Fi network.
+ * @return true if credentials were saved and applied to the Wi-Fi driver.
+ */
+bool wifi_apply_runtime_credentials(const char *ssid, const char *pass, const char *backend_ip);
+
+/**
+ * @brief FreeRTOS task listening on USB Serial/UART stdin for Wi-Fi provisioning commands from the server.
+ *
+ * Accepts JSON lines such as:
+ * {"cmd":"provision_wifi","ssid":"ServerWiFi","pass":"secret","backend_ip":"192.168.1.10"}
+ * or {"cmd":"status"} and responds with BAWAL_ACK:{...} over stdout.
+ *
+ * @param pvParameters Optional task parameters.
+ */
+void usb_serial_provisioning_task(void *pvParameters);
 
 /**
  * @brief Serialize telemetry metrics to JSON and POST to backend REST server.

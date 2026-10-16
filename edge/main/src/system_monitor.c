@@ -6,6 +6,28 @@
 #include "esp_app_desc.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
+#include "driver/temperature_sensor.h"
+
+static temperature_sensor_handle_t s_temp_sensor = NULL;
+
+float get_esp32_cpu_temperature(void) {
+    if (s_temp_sensor == NULL) {
+        temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+        if (temperature_sensor_install(&temp_sensor_config, &s_temp_sensor) == ESP_OK) {
+            temperature_sensor_enable(s_temp_sensor);
+        } else {
+            s_temp_sensor = NULL;
+        }
+    }
+
+    float tsens_out = 36.5f;
+    if (s_temp_sensor != NULL) {
+        if (temperature_sensor_get_celsius(s_temp_sensor, &tsens_out) == ESP_OK) {
+            return tsens_out;
+        }
+    }
+    return tsens_out;
+}
 
 uint8_t get_cpu_usage_percentage(void) {
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
