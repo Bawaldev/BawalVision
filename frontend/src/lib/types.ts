@@ -1,7 +1,6 @@
 export interface FoodDetection {
     food_name: string;
     similarity_rate: number;
-    temperature?: number;
     spoilage_score?: number;
     status?: 'PASS' | 'REVIEW' | 'REJECT';
     box?: [number, number, number, number]; // [x, y, width, height]
@@ -15,7 +14,6 @@ export interface InspectionRecord {
     firmware_version: string;
     created_at: string;
     image_s3_uri?: string;
-    food_temperature?: number;
     cpu_temperature?: number;
     temperature: number;
     cpu_load: number;
@@ -25,7 +23,6 @@ export interface InspectionRecord {
         id: string;
         inspection_id: string;
         food_item_id: number;
-        temperature: number;
         similarity_rate: number;
         spoilage_score: number;
         status: 'PASS' | 'REVIEW' | 'REJECT';
@@ -41,11 +38,15 @@ export interface TelemetryPayload {
     device_name?: string;
     firmware_version: string;
     device_core: number;
-    food_temperature?: number;
-    cpu_temperature?: number;
-    temperature: number;
-    cpu_load: number;
+    cpu_temperature?: number | null;
+    temperature: number | null;
+    cpu_load?: number | null;
+    heap_free?: number | null;
+    free_heap?: number | null;
+    rssi?: number | null;
+    server_memory_mb?: number | null;
     timestamp: number;
+    is_connected?: boolean;
 }
 
 export interface InferenceLogEntry {
@@ -72,6 +73,13 @@ export interface EngineStatus {
     arch: string;
     graviton_available: boolean;
     local_engine_available: boolean;
+    num_cpu?: number;
+    parallel_cores?: number;
+    server_mem_alloc_mb?: number;
+    server_mem_sys_mb?: number;
+    host_mem_used_mb?: number;
+    host_mem_total_mb?: number;
+    memory_usage_mb?: number;
 }
 
 export interface SystemConfig {
@@ -80,11 +88,36 @@ export interface SystemConfig {
     streamIntervalMs: number;
     enableMockIfOffline: boolean;
     minConfidenceThreshold: number;
-    tempWarningThreshold: number;
     gravitonEngineEnabled: boolean;
     gravitonEngineAvailable?: boolean;
     localEngineEnabled: boolean;
     localEngineAvailable?: boolean;
+}
+
+export interface USBPortInfo {
+    port: string;
+    name: string;
+    driver?: string;
+    vendor_id?: string;
+    product_id?: string;
+    manufacturer?: string;
+    product?: string;
+    is_esp32: boolean;
+}
+
+export interface DeviceHardwareStatus {
+    connected: boolean;
+    connection_mode: 'wifi_lan' | 'usb_serial' | 'disconnected';
+    device_id: string;
+    firmware_version: string;
+    ip_address: string;
+    usb_ports: USBPortInfo[];
+    server_wifi: {
+        ssid: string;
+        has_password: boolean;
+        backend_ip: string;
+        backend_port: string;
+    };
 }
 
 export interface EspConnectionResult {
@@ -94,6 +127,9 @@ export interface EspConnectionResult {
     rssi?: number;
     latencyMs?: number;
     ipAddress?: string;
+    usbPort?: string;
+    provisionedSsid?: string;
+    connectionMode?: 'wifi_lan' | 'usb_serial' | 'disconnected';
     message?: string;
 }
 

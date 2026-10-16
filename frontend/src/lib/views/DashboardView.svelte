@@ -88,19 +88,19 @@
 
         <!-- 2. Food Quality & Freshness (Chemical / Thermal Spoilage & Freshness Bar) -->
         <ChemicalSpoilageBar
-            temperature={telemetry?.food_temperature || telemetry?.temperature}
-            isSpoiled={(telemetry?.food_temperature || telemetry?.temperature || 0) > 40 || (detections && detections.some(d => d.status === 'REJECT'))}
-            tSafeHours={detections && detections.length > 0 ? (telemetry?.food_temperature && telemetry.food_temperature > 20 ? 8.0 * (1.0 / (1.0 + 0.05 * (telemetry.food_temperature - 20))) : 8.0) : 0}
+            temperature={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.temperature : null}
+            isSpoiled={(isOnline && (telemetry?.is_connected ?? false) && (telemetry?.temperature || 0) > 40) || (detections && detections.some(d => d.status === 'REJECT'))}
+            tSafeHours={detections && detections.length > 0 ? (isOnline && (telemetry?.is_connected ?? false) && telemetry?.temperature && telemetry.temperature > 20 ? 8.0 * (1.0 / (1.0 + 0.05 * (telemetry.temperature - 20))) : 8.0) : 0}
             hasFood={detections && detections.length > 0}
             qualityScore={avgFreshness}
         />
 
         <!-- 3. Thermal & Hardware Telemetry (Physical Environmental Telemetry) -->
         <EnvironmentalTelemetry
-            foodTemperature={telemetry?.food_temperature || telemetry?.temperature}
-            cpuTemperature={telemetry?.cpu_temperature}
-            temperature={telemetry?.temperature}
-            cpuLoad={telemetry?.cpu_load}
+            isConnected={isOnline && (telemetry?.is_connected ?? false)}
+            cpuTemperature={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.cpu_temperature : null}
+            temperature={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.temperature : null}
+            cpuLoad={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.cpu_load : null}
             firmwareVersion={telemetry?.firmware_version}
         />
 

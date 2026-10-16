@@ -1,10 +1,12 @@
 <script lang="ts">
-    import { connectEspDevice, disconnectEspDevice } from '../api';
-    import type { SystemConfig, EspConnectionResult } from '../types';
+    import { onMount } from 'svelte';
+    import { connectEspDevice, disconnectEspDevice, fetchDeviceStatus, provisionEspViaUsb } from '../api';
+    import type { SystemConfig, EspConnectionResult, USBPortInfo } from '../types';
 
     interface Props {
         config: SystemConfig;
         isOnline?: boolean;
+        parallelCores?: number;
         onDeviceConnectionChange?: (connected: boolean, deviceId: string) => void;
         onSaveConfig: (updated: SystemConfig) => void;
     }
@@ -12,112 +14,164 @@
     let {
         config,
         isOnline = false,
+        parallelCores = 0,
         onDeviceConnectionChange,
         onSaveConfig
     }: Props = $props();
 
     let formState = $state({
         backendUrl: '/api/v1',
-        deviceId: 'ESP32S3_441BF6C95678',
+        deviceId: '',
         streamIntervalMs: 1500,
         enableMockIfOffline: true,
         minConfidenceThreshold: 0.35,
-        tempWarningThreshold: 35.0,
         gravitonEngineEnabled: true,
         localEngineEnabled: true
     });
 
-    // ESP Connection States (like Wi-Fi / Bluetooth connect modal)
+    // ESP32-S3 Hardware Connection & USB Serial Provisioning State
     let connectionStatus = $state<'disconnected' | 'connecting' | 'connected' | 'failed'>('disconnected');
-    let connectingStepText = $state('Initializing connection...');
+    let connectingStepText = $state('Probing shared Wi-Fi & USB slots...');
     let errorMessage = $state('');
+    let detectedUsbPorts = $state<USBPortInfo[]>([]);
+    let selectedUsbPort = $state('');
+    let serverWifiSsid = $state('');
+    let serverWifiPassword = $state('');
+    let serverBackendIp = $state('');
     let lastConnDetails = $state<EspConnectionResult>({
-        success: true,
-        deviceId: 'ESP32S3_441BF6C95678',
-        firmwareVersion: '1.0.4-prod',
-        rssi: -58,
-        latencyMs: 12,
-        ipAddress: '192.168.4.1',
-        message: 'Connected'
+        success: false,
+        deviceId: '',
+        firmwareVersion: '--',
+        latencyMs: 0,
+        ipAddress: '--',
+        connectionMode: 'disconnected',
+        message: 'Disconnected'
     });
 
     $effect(() => {
         if (config) {
             formState.backendUrl = config.backendUrl;
-            formState.deviceId = config.deviceId || formState.deviceId;
+            formState.deviceId = config.deviceId ?? '';
             formState.streamIntervalMs = config.streamIntervalMs;
             formState.enableMockIfOffline = config.enableMockIfOffline;
             formState.minConfidenceThreshold = config.minConfidenceThreshold;
-            formState.tempWarningThreshold = config.tempWarningThreshold;
             formState.gravitonEngineEnabled = config.gravitonEngineEnabled;
             formState.localEngineEnabled = config.localEngineEnabled;
         }
     });
 
-    $effect(() => {
-        if (isOnline && connectionStatus === 'disconnected') {
-            connectionStatus = 'connected';
-            if (config.deviceId) {
-                lastConnDetails.deviceId = config.deviceId;
+    async function refreshHardwareStatus() {
+        const hw = await fetchDeviceStatus(formState.backendUrl);
+        if (!hw) return;
+
+        detectedUsbPorts = hw.usb_ports || [];
+        if (detectedUsbPorts.length > 0 && !selectedUsbPort) {
+            selectedUsbPort = detectedUsbPorts[0].port;
+        } else if (detectedUsbPorts.length === 0) {
+            selectedUsbPort = '';
+        }
+
+        if (hw.server_wifi) {
+            if (!serverWifiSsid && hw.server_wifi.ssid) {
+                serverWifiSsid = hw.server_wifi.ssid;
+            }
+            if (hw.server_wifi.backend_ip) {
+                serverBackendIp = hw.server_wifi.backend_ip;
             }
         }
+
+        if (hw.connected) {
+            connectionStatus = 'connected';
+            lastConnDetails = {
+                success: true,
+                deviceId: hw.device_id || formState.deviceId,
+                firmwareVersion: hw.firmware_version || '1.0.0',
+                ipAddress: hw.ip_address || serverBackendIp || 'LAN',
+                connectionMode: hw.connection_mode,
+                latencyMs: hw.connection_mode === 'usb_serial' ? 4 : 9,
+                message: hw.connection_mode === 'usb_serial'
+                    ? `Connected via USB Serial (${hw.ip_address}) — Server Wi-Fi Synced`
+                    : `Connected on shared Wi-Fi network (${hw.ip_address || 'LAN'})`
+            };
+        } else if (connectionStatus === 'connected') {
+            connectionStatus = 'disconnected';
+        }
+    }
+
+    $effect(() => {
+        if (!isOnline && connectionStatus === 'connected') {
+            connectionStatus = 'disconnected';
+        }
+    });
+
+    onMount(() => {
+        refreshHardwareStatus();
+        const timer = setInterval(refreshHardwareStatus, 1000);
+        return () => clearInterval(timer);
     });
 
     async function handleConnectEsp() {
         const targetId = (formState.deviceId || '').trim();
-        if (!targetId) {
-            connectionStatus = 'failed';
-            errorMessage = 'Please specify an ESP32 Sensor Node ID before connecting.';
-            return;
-        }
-
         connectionStatus = 'connecting';
         errorMessage = '';
-        connectingStepText = `Scanning for broadcast from ${targetId}...`;
-
-        const stepTimer1 = setTimeout(() => {
-            if (connectionStatus === 'connecting') {
-                connectingStepText = 'Initiating Fieldbus TCP/UART handshake...';
-            }
-        }, 350);
-
-        const stepTimer2 = setTimeout(() => {
-            if (connectionStatus === 'connecting') {
-                connectingStepText = 'Validating CRC32 telemetry frame sync (100 Hz)...';
-            }
-        }, 750);
+        connectingStepText = 'Checking shared Wi-Fi network & scanning server USB ports (/dev/ttyACM*, /dev/ttyUSB*)...';
 
         try {
-            const res = await connectEspDevice(targetId, formState.backendUrl);
-            clearTimeout(stepTimer1);
-            clearTimeout(stepTimer2);
+            const res = await connectEspDevice(targetId, formState.backendUrl, {
+                usbPort: selectedUsbPort,
+                ssid: serverWifiSsid,
+                password: serverWifiPassword
+            });
 
             if (res.success) {
                 connectionStatus = 'connected';
                 lastConnDetails = res;
-                formState.deviceId = res.deviceId;
                 onDeviceConnectionChange?.(true, res.deviceId);
+                await refreshHardwareStatus();
             } else {
                 connectionStatus = 'failed';
-                errorMessage = res.message || 'Connection handshake timed out.';
+                errorMessage = res.message || 'No ESP32-S3 detected on shared Wi-Fi or USB slots.';
                 onDeviceConnectionChange?.(false, targetId);
+                await refreshHardwareStatus();
             }
         } catch (err: any) {
-            clearTimeout(stepTimer1);
-            clearTimeout(stepTimer2);
             connectionStatus = 'failed';
-            errorMessage = err?.message || 'Failed to connect to ESP32 node.';
+            errorMessage = err?.message || 'Failed to probe ESP32-S3 hardware.';
             onDeviceConnectionChange?.(false, targetId);
         }
     }
 
+    async function handleProvisionUsbWifi() {
+        const portToUse = selectedUsbPort || (detectedUsbPorts[0]?.port ?? '');
+        if (!portToUse) {
+            connectionStatus = 'failed';
+            errorMessage = 'No USB Serial device (/dev/ttyACM* or /dev/ttyUSB*) plugged into the server.';
+            return;
+        }
+        connectionStatus = 'connecting';
+        errorMessage = '';
+        connectingStepText = `Provisioning server Wi-Fi '${serverWifiSsid || 'Auto'}' over ${portToUse}...`;
+
+        const res = await provisionEspViaUsb(portToUse, serverWifiSsid, serverWifiPassword, formState.backendUrl);
+        if (res.success) {
+            connectionStatus = 'connected';
+            lastConnDetails = res;
+            onDeviceConnectionChange?.(true, res.deviceId);
+            await refreshHardwareStatus();
+        } else {
+            connectionStatus = 'failed';
+            errorMessage = res.message || 'USB Wi-Fi provisioning failed.';
+        }
+    }
+
     async function handleDisconnectEsp() {
+        const targetId = formState.deviceId || lastConnDetails.deviceId || '*';
         try {
-            await disconnectEspDevice(formState.deviceId, formState.backendUrl);
+            await disconnectEspDevice(targetId, formState.backendUrl);
         } catch {}
         connectionStatus = 'disconnected';
         errorMessage = '';
-        onDeviceConnectionChange?.(false, formState.deviceId);
+        onDeviceConnectionChange?.(false, '');
     }
 
     let isSaved = $state(false);
@@ -152,18 +206,18 @@
                 <h3>Gateway & Fieldbus Connectivity</h3>
             </div>
 
-            <!-- ESP32-S3 Connection Controller (Wi-Fi Style Pairing & Telemetry Link) -->
+            <!-- ESP32-S3 Connection Controller (Real LAN + USB /dev/ttyACM* & /dev/ttyUSB* Wi-Fi Sync) -->
             <div class="form-group esp-connect-group">
                     <div class="esp-header-row">
                         <label for="deviceId">ESP32-S3 Sensor Node Connection</label>
                         <span class="esp-status-chip {connectionStatus}">
                             <span class="status-dot {connectionStatus}"></span>
                             {#if connectionStatus === 'connected'}
-                                Connected
+                                {lastConnDetails.connectionMode === 'usb_serial' ? 'Connected (USB Sync)' : 'Connected (Same Wi-Fi)'}
                             {:else if connectionStatus === 'connecting'}
-                                Connecting...
+                                Probing Hardware...
                             {:else if connectionStatus === 'failed'}
-                                Failed
+                                Not Detected
                             {:else}
                                 Disconnected
                             {/if}
@@ -200,43 +254,99 @@
                                 disabled
                             >
                                 <span class="btn-spinner"></span>
-                                Connecting...
+                                Probing...
                             </button>
                         {:else}
                             <button
                                 type="button"
                                 class="btn-esp-connect"
                                 onclick={handleConnectEsp}
-                                title="Connect to ESP32 node"
+                                title="Detect ESP32 on shared Wi-Fi or provision via USB"
                             >
-                                Connect
+                                Detect / Connect
                             </button>
                         {/if}
                     </div>
 
-                    <!-- Diagnostic Properties & Live Link Status Card (Like Wi-Fi Network Details) -->
+                    <!-- USB Serial Slots (/dev/ttyACM* & /dev/ttyUSB*) & Server Wi-Fi Auto-Provisioning Panel -->
+                    <div class="usb-provision-panel">
+                        <div class="usb-panel-header">
+                            <span class="usb-badge-title">🔌 Server USB Slots (<code>/dev/ttyACM*</code>, <code>/dev/ttyUSB*</code>) & Same-Wi-Fi Sync</span>
+                            <button type="button" class="btn-scan-usb" onclick={refreshHardwareStatus}>
+                                ↻ Scan USB
+                            </button>
+                        </div>
+
+                        {#if detectedUsbPorts.length > 0}
+                            <div class="usb-detected-banner">
+                                <span>✓ USB Serial Detected: <strong>{detectedUsbPorts.map(p => `${p.port}${p.product ? ` (${p.product})` : ''}`).join(', ')}</strong></span>
+                            </div>
+
+                            <div class="form-grid usb-wifi-grid">
+                                <div class="form-group">
+                                    <label for="serverWifiSsid">Server Wi-Fi SSID (Synced to ESP32-S3)</label>
+                                    <input
+                                        id="serverWifiSsid"
+                                        type="text"
+                                        bind:value={serverWifiSsid}
+                                        placeholder="Auto-detected server SSID"
+                                        class="form-input"
+                                    />
+                                </div>
+                                <div class="form-group">
+                                    <label for="serverWifiPass">Server Wi-Fi Password (for USB Provisioning)</label>
+                                    <div class="esp-input-action-bar">
+                                        <input
+                                            id="serverWifiPass"
+                                            type="password"
+                                            bind:value={serverWifiPassword}
+                                            placeholder="Wi-Fi Password (or set WIFI_PASS)"
+                                            class="form-input"
+                                            style="flex: 1;"
+                                        />
+                                        <button
+                                            type="button"
+                                            class="btn-esp-connect"
+                                            onclick={handleProvisionUsbWifi}
+                                            title="Apply Server Wi-Fi to ESP32-S3 via USB"
+                                        >
+                                            Sync Wi-Fi via USB
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        {:else}
+                            <div class="usb-empty-banner">
+                                <span>No USB serial device currently detected on server slots. Plug ESP32-S3 into USB if Wi-Fi is not configured yet.</span>
+                            </div>
+                        {/if}
+                    </div>
+
+                    <!-- Diagnostic Properties & Live Link Status Card -->
                     <div class="esp-connection-card {connectionStatus}">
                         {#if connectionStatus === 'connected'}
                             <div class="esp-diag-grid">
                                 <div class="diag-item">
-                                    <span class="diag-lbl">Signal (RSSI)</span>
-                                    <span class="diag-val good">📶 {lastConnDetails.rssi ?? -58} dBm</span>
+                                    <span class="diag-lbl">Transport Mode</span>
+                                    <span class="diag-val good">
+                                        {lastConnDetails.connectionMode === 'usb_serial' ? '🔌 USB Serial' : '📶 Shared Wi-Fi LAN'}
+                                    </span>
                                 </div>
                                 <div class="diag-item">
                                     <span class="diag-lbl">Ping / Latency</span>
-                                    <span class="diag-val">⚡ {lastConnDetails.latencyMs ?? 12} ms</span>
+                                    <span class="diag-val">⚡ {lastConnDetails.latencyMs ?? 8} ms</span>
                                 </div>
                                 <div class="diag-item">
                                     <span class="diag-lbl">Firmware</span>
-                                    <span class="diag-val mono">{lastConnDetails.firmwareVersion ?? 'v1.0.4-prod'}</span>
+                                    <span class="diag-val mono">{lastConnDetails.firmwareVersion ?? '1.0.0'}</span>
                                 </div>
                                 <div class="diag-item">
-                                    <span class="diag-lbl">Host / IP</span>
-                                    <span class="diag-val mono">{lastConnDetails.ipAddress ?? '192.168.4.1'}</span>
+                                    <span class="diag-lbl">Endpoint / Port</span>
+                                    <span class="diag-val mono">{lastConnDetails.ipAddress || serverBackendIp || 'LAN'}</span>
                                 </div>
                             </div>
                             <div class="esp-sync-badge">
-                                <span class="sync-check">✓</span> 100 Hz Fieldbus telemetry stream synchronized
+                                <span class="sync-check">✓</span> {lastConnDetails.message || 'ESP32-S3 live telemetry & shared Wi-Fi synchronized'}
                             </div>
                         {:else if connectionStatus === 'connecting'}
                             <div class="esp-connecting-box">
@@ -247,14 +357,14 @@
                                 </div>
                                 <div class="connecting-info">
                                     <span class="connecting-step-title">{connectingStepText}</span>
-                                    <small class="connecting-hint">Negotiating Wi-Fi handshake & telemetry bus...</small>
+                                    <small class="connecting-hint">Checking shared Wi-Fi heartbeats & USB serial slots...</small>
                                 </div>
                             </div>
                         {:else if connectionStatus === 'failed'}
                             <div class="esp-failed-box">
                                 <div class="failed-info">
                                     <span class="failed-icon">⚠️</span>
-                                    <span class="failed-text">{errorMessage || 'Node unreachable. Verify device power.'}</span>
+                                    <span class="failed-text">{errorMessage || 'Node unreachable. Verify same Wi-Fi connection or plug into server USB.'}</span>
                                 </div>
                                 <button type="button" class="btn-retry-conn" onclick={handleConnectEsp}>
                                     ↻ Retry
@@ -263,44 +373,31 @@
                         {:else}
                             <div class="esp-idle-box">
                                 <span class="idle-icon">💡</span>
-                                <span class="idle-text">Press <strong>Connect</strong> to probe & pair with the ESP32 node.</span>
+                                <span class="idle-text">Connect ESP32-S3 to the <strong>same Wi-Fi network</strong> as the server, or plug it into a <strong>server USB port</strong> (<code>/dev/ttyACM*</code> / <code>/dev/ttyUSB*</code>) to automatically apply the server's Wi-Fi.</span>
                             </div>
                         {/if}
                     </div>
                 </div>
         </div>
 
-        <!-- 2. Tolerance & Spoilage Thresholds -->
+        <!-- 2. Detection Confidence Thresholds -->
         <div class="settings-card">
             <div class="section-header">
                 <span class="section-icon">🎯</span>
-                <h3>Detection & Thermal Warning Thresholds</h3>
+                <h3>Detection Thresholds</h3>
             </div>
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="minConf">Minimum Confidence Gate ({(formState.minConfidenceThreshold * 100).toFixed(0)}%)</label>
-                    <input
-                        id="minConf"
-                        type="range"
-                        min="0.20"
-                        max="0.95"
-                        step="0.05"
-                        bind:value={formState.minConfidenceThreshold}
-                        class="form-range"
-                    />
-                    <small>Vision classification acceptance threshold</small>
-                </div>
-
-                <div class="form-group">
-                    <label for="tempThreshold">Temperature Warning Cutoff ({formState.tempWarningThreshold} °C)</label>
-                    <input
-                        id="tempThreshold"
-                        type="number"
-                        bind:value={formState.tempWarningThreshold}
-                        class="form-input"
-                    />
-                    <small>Thermal cutoff threshold for food safety alerts</small>
-                </div>
+            <div class="form-group">
+                <label for="minConf">Minimum Confidence Gate ({(formState.minConfidenceThreshold * 100).toFixed(0)}%)</label>
+                <input
+                    id="minConf"
+                    type="range"
+                    min="0.20"
+                    max="0.95"
+                    step="0.05"
+                    bind:value={formState.minConfidenceThreshold}
+                    class="form-range"
+                />
+                <small>Vision classification acceptance threshold</small>
             </div>
         </div>
 
@@ -337,8 +434,8 @@
                 <label class="check-item">
                     <input type="checkbox" bind:checked={formState.localEngineEnabled} />
                     <div class="check-text">
-                        <strong>Local C++20 Vision Service (OpenMP SIMD)</strong>
-                        <small>Active on-premise zero-dependency machine vision pipeline</small>
+                        <strong>Local C++20 Vision Service ({parallelCores > 0 ? `${parallelCores}-Core ` : ''}OpenMP SIMD)</strong>
+                        <small>Active on-premise zero-dependency machine vision pipeline ({parallelCores > 0 ? `${parallelCores} parallel worker threads` : 'multi-threaded'})</small>
                     </div>
                 </label>
             </div>
@@ -910,9 +1007,97 @@
         color: var(--text-secondary);
     }
 
+    .usb-provision-panel {
+        background: var(--bg-inset);
+        border: 1px dashed var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .usb-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .usb-badge-title {
+        font-size: 0.74rem;
+        font-weight: 700;
+        color: var(--text-secondary);
+    }
+
+    .btn-scan-usb {
+        background: transparent;
+        border: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+    }
+
+    .btn-scan-usb:hover {
+        border-color: var(--accent-blue);
+        color: var(--accent-blue);
+    }
+
+    .usb-detected-banner {
+        font-size: 0.72rem;
+        color: var(--accent-green);
+        background: var(--accent-green-dim);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+    }
+
+    .usb-empty-banner {
+        font-size: 0.7rem;
+        color: var(--text-muted);
+    }
+
+    .usb-wifi-grid {
+        margin-top: 2px;
+    }
+
     @media (max-width: 640px) {
         .form-grid {
             grid-template-columns: 1fr;
         }
+
+        .card-header-bar {
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .settings-card {
+            padding: 14px 12px;
+        }
+
+        .esp-header-row,
+        .usb-panel-header,
+        .esp-failed-box {
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .esp-input-action-bar {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .input-with-icon,
+        .btn-esp-connect,
+        .btn-esp-disconnect,
+        .btn-esp-connecting,
+        .save-chip-btn {
+            width: 100%;
+            justify-content: center;
+        }
     }
 </style>
+

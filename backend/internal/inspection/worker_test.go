@@ -67,3 +67,26 @@ func TestEvaluateFoodQuality(t *testing.T) {
 	}
 }
 
+func TestStoreTelemetryBootTimestampNormalization(t *testing.T) {
+	store := NewInspectionStore()
+	// ESP32-S3 without SNTP sends seconds since boot (e.g. 120)
+	store.StoreTelemetry(TelemetryIngressPayload{
+		DeviceID:        "ESP32S3_441BF6C95678",
+		FirmwareVersion: "1.0.0",
+		Timestamp:       120,
+		Temperature:     38.5,
+		CPUTemperature:  38.5,
+		CurrentCPULoad:  24,
+	})
+
+	got, ok := store.GetAnyLatestTelemetry()
+	if !ok {
+		t.Fatalf("expected telemetry to be stored")
+	}
+	nowUnix := time.Now().Unix()
+	if (nowUnix - got.Timestamp) > 5 {
+		t.Errorf("expected normalized server timestamp close to %d, got %d", nowUnix, got.Timestamp)
+	}
+}
+
+

@@ -37,6 +37,14 @@ services:
       - DB_NAME=${POSTGRES_DB:-bawal_vision}
       - DB_PORT=5432
       - DB_SSLMODE=disable
+      - WIFI_SSID=${WIFI_SSID:-}
+      - WIFI_PASS=${WIFI_PASS:-}
+      - BACKEND_IP=${BACKEND_IP:-}
+    group_add:
+      - dialout
+    device_cgroup_rules:
+      - 'c 166:* rmw'
+      - 'c 188:* rmw'
     networks:
       - bawal-net
     depends_on:

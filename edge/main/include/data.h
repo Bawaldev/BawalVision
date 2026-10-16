@@ -44,9 +44,7 @@ typedef struct __attribute__((__packed__)) {
     char device_id[DEVICE_ID_MAX_LEN];         /**< Unique device ID string (<CHIP>_<MAC>) */
     char firmware_version[FW_VERSION_MAX_LEN]; /**< Application version string */
     int64_t timestamp;                         /**< Millisecond epoch or uptime timestamp */
-    float food_temperature;                    /**< Food / IR thermal sensor temperature in Celsius */
-    float cpu_temperature;                     /**< ESP32-S3 internal MCU temperature in Celsius */
-    float temperature;                         /**< Ambient or Food temperature fallback */
+    float temperature;                         /**< ESP32-S3 hardware temperature in Celsius */
     uint8_t current_cpu_load;                  /**< CPU load percentage (0 - 100) */
     char device_name[DEVICE_NAME_MAX_CHAR];    /**< Project/Node identification name */
     uint8_t device_core;                       /**< Core ID running the telemetry task */

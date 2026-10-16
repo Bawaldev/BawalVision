@@ -9,6 +9,9 @@
         fps?: number;
         latencyMs?: number;
         isOnline?: boolean;
+        memoryUsage?: string | null;
+        memoryMB?: number | null;
+        parallelCores?: number;
         onToggleGraviton?: () => void;
         onToggleLocal?: () => void;
     }
@@ -19,13 +22,24 @@
         gravitonAvailable = false,
         localEngineEnabled = true,
         localEngineAvailable = true,
-        activeDevice = 'ESP32S3_441BF6C95678',
-        fps = 29.8,
-        latencyMs = 5.4,
-        isOnline = true,
+        activeDevice = '',
+        fps = 0.0,
+        latencyMs = 0.0,
+        isOnline = false,
+        memoryUsage = null,
+        memoryMB = null,
+        parallelCores = 0,
         onToggleGraviton,
         onToggleLocal
     }: Props = $props();
+
+    let memoryDisplay = $derived.by(() => {
+        if (memoryUsage && memoryUsage.trim() !== '') return memoryUsage;
+        if (memoryMB != null && memoryMB > 0) {
+            return `Memory usage: ${memoryMB >= 1024 ? (memoryMB / 1024).toFixed(2) + ' GB' : Math.round(memoryMB) + ' MB'}`;
+        }
+        return isOnline ? 'Memory: In Sync' : 'Memory: Offline';
+    });
 
     let currentTime = $state(new Date().toLocaleTimeString('en-US', { hour12: true }));
 
@@ -94,7 +108,7 @@
             </div>
             <div class="chip-text">
                 <strong>Local C++ SIMD</strong>
-                <small>{localEngineEnabled ? 'Active (OpenMP)' : 'Standby'}</small>
+                <small>{localEngineEnabled ? (parallelCores > 0 ? `Active (${parallelCores}C OpenMP)` : 'Active (OpenMP)') : 'Standby'}</small>
             </div>
         </button>
     </div>
@@ -105,7 +119,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="metric-svg">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
-            <span class="metric-val">Memory usage: 382 MB</span>
+            <span class="metric-val">{memoryDisplay}</span>
         </div>
         <div class="metric-item fps-item">
             <span class="metric-dot green"></span>
@@ -361,6 +375,73 @@
             order: 3;
             width: 100%;
             justify-content: flex-start;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .topbar-container {
+            padding: 10px 12px;
+            gap: 10px;
+        }
+
+        .title-group {
+            width: 100%;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .title-chip {
+            min-width: 0;
+        }
+
+        .title-chip h1 {
+            font-size: 0.96rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .engine-selectors {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            width: 100%;
+        }
+
+        .entity-chip {
+            padding: 6px 10px;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .chip-text {
+            min-width: 0;
+        }
+
+        .chip-text strong,
+        .chip-text small {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .horizontal-metrics-strip {
+            width: 100%;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: var(--radius-md);
+        }
+    }
+
+    @media (max-width: 480px) {
+        .memory-item {
+            display: none;
+        }
+
+        .engine-selectors {
+            grid-template-columns: 1fr;
         }
     }
 </style>

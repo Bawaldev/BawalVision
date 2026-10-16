@@ -27,6 +27,7 @@ static const char *TAG = "MAIN";
 #define WIFI_TASK_STACK_SIZE 4096
 #define HTTP_STREAM_STACK_SIZE 4096
 #define TEST_PRODUCER_STACK_SIZE 3072
+#define USB_PROV_STACK_SIZE 4096
 
 #define WS2812_LED_GPIO      GPIO_NUM_48
 
@@ -54,6 +55,10 @@ static TaskHandle_t s_http_sender_task_handle = NULL;
 static StaticTask_t s_test_producer_task_buffer;
 static StackType_t s_test_producer_task_stack[TEST_PRODUCER_STACK_SIZE];
 static TaskHandle_t s_test_task_handle = NULL;
+
+static StaticTask_t s_usb_prov_task_buffer;
+static StackType_t s_usb_prov_task_stack[USB_PROV_STACK_SIZE];
+static TaskHandle_t s_usb_prov_task_handle = NULL;
 
 static TaskHandle_t s_camera_task_handle = NULL;
 
@@ -234,6 +239,11 @@ void app_main(void) {
     s_test_task_handle = xTaskCreateStaticPinnedToCore(
         test_telemetry_producer_task, "Test_Producer_Task", TEST_PRODUCER_STACK_SIZE,
         (void *)s_telemetry_queue, 3, s_test_producer_task_stack, &s_test_producer_task_buffer, 1);
+
+    /* USB Serial / UART Wi-Fi Provisioning task pinned to Core 0 */
+    s_usb_prov_task_handle = xTaskCreateStaticPinnedToCore(
+        usb_serial_provisioning_task, "USB_Prov_Task", USB_PROV_STACK_SIZE,
+        NULL, 3, s_usb_prov_task_stack, &s_usb_prov_task_buffer, 0);
 
     ESP_LOGI(TAG, "All system static tasks started successfully.");
 }

@@ -332,4 +332,90 @@
         color: var(--accent-green);
         font-weight: 700;
     }
+
+    @media (max-width: 768px) {
+        .sidebar-container {
+            width: 100%;
+            border-right: none;
+            border-bottom: 1px solid var(--border-card);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+        }
+
+        .brand-box {
+            padding: 10px 14px;
+        }
+
+        .brand-emblem {
+            width: 32px;
+            height: 32px;
+        }
+
+        .brand-text {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex: 1;
+            gap: 8px;
+        }
+
+        .brand-text h2 {
+            font-size: 1rem;
+        }
+
+        .device-pill {
+            margin-top: 0;
+        }
+
+        .nav-group-label,
+        .sidebar-status-box,
+        .active-pill-marker {
+            display: none;
+        }
+
+        .nav-menu {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            padding: 8px 10px;
+        }
+
+        .nav-btn {
+            justify-content: center;
+            padding: 7px 8px;
+            gap: 6px;
+            text-align: center;
+        }
+
+        .icon-circle {
+            width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+        }
+
+        .nav-svg {
+            width: 13px;
+            height: 13px;
+        }
+
+        .nav-text {
+            flex: initial;
+            font-size: 0.76rem;
+            white-space: nowrap;
+        }
+    }
+
+    @media (max-width: 400px) {
+        .nav-btn {
+            flex-direction: column;
+            gap: 3px;
+            padding: 6px 4px;
+        }
+
+        .nav-text {
+            font-size: 0.68rem;
+        }
+    }
 </style>
