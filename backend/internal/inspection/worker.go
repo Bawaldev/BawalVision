@@ -258,18 +258,36 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 		inspectionFoods := make([]InspectionFood, 0, len(batch)*3)
 
 		for _, task := range batch {
+			lux := 120.0
+			wb := "BALANCED"
+			cct := 6500
+			if task.Request.SceneOptical != nil {
+				if task.Request.SceneOptical.LuxLuminance > 0 {
+					lux = task.Request.SceneOptical.LuxLuminance
+				}
+				if task.Request.SceneOptical.WhiteBalanceStatus != "" {
+					wb = task.Request.SceneOptical.WhiteBalanceStatus
+				}
+				if task.Request.SceneOptical.ColorTemperature > 0 {
+					cct = task.Request.SceneOptical.ColorTemperature
+				}
+			}
+
 			records = append(records, InspectionRecord{
-				ID:              task.RecordID,
-				UserID:          task.Request.UserID,
-				DeviceID:        task.Request.DeviceID,
-				FirmwareVersion: task.FirmwareVersion,
-				CreatedAt:       task.CreatedAt,
-				ImageS3URI:      task.Request.ImageS3URI,
-				CPUTemperature:  task.CPUTemp,
-				Temperature:     task.Temperature,
-				CPULoad:         task.CPULoad,
-				IsSpoiled:       task.IsSpoiled,
-				TSafeHours:      task.TSafeHours,
+				ID:                 task.RecordID,
+				UserID:             task.Request.UserID,
+				DeviceID:           task.Request.DeviceID,
+				FirmwareVersion:    task.FirmwareVersion,
+				CreatedAt:          task.CreatedAt,
+				ImageS3URI:         task.Request.ImageS3URI,
+				CPUTemperature:     task.CPUTemp,
+				Temperature:        task.Temperature,
+				CPULoad:            task.CPULoad,
+				IsSpoiled:          task.IsSpoiled,
+				TSafeHours:         task.TSafeHours,
+				LuxLuminance:       lux,
+				WhiteBalanceStatus: wb,
+				ColorTemperature:   cct,
 			})
 
 			insertedForTask := make(map[int]bool)

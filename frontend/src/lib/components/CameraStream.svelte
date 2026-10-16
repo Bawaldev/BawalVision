@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
-    import type { FoodDetection } from '../types';
+    import type { FoodDetection, SceneOpticalMetrics } from '../types';
 
     interface Props {
         detections: FoodDetection[];
@@ -8,6 +8,7 @@
         isLive?: boolean;
         hasCamera?: boolean;
         streamUrl?: string;
+        sceneOptical?: SceneOpticalMetrics;
     }
 
     let {
@@ -15,7 +16,8 @@
         deviceId = '',
         isLive = true,
         hasCamera = false,
-        streamUrl = ''
+        streamUrl = '',
+        sceneOptical = undefined
     }: Props = $props();
 
     const standardFoodItems = [
@@ -537,7 +539,14 @@
         {/if}
 
         <div class="viewport-footer">
-            <span>📷 Device: {sourceMode === 'mock' ? 'MOCK_VIDEO_CAM' : (deviceId || 'ESP32S3_CAM')}</span>
+            <div class="footer-left">
+                <span>📷 Device: {sourceMode === 'mock' ? 'MOCK_VIDEO_CAM' : (deviceId || 'ESP32S3_CAM')}</span>
+                {#if sceneOptical && sceneOptical.lux_luminance != null}
+                    <span class="optical-badge" title="SIMD AVX2 Optical Scene Analysis: Lux, White Balance & Correlated Color Temp">
+                        💡 {Math.round(sceneOptical.lux_luminance)} lx • WB: {sceneOptical.white_balance_status} ({sceneOptical.color_temperature}K)
+                    </span>
+                {/if}
+            </div>
             <span>
                 {#if sourceMode === 'live'}
                     ⚡ Ingestion: MJPEG Push (/api/v1/camera/stream)
@@ -985,11 +994,32 @@
     .viewport-footer {
         display: flex;
         justify-content: space-between;
+        align-items: center;
         padding: 10px 16px;
         font-size: 0.72rem;
         color: var(--text-muted);
         background: var(--bg-card);
         border-top: 1px solid var(--border-subtle);
+        gap: 8px;
+    }
+
+    .footer-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .optical-badge {
+        display: inline-flex;
+        align-items: center;
+        background: #f1f5f9;
+        border: 1px solid #cbd5e1;
+        border-radius: var(--radius-sm);
+        padding: 1px 7px;
+        font-size: 0.68rem;
+        font-weight: 600;
+        color: #334155;
     }
 
     .entities-panel {

@@ -14,10 +14,7 @@
 
 namespace bawal::vision {
 
-namespace {
-
-#if defined(__AVX2__)
-static inline void computeBGRSumsAVX2(const cv::Mat& bgr_mat, double& out_sum_b, double& out_sum_g, double& out_sum_r, int& out_sampled_pixels) {
+void computeBGRSumsAVX2(const cv::Mat& bgr_mat, double& out_sum_b, double& out_sum_g, double& out_sum_r, int& out_sampled_pixels) {
     const int width = bgr_mat.cols;
     const int height = bgr_mat.rows;
     if (bgr_mat.empty() || width <= 0 || height <= 0) {
@@ -26,6 +23,7 @@ static inline void computeBGRSumsAVX2(const cv::Mat& bgr_mat, double& out_sum_b,
         return;
     }
 
+#if defined(__AVX2__)
     const __m128i m0_b = _mm_setr_epi8(0, 3, 6, 9, 12, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
     const __m128i m1_b = _mm_setr_epi8(-1, -1, -1, -1, -1, -1, 2, 5, 8, 11, 14, -1, -1, -1, -1, -1);
     const __m128i m2_b = _mm_setr_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 1, 4, 7, 10, 13);
@@ -44,49 +42,116 @@ static inline void computeBGRSumsAVX2(const cv::Mat& bgr_mat, double& out_sum_b,
     __m256i acc_r = _mm256_setzero_si256();
 
     int sampled_pixels = 0;
-    for (int y = 0; y < height; y += 16) {
-        const uint8_t* row_ptr = bgr_mat.ptr<uint8_t>(y);
-        for (int x = 0; x <= width - 32; x += 32) {
-            const uint8_t* ptr0 = row_ptr + x * 3;
-            __m128i v0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0));
-            __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0 + 16));
-            __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0 + 32));
+    if (width >= 32) {
+        for (int y = 0; y < height; y += 16) {
+            const uint8_t* row_ptr = bgr_mat.ptr<uint8_t>(y);
+            for (int x = 0; x <= width - 32; x += 32) {
+                const uint8_t* ptr0 = row_ptr + x * 3;
+                __m128i v0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0));
+                __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0 + 16));
+                __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr0 + 32));
 
-            __m128i b_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_b), _mm_or_si128(_mm_shuffle_epi8(v1, m1_b), _mm_shuffle_epi8(v2, m2_b)));
-            __m128i g_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_g), _mm_or_si128(_mm_shuffle_epi8(v1, m1_g), _mm_shuffle_epi8(v2, m2_g)));
-            __m128i r_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_r), _mm_or_si128(_mm_shuffle_epi8(v1, m1_r), _mm_shuffle_epi8(v2, m2_r)));
+                __m128i b_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_b), _mm_or_si128(_mm_shuffle_epi8(v1, m1_b), _mm_shuffle_epi8(v2, m2_b)));
+                __m128i g_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_g), _mm_or_si128(_mm_shuffle_epi8(v1, m1_g), _mm_shuffle_epi8(v2, m2_g)));
+                __m128i r_low = _mm_or_si128(_mm_shuffle_epi8(v0, m0_r), _mm_or_si128(_mm_shuffle_epi8(v1, m1_r), _mm_shuffle_epi8(v2, m2_r)));
 
-            const uint8_t* ptr1 = ptr0 + 48;
-            __m128i v3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1));
-            __m128i v4 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1 + 16));
-            __m128i v5 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1 + 32));
+                const uint8_t* ptr1 = ptr0 + 48;
+                __m128i v3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1));
+                __m128i v4 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1 + 16));
+                __m128i v5 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr1 + 32));
 
-            __m128i b_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_b), _mm_or_si128(_mm_shuffle_epi8(v4, m1_b), _mm_shuffle_epi8(v5, m2_b)));
-            __m128i g_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_g), _mm_or_si128(_mm_shuffle_epi8(v4, m1_g), _mm_shuffle_epi8(v5, m2_g)));
-            __m128i r_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_r), _mm_or_si128(_mm_shuffle_epi8(v4, m1_r), _mm_shuffle_epi8(v5, m2_r)));
+                __m128i b_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_b), _mm_or_si128(_mm_shuffle_epi8(v4, m1_b), _mm_shuffle_epi8(v5, m2_b)));
+                __m128i g_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_g), _mm_or_si128(_mm_shuffle_epi8(v4, m1_g), _mm_shuffle_epi8(v5, m2_g)));
+                __m128i r_high = _mm_or_si128(_mm_shuffle_epi8(v3, m0_r), _mm_or_si128(_mm_shuffle_epi8(v4, m1_r), _mm_shuffle_epi8(v5, m2_r)));
 
-            __m256i b_256 = _mm256_set_m128i(b_high, b_low);
-            __m256i g_256 = _mm256_set_m128i(g_high, g_low);
-            __m256i r_256 = _mm256_set_m128i(r_high, r_low);
+                __m256i b_256 = _mm256_set_m128i(b_high, b_low);
+                __m256i g_256 = _mm256_set_m128i(g_high, g_low);
+                __m256i r_256 = _mm256_set_m128i(r_high, r_low);
 
-            acc_b = _mm256_add_epi64(acc_b, _mm256_sad_epu8(b_256, zero256));
-            acc_g = _mm256_add_epi64(acc_g, _mm256_sad_epu8(g_256, zero256));
-            acc_r = _mm256_add_epi64(acc_r, _mm256_sad_epu8(r_256, zero256));
-            sampled_pixels += 32;
+                acc_b = _mm256_add_epi64(acc_b, _mm256_sad_epu8(b_256, zero256));
+                acc_g = _mm256_add_epi64(acc_g, _mm256_sad_epu8(g_256, zero256));
+                acc_r = _mm256_add_epi64(acc_r, _mm256_sad_epu8(r_256, zero256));
+                sampled_pixels += 32;
+            }
         }
     }
 
-    alignas(32) uint64_t b_arr[4], g_arr[4], r_arr[4];
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(b_arr), acc_b);
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(g_arr), acc_g);
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(r_arr), acc_r);
+    if (sampled_pixels > 0) {
+        alignas(32) uint64_t b_arr[4], g_arr[4], r_arr[4];
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(b_arr), acc_b);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(g_arr), acc_g);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(r_arr), acc_r);
 
-    out_sum_b = static_cast<double>(b_arr[0] + b_arr[1] + b_arr[2] + b_arr[3]);
-    out_sum_g = static_cast<double>(g_arr[0] + g_arr[1] + g_arr[2] + g_arr[3]);
-    out_sum_r = static_cast<double>(r_arr[0] + r_arr[1] + r_arr[2] + r_arr[3]);
-    out_sampled_pixels = sampled_pixels;
-}
+        out_sum_b = static_cast<double>(b_arr[0] + b_arr[1] + b_arr[2] + b_arr[3]);
+        out_sum_g = static_cast<double>(g_arr[0] + g_arr[1] + g_arr[2] + g_arr[3]);
+        out_sum_r = static_cast<double>(r_arr[0] + r_arr[1] + r_arr[2] + r_arr[3]);
+        out_sampled_pixels = sampled_pixels;
+        return;
+    }
 #endif
+
+    // Universal / fallback sampling loop (for non-AVX2 CPUs or small ROIs)
+    double sb = 0.0, sg = 0.0, sr = 0.0;
+    int sampled = 0;
+    const int step_y = std::max(1, height / 24);
+    const int step_x = std::max(1, width / 24);
+
+    for (int y = 0; y < height; y += step_y) {
+        const uint8_t* ptr = bgr_mat.ptr<uint8_t>(y);
+        for (int x = 0; x < width; x += step_x) {
+            sb += ptr[x * 3];
+            sg += ptr[x * 3 + 1];
+            sr += ptr[x * 3 + 2];
+            sampled++;
+        }
+    }
+
+    out_sum_b = sb;
+    out_sum_g = sg;
+    out_sum_r = sr;
+    out_sampled_pixels = sampled;
+}
+
+SceneOpticalMetrics evaluateSceneOptical(const cv::Mat& bgr_mat) {
+    SceneOpticalMetrics metrics;
+    if (bgr_mat.empty()) return metrics;
+
+    computeBGRSumsAVX2(bgr_mat, metrics.sum_b, metrics.sum_g, metrics.sum_r, metrics.sampled_pixels);
+    if (metrics.sampled_pixels <= 0) return metrics;
+
+    metrics.avg_b = static_cast<float>(metrics.sum_b / metrics.sampled_pixels);
+    metrics.avg_g = static_cast<float>(metrics.sum_g / metrics.sampled_pixels);
+    metrics.avg_r = static_cast<float>(metrics.sum_r / metrics.sampled_pixels);
+
+    // Standard ITU-R BT.601 perceptual luminance
+    metrics.lux_luminance = 0.299f * metrics.avg_r + 0.587f * metrics.avg_g + 0.114f * metrics.avg_b;
+
+    // Chromaticity balance evaluation & Correlated Color Temperature (CCT)
+    const float sum_rgb = metrics.avg_r + metrics.avg_g + metrics.avg_b + 1e-4f;
+    const float r_norm = metrics.avg_r / sum_rgb;
+    const float b_norm = metrics.avg_b / sum_rgb;
+
+    if (metrics.lux_luminance < 28.0f) {
+        metrics.color_temperature = 4500;
+        metrics.white_balance_status = "UNDEREXPOSED";
+    } else if (metrics.lux_luminance > 235.0f) {
+        metrics.color_temperature = 6500;
+        metrics.white_balance_status = "OVEREXPOSED";
+    } else if (r_norm > 0.44f && b_norm < 0.26f) {
+        metrics.color_temperature = 3200; // Warm incandescent / halogen
+        metrics.white_balance_status = "WARM";
+    } else if (b_norm > 0.40f && r_norm < 0.26f) {
+        metrics.color_temperature = 8200; // Cool / blue cast
+        metrics.white_balance_status = "COOL";
+    } else {
+        metrics.color_temperature = 6000; // Balanced neutral kitchen daylight
+        metrics.white_balance_status = "BALANCED";
+    }
+
+    return metrics;
+}
+
+namespace {
 
 static std::vector<TrackedItem> s_tracked_items;
 
@@ -250,6 +315,9 @@ bool FoodClassifier::detect(const cv::Mat& frame,
     }
 
     try {
+        // High-speed vectorized AVX2 scene optical analysis & illuminance telemetry
+        m_last_optical = evaluateSceneOptical(frame);
+
         constexpr int target_w = 640;
         constexpr int target_h = 640;
         constexpr int spatial_size = target_w * target_h;
