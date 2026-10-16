@@ -27,8 +27,9 @@ func (s *InspectionStore) StoreTelemetry(payload TelemetryIngressPayload) {
 	if payload.DeviceID == "" {
 		return
 	}
-	if payload.Timestamp == 0 {
-		payload.Timestamp = time.Now().Unix()
+	nowUnix := time.Now().Unix()
+	if payload.Timestamp <= 0 || payload.Timestamp < 1700000000 || (nowUnix-payload.Timestamp) > 30 {
+		payload.Timestamp = nowUnix
 	}
 
 	s.Lock()
@@ -97,5 +98,15 @@ func (s *InspectionStore) GetAnyLatestTelemetry() (TelemetryIngressPayload, bool
 		return latest, true
 	}
 	return latest, false
+}
+
+func (s *InspectionStore) DisconnectDevice(deviceID string) {
+	s.Lock()
+	defer s.Unlock()
+	if deviceID == "" || deviceID == "*" {
+		s.readings = make(map[string]TelemetryIngressPayload)
+		return
+	}
+	delete(s.readings, deviceID)
 }
 

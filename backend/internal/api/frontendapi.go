@@ -2,10 +2,12 @@ package api
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,10 +112,46 @@ func (h *Handler) GetEngineStatus(c *fiber.Ctx) error {
 	gravitonEnv := os.Getenv("AWS_GRAVITON_AVAILABLE") == "true" || os.Getenv("ENABLE_GRAVITON") == "true"
 	isGraviton := (arch == "arm64" || gravitonEnv)
 
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	serverAllocMB := float64(m.Alloc) / (1024 * 1024)
+	serverSysMB := float64(m.Sys) / (1024 * 1024)
+
+	var hostUsedMB float64
+	var hostTotalMB float64
+	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+		lines := strings.Split(string(data), "\n")
+		var totalKB, availKB float64
+		for _, line := range lines {
+			if strings.HasPrefix(line, "MemTotal:") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					totalKB, _ = strconv.ParseFloat(fields[1], 64)
+				}
+			} else if strings.HasPrefix(line, "MemAvailable:") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					availKB, _ = strconv.ParseFloat(fields[1], 64)
+				}
+			}
+		}
+		if totalKB > 0 && availKB > 0 {
+			hostTotalMB = totalKB / 1024.0
+			hostUsedMB = (totalKB - availKB) / 1024.0
+		}
+	}
+
 	return c.JSON(fiber.Map{
 		"arch":                   arch,
+		"num_cpu":                runtime.NumCPU(),
+		"parallel_cores":         runtime.NumCPU(),
 		"graviton_available":     isGraviton,
 		"local_engine_available": true,
+		"server_mem_alloc_mb":    math.Round(serverAllocMB*10) / 10,
+		"server_mem_sys_mb":      math.Round(serverSysMB*10) / 10,
+		"host_mem_used_mb":       math.Round(hostUsedMB),
+		"host_mem_total_mb":      math.Round(hostTotalMB),
+		"memory_usage_mb":        math.Round(serverSysMB*10) / 10,
 	})
 }
 

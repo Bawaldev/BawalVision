@@ -2,8 +2,6 @@ package model
 
 import (
 	"time"
-
-	"gorm.io/gorm"
 )
 
 type InspectionFood struct {
@@ -26,7 +24,6 @@ type InspectionRecord struct {
 	FirmwareVersion string           `json:"firmware_version" gorm:"column:firmware_version;type:varchar(32);not null;default:'1.0.0'"`
 	CreatedAt       time.Time        `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:NOW()"`
 	ImageS3URI      *string          `json:"image_s3_uri,omitempty" gorm:"column:image_s3_uri;type:text"`
-	FoodTemperature float64          `json:"food_temperature" gorm:"-"`
 	CPUTemperature  float64          `json:"cpu_temperature" gorm:"column:cpu_temperature;type:numeric(5,2);not null;default:35.00"`
 	Temperature     float64          `json:"temperature" gorm:"column:temperature;type:numeric(5,2);not null;default:25.00"`
 	CPULoad         uint8            `json:"cpu_load" gorm:"column:cpu_load;type:smallint;not null;default:0"`
@@ -36,12 +33,6 @@ type InspectionRecord struct {
 }
 
 func (InspectionRecord) TableName() string { return "inspections" }
-
-// AfterFind exposes the stored temperature under the legacy food_temperature API field.
-func (i *InspectionRecord) AfterFind(_ *gorm.DB) error {
-	i.FoodTemperature = i.Temperature
-	return nil
-}
 
 type TelemetryIngressPayload struct {
 	DeviceID        string  `json:"device_id"`
@@ -53,6 +44,11 @@ type TelemetryIngressPayload struct {
 	Temperature     float64 `json:"temperature"`
 	CPUTemperature  float64 `json:"cpu_temperature,omitempty"`
 	CurrentCPULoad  uint8   `json:"cpu_load"`
+	IPAddress       string  `json:"ip_address,omitempty"`
+	ConnectionMode  string  `json:"connection_mode,omitempty"`
+	FreeHeap        uint32  `json:"free_heap,omitempty"`
+	HeapFree        uint32  `json:"heap_free,omitempty"`
+	RSSI            int     `json:"rssi,omitempty"`
 }
 
 type PredictionResult struct {

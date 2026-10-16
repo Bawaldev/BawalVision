@@ -59,6 +59,10 @@
     let isInspecting = $state(false);
     let gravitonAvailable = $state(false);
     let localEngineAvailable = $state(true);
+    let realFps = $state(0.0);
+    let realLatencyMs = $state(0.0);
+    let serverMemoryMB = $state<number | null>(null);
+    let parallelCores = $state(0);
 
     let systemConfig = $state<SystemConfig>({
         backendUrl: '/api/v1',
@@ -66,7 +70,6 @@
         streamIntervalMs: 1500,
         enableMockIfOffline: false,
         minConfidenceThreshold: 0.35,
-        tempWarningThreshold: 35.0,
         gravitonEngineEnabled: false,
         gravitonEngineAvailable: false,
         localEngineEnabled: true,
@@ -78,9 +81,11 @@
         device_id: 'WAITING_DEVICE',
         firmware_version: '1.0.0',
         device_core: 0,
-        temperature: 0,
-        cpu_load: 0,
-        timestamp: Math.floor(Date.now() / 1000)
+        temperature: null,
+        cpu_temperature: null,
+        cpu_load: null,
+        timestamp: Math.floor(Date.now() / 1000),
+        is_connected: false
     });
 
     let logs = $state<InferenceLogEntry[]>([
@@ -103,6 +108,7 @@
 
     // Real Backend Polling Step
     async function pollBackendData() {
+        const pollStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
         try {
             // 1. Hardware Engine Status
             const engines = await fetchEngineStatus(systemConfig.backendUrl);
@@ -110,6 +116,18 @@
             localEngineAvailable = engines.local_engine_available;
             systemConfig.gravitonEngineAvailable = engines.graviton_available;
             systemConfig.localEngineAvailable = engines.local_engine_available;
+            if (engines.memory_usage_mb != null && engines.memory_usage_mb > 0) {
+                serverMemoryMB = engines.memory_usage_mb;
+            } else if (engines.server_mem_sys_mb != null && engines.server_mem_sys_mb > 0) {
+                serverMemoryMB = engines.server_mem_sys_mb;
+            } else if (engines.server_mem_alloc_mb != null && engines.server_mem_alloc_mb > 0) {
+                serverMemoryMB = engines.server_mem_alloc_mb;
+            }
+            if (engines.parallel_cores != null && engines.parallel_cores > 0) {
+                parallelCores = engines.parallel_cores;
+            } else if (engines.num_cpu != null && engines.num_cpu > 0) {
+                parallelCores = engines.num_cpu;
+            }
             if (!gravitonAvailable && systemConfig.gravitonEngineEnabled) {
                 systemConfig.gravitonEngineEnabled = false;
             }
@@ -117,26 +135,39 @@
             // 2. Camera Status
             const cam = await fetchCameraStatus(systemConfig.backendUrl);
             hasCamera = cam.active;
-            if (cam.active && cam.deviceId) {
-                systemConfig.deviceId = cam.deviceId;
-                isOnline = true;
-            }
+            realFps = cam.active ? (cam.fps > 0 ? cam.fps : 20.0) : 0.0;
 
             // 3. Telemetry Ingress from ESP32-S3
             const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
             if (tel) {
-                telemetry = tel;
-                if (!telemetryHistory.some(h => h.timestamp === tel.timestamp)) {
-                    telemetryHistory = [...telemetryHistory.slice(-19), tel];
+                telemetry = {
+                    ...tel,
+                    device_id: (cam.active && cam.deviceId && (!tel.device_id || tel.device_id === 'DISCONNECTED')) ? cam.deviceId : tel.device_id,
+                    is_connected: Boolean(tel.is_connected) || cam.active
+                };
+                isOnline = Boolean(telemetry.is_connected);
+                if (telemetry.is_connected && telemetry.temperature != null && !telemetryHistory.some(h => h.timestamp === telemetry.timestamp)) {
+                    telemetryHistory = [...telemetryHistory.slice(-19), telemetry];
                 }
-                isOnline = true;
+            } else {
+                isOnline = cam.active;
+                telemetry = {
+                    ...telemetry,
+                    device_id: cam.active && cam.deviceId ? cam.deviceId : 'DISCONNECTED',
+                    temperature: null,
+                    cpu_temperature: null,
+                    cpu_load: null,
+                    is_connected: false
+                };
             }
 
             // 4. Live Real-time Inspections & Dynamic Bounding Boxes
             const latestLive: any = await fetchLatestInspection(systemConfig.backendUrl);
             let hasLiveDetections = false;
             if (latestLive && latestLive.detections && latestLive.detections.length > 0) {
-                isOnline = true;
+                if (latestLive.is_live && (cam.active || (telemetry && telemetry.is_connected))) {
+                    isOnline = true;
+                }
                 hasLiveDetections = true;
                 detections = latestLive.detections.map((det: any) => {
                     const spoilage = Number(det.spoilage_score) || 0;
@@ -148,7 +179,6 @@
                     return {
                         food_name: det.food_name || 'food_item',
                         similarity_rate: conf,
-                        temperature: Number(det.temperature) || Number(latestLive.food_temperature) || Number(latestLive.temperature) || 25,
                         spoilage_score: spoilage,
                         status: st,
                         category: getCategory(det.food_name || ''),
@@ -164,7 +194,6 @@
             );
 
             if (validRecords.length > 0) {
-                isOnline = true;
                 const spoiled = validRecords.filter(r => r.is_spoiled || (r.inspection_foods && r.inspection_foods.some(f => f.status === 'REJECT'))).length;
                 const accepted = validRecords.length - spoiled;
                 totalRejected = Math.max(totalRejected, spoiled);
@@ -184,7 +213,6 @@
                             return {
                                 food_name: name,
                                 similarity_rate: cf,
-                                temperature: Number(item.temperature) || Number(latest.food_temperature) || Number(latest.temperature) || 25,
                                 spoilage_score: sp,
                                 status: st,
                                 category: getCategory(name)
@@ -199,27 +227,37 @@
             }
         } catch (err) {
             console.warn('[BACKEND POLL] Offline or waiting for backend service:', err);
+        } finally {
+            const pollEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            realLatencyMs = Math.max(0.5, Math.round((pollEnd - pollStart) * 10) / 10);
         }
     }
 
-    onMount(async () => {
-        // Restore active tab from URL hash or localStorage so refresh maintains current view
-        if (typeof window !== 'undefined') {
-            try {
-                const hash = window.location.hash.toLowerCase();
-                if (hash.includes('telemetry') || hash.includes('result')) {
-                    activeTab = 'Telemetry Analytics & Result Log';
-                } else if (hash.includes('setting')) {
-                    activeTab = 'System & Cloud Settings';
-                } else if (hash.includes('dashboard')) {
-                    activeTab = 'Dashboard';
-                } else {
-                    const savedTab = localStorage.getItem('bawal_active_tab');
-                    if (savedTab && VALID_TABS.includes(savedTab)) {
-                        activeTab = savedTab;
-                    }
+    function syncTabFromLocation() {
+        if (typeof window === 'undefined') return;
+        try {
+            const hash = window.location.hash.toLowerCase();
+            if (hash.includes('telemetry') || hash.includes('result')) {
+                activeTab = 'Telemetry Analytics & Result Log';
+            } else if (hash.includes('setting')) {
+                activeTab = 'System & Cloud Settings';
+            } else if (hash.includes('dashboard')) {
+                activeTab = 'Dashboard';
+            } else {
+                const savedTab = localStorage.getItem('bawal_active_tab');
+                if (savedTab && VALID_TABS.includes(savedTab)) {
+                    activeTab = savedTab;
                 }
-            } catch {}
+            }
+        } catch {}
+    }
+
+    onMount(async () => {
+        // Restore active tab from URL hash or localStorage and listen for SPA Back/Forward navigation
+        syncTabFromLocation();
+        if (typeof window !== 'undefined') {
+            window.addEventListener('hashchange', syncTabFromLocation);
+            window.addEventListener('popstate', syncTabFromLocation);
         }
 
         // Initial polling
@@ -233,6 +271,10 @@
 
     onDestroy(() => {
         if (pollingTimer) clearInterval(pollingTimer);
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('hashchange', syncTabFromLocation);
+            window.removeEventListener('popstate', syncTabFromLocation);
+        }
     });
 
     // Handlers
@@ -291,7 +333,7 @@
         }
 
         const avgFreshness = detections.length > 0 ? totalFreshness / detections.length : 100;
-        const isTrayRejected = anyReject || avgFreshness < 55.0 || (telemetry?.food_temperature || 0) > 42.0;
+        const isTrayRejected = anyReject || avgFreshness < 55.0 || (telemetry?.temperature || 0) > 42.0;
 
         if (isTrayRejected) {
             totalRejected++;
@@ -318,7 +360,8 @@
         }
 
         try {
-            await triggerManualInspection(systemConfig.deviceId, detections, systemConfig.backendUrl);
+            const targetDevice = systemConfig.deviceId || telemetry.device_id || 'ESP32S3';
+            await triggerManualInspection(targetDevice, detections, systemConfig.backendUrl);
             await pollBackendData();
         } catch (err) {
             console.warn('[MANUAL INSPECTION SYNC]', err);
@@ -343,6 +386,22 @@
             }
         ];
     }
+
+    let resolvedActiveDevice = $derived(
+        isOnline && telemetry?.device_id && telemetry.device_id !== 'DISCONNECTED' && telemetry.device_id !== 'WAITING_DEVICE'
+            ? telemetry.device_id
+            : systemConfig.deviceId
+    );
+
+    let realMemoryText = $derived.by(() => {
+        if (serverMemoryMB != null && serverMemoryMB > 0) {
+            return `Memory usage: ${serverMemoryMB >= 1024 ? (serverMemoryMB / 1024).toFixed(2) + ' GB' : Math.round(serverMemoryMB) + ' MB'}`;
+        }
+        if (isOnline && telemetry?.heap_free != null && telemetry.heap_free > 0) {
+            return `ESP Heap: ${Math.round(telemetry.heap_free / 1024)} KB`;
+        }
+        return isOnline ? 'Memory: Active' : 'Memory: Offline';
+    });
 </script>
 
 <svelte:head>
@@ -355,7 +414,7 @@
     <Sidebar
         {activeTab}
         onSelectTab={handleSelectTab}
-        activeDevice={systemConfig.deviceId}
+        activeDevice={resolvedActiveDevice}
         {isOnline}
     />
 
@@ -368,9 +427,13 @@
             gravitonAvailable={gravitonAvailable}
             localEngineEnabled={systemConfig.localEngineEnabled}
             localEngineAvailable={localEngineAvailable}
-            activeDevice={systemConfig.deviceId || 'DISCONNECTED'}
-            fps={hasCamera ? 29.8 : 0.0}
-            latencyMs={hasCamera ? 5.4 : 0.0}
+            activeDevice={resolvedActiveDevice || 'DISCONNECTED'}
+            fps={realFps}
+            latencyMs={isOnline || hasCamera ? realLatencyMs : 0.0}
+            memoryUsage={realMemoryText}
+            memoryMB={serverMemoryMB}
+            {parallelCores}
+            {isOnline}
             onToggleGraviton={() => {
                 if (gravitonAvailable) {
                     systemConfig.gravitonEngineEnabled = !systemConfig.gravitonEngineEnabled;
@@ -415,9 +478,24 @@
                 <SettingsView
                     config={systemConfig}
                     {isOnline}
+                    {parallelCores}
                     onDeviceConnectionChange={(connected, devId) => {
                         isOnline = connected;
-                        if (devId) systemConfig.deviceId = devId;
+                        if (!connected) {
+                            telemetry = {
+                                ...telemetry,
+                                temperature: null,
+                                cpu_temperature: null,
+                                cpu_load: null,
+                                is_connected: false
+                            };
+                        } else if (devId) {
+                            telemetry = {
+                                ...telemetry,
+                                device_id: devId,
+                                is_connected: true
+                            };
+                        }
                     }}
                     onSaveConfig={handleSaveConfig}
                 />

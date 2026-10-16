@@ -6,39 +6,109 @@
 #include "esp_app_desc.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
+#include "driver/temperature_sensor.h"
 
-uint8_t get_cpu_usage_percentage(void) {
-#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-    static TaskStatus_t start_array[16], end_array[16];
-    UBaseType_t start_count, end_count;
-    uint32_t start_run_time, end_run_time;
+static temperature_sensor_handle_t s_temp_sensor = NULL;
+static bool s_temp_sensor_enabled = false;
+static float s_last_valid_temp = 0.0f;
 
-    start_count = uxTaskGetSystemState(start_array, 16, &start_run_time);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    end_count = uxTaskGetSystemState(end_array, 16, &end_run_time);
-
-    uint32_t total_elapsed = end_run_time - start_run_time;
-    if (total_elapsed == 0) return 0;
-
-    uint32_t idle_time = 0;
-    for (UBaseType_t i = 0; i < end_count; i++) {
-        if (strncmp(end_array[i].pcTaskName, "IDLE", 4) == 0) {
-            for (UBaseType_t j = 0; j < start_count; j++) {
-                if (end_array[i].xHandle == start_array[j].xHandle) {
-                    idle_time += (end_array[i].ulRunTimeCounter - start_array[j].ulRunTimeCounter);
-                    break;
-                }
+float get_esp32_cpu_temperature(void) {
+    if (s_temp_sensor == NULL) {
+        temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+        esp_err_t err = temperature_sensor_install(&temp_sensor_config, &s_temp_sensor);
+        if (err == ESP_OK && s_temp_sensor != NULL) {
+            if (temperature_sensor_enable(s_temp_sensor) == ESP_OK) {
+                s_temp_sensor_enabled = true;
+            } else {
+                temperature_sensor_uninstall(s_temp_sensor);
+                s_temp_sensor = NULL;
+                s_temp_sensor_enabled = false;
             }
+        } else {
+            s_temp_sensor = NULL;
+            s_temp_sensor_enabled = false;
         }
     }
 
-    uint32_t cpu_busy = total_elapsed - (idle_time / CONFIG_FREERTOS_NUMBER_OF_CORES);
-    uint32_t cpu_percentage = (cpu_busy * 100) / total_elapsed;
+    if (s_temp_sensor != NULL && s_temp_sensor_enabled) {
+        float tsens_out = 0.0f;
+        if (temperature_sensor_get_celsius(s_temp_sensor, &tsens_out) == ESP_OK) {
+            s_last_valid_temp = tsens_out;
+            return tsens_out;
+        }
+    }
+    return s_last_valid_temp;
+}
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+static uint32_t s_prev_total_runtime = 0;
+static uint32_t s_prev_idle_runtime = 0;
+static uint8_t s_last_cpu_percent = 0;
+#endif
+
+uint8_t get_cpu_usage_percentage(void) {
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    UBaseType_t task_count = uxTaskGetNumberOfTasks();
+    UBaseType_t array_size = task_count + 8;
+    TaskStatus_t stack_tasks[36];
+    TaskStatus_t *task_array = (array_size <= 36) ? stack_tasks : (TaskStatus_t *)pvPortMalloc(array_size * sizeof(TaskStatus_t));
+    if (task_array == NULL) {
+        return s_last_cpu_percent;
+    }
+
+    uint32_t current_total_time = 0;
+    UBaseType_t actual_count = uxTaskGetSystemState(task_array, (task_array == stack_tasks) ? 36 : array_size, &current_total_time);
+    if (actual_count == 0) {
+        if (task_array != stack_tasks) vPortFree(task_array);
+        return s_last_cpu_percent;
+    }
+
+    uint32_t current_idle_time = 0;
+    for (UBaseType_t i = 0; i < actual_count; i++) {
+        // In ESP-IDF FreeRTOS SMP, idle tasks are named "IDLE0" (core 0) and "IDLE1" (core 1)
+        if (strncmp(task_array[i].pcTaskName, "IDLE", 4) == 0) {
+            current_idle_time += task_array[i].ulRunTimeCounter;
+        }
+    }
+
+    if (task_array != stack_tasks) {
+        vPortFree(task_array);
+    }
+
+    // First call initialization: take a short baseline sample once
+    if (s_prev_total_runtime == 0) {
+        s_prev_total_runtime = current_total_time;
+        s_prev_idle_runtime = current_idle_time;
+        vTaskDelay(pdMS_TO_TICKS(50));
+        return get_cpu_usage_percentage();
+    }
+
+    uint32_t delta_total = current_total_time - s_prev_total_runtime;
+    // Debounce rapid consecutive reads (< 25ms) to preserve accuracy
+    if (delta_total < 25000) {
+        return s_last_cpu_percent;
+    }
+
+    uint32_t delta_idle = current_idle_time - s_prev_idle_runtime;
+    s_prev_total_runtime = current_total_time;
+    s_prev_idle_runtime = current_idle_time;
+
+    uint32_t num_cores = CONFIG_FREERTOS_NUMBER_OF_CORES;
+    if (num_cores == 0) num_cores = 1;
+
+    // Total execution capacity across all active physical cores in the sample interval
+    uint32_t total_capacity = delta_total * num_cores;
+    if (total_capacity == 0) return 0;
+
+    uint32_t idle_clamped = (delta_idle > total_capacity) ? total_capacity : delta_idle;
+    uint32_t cpu_busy = total_capacity - idle_clamped;
+    uint32_t cpu_percentage = (cpu_busy * 100) / total_capacity;
 
     if (cpu_percentage > 100) cpu_percentage = 100;
-    return (uint8_t)cpu_percentage;
+    s_last_cpu_percent = (uint8_t)cpu_percentage;
+    return s_last_cpu_percent;
 #else
-    return 0; 
+    return 0;
 #endif
 }
 
@@ -81,11 +151,5 @@ void init_device_metadata(telemetry_data_t *data) {
 }
 
 uint8_t get_system_cpu_load(void) {
-    uint32_t total_heap = esp_get_free_heap_size() + esp_get_minimum_free_heap_size();
-    uint32_t free_heap = esp_get_free_heap_size();
-    
-    if (total_heap == 0) return 0;
-    
-    uint8_t usage = (uint8_t)(((total_heap - free_heap) * 100) / total_heap);
-    return usage;
+    return get_cpu_usage_percentage();
 }

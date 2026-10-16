@@ -187,4 +187,10 @@
         color: var(--text-muted);
         white-space: nowrap;
     }
+
+    @media (max-width: 400px) {
+        .buttons-grid {
+            grid-template-columns: 1fr;
+        }
+    }
 </style>

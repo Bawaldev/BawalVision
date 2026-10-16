@@ -55,13 +55,12 @@ void lcd_update_http_status(const char *status_str, bool is_error);
 void lcd_update_wifi_status(bool connected, const char *ip_address);
 
 /**
- * @brief Update the real-time sensor strip on the LCD (Food Temp, MCU Temp, CPU Load).
+ * @brief Update the real-time sensor strip on the LCD (ESP32 Temp, CPU Load).
  *
- * @param food_temp Current food surface temperature in °C.
- * @param cpu_temp Current ESP32 microcontroller core temperature in °C.
+ * @param temperature Current ESP32-S3 hardware temperature in °C.
  * @param cpu_load Current ESP32 CPU load percentage (0-100%).
  */
-void lcd_update_telemetry_display(float food_temp, float cpu_temp, uint8_t cpu_load);
+void lcd_update_telemetry_display(float temperature, uint8_t cpu_load);
 
 /**
  * @brief FreeRTOS task entry point for initializing the 128x160 SPI TFT and LVGL UI.

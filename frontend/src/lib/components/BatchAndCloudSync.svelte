@@ -195,4 +195,10 @@
         font-size: 0.62rem;
         color: var(--text-muted);
     }
+
+    @media (max-width: 480px) {
+        .batch-cloud-grid {
+            grid-template-columns: 1fr;
+        }
+    }
 </style>
