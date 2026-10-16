@@ -85,7 +85,6 @@ ml/model/*.pt
 ml/AI1/model/ai1_vision.onnx
 ml/AI1/model/yolov8n/*.onnx
 ml/AI1/model/yolov8n/*.pt
-ml/AI1/model/yolov8n_int8/*.onnx
 weights/yolo8n.onnx
 ml/model/*.pths
 ml/model/*.engine

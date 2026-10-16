@@ -220,7 +220,7 @@ generate-ncnn-cpp model="realesr-animevideov3-x2" scale="2" out="weights":
     echo "[✓] NCNN models successfully created and synced to {{ out }}/"
 
 
-# Sanity check and inspect ONNX model tensors and execution provider
+# Sanity check and inspect ONNX model tensors and execution provider (FP32)
 test-model-ai1 model="ml/AI1/model/yolov8n/ai1_vision.onnx":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
@@ -231,6 +231,19 @@ test-model-ai1 model="ml/AI1/model/yolov8n/ai1_vision.onnx":
         PY_BIN=".venv/Scripts/python.exe"
     fi
     $PY_BIN -c "import onnxruntime as ort, numpy as np; sess = ort.InferenceSession('{{ model }}', providers=['CPUExecutionProvider']); in_meta = sess.get_inputs()[0]; print(f'[✓] ONNX Model Verified: {{ model }}'); print(f'    Input : {in_meta.name} {in_meta.shape} {in_meta.type}'); dummy = np.zeros([1, 3, 640, 640], dtype=np.float32); out = sess.run(None, {in_meta.name: dummy}); print(f'    Output Shape: {out[0].shape}'); print('[✓] Model forward pass successful via ONNX Runtime CPU.')"
+
+
+# Sanity check and inspect Quantized INT8 ONNX model tensors and execution provider
+test-model-ai1-int8 model="ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx":
+    #!/usr/bin/env bash
+    cd {{ justfile_directory() }}
+    PY_BIN="python3"
+    if [ -f .venv/bin/python3 ]; then
+        PY_BIN=".venv/bin/python3"
+    elif [ -f .venv/Scripts/python.exe ]; then
+        PY_BIN=".venv/Scripts/python.exe"
+    fi
+    $PY_BIN -c "import onnxruntime as ort, numpy as np; sess = ort.InferenceSession('{{ model }}', providers=['CPUExecutionProvider']); in_meta = sess.get_inputs()[0]; print(f'[✓] ONNX INT8 Model Verified: {{ model }}'); print(f'    Input : {in_meta.name} {in_meta.shape} {in_meta.type}'); dummy = np.zeros([1, 3, 640, 640], dtype=np.float32); out = sess.run(None, {in_meta.name: dummy}); print(f'    Output Shape: {out[0].shape}'); print('[✓] INT8 Model forward pass successful via ONNX Runtime CPU.')"
 
 
 # Clean training run caches, temporary weights, and intermediate predictions
