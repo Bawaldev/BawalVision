@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { connectEspDevice, disconnectEspDevice, fetchDeviceStatus, provisionEspViaUsb, fetchWiFiNetworks } from '../api';
+    import { connectEspDevice, disconnectEspDevice, fetchDeviceStatus, provisionEspViaUsb, fetchWiFiNetworks, probeEspUsbPort } from '../api';
     import type { SystemConfig, EspConnectionResult, USBPortInfo, WiFiNetworkInfo } from '../types';
 
     interface Props {
@@ -60,6 +60,11 @@
     let wifiConnectSuccess = $state(false);
     let wifiSuccessMsg = $state('');
 
+    // USB Hardware probe state
+    let isProbingUsb = $state(false);
+    let usbProbeMsg = $state('');
+    let espUsbStatus = $state<{ port: string; device_id: string; current_ssid: string; wifi_connected: boolean; temperature: number } | null>(null);
+
     // Web Serial direct hardware connection state (Fedora / Browser direct access)
     let isWebSerialConnecting = $state(false);
     let webSerialMsg = $state('');
@@ -101,6 +106,10 @@
             }
         }
 
+        if (hw.esp_usb_status) {
+            espUsbStatus = hw.esp_usb_status;
+        }
+
         if (hw.connected) {
             connectionStatus = 'connected';
             lastConnDetails = {
@@ -117,6 +126,29 @@
         } else if (connectionStatus === 'connected') {
             connectionStatus = 'disconnected';
         }
+    }
+
+    async function handleProbeUsbPort(port?: string) {
+        isProbingUsb = true;
+        usbProbeMsg = 'Probing serial status...';
+        const targetPort = port || selectedUsbPort || (detectedUsbPorts[0]?.port ?? '');
+        const res = await probeEspUsbPort(targetPort, formState.backendUrl);
+        if (res.success && res.deviceId) {
+            espUsbStatus = {
+                port: res.port || targetPort,
+                device_id: res.deviceId,
+                current_ssid: res.currentSsid || '',
+                wifi_connected: !!res.wifiConnected,
+                temperature: res.temperature || 0
+            };
+            usbProbeMsg = res.currentSsid
+                ? `ESP32-S3 (${res.deviceId}) is connected to "${res.currentSsid}"`
+                : `ESP32-S3 (${res.deviceId}) detected (Wi-Fi not associated)`;
+            await refreshHardwareStatus();
+        } else {
+            usbProbeMsg = res.message || 'No response from serial port.';
+        }
+        isProbingUsb = false;
     }
 
     $effect(() => {
@@ -499,10 +531,37 @@
                                                 • ID {portInfo.vendor_id}:{portInfo.product_id} ({portInfo.manufacturer || 'Espressif Systems'})
                                             {/if}
                                         </span>
+                                        {#if portInfo.current_ssid || (espUsbStatus && espUsbStatus.port === portInfo.port && espUsbStatus.current_ssid)}
+                                            {@const curSsid = portInfo.current_ssid || espUsbStatus?.current_ssid}
+                                            <div class="port-ssid-indicator">
+                                                <span>ESP32 Connected Wi-Fi: <strong>{curSsid}</strong></span>
+                                                {#if curSsid === serverWifiSsid}
+                                                    <span class="fedora-badge green">✓ Same as Server</span>
+                                                {:else}
+                                                    <span class="fedora-badge yellow">⚠ Different SSID</span>
+                                                {/if}
+                                            </div>
+                                        {:else}
+                                            <div class="port-ssid-indicator">
+                                                <span class="port-subdetail-muted">Wi-Fi: Not Associated (Select a Wi-Fi below to switch / connect)</span>
+                                            </div>
+                                        {/if}
                                     </div>
                                 </div>
                                 <div class="row-trailing">
-                                    <span class="status-ready-pill">Ready for Sync</span>
+                                    <button
+                                        type="button"
+                                        class="fedora-row-action-btn"
+                                        onclick={() => handleProbeUsbPort(portInfo.port)}
+                                        disabled={isProbingUsb}
+                                        title="Probe ESP32 serial status"
+                                    >
+                                        {#if isProbingUsb}
+                                            <span class="btn-spinner"></span>
+                                        {:else}
+                                            🔍 Probe
+                                        {/if}
+                                    </button>
                                 </div>
                             </div>
                         {/each}
@@ -657,8 +716,16 @@
                         </div>
 
                         <div class="dialog-body">
+                            {#if espUsbStatus?.current_ssid && espUsbStatus.current_ssid !== selectedNetwork.ssid}
+                                <div class="dialog-switch-chip">
+                                    <span class="switch-chip-from">Current ESP Wi-Fi: <strong>{espUsbStatus.current_ssid}</strong></span>
+                                    <span class="switch-chip-arrow">➔</span>
+                                    <span class="switch-chip-to">Switch to: <strong>{selectedNetwork.ssid}</strong></span>
+                                </div>
+                            {/if}
+
                             <div class="dialog-field">
-                                <label for="wifi-dialog-ssid">Network Name (SSID)</label>
+                                <label for="wifi-dialog-ssid">Target Wi-Fi Network (SSID)</label>
                                 <input id="wifi-dialog-ssid" type="text" class="fedora-input disabled" value={selectedNetwork.ssid} readonly />
                             </div>
 
@@ -719,6 +786,10 @@
                                 </div>
                             </div>
 
+                            <div class="dialog-security-note">
+                                🔒 <span><strong>Zero-Persistence Security:</strong> Credentials are sent transiently to ESP32 memory via USB CDC and are never stored in database or cookies.</span>
+                            </div>
+
                             {#if connectError}
                                 <div class="dialog-alert error">
                                     <span>⚠️ {connectError}</span>
@@ -738,7 +809,9 @@
                             </button>
                             <button type="button" class="fedora-btn primary" onclick={handleConnectToSelectedNetwork} disabled={isConnectingWifi}>
                                 {#if isConnectingWifi}
-                                    <span class="btn-spinner"></span> Connecting ESP32...
+                                    <span class="btn-spinner"></span> Switching & Connecting ESP32...
+                                {:else if espUsbStatus?.current_ssid && espUsbStatus.current_ssid !== selectedNetwork.ssid}
+                                    Switch ESP32 to "{selectedNetwork.ssid}"
                                 {:else if selectedNetwork.is_server}
                                     Connect ESP32 to Server Wi-Fi
                                 {:else}
@@ -1699,6 +1772,67 @@
         background: rgba(255, 255, 255, 0.08);
         color: var(--text-muted);
         border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .fedora-badge.yellow {
+        background: rgba(245, 158, 11, 0.18);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+
+    .port-ssid-indicator {
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+
+    .port-subdetail-muted {
+        font-size: 0.67rem;
+        color: var(--text-muted);
+    }
+
+    .dialog-switch-chip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background: rgba(245, 158, 11, 0.1);
+        border: 1px solid rgba(245, 158, 11, 0.25);
+        border-radius: 8px;
+        font-size: 0.74rem;
+        color: var(--text-primary);
+    }
+
+    .switch-chip-from strong {
+        color: #fbbf24;
+    }
+
+    .switch-chip-arrow {
+        color: #3584e4;
+        font-weight: 800;
+    }
+
+    .switch-chip-to strong {
+        color: #2ec27e;
+    }
+
+    .dialog-security-note {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+        padding: 6px 10px;
+        background: rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
+        font-size: 0.68rem;
+        color: var(--text-muted);
+        line-height: 1.35;
+    }
+
+    .dialog-security-note strong {
+        color: var(--text-secondary);
     }
 
     /* Wi-Fi Row Specifics */

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -24,14 +23,18 @@ var validUSBPortRegex = regexp.MustCompile(`^/dev/tty(ACM|USB)[0-9]{1,2}$`)
 
 // USBPortInfo describes a detected serial port (/dev/ttyACM* or /dev/ttyUSB*) on the server.
 type USBPortInfo struct {
-	Port         string `json:"port"`
-	Name         string `json:"name"`
-	Driver       string `json:"driver,omitempty"`
-	VendorID     string `json:"vendor_id,omitempty"`
-	ProductID    string `json:"product_id,omitempty"`
-	Manufacturer string `json:"manufacturer,omitempty"`
-	Product      string `json:"product,omitempty"`
-	IsESP32      bool   `json:"is_esp32"`
+	Port          string  `json:"port"`
+	Name          string  `json:"name"`
+	Driver        string  `json:"driver,omitempty"`
+	VendorID      string  `json:"vendor_id,omitempty"`
+	ProductID     string  `json:"product_id,omitempty"`
+	Manufacturer  string  `json:"manufacturer,omitempty"`
+	Product       string  `json:"product,omitempty"`
+	IsESP32       bool    `json:"is_esp32"`
+	DeviceID      string  `json:"device_id,omitempty"`
+	CurrentSSID   string  `json:"current_ssid,omitempty"`
+	WiFiConnected bool    `json:"wifi_connected"`
+	Temperature   float64 `json:"temperature,omitempty"`
 }
 
 // ServerWiFiConfig holds the server's active Wi-Fi network and LAN IP configuration.
@@ -236,6 +239,15 @@ func ScanUSBSerialPorts() []USBPortInfo {
 				info.ProductID = "1001"
 			}
 		}
+
+		provisionMu.Lock()
+		if lastUSBAck != nil && (lastUSBAck.USBPort == info.Port || filepath.Clean(lastUSBAck.USBPort) == devPath) {
+			info.DeviceID = lastUSBAck.DeviceID
+			info.CurrentSSID = lastUSBAck.SSID
+			info.WiFiConnected = lastUSBAck.WiFiConnected
+			info.Temperature = lastUSBAck.Temperature
+		}
+		provisionMu.Unlock()
 
 		ports = append(ports, info)
 	}
@@ -665,6 +677,57 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 	return parsedAck, nil
 }
 
+// ProbeESP32ViaUSB queries an ESP32-S3 over a validated USB serial port to retrieve its current status,
+// device ID, connected Wi-Fi SSID, and temperature without modifying any Wi-Fi credentials.
+func ProbeESP32ViaUSB(portPath string) (*ESPSerialAck, error) {
+	provisionMu.Lock()
+	defer provisionMu.Unlock()
+
+	validPort, err := ValidateUSBPortPath(portPath)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.OpenFile(validPort, syscall.O_RDWR|syscall.O_NOCTTY|syscall.O_NONBLOCK, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open USB serial port %s: %w", validPort, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	_ = configureSerial115200(f.Fd())
+
+	// Send status query to ESP32-S3
+	cmdLine := []byte("{\"cmd\":\"status\"}\n")
+	if _, err := f.Write(cmdLine); err != nil {
+		return nil, fmt.Errorf("failed to write status query to %s: %w", validPort, err)
+	}
+
+	deadline := time.Now().Add(800 * time.Millisecond)
+	var parsedAck *ESPSerialAck
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024), 4096)
+	for time.Now().Before(deadline) {
+		if scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if ack := parseSerialLine(line, validPort); ack != nil {
+				parsedAck = ack
+				lastUSBAck = ack
+				break
+			}
+		} else {
+			time.Sleep(30 * time.Millisecond)
+			scanner = bufio.NewScanner(f)
+			scanner.Buffer(make([]byte, 1024), 4096)
+		}
+	}
+
+	if parsedAck == nil {
+		return nil, fmt.Errorf("no response from ESP32 on %s", validPort)
+	}
+
+	return parsedAck, nil
+}
+
 func parseSerialLine(line, portPath string) *ESPSerialAck {
 	if len(line) > 2048 {
 		return nil
@@ -690,8 +753,7 @@ func parseSerialLine(line, portPath string) *ESPSerialAck {
 }
 
 // StartUSBAutoProvisioner monitors /dev/ttyACM* and /dev/ttyUSB* in the background.
-// Whenever an ESP32-S3 is plugged into a server USB slot, it automatically provisions the server's Wi-Fi
-// credentials so the ESP32-S3 connects to the same Wi-Fi network as the server.
+// It actively probes detected ESP32 devices to detect their current Wi-Fi SSID and status without overwriting user Wi-Fi.
 func StartUSBAutoProvisioner(onTelemetry func(ack *ESPSerialAck)) {
 	go func() {
 		ticker := time.NewTicker(4 * time.Second)
@@ -706,23 +768,22 @@ func StartUSBAutoProvisioner(onTelemetry func(ack *ESPSerialAck)) {
 				lastTime, alreadyDone := provisionedPorts[p.Port]
 				provisionMu.Unlock()
 
-				// Auto-provision newly plugged USB device or refresh every 30s
-				if !alreadyDone || time.Since(lastTime) > 30*time.Second {
-					wifiCfg := DetectServerWiFiConfig()
-					log.Printf("[USB AUTO-PROVISION] Detected ESP32 serial device on %s. Syncing server Wi-Fi SSID '%s' (Backend IP: %s)...",
-						p.Port, wifiCfg.SSID, wifiCfg.BackendIP)
-					ack, err := ProvisionESP32ViaUSB(p.Port, wifiCfg.SSID, wifiCfg.Password, wifiCfg.BackendIP, wifiCfg.BackendPort)
-					if err != nil {
-						log.Printf("[USB AUTO-PROVISION] Warning on %s: %v", p.Port, err)
-						continue
-					}
-					if ack != nil && onTelemetry != nil {
-						onTelemetry(ack)
+				// Auto-probe newly plugged USB device or refresh status every 20s
+				if !alreadyDone || time.Since(lastTime) > 20*time.Second {
+					ack, err := ProbeESP32ViaUSB(p.Port)
+					if err == nil && ack != nil {
+						provisionMu.Lock()
+						provisionedPorts[p.Port] = time.Now()
+						lastUSBAck = ack
+						provisionMu.Unlock()
+						if onTelemetry != nil {
+							onTelemetry(ack)
+						}
 					}
 				}
 			}
 
-			// Clean up unplugged ports so re-plugging triggers immediate provisioning
+			// Clean up unplugged ports so re-plugging triggers immediate probing
 			provisionMu.Lock()
 			for port := range provisionedPorts {
 				if !activeSet[port] {

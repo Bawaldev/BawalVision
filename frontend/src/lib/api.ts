@@ -269,4 +269,42 @@ export async function fetchWiFiNetworks(baseUrl = BASE_URL): Promise<WiFiNetwork
     return [];
 }
 
+export async function probeEspUsbPort(port?: string, baseUrl = BASE_URL): Promise<{
+    success: boolean;
+    port?: string;
+    deviceId?: string;
+    currentSsid?: string;
+    wifiConnected?: boolean;
+    temperature?: number;
+    cpuLoad?: number;
+    message?: string;
+}> {
+    try {
+        const response = await fetch(`${baseUrl}/devices/usb/probe`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({ port })
+        });
+        const data = await response.json().catch(() => ({}));
+        return {
+            success: response.ok && data.success,
+            port: data.port,
+            deviceId: data.device_id,
+            currentSsid: data.current_ssid,
+            wifiConnected: data.wifi_connected,
+            temperature: data.temperature,
+            cpuLoad: data.cpu_load,
+            message: data.message
+        };
+    } catch (err: any) {
+        return {
+            success: false,
+            message: err?.message || 'USB probe request failed.'
+        };
+    }
+}
+
 

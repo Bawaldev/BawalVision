@@ -621,7 +621,8 @@ void usb_serial_provisioning_task(void *pvParameters) {
 
             cJSON *cmd_item = cJSON_GetObjectItemCaseSensitive(cmd_json, "cmd");
             if (cJSON_IsString(cmd_item) && cmd_item->valuestring != NULL) {
-                if (strcmp(cmd_item->valuestring, "provision_wifi") == 0) {
+                if (strcmp(cmd_item->valuestring, "provision_wifi") == 0 ||
+                    strcmp(cmd_item->valuestring, "set_wifi") == 0) {
                     cJSON *ssid_item = cJSON_GetObjectItemCaseSensitive(cmd_json, "ssid");
                     cJSON *pass_item = cJSON_GetObjectItemCaseSensitive(cmd_json, "pass");
                     cJSON *ip_item = cJSON_GetObjectItemCaseSensitive(cmd_json, "backend_ip");
@@ -643,7 +644,8 @@ void usb_serial_provisioning_task(void *pvParameters) {
                            real_temp,
                            cpu_load);
                     fflush(stdout);
-                } else if (strcmp(cmd_item->valuestring, "status") == 0) {
+                } else if (strcmp(cmd_item->valuestring, "status") == 0 ||
+                           strcmp(cmd_item->valuestring, "get_status") == 0) {
                     bool wifi_connected = false;
                     if (g_wifi_event_group != NULL) {
                         EventBits_t bits = xEventGroupGetBits(g_wifi_event_group);
