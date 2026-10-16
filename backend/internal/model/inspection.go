@@ -46,6 +46,9 @@ type TelemetryIngressPayload struct {
 	CurrentCPULoad  uint8   `json:"cpu_load"`
 	IPAddress       string  `json:"ip_address,omitempty"`
 	ConnectionMode  string  `json:"connection_mode,omitempty"`
+	FreeHeap        uint32  `json:"free_heap,omitempty"`
+	HeapFree        uint32  `json:"heap_free,omitempty"`
+	RSSI            int     `json:"rssi,omitempty"`
 }
 
 type PredictionResult struct {

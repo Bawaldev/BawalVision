@@ -1,6 +1,7 @@
 package camera_handler
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -24,6 +25,9 @@ type CameraStore struct {
 	annotatedFrames map[string]CachedFrame
 	subscribers     map[uint64]*subscriber
 	subCounter      uint64
+	lastFrameTimeMS int64
+	frameCount      uint64
+	fps             float64
 }
 
 var GlobalCameraStore = &CameraStore{
@@ -42,6 +46,20 @@ func (s *CameraStore) StoreRawFrameWithIP(deviceID string, frameID uint32, data 
 	}
 	s.Lock()
 	now := time.Now().UnixMilli()
+	if s.lastFrameTimeMS > 0 && now > s.lastFrameTimeMS {
+		dt := float64(now-s.lastFrameTimeMS) / 1000.0
+		if dt > 0.005 && dt < 2.0 {
+			instantFps := 1.0 / dt
+			if s.fps <= 0 {
+				s.fps = instantFps
+			} else {
+				s.fps = 0.85*s.fps + 0.15*instantFps
+			}
+		}
+	}
+	s.lastFrameTimeMS = now
+	s.frameCount++
+
 	s.rawFrames[deviceID] = CachedFrame{
 		DeviceID:    deviceID,
 		FrameID:     frameID,
@@ -288,6 +306,16 @@ func (s *CameraStore) DisconnectDevice(deviceID string) {
 	}
 	delete(s.rawFrames, deviceID)
 	delete(s.annotatedFrames, deviceID)
+}
+
+func (s *CameraStore) GetActiveFPS() float64 {
+	s.RLock()
+	defer s.RUnlock()
+	now := time.Now().UnixMilli()
+	if now-s.lastFrameTimeMS > 2500 || s.fps <= 0 {
+		return 0.0
+	}
+	return math.Round(s.fps*10) / 10
 }
 
 

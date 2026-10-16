@@ -184,9 +184,19 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 	camGroup.Get("/active", func(c *fiber.Ctx) error {
 		activeID := camera_handler.GlobalCameraStore.GetActiveDeviceID()
 		if activeID == "" {
-			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "No active camera device found"})
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error":     "No active camera device found",
+				"active":    false,
+				"device_id": "",
+				"fps":       0.0,
+			})
 		}
-		return c.JSON(fiber.Map{"device_id": activeID})
+		fps := camera_handler.GlobalCameraStore.GetActiveFPS()
+		return c.JSON(fiber.Map{
+			"active":    true,
+			"device_id": activeID,
+			"fps":       fps,
+		})
 	})
 
 	mjpegStreamHandler := func(c *fiber.Ctx) error {

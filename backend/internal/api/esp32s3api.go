@@ -397,10 +397,20 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				resp["temperature"] = realT
 				resp["cpu_temperature"] = cpuT
 				resp["cpu_load"] = cpuLoad
+				if live.FreeHeap > 0 {
+					resp["heap_free"] = live.FreeHeap
+				} else if live.HeapFree > 0 {
+					resp["heap_free"] = live.HeapFree
+				}
+				if live.RSSI != 0 {
+					resp["rssi"] = live.RSSI
+				}
 			} else {
 				resp["temperature"] = nil
 				resp["cpu_temperature"] = nil
 				resp["cpu_load"] = nil
+				resp["heap_free"] = nil
+				resp["rssi"] = nil
 			}
 
 			return c.JSON(resp)

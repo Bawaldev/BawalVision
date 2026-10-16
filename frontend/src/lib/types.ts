@@ -41,6 +41,10 @@ export interface TelemetryPayload {
     cpu_temperature?: number | null;
     temperature: number | null;
     cpu_load?: number | null;
+    heap_free?: number | null;
+    free_heap?: number | null;
+    rssi?: number | null;
+    server_memory_mb?: number | null;
     timestamp: number;
     is_connected?: boolean;
 }
@@ -69,6 +73,13 @@ export interface EngineStatus {
     arch: string;
     graviton_available: boolean;
     local_engine_available: boolean;
+    num_cpu?: number;
+    parallel_cores?: number;
+    server_mem_alloc_mb?: number;
+    server_mem_sys_mb?: number;
+    host_mem_used_mb?: number;
+    host_mem_total_mb?: number;
+    memory_usage_mb?: number;
 }
 
 export interface SystemConfig {

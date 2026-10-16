@@ -349,7 +349,7 @@
                     <span class="metric-label">CPU Core 1</span>
                     <div class="value-box">
                         <span class="value-text" class:offline-val={!isDeviceConnected}>
-                            {isDeviceConnected && currentTelemetry?.cpu_load != null ? `${Math.max(8, Math.round(currentTelemetry.cpu_load * 0.7))}% @ 240M` : 'Offline'}
+                            {isDeviceConnected && currentTelemetry?.cpu_load != null ? `${currentTelemetry.cpu_load}% @ 240MHz` : 'Offline'}
                         </span>
                     </div>
                 </div>
@@ -358,7 +358,11 @@
                     <span class="metric-label">RSSI</span>
                     <div class="value-box">
                         <span class="value-text" class:offline-val={!isDeviceConnected}>
-                            {isDeviceConnected ? '-58 dBm' : 'Offline'}
+                            {#if isDeviceConnected}
+                                {currentTelemetry?.rssi != null ? `${currentTelemetry.rssi} dBm` : 'Connected (LAN)'}
+                            {:else}
+                                Offline
+                            {/if}
                         </span>
                     </div>
                 </div>
@@ -367,7 +371,15 @@
                     <span class="metric-label">Heap Free</span>
                     <div class="value-box">
                         <span class="value-text" class:offline-val={!isDeviceConnected}>
-                            {isDeviceConnected ? '284 KB' : 'Offline'}
+                            {#if isDeviceConnected}
+                                {currentTelemetry?.heap_free != null && currentTelemetry.heap_free > 0
+                                    ? `${Math.round(currentTelemetry.heap_free / 1024)} KB`
+                                    : (currentTelemetry?.free_heap != null && currentTelemetry.free_heap > 0
+                                        ? `${Math.round(currentTelemetry.free_heap / 1024)} KB`
+                                        : 'Available')}
+                            {:else}
+                                Offline
+                            {/if}
                         </span>
                     </div>
                 </div>

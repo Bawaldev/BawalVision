@@ -17,6 +17,7 @@
 #include "system_monitor.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "esp_system.h"
 #include "cJSON.h"
 
 #include "data.h"
@@ -372,6 +373,12 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     cJSON_AddNumberToObject(root, "timestamp", (double)data->timestamp);
     cJSON_AddNumberToObject(root, "temperature", data->temperature > 0 ? data->temperature : 36.5);
     cJSON_AddNumberToObject(root, "cpu_load", data->current_cpu_load);
+    cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
+    cJSON_AddNumberToObject(root, "heap_free", (double)esp_get_free_heap_size());
+    wifi_ap_record_t ap_info;
+    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        cJSON_AddNumberToObject(root, "rssi", (double)ap_info.rssi);
+    }
     cJSON_AddStringToObject(root, "device_name", data->device_name);
     cJSON_AddNumberToObject(root, "device_core", data->device_core);
 

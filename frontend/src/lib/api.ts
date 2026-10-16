@@ -35,19 +35,19 @@ export async function fetchRecords(baseUrl = BASE_URL): Promise<InspectionRecord
     }
 }
 
-export async function fetchCameraStatus(baseUrl = BASE_URL): Promise<{ active: boolean; deviceId: string }> {
+export async function fetchCameraStatus(baseUrl = BASE_URL): Promise<{ active: boolean; deviceId: string; fps: number }> {
     try {
         const response = await fetch(`${baseUrl}/camera/active`);
         if (response.ok) {
             const data = await response.json();
             if (data.device_id) {
-                return { active: true, deviceId: data.device_id };
+                return { active: true, deviceId: data.device_id, fps: Number(data.fps) || 0.0 };
             }
         }
     } catch {
         // network or offline error
     }
-    return { active: false, deviceId: '' };
+    return { active: false, deviceId: '', fps: 0.0 };
 }
 
 export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<TelemetryPayload | null> {
@@ -67,6 +67,9 @@ export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<Telemetr
                 cpu_temperature: isConnected && data.cpu_temperature != null ? Number(data.cpu_temperature) : null,
                 temperature: isConnected && data.temperature != null ? Number(data.temperature) : null,
                 cpu_load: isConnected && data.cpu_load != null ? Number(data.cpu_load) : null,
+                heap_free: isConnected && (data.heap_free != null || data.free_heap != null) ? Number(data.heap_free ?? data.free_heap) : null,
+                free_heap: isConnected && (data.heap_free != null || data.free_heap != null) ? Number(data.heap_free ?? data.free_heap) : null,
+                rssi: isConnected && data.rssi != null ? Number(data.rssi) : null,
                 timestamp: data.timestamp
                     ? Number(data.timestamp)
                     : (data.created_at ? Math.floor(new Date(data.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000)),
