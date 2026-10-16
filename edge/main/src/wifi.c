@@ -30,13 +30,19 @@ static const char *TAG = "TELEMETRY_DISPATCH";
 static const char *TAG_WIFI = "WIFI_STA";
 char g_wifi_ssid[32] = {0};
 char g_wifi_pass[64] = {0};
+char g_backend_ip[32] = {0};
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-        ESP_LOGI(TAG_WIFI, "Connecting to AP...");
-        lcd_update_http_status("WIFI CONNECTING...", false);
+        if (strlen(g_wifi_ssid) > 0) {
+            esp_wifi_connect();
+            ESP_LOGI(TAG_WIFI, "Connecting to AP '%s'...", g_wifi_ssid);
+            lcd_update_http_status("WIFI CONNECTING...", false);
+        } else {
+            ESP_LOGW(TAG_WIFI, "Wi-Fi SSID not configured yet. Waiting for USB Serial provisioning from server...");
+            lcd_update_http_status("WAIT USB WIFI...", false);
+        }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
         ESP_LOGI(TAG_WIFI, "Associated with AP '%s'. Requesting IP via DHCP...", g_wifi_ssid);
         lcd_update_http_status("DHCP REQUEST...", false);
@@ -49,9 +55,11 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         lcd_update_wifi_status(false, NULL);
         lcd_update_http_status("WIFI LOST", true);
 
-        g_wifi_retry_num++;
-        ESP_LOGW(TAG_WIFI, "Reconnecting to AP '%s' (attempt %d)...", g_wifi_ssid, g_wifi_retry_num);
-        esp_wifi_connect();
+        if (strlen(g_wifi_ssid) > 0) {
+            g_wifi_retry_num++;
+            ESP_LOGW(TAG_WIFI, "Reconnecting to AP '%s' (attempt %d)...", g_wifi_ssid, g_wifi_retry_num);
+            esp_wifi_connect();
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         char ip_str[24];
@@ -71,6 +79,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 bool get_backend_ip(char *out_ip, size_t max_len) {
     if (out_ip == NULL || max_len == 0) return false;
 
+    if (strlen(g_backend_ip) > 0) {
+        snprintf(out_ip, max_len, "%s", g_backend_ip);
+        return true;
+    }
     if (strlen(CONFIG_BACKEND_IP) > 0) {
         snprintf(out_ip, max_len, "%s", CONFIG_BACKEND_IP);
         return true;
@@ -107,11 +119,17 @@ void wifi_init_sta(void) {
     }
     ESP_ERROR_CHECK(ret);
 
-    if (strlen(CONFIG_ESP_WIFI_SSID) > 0) {
-        strncpy(g_wifi_ssid, CONFIG_ESP_WIFI_SSID, sizeof(g_wifi_ssid) - 1);
-        strncpy(g_wifi_pass, CONFIG_ESP_WIFI_PASSWORD, sizeof(g_wifi_pass) - 1);
-    } else if (!wifi_nvs_load_credentials()) {
-        ESP_LOGW(TAG_WIFI, "NVS empty/invalid and no build args provided.");
+    /* Prioritize NVS credentials provisioned via USB Serial so server Wi-Fi sync persists across reboots */
+    if (!wifi_nvs_load_credentials()) {
+        if (strlen(CONFIG_ESP_WIFI_SSID) > 0) {
+            strncpy(g_wifi_ssid, CONFIG_ESP_WIFI_SSID, sizeof(g_wifi_ssid) - 1);
+            strncpy(g_wifi_pass, CONFIG_ESP_WIFI_PASSWORD, sizeof(g_wifi_pass) - 1);
+        } else {
+            ESP_LOGW(TAG_WIFI, "NVS empty/invalid and no build args provided. Waiting for USB Serial Wi-Fi provisioning.");
+        }
+    }
+    if (strlen(g_backend_ip) == 0 && strlen(CONFIG_BACKEND_IP) > 0) {
+        strncpy(g_backend_ip, CONFIG_BACKEND_IP, sizeof(g_backend_ip) - 1);
     }
 
     g_wifi_event_group = xEventGroupCreate();
@@ -185,14 +203,16 @@ bool wifi_nvs_load_credentials(void) {
 
     size_t ssid_len = sizeof(g_wifi_ssid);
     size_t pass_len = sizeof(g_wifi_pass);
+    size_t ip_len = sizeof(g_backend_ip);
 
     esp_err_t err_ssid = nvs_get_str(nvs_handle, "ssid", g_wifi_ssid, &ssid_len);
     esp_err_t err_pass = nvs_get_str(nvs_handle, "pass", g_wifi_pass, &pass_len);
+    (void)nvs_get_str(nvs_handle, "backend_ip", g_backend_ip, &ip_len);
 
     nvs_close(nvs_handle);
 
     if (err_ssid == ESP_OK && err_pass == ESP_OK && strlen(g_wifi_ssid) > 0) {
-        ESP_LOGI(TAG, "Successfully read credentials from NVS (SSID: %s)", g_wifi_ssid);
+        ESP_LOGI(TAG, "Successfully read credentials from NVS (SSID: %s, BackendIP: %s)", g_wifi_ssid, g_backend_ip);
         return true;
     }
 
@@ -200,7 +220,8 @@ bool wifi_nvs_load_credentials(void) {
     return false;
 }
 
-bool wifi_nvs_save_credentials(const char *ssid, const char *pass) {
+bool wifi_nvs_save_full_config(const char *ssid, const char *pass, const char *backend_ip) {
+    if (ssid == NULL) return false;
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK) {
@@ -210,18 +231,94 @@ bool wifi_nvs_save_credentials(const char *ssid, const char *pass) {
 
     err = nvs_set_str(nvs_handle, "ssid", ssid);
     if (err == ESP_OK) {
-        err = nvs_set_str(nvs_handle, "pass", pass);
+        err = nvs_set_str(nvs_handle, "pass", pass != NULL ? pass : "");
+    }
+    if (err == ESP_OK && backend_ip != NULL && strlen(backend_ip) > 0) {
+        err = nvs_set_str(nvs_handle, "backend_ip", backend_ip);
     }
 
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
-        ESP_LOGI(TAG, "Successfully saved WiFi to NVS: %s", ssid);
+        ESP_LOGI(TAG, "Successfully saved WiFi to NVS: %s (Backend: %s)", ssid, backend_ip != NULL ? backend_ip : "");
     } else {
         ESP_LOGE(TAG, "Failed to save to NVS: %s", esp_err_to_name(err));
     }
 
     nvs_close(nvs_handle);
     return (err == ESP_OK);
+}
+
+bool wifi_nvs_save_credentials(const char *ssid, const char *pass) {
+    return wifi_nvs_save_full_config(ssid, pass, NULL);
+}
+
+static bool is_safe_printable_str(const char *s, size_t max_len) {
+    if (s == NULL) return false;
+    size_t len = strlen(s);
+    if (len > max_len) return false;
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x20 || c == 0x7f || c == '"' || c == '\\') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool is_valid_ipv4_str(const char *ip) {
+    if (ip == NULL) return false;
+    size_t len = strlen(ip);
+    if (len < 7 || len > 15) return false;
+    int dots = 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (ip[i] == '.') {
+            dots++;
+        } else if (ip[i] < '0' || ip[i] > '9') {
+            return false;
+        }
+    }
+    return (dots == 3);
+}
+
+bool wifi_apply_runtime_credentials(const char *ssid, const char *pass, const char *backend_ip) {
+    if (ssid == NULL || strlen(ssid) == 0 || !is_safe_printable_str(ssid, sizeof(g_wifi_ssid) - 1)) {
+        return false;
+    }
+    if (pass != NULL && !is_safe_printable_str(pass, sizeof(g_wifi_pass) - 1)) {
+        return false;
+    }
+
+    memset(g_wifi_ssid, 0, sizeof(g_wifi_ssid));
+    memset(g_wifi_pass, 0, sizeof(g_wifi_pass));
+    strncpy(g_wifi_ssid, ssid, sizeof(g_wifi_ssid) - 1);
+    if (pass != NULL) {
+        strncpy(g_wifi_pass, pass, sizeof(g_wifi_pass) - 1);
+    }
+    if (backend_ip != NULL && is_valid_ipv4_str(backend_ip)) {
+        memset(g_backend_ip, 0, sizeof(g_backend_ip));
+        strncpy(g_backend_ip, backend_ip, sizeof(g_backend_ip) - 1);
+    }
+
+    wifi_nvs_save_full_config(g_wifi_ssid, g_wifi_pass, g_backend_ip);
+
+    wifi_config_t wifi_config;
+    memset(&wifi_config, 0, sizeof(wifi_config_t));
+    snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%s", g_wifi_ssid);
+    snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%s", g_wifi_pass);
+    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    wifi_config.sta.threshold.authmode = (strlen(g_wifi_pass) > 0) ? WIFI_AUTH_WPA_WPA2_PSK : WIFI_AUTH_OPEN;
+    wifi_config.sta.pmf_cfg.capable = false;
+    wifi_config.sta.pmf_cfg.required = false;
+
+    g_wifi_retry_num = 0;
+    esp_wifi_disconnect();
+    if (esp_wifi_set_config(WIFI_IF_STA, &wifi_config) == ESP_OK) {
+        lcd_update_http_status("USB WIFI SYNC...", false);
+        esp_wifi_connect();
+        return true;
+    }
+    return false;
 }
 
 bool get_backend_url(char *out_url, size_t max_len) {
@@ -235,6 +332,11 @@ bool get_backend_url(char *out_url, size_t max_len) {
     if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK || ip_info.ip.addr == 0) {
         ESP_LOGW(TAG, "IP interface unassigned");
         return false;
+    }
+    if (strlen(g_backend_ip) > 0) {
+        int ret = snprintf(out_url, max_len, "http://%s:%s%s", 
+                           g_backend_ip, CONFIG_BACKEND_PORT, BACKEND_ENDPOINT);
+        return (ret > 0 && ret < (int)max_len);
     }
     if (strlen(CONFIG_BACKEND_IP) > 0) {
         int ret = snprintf(out_url, max_len, "http://%s:%s%s", 
@@ -460,5 +562,96 @@ void WiFi_Server_Task(void *pvParameters) {
         }
 
         send_telemetry_to_backend(backend_ip, backend_port, &telemetry);
+    }
+}
+
+void usb_serial_provisioning_task(void *pvParameters) {
+    (void)pvParameters;
+    char line_buf[256];
+    size_t idx = 0;
+
+    telemetry_data_t meta;
+    init_device_metadata(&meta);
+
+    ESP_LOGI(TAG_WIFI, "USB Serial Wi-Fi Provisioning listener active on stdin (Device ID: %s)", meta.device_id);
+
+    for (;;) {
+        int ch = fgetc(stdin);
+        if (ch == EOF) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        if (ch == '\r' || ch == '\n') {
+            if (idx == 0) {
+                continue;
+            }
+            line_buf[idx] = '\0';
+            idx = 0;
+
+            /* Locate JSON start in case of serial noise */
+            char *json_start = strchr(line_buf, '{');
+            if (json_start == NULL) {
+                continue;
+            }
+
+            cJSON *cmd_json = cJSON_Parse(json_start);
+            if (cmd_json == NULL) {
+                continue;
+            }
+
+            cJSON *cmd_item = cJSON_GetObjectItemCaseSensitive(cmd_json, "cmd");
+            if (cJSON_IsString(cmd_item) && cmd_item->valuestring != NULL) {
+                if (strcmp(cmd_item->valuestring, "provision_wifi") == 0) {
+                    cJSON *ssid_item = cJSON_GetObjectItemCaseSensitive(cmd_json, "ssid");
+                    cJSON *pass_item = cJSON_GetObjectItemCaseSensitive(cmd_json, "pass");
+                    cJSON *ip_item = cJSON_GetObjectItemCaseSensitive(cmd_json, "backend_ip");
+
+                    const char *new_ssid = (cJSON_IsString(ssid_item) && ssid_item->valuestring) ? ssid_item->valuestring : "";
+                    const char *new_pass = (cJSON_IsString(pass_item) && pass_item->valuestring) ? pass_item->valuestring : "";
+                    const char *new_ip = (cJSON_IsString(ip_item) && ip_item->valuestring) ? ip_item->valuestring : "";
+
+                    bool ok = wifi_apply_runtime_credentials(new_ssid, new_pass, new_ip);
+                    float real_temp = get_esp32_cpu_temperature();
+                    uint8_t cpu_load = get_cpu_usage_percentage();
+
+                    printf("BAWAL_ACK:{\"status\":\"%s\",\"device_id\":\"%s\",\"firmware_version\":\"%s\",\"ssid\":\"%s\",\"backend_ip\":\"%s\",\"temperature\":%.2f,\"cpu_temperature\":%.2f,\"cpu_load\":%u}\n",
+                           ok ? "wifi_provisioned" : "error",
+                           meta.device_id,
+                           meta.firmware_version,
+                           g_wifi_ssid,
+                           g_backend_ip,
+                           real_temp,
+                           real_temp,
+                           cpu_load);
+                    fflush(stdout);
+                } else if (strcmp(cmd_item->valuestring, "status") == 0) {
+                    bool wifi_connected = false;
+                    if (g_wifi_event_group != NULL) {
+                        EventBits_t bits = xEventGroupGetBits(g_wifi_event_group);
+                        wifi_connected = (bits & WIFI_CONNECTED_BIT) != 0;
+                    }
+                    float real_temp = get_esp32_cpu_temperature();
+                    uint8_t cpu_load = get_cpu_usage_percentage();
+                    printf("BAWAL_ACK:{\"status\":\"ok\",\"device_id\":\"%s\",\"firmware_version\":\"%s\",\"wifi_connected\":%s,\"ssid\":\"%s\",\"backend_ip\":\"%s\",\"temperature\":%.2f,\"cpu_temperature\":%.2f,\"cpu_load\":%u}\n",
+                           meta.device_id,
+                           meta.firmware_version,
+                           wifi_connected ? "true" : "false",
+                           g_wifi_ssid,
+                           g_backend_ip,
+                           real_temp,
+                           real_temp,
+                           cpu_load);
+                    fflush(stdout);
+                }
+            }
+            cJSON_Delete(cmd_json);
+            memset(line_buf, 0, sizeof(line_buf));
+        } else if (idx < sizeof(line_buf) - 1) {
+            line_buf[idx++] = (char)ch;
+        } else {
+            memset(line_buf, 0, sizeof(line_buf));
+            idx = 0;
+        }
     }
 }
