@@ -103,6 +103,10 @@ export interface USBPortInfo {
     manufacturer?: string;
     product?: string;
     is_esp32: boolean;
+    device_id?: string;
+    current_ssid?: string;
+    wifi_connected?: boolean;
+    temperature?: number;
 }
 
 export interface WiFiNetworkInfo {
@@ -121,6 +125,13 @@ export interface DeviceHardwareStatus {
     firmware_version: string;
     ip_address: string;
     usb_ports: USBPortInfo[];
+    esp_usb_status?: {
+        port: string;
+        device_id: string;
+        current_ssid: string;
+        wifi_connected: boolean;
+        temperature: number;
+    };
     wifi_networks?: WiFiNetworkInfo[];
     server_wifi: {
         ssid: string;
