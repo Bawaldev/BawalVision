@@ -30,7 +30,10 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
             std::cout << "[Pipeline] Model loaded: " << model_path
                       << " (Inference threads: " << num_threads << ")\n";
         } else {
-            std::cout << "[Pipeline] Model path fallback triggered.\n";
+            std::cout << "[Pipeline] Specific model path failed. Fallback to default candidates triggered.\n";
+            if (!m_classifier.init("", num_threads)) {
+                std::cerr << "[Pipeline] Warning: All candidate models failed to initialize.\n";
+            }
         }
     } else {
         (void)m_classifier.init("", num_threads);
