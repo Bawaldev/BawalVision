@@ -1070,6 +1070,36 @@
         .form-grid {
             grid-template-columns: 1fr;
         }
+
+        .card-header-bar {
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .settings-card {
+            padding: 14px 12px;
+        }
+
+        .esp-header-row,
+        .usb-panel-header,
+        .esp-failed-box {
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .esp-input-action-bar {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .input-with-icon,
+        .btn-esp-connect,
+        .btn-esp-disconnect,
+        .btn-esp-connecting,
+        .save-chip-btn {
+            width: 100%;
+            justify-content: center;
+        }
     }
 </style>
 

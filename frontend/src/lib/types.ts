@@ -39,7 +39,7 @@ export interface TelemetryPayload {
     firmware_version: string;
     device_core: number;
     cpu_temperature?: number | null;
-    temperature: number;
+    temperature: number | null;
     cpu_load?: number | null;
     timestamp: number;
     is_connected?: boolean;

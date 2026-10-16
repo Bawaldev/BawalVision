@@ -1,13 +1,15 @@
 <script lang="ts">
     interface Props {
-        temperature?: number;
+        temperature?: number | null;
         isSpoiled?: boolean;
         tSafeHours?: number;
         hasFood?: boolean;
         qualityScore?: number;
     }
 
-    let { temperature = 24.5, isSpoiled = false, tSafeHours = 0, hasFood = false, qualityScore = 0 }: Props = $props();
+    let { temperature = null, isSpoiled = false, tSafeHours = 0, hasFood = false, qualityScore = 0 }: Props = $props();
+
+    let effectiveTemp = $derived(temperature != null && temperature > 0 ? temperature : 25.0);
 
     let freshnessIndex = $derived(
         !hasFood
@@ -15,8 +17,8 @@
             : isSpoiled
             ? 15
             : qualityScore > 0
-            ? Math.max(10, Math.min(100, qualityScore - (temperature > 35 ? (temperature - 35) * 2.5 : 0)))
-            : Math.max(20, Math.min(100, 100 - Math.max(0, (temperature - 20) * 2)))
+            ? Math.max(10, Math.min(100, qualityScore - (effectiveTemp > 35 ? (effectiveTemp - 35) * 2.5 : 0)))
+            : Math.max(20, Math.min(100, 100 - Math.max(0, (effectiveTemp - 20) * 2)))
     );
 
     let statusText = $derived(

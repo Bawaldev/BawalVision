@@ -32,84 +32,91 @@
         loadRecords();
     });
 
-    // Provide rich synthetic timeline data if history has few points so the graph is always vivid
+    let isDeviceConnected = $derived(
+        Boolean(currentTelemetry?.is_connected) && currentTelemetry?.temperature != null
+    );
+
+    // Only display live telemetry timeline when ESP32-S3 is actively connected
     let displayHistory = $derived.by(() => {
-        if (history && history.length >= 6) {
-            return history;
+        if (!isDeviceConnected) {
+            return [];
+        }
+        if (history && history.length >= 2) {
+            return history.filter(pt => pt.temperature != null);
         }
 
-        // Generate smooth operational shift timeline (e.g. 10 sampled points over shift)
-        const baseTemp = currentTelemetry?.temperature || 28.5;
-        const baseMcu = currentTelemetry?.cpu_temperature || 36.8;
+        const baseTemp = currentTelemetry?.temperature ?? 36.5;
+        const baseMcu = currentTelemetry?.cpu_temperature ?? baseTemp;
         const now = Math.floor(Date.now() / 1000);
         const points: TelemetryPayload[] = [];
 
-        for (let i = 9; i >= 0; i--) {
-            const shiftTime = now - i * 180; // 3 min intervals
-            // Subtle realistic oscillation
-            const delta = Math.sin((10 - i) * 0.8) * 1.8 + ((10 - i) % 2 === 0 ? 0.4 : -0.3);
+        for (let i = 5; i >= 0; i--) {
+            const shiftTime = now - i * 60;
             points.push({
-                device_id: currentTelemetry?.device_id || 'ESP32S3_441BF6C95678',
-                firmware_version: currentTelemetry?.firmware_version || '1.0.4-prod',
+                device_id: currentTelemetry?.device_id || 'ESP32S3',
+                firmware_version: currentTelemetry?.firmware_version || '1.0.0',
                 device_core: 2,
-                cpu_temperature: Math.max(30.0, Math.min(50.0, baseMcu + delta * 0.6)),
-                temperature: baseTemp + delta,
-                cpu_load: Math.min(65, Math.max(12, Math.round(18 + Math.abs(delta) * 8))),
-                timestamp: shiftTime
+                cpu_temperature: baseMcu,
+                temperature: baseTemp,
+                cpu_load: currentTelemetry?.cpu_load ?? 18,
+                timestamp: shiftTime,
+                is_connected: true
             });
         }
         return points;
     });
 
-    // Computed Stats for Upper-Right Card
+    // Computed Stats for Upper-Right Card (Unavailable when ESP32-S3 is offline)
     let avgTemp = $derived.by(() => {
-        if (!displayHistory || displayHistory.length === 0) return 26.5;
-        const sum = displayHistory.reduce((acc, pt) => acc + (pt.temperature || 25), 0);
+        if (!isDeviceConnected || !displayHistory || displayHistory.length === 0) return null;
+        const sum = displayHistory.reduce((acc, pt) => acc + (pt.temperature ?? 0), 0);
         return (sum / displayHistory.length).toFixed(1);
     });
 
     let peakVoc = $derived.by(() => {
-        // Estimated VOC reading derived from temperature & environmental index
-        const currentTemp = currentTelemetry?.temperature || 28.5;
+        if (!isDeviceConnected || currentTelemetry?.temperature == null) return null;
+        const currentTemp = currentTelemetry.temperature;
         const basePpb = 42 + Math.round(Math.max(0, currentTemp - 25) * 6.5);
         return `${basePpb} ppb`;
     });
 
-    // Chart SVG Coordinates Calculations (Range: 15°C to 45°C)
+    // Chart SVG Coordinates Calculations (Range: 15°C to 65°C)
     const CHART_WIDTH = 1000;
     const CHART_HEIGHT = 300;
 
     function getCoords(index: number, total: number, tempVal: number) {
         const x = (index / Math.max(1, total - 1)) * CHART_WIDTH;
-        const norm = Math.max(0, Math.min(1, (tempVal - 15) / 30)); // 15 to 45°C
+        const norm = Math.max(0, Math.min(1, (tempVal - 15) / 50)); // 15 to 65°C
         const y = CHART_HEIGHT - (norm * CHART_HEIGHT);
         return { x, y };
     }
 
     let ambientTempPoints = $derived.by(() => {
-        if (!displayHistory || displayHistory.length < 2) return '';
+        if (!isDeviceConnected || !displayHistory || displayHistory.length < 2) return '';
         return displayHistory.map((pt, idx) => {
-            const val = pt.temperature || 25.0;
+            const val = pt.temperature ?? 36.5;
             const c = getCoords(idx, displayHistory.length, val);
             return `${c.x.toFixed(1)},${c.y.toFixed(1)}`;
         }).join(' ');
     });
 
     let mcuTempPoints = $derived.by(() => {
-        if (!displayHistory || displayHistory.length < 2) return '';
+        if (!isDeviceConnected || !displayHistory || displayHistory.length < 2) return '';
         const hasAnyCpu = displayHistory.some(pt => pt.cpu_temperature != null && pt.cpu_temperature > 0);
         if (!hasAnyCpu) return '';
         return displayHistory.map((pt, idx) => {
-            const val = pt.cpu_temperature != null ? pt.cpu_temperature : 36.5;
+            const val = pt.cpu_temperature != null ? pt.cpu_temperature : (pt.temperature ?? 36.5);
             const c = getCoords(idx, displayHistory.length, val);
             return `${c.x.toFixed(1)},${c.y.toFixed(1)}`;
         }).join(' ');
     });
 
     let hoveredPoint = $derived(
-        hoveredIdx !== null && displayHistory[hoveredIdx]
-            ? displayHistory[hoveredIdx]
-            : (displayHistory.length > 0 ? displayHistory[displayHistory.length - 1] : null)
+        isDeviceConnected
+            ? (hoveredIdx !== null && displayHistory[hoveredIdx]
+                ? displayHistory[hoveredIdx]
+                : (displayHistory.length > 0 ? displayHistory[displayHistory.length - 1] : null))
+            : null
     );
 
     // Food category helper
@@ -180,15 +187,25 @@
 
                     <!-- Center Plot Area (Vector Canvas + Hover Overlay) -->
                     <div class="plot-canvas-area">
-                        <!-- Floating Interactive Tooltip -->
-                        {#if hoveredPoint}
+                        {#if !isDeviceConnected}
+                            <div class="offline-chart-overlay">
+                                <span class="offline-chart-icon">📡</span>
+                                <strong>ESP32-S3 Device Offline</strong>
+                                <p>Real temperature & hardware telemetry are unavailable while the ESP-IDF sensor node is disconnected.</p>
+                            </div>
+                        {:else if hoveredPoint}
+                            <!-- Floating Interactive Tooltip -->
                             <div
                                 class="chart-tooltip"
                                 style="left: {hoveredIdx !== null && displayHistory.length > 1 ? `${Math.min(85, Math.max(15, (hoveredIdx / (displayHistory.length - 1)) * 100))}%` : '50%'};"
                             >
                                 <span class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString()}</span>
                                 <div class="tooltip-metrics">
-                                    <span class="chip esp32">🌡️ ESP32-S3: {(hoveredPoint.temperature || 25.0).toFixed(1)}°C</span>
+                                    {#if hoveredPoint.temperature != null}
+                                        <span class="chip esp32">🌡️ ESP32-S3: {hoveredPoint.temperature.toFixed(1)}°C</span>
+                                    {:else}
+                                        <span class="chip esp32 offline">🌡️ ESP32-S3: Offline</span>
+                                    {/if}
                                     {#if hoveredPoint.cpu_temperature != null}
                                         <span class="chip mcu">💻 MCU: {hoveredPoint.cpu_temperature.toFixed(1)}°C</span>
                                     {:else}
@@ -219,7 +236,7 @@
                             <line x1="0" y1="300" x2={CHART_WIDTH} y2="300" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
 
                             <!-- Active Hover Vertical Cursor Guide -->
-                            {#if hoveredIdx !== null && displayHistory.length > 1}
+                            {#if isDeviceConnected && hoveredIdx !== null && displayHistory.length > 1}
                                 {@const hoverX = (hoveredIdx / (displayHistory.length - 1)) * CHART_WIDTH}
                                 <line
                                     x1={hoverX}
@@ -234,7 +251,7 @@
                             {/if}
 
                             <!-- Area Under Curve (Ambient Temp) -->
-                            {#if ambientTempPoints}
+                            {#if isDeviceConnected && ambientTempPoints}
                                 <polygon
                                     points={`0,${CHART_HEIGHT} ${ambientTempPoints} ${CHART_WIDTH},${CHART_HEIGHT}`}
                                     fill="url(#ambientGrad)"
@@ -242,7 +259,7 @@
                             {/if}
 
                             <!-- Curve 1: Ambient Temperature Line (Amber) -->
-                            {#if ambientTempPoints}
+                            {#if isDeviceConnected && ambientTempPoints}
                                 <polyline
                                     points={ambientTempPoints}
                                     fill="none"
@@ -255,7 +272,7 @@
                             {/if}
 
                             <!-- Curve 2: MCU Temperature Line (Blue/Cyan) -->
-                            {#if mcuTempPoints}
+                            {#if isDeviceConnected && mcuTempPoints}
                                 <polyline
                                     points={mcuTempPoints}
                                     fill="none"
@@ -269,33 +286,37 @@
                             {/if}
 
                             <!-- Interactive Data Points -->
-                            {#if displayHistory}
+                            {#if isDeviceConnected && displayHistory}
                                 {#each displayHistory as pt, idx}
-                                    {@const c = getCoords(idx, displayHistory.length, pt.temperature || 25.0)}
-                                    <circle
-                                        cx={c.x}
-                                        cy={c.y}
-                                        r={hoveredIdx === idx ? 5.5 : 3.5}
-                                        fill="#f59e0b"
-                                        stroke="#14171d"
-                                        stroke-width="2"
-                                        vector-effect="non-scaling-stroke"
-                                    />
+                                    {#if pt.temperature != null}
+                                        {@const c = getCoords(idx, displayHistory.length, pt.temperature)}
+                                        <circle
+                                            cx={c.x}
+                                            cy={c.y}
+                                            r={hoveredIdx === idx ? 5.5 : 3.5}
+                                            fill="#f59e0b"
+                                            stroke="#14171d"
+                                            stroke-width="2"
+                                            vector-effect="non-scaling-stroke"
+                                        />
+                                    {/if}
                                 {/each}
                             {/if}
                         </svg>
 
                         <!-- Invisible Full-Height Hover Trigger Columns -->
-                        <div class="hover-detector-overlay">
-                            {#each displayHistory as _, idx}
-                                <div
-                                    class="hover-trigger-slice"
-                                    role="presentation"
-                                    onmouseenter={() => (hoveredIdx = idx)}
-                                    onmouseleave={() => (hoveredIdx = null)}
-                                ></div>
-                            {/each}
-                        </div>
+                        {#if isDeviceConnected}
+                            <div class="hover-detector-overlay">
+                                {#each displayHistory as _, idx}
+                                    <div
+                                        class="hover-trigger-slice"
+                                        role="presentation"
+                                        onmouseenter={() => (hoveredIdx = idx)}
+                                        onmouseleave={() => (hoveredIdx = null)}
+                                    ></div>
+                                {/each}
+                            </div>
+                        {/if}
                     </div>
                 </div>
 
@@ -313,14 +334,22 @@
                 <div class="metric-row">
                     <span class="metric-label">Avg. ESP32 Temp</span>
                     <div class="value-box">
-                        <span class="value-text">{avgTemp} °C</span>
+                        {#if isDeviceConnected && avgTemp != null}
+                            <span class="value-text">{avgTemp} °C</span>
+                        {:else}
+                            <span class="value-text offline-val">Offline</span>
+                        {/if}
                     </div>
                 </div>
 
                 <div class="metric-row">
                     <span class="metric-label">Peak VOC</span>
                     <div class="value-box">
-                        <span class="value-text">{peakVoc}</span>
+                        {#if isDeviceConnected && peakVoc != null}
+                            <span class="value-text">{peakVoc}</span>
+                        {:else}
+                            <span class="value-text offline-val">Offline</span>
+                        {/if}
                     </div>
                 </div>
             </div>
@@ -330,42 +359,54 @@
                 <div class="metric-row">
                     <span class="metric-label">Device</span>
                     <div class="value-box mono">
-                        <span class="value-text">{(currentTelemetry?.device_id || 'ESP32-S3-B4').slice(0, 14)}</span>
+                        <span class="value-text" class:offline-val={!isDeviceConnected}>
+                            {isDeviceConnected ? (currentTelemetry?.device_id || 'ESP32-S3').slice(0, 14) : 'Disconnected'}
+                        </span>
                     </div>
                 </div>
 
                 <div class="metric-row">
                     <span class="metric-label">FMW</span>
                     <div class="value-box">
-                        <span class="value-text">{currentTelemetry?.firmware_version || 'v1.0.4'}</span>
+                        <span class="value-text" class:offline-val={!isDeviceConnected}>
+                            {isDeviceConnected ? `v${currentTelemetry?.firmware_version || '1.0.0'}` : 'Offline'}
+                        </span>
                     </div>
                 </div>
 
                 <div class="metric-row">
                     <span class="metric-label">CPU Core 0</span>
                     <div class="value-box">
-                        <span class="value-text">{currentTelemetry?.cpu_load || 18}% @ 240M</span>
+                        <span class="value-text" class:offline-val={!isDeviceConnected}>
+                            {isDeviceConnected && currentTelemetry?.cpu_load != null ? `${currentTelemetry.cpu_load}% @ 240M` : 'Offline'}
+                        </span>
                     </div>
                 </div>
 
                 <div class="metric-row">
                     <span class="metric-label">CPU Core 1</span>
                     <div class="value-box">
-                        <span class="value-text">{Math.max(8, Math.round((currentTelemetry?.cpu_load || 18) * 0.7))}% @ 240M</span>
+                        <span class="value-text" class:offline-val={!isDeviceConnected}>
+                            {isDeviceConnected && currentTelemetry?.cpu_load != null ? `${Math.max(8, Math.round(currentTelemetry.cpu_load * 0.7))}% @ 240M` : 'Offline'}
+                        </span>
                     </div>
                 </div>
 
                 <div class="metric-row">
                     <span class="metric-label">RSSI</span>
                     <div class="value-box">
-                        <span class="value-text">-58 dBm</span>
+                        <span class="value-text" class:offline-val={!isDeviceConnected}>
+                            {isDeviceConnected ? '-58 dBm' : 'Offline'}
+                        </span>
                     </div>
                 </div>
 
                 <div class="metric-row">
                     <span class="metric-label">Heap Free</span>
                     <div class="value-box">
-                        <span class="value-text">284 KB</span>
+                        <span class="value-text" class:offline-val={!isDeviceConnected}>
+                            {isDeviceConnected ? '284 KB' : 'Offline'}
+                        </span>
                     </div>
                 </div>
             </div>
@@ -1365,6 +1406,110 @@
         font-size: 0.72rem;
         overflow-x: auto;
         max-height: 240px;
+    }
+
+    .offline-chart-overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 20px;
+        gap: 6px;
+        z-index: 8;
+        background: rgba(248, 250, 252, 0.88);
+    }
+
+    .offline-chart-icon {
+        font-size: 1.8rem;
+    }
+
+    .offline-chart-overlay strong {
+        font-size: 0.9rem;
+        color: var(--text-primary);
+    }
+
+    .offline-chart-overlay p {
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        max-width: 340px;
+    }
+
+    .value-text.offline-val {
+        color: #dc2626;
+        font-weight: 600;
+    }
+
+    @media (max-width: 768px) {
+        .card {
+            padding: 12px 14px;
+        }
+
+        .card-title-bar {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+        }
+
+        .legend-strip {
+            flex-wrap: wrap;
+            gap: 8px 12px;
+        }
+
+        .temperature-chart-card {
+            min-height: 280px;
+        }
+
+        .chart-main-row,
+        .plot-canvas-area {
+            min-height: 200px;
+        }
+
+        .x-axis-row {
+            padding-left: 0;
+        }
+
+        .toggle-header-row {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 10px;
+        }
+
+        .cam-toggle-btn {
+            width: 100%;
+            text-align: center;
+        }
+
+        .result-log-header {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .table-actions-strip {
+            width: 100%;
+        }
+
+        .status-filters {
+            width: 100%;
+            justify-content: space-between;
+        }
+
+        .filter-pill {
+            flex: 1;
+            text-align: center;
+        }
+
+        .log-search-input {
+            width: 100%;
+            flex: 1;
+        }
+
+        .modal-details-grid {
+            grid-template-columns: 1fr;
+        }
     }
 </style>
 

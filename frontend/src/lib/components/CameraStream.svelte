@@ -875,4 +875,58 @@
         font-weight: 600;
         opacity: 1.0;
     }
+
+    @media (max-width: 900px) {
+        .camera-stream-wrapper {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .viewport-header {
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 10px 12px;
+        }
+
+        .source-mode-switcher {
+            order: 3;
+            width: 100%;
+        }
+
+        .mode-pill-btn {
+            flex: 1;
+            justify-content: center;
+            padding: 6px 10px;
+        }
+
+        .mock-control-bar {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+            padding: 10px 12px;
+        }
+
+        .mock-select-group {
+            width: 100%;
+        }
+
+        .example-select {
+            flex: 1;
+            max-width: none;
+            width: 100%;
+        }
+
+        .mock-actions,
+        .upload-btn {
+            width: 100%;
+            text-align: center;
+        }
+
+        .viewport-footer {
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px 12px;
+        }
+    }
 </style>
