@@ -1,0 +1,38 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add:
+    - -std=gnu17
+    - -D__XTENSA__=1
+    - -DESP_PLATFORM=1
+    - -Wno-unknown-warning-option
+    - -Wno-unknown-attributes
+    - -Wno-ignored-attributes
+    - -Wno-unused-command-line-argument
+  Remove:
+    - "@"
+    - --sysroot
+    - -isysroot
+    - -mlongcalls
+    - -mlong-calls
+    - -mdisable-hardware-atomics
+    - -mtext-section-literals
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -fzero-init-padding-bits
+    - -fzero-init-padding-bits=all
+    - -fno-malloc-dce
+    - -fno-jump-tables
+    - -fno-reorder-blocks
+    - -fno-shrink-wrap
+    - --target=xtensa
+    - -target
+    - xtensa-esp32s3-elf
+    - -Wno-old-style-declaration
+    - -I*intel*
+
+Diagnostics:
+  UnusedIncludes: None
+  Suppress:
+    - drv_unknown_argument
+    - drv_unknown_argument_with_suggestion
+    - pp_expr_bad_token_lparen
