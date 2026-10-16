@@ -1,4 +1,6 @@
 #include <iostream>
+#include <fstream>
+#include <array>
 #include <vector>
 #include <string>
 #include <cstdlib>
@@ -98,10 +100,32 @@ int main(int argc, char** argv) {
         : (backend_base_url + "/api/v1/camera/latest/raw");
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
-    // 4. Initialize Inspection Pipeline Orchestrator (Prioritizing INT8 Models)
-    std::string model_path = "ml/AI1/model/ai1_vision_int8.onnx";
+    // 4. Initialize Inspection Pipeline Orchestrator
+    // Prioritize INT8 model (ml/AI1/model/yolov8n_int8) with fallback to FP32 (ml/AI1/model/yolov8n)
+    std::string model_path;
     if (const char* env_model = std::getenv("MODEL_PATH")) {
         model_path = env_model;
+    } else {
+        const std::array<std::string, 8> default_model_candidates = {
+            "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "ml/AI1/model/yolov8n/ai1_vision.onnx",
+            "ml/AI1/model/yolov8n/yolo8n.onnx",
+            "/app/ml/AI1/model/yolov8n/ai1_vision.onnx",
+            "/app/ml/AI1/model/yolov8n/yolo8n.onnx",
+            "../ml/AI1/model/yolov8n/ai1_vision.onnx"
+        };
+        for (const auto& candidate : default_model_candidates) {
+            std::ifstream check_file(candidate);
+            if (check_file.good()) {
+                model_path = candidate;
+                break;
+            }
+        }
+        if (model_path.empty()) {
+            model_path = "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx";
+        }
     }
 
     InspectionPipeline pipeline;

@@ -107,7 +107,7 @@ COPY --from=builder /usr/local/bin/ncnn_generator /usr/local/bin/ncnn_generator
 
 # 10. Directory & Ownership Setup (Permission Hardening)
 # Create full directory structure, copy initial weights, and configure permissions
-RUN mkdir -p /app/ml/AI1/model /app/weights
+RUN mkdir -p /app/ml/AI1/model/yolov8n /app/ml/AI1/model/yolov8n_int8 /app/weights
 COPY --from=builder /app/weights/ /app/weights/
 
 RUN chown -R visionuser:visionuser /app && \
