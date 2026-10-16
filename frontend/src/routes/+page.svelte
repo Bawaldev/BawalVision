@@ -77,9 +77,11 @@
         device_id: 'WAITING_DEVICE',
         firmware_version: '1.0.0',
         device_core: 0,
-        temperature: 0,
-        cpu_load: 0,
-        timestamp: Math.floor(Date.now() / 1000)
+        temperature: null,
+        cpu_temperature: null,
+        cpu_load: null,
+        timestamp: Math.floor(Date.now() / 1000),
+        is_connected: false
     });
 
     let logs = $state<InferenceLogEntry[]>([
@@ -118,19 +120,25 @@
             hasCamera = cam.active;
             if (cam.active && cam.deviceId) {
                 systemConfig.deviceId = cam.deviceId;
-                isOnline = true;
             }
 
             // 3. Telemetry Ingress from ESP32-S3
             const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
             if (tel) {
                 telemetry = tel;
-                if (tel.is_connected) {
-                    isOnline = true;
-                }
-                if (!telemetryHistory.some(h => h.timestamp === tel.timestamp)) {
+                isOnline = Boolean(tel.is_connected) || cam.active;
+                if (tel.is_connected && !telemetryHistory.some(h => h.timestamp === tel.timestamp)) {
                     telemetryHistory = [...telemetryHistory.slice(-19), tel];
                 }
+            } else {
+                isOnline = cam.active;
+                telemetry = {
+                    ...telemetry,
+                    temperature: null,
+                    cpu_temperature: null,
+                    cpu_load: null,
+                    is_connected: false
+                };
             }
 
             // 4. Live Real-time Inspections & Dynamic Bounding Boxes
@@ -202,24 +210,31 @@
         }
     }
 
-    onMount(async () => {
-        // Restore active tab from URL hash or localStorage so refresh maintains current view
-        if (typeof window !== 'undefined') {
-            try {
-                const hash = window.location.hash.toLowerCase();
-                if (hash.includes('telemetry') || hash.includes('result')) {
-                    activeTab = 'Telemetry Analytics & Result Log';
-                } else if (hash.includes('setting')) {
-                    activeTab = 'System & Cloud Settings';
-                } else if (hash.includes('dashboard')) {
-                    activeTab = 'Dashboard';
-                } else {
-                    const savedTab = localStorage.getItem('bawal_active_tab');
-                    if (savedTab && VALID_TABS.includes(savedTab)) {
-                        activeTab = savedTab;
-                    }
+    function syncTabFromLocation() {
+        if (typeof window === 'undefined') return;
+        try {
+            const hash = window.location.hash.toLowerCase();
+            if (hash.includes('telemetry') || hash.includes('result')) {
+                activeTab = 'Telemetry Analytics & Result Log';
+            } else if (hash.includes('setting')) {
+                activeTab = 'System & Cloud Settings';
+            } else if (hash.includes('dashboard')) {
+                activeTab = 'Dashboard';
+            } else {
+                const savedTab = localStorage.getItem('bawal_active_tab');
+                if (savedTab && VALID_TABS.includes(savedTab)) {
+                    activeTab = savedTab;
                 }
-            } catch {}
+            }
+        } catch {}
+    }
+
+    onMount(async () => {
+        // Restore active tab from URL hash or localStorage and listen for SPA Back/Forward navigation
+        syncTabFromLocation();
+        if (typeof window !== 'undefined') {
+            window.addEventListener('hashchange', syncTabFromLocation);
+            window.addEventListener('popstate', syncTabFromLocation);
         }
 
         // Initial polling
@@ -233,6 +248,10 @@
 
     onDestroy(() => {
         if (pollingTimer) clearInterval(pollingTimer);
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('hashchange', syncTabFromLocation);
+            window.removeEventListener('popstate', syncTabFromLocation);
+        }
     });
 
     // Handlers
@@ -371,6 +390,7 @@
             activeDevice={systemConfig.deviceId || 'DISCONNECTED'}
             fps={hasCamera ? 29.8 : 0.0}
             latencyMs={hasCamera ? 5.4 : 0.0}
+            {isOnline}
             onToggleGraviton={() => {
                 if (gravitonAvailable) {
                     systemConfig.gravitonEngineEnabled = !systemConfig.gravitonEngineEnabled;
@@ -418,6 +438,15 @@
                     onDeviceConnectionChange={(connected, devId) => {
                         isOnline = connected;
                         if (devId) systemConfig.deviceId = devId;
+                        if (!connected) {
+                            telemetry = {
+                                ...telemetry,
+                                temperature: null,
+                                cpu_temperature: null,
+                                cpu_load: null,
+                                is_connected: false
+                            };
+                        }
                     }}
                     onSaveConfig={handleSaveConfig}
                 />

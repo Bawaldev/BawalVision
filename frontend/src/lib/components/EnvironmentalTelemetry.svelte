@@ -2,29 +2,26 @@
     interface Props {
         isConnected?: boolean;
         cpuTemperature?: number | null;
-        temperature?: number;
+        temperature?: number | null;
         cpuLoad?: number | null;
         firmwareVersion?: string;
     }
 
     let {
-        isConnected = true,
+        isConnected = false,
         cpuTemperature = null,
-        temperature,
+        temperature = null,
         cpuLoad = null,
         firmwareVersion = '1.0.4'
     }: Props = $props();
 
-    // The live temperature is ESP-IDF telemetry (ESP32-S3 real temperature)
-    let displayRealTemp = $derived(
-        temperature != null && temperature > 0
-            ? temperature
-            : 25.0
+    // ESP32-S3 real temperature, CPU temp, and CPU utility are ONLY available if the ESP device is connected
+    let isDeviceActive = $derived(
+        Boolean(isConnected) && temperature != null && temperature > 0
     );
 
-    // CPU temp and CPU utility are ONLY available if the ESP device is connected
-    let isDeviceActive = $derived(
-        isConnected && cpuTemperature != null && cpuLoad != null
+    let displayRealTemp = $derived(
+        isDeviceActive && temperature != null ? temperature : null
     );
 </script>
 
@@ -42,11 +39,16 @@
 
     <!-- Horizontal IoT Metrics Strip -->
     <div class="metrics-row">
-        <div class="stat-item">
+        <div class="stat-item" class:is-disabled={!isDeviceActive}>
             <span class="icon">🌡️</span>
             <div class="stat-text">
-                <span class="val">{displayRealTemp.toFixed(1)} <small>°C</small></span>
-                <span class="stat-tag">ESP32-S3</span>
+                {#if isDeviceActive && displayRealTemp != null}
+                    <span class="val">{displayRealTemp.toFixed(1)} <small>°C</small></span>
+                    <span class="stat-tag">ESP32-S3</span>
+                {:else}
+                    <span class="val na">-- <small>°C</small></span>
+                    <span class="stat-tag offline">Offline</span>
+                {/if}
             </div>
         </div>
         <div class="stat-item" class:is-disabled={!isDeviceActive}>
@@ -77,13 +79,17 @@
 
     <!-- Mini Telemetry Level Meters -->
     <div class="meters-container">
-        <div class="meter-bar-item">
+        <div class="meter-bar-item" class:meter-disabled={!isDeviceActive}>
             <div class="meter-labels">
                 <span>ESP32-S3 Real Temperature</span>
-                <strong>{displayRealTemp.toFixed(1)} °C</strong>
+                {#if isDeviceActive && displayRealTemp != null}
+                    <strong>{displayRealTemp.toFixed(1)} °C</strong>
+                {:else}
+                    <strong class="na-label">Unavailable (Disconnected)</strong>
+                {/if}
             </div>
             <div class="progress-track">
-                <div class="progress-fill esp-temp" style={`width: ${Math.min(100, Math.max(0, (displayRealTemp / 80) * 100))}%`}></div>
+                <div class="progress-fill esp-temp" style={`width: ${isDeviceActive && displayRealTemp != null ? Math.min(100, Math.max(0, (displayRealTemp / 80) * 100)) : 0}%`}></div>
             </div>
         </div>
 
@@ -119,6 +125,8 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
     }
 
     .header-left {
@@ -184,9 +192,9 @@
     }
 
     .metrics-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
         background: #f8fafc;
         padding: 10px 14px;
         border-radius: var(--radius-md);
@@ -197,10 +205,12 @@
         display: flex;
         align-items: center;
         gap: 8px;
+        min-width: 0;
     }
 
     .stat-item .icon {
         font-size: 0.95rem;
+        flex-shrink: 0;
     }
 
     .stat-item .val {
@@ -208,6 +218,7 @@
         font-weight: 700;
         color: var(--text-primary);
         font-family: var(--font-mono);
+        white-space: nowrap;
     }
 
     .stat-item .val small {
@@ -219,6 +230,7 @@
     .stat-text {
         display: flex;
         flex-direction: column;
+        min-width: 0;
     }
 
     .stat-tag {
@@ -244,6 +256,9 @@
     .meter-labels {
         display: flex;
         justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
         font-size: 0.72rem;
         color: var(--text-secondary);
         font-weight: 500;
@@ -278,5 +293,16 @@
 
     .progress-fill.cpu {
         background: #16a34a;
+    }
+
+    @media (max-width: 420px) {
+        .metrics-row {
+            padding: 8px 10px;
+            gap: 6px;
+        }
+
+        .stat-item .val {
+            font-size: 0.78rem;
+        }
     }
 </style>

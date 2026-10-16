@@ -19,8 +19,9 @@
         history.length > 1
             ? history.map((pt, idx) => {
                 const x = (idx / (history.length - 1)) * 580 + 10;
-                // Temperature scale from 15 to 45 °C
-                const norm = Math.max(0, Math.min(1, (pt.temperature - 15) / 30));
+                const val = pt.temperature ?? 36.5;
+                // Temperature scale from 15 to 65 °C
+                const norm = Math.max(0, Math.min(1, (val - 15) / 50));
                 const y = 140 - (norm * 110);
                 return `${x.toFixed(1)},${y.toFixed(1)}`;
             }).join(' ')
@@ -38,7 +39,11 @@
                 <div class="room-title-box">
                     <h3>Inspection Station 01</h3>
                     <div class="room-meta-strip">
-                        <span class="stat-meta">🌡️ ESP32-S3: {currentTelemetry?.temperature != null && currentTelemetry.temperature > 0 ? currentTelemetry.temperature.toFixed(1) : '25.0'} °C</span>
+                        {#if currentTelemetry?.is_connected && currentTelemetry?.temperature != null && currentTelemetry.temperature > 0}
+                            <span class="stat-meta">🌡️ ESP32-S3: {currentTelemetry.temperature.toFixed(1)} °C</span>
+                        {:else}
+                            <span class="stat-meta dim">🌡️ ESP32-S3: N/A (Offline)</span>
+                        {/if}
                         {#if currentTelemetry?.is_connected && currentTelemetry?.cpu_temperature != null}
                             <span class="stat-meta">💻 MCU: {currentTelemetry.cpu_temperature.toFixed(1)} °C</span>
                             <span class="stat-meta">⚡ {currentTelemetry.cpu_load ?? 0} % Load</span>
@@ -47,7 +52,7 @@
                             <span class="stat-meta dim">⚡ CPU: Offline</span>
                         {/if}
                         <span class="stat-meta">📡 100 Hz Bus</span>
-                        <span class="stat-meta">🏷️ {currentTelemetry?.firmware_version || 'v1.0.0'}</span>
+                        <span class="stat-meta">🏷️ {currentTelemetry?.is_connected ? (currentTelemetry?.firmware_version || 'v1.0.0') : 'Offline'}</span>
                     </div>
                 </div>
             </div>
@@ -77,7 +82,7 @@
                     <div class="tooltip-row">
                         <span class="tooltip-dot orange"></span>
                         <span class="tooltip-label">ESP32-S3 Temp:</span>
-                        <strong class="tooltip-val">{(hoveredPoint.temperature || 25.0).toFixed(1)} °C</strong>
+                        <strong class="tooltip-val">{hoveredPoint.temperature != null ? `${hoveredPoint.temperature.toFixed(1)} °C` : 'N/A (Offline)'}</strong>
                     </div>
                     <div class="tooltip-row">
                         <span class="tooltip-dot pink"></span>
@@ -124,7 +129,7 @@
                         <!-- Threshold Marker Dots & Badges (Matching Reference image) -->
                         {#each history as pt, idx}
                             {@const cx = (idx / (history.length - 1)) * 580 + 10}
-                            {@const norm = Math.max(0, Math.min(1, ((pt.temperature || 24.5) - 15) / 30))}
+                            {@const norm = Math.max(0, Math.min(1, ((pt.temperature ?? 36.5) - 15) / 50))}
                             {@const cy = 140 - (norm * 110)}
                             {#if idx === 0 || idx === Math.floor(history.length / 2) || idx === history.length - 1}
                                 <circle cx={cx} cy={cy} r="4.5" fill="#f59e0b" stroke="#181c24" stroke-width="2" />

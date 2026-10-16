@@ -65,7 +65,7 @@ export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<Telemetr
                 firmware_version: data.firmware_version || '1.0.0',
                 device_core: data.device_core || 2,
                 cpu_temperature: isConnected && data.cpu_temperature != null ? Number(data.cpu_temperature) : null,
-                temperature: data.temperature != null ? Number(data.temperature) : 25.0,
+                temperature: isConnected && data.temperature != null ? Number(data.temperature) : null,
                 cpu_load: isConnected && data.cpu_load != null ? Number(data.cpu_load) : null,
                 timestamp: data.timestamp
                     ? Number(data.timestamp)

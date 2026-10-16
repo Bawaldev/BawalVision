@@ -350,36 +350,36 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			// Device is actively connected if telemetry was received within the last 30 seconds
 			isLiveConnected := (nowUnix - live.Timestamp) <= 30
 
-			realT := live.Temperature
-			if realT <= 0 {
-				realT = live.CPUTemperature
-			}
-			if realT <= 0 {
-				realT = live.FoodTemperature
-			}
-			if realT <= 0 {
-				realT = 25.0
-			}
-
 			resp := fiber.Map{
 				"device_id":        live.DeviceID,
 				"firmware_version": live.FirmwareVersion,
-				"temperature":      realT,
 				"timestamp":        live.Timestamp,
 				"is_connected":     isLiveConnected,
 				"ip_address":       live.IPAddress,
 				"connection_mode":  live.ConnectionMode,
 			}
 
-			// CPU temperature and CPU utility are only available if the ESP device is connected
+			// ESP32-S3 real temperature, CPU temperature, and CPU utility are only available if the ESP device is connected
 			if isLiveConnected {
+				realT := live.Temperature
+				if realT <= 0 {
+					realT = live.CPUTemperature
+				}
+				if realT <= 0 {
+					realT = live.FoodTemperature
+				}
+				if realT <= 0 {
+					realT = 36.5
+				}
 				cpuT := live.CPUTemperature
 				if cpuT <= 0 {
-					cpuT = 36.5
+					cpuT = realT
 				}
+				resp["temperature"] = realT
 				resp["cpu_temperature"] = cpuT
 				resp["cpu_load"] = live.CurrentCPULoad
 			} else {
+				resp["temperature"] = nil
 				resp["cpu_temperature"] = nil
 				resp["cpu_load"] = nil
 			}
@@ -395,7 +395,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"device_id":        record.DeviceID,
 			"firmware_version": record.FirmwareVersion,
 			"cpu_temperature":  nil, // Not available: ESP device not actively connected
-			"temperature":      record.Temperature,
+			"temperature":      nil, // Not available: ESP device not actively connected
 			"cpu_load":         nil, // Not available: ESP device not actively connected
 			"is_spoiled":       record.IsSpoiled,
 			"t_safe_hours":     record.TSafeHours,
