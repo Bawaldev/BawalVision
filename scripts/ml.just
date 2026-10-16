@@ -219,17 +219,6 @@ generate-ncnn-cpp model="realesr-animevideov3-x2" scale="2" out="weights":
     ./ml/ncnn_generator "{{ model }}" "{{ scale }}" "{{ out }}"
     echo "[✓] NCNN models successfully created and synced to {{ out }}/"
 
-# Generate or fetch NCNN model weights via Python pipeline
-generate-ncnn model="realesr-animevideov3-x2" scale="2" out="weights":
-    #!/usr/bin/env bash
-    cd {{ justfile_directory() }}
-    if [ -f .venv/bin/python3 ]; then
-        .venv/bin/python3 ml/generate_ncnn_models.py --model-name "{{ model }}" --scale "{{ scale }}" --output-dir "{{ out }}"
-    elif [ -f .venv/Scripts/python.exe ]; then
-        .venv/Scripts/python.exe ml/generate_ncnn_models.py --model-name "{{ model }}" --scale "{{ scale }}" --output-dir "{{ out }}"
-    else
-        python3 ml/generate_ncnn_models.py --model-name "{{ model }}" --scale "{{ scale }}" --output-dir "{{ out }}" || just generate-ncnn-cpp "{{ model }}" "{{ scale }}" "{{ out }}"
-    fi
 
 # Sanity check and inspect ONNX model tensors and execution provider
 test-model-ai1 model="ml/AI1/model/ai1_vision.onnx":
