@@ -88,25 +88,3 @@ func TestUSBSecurityValidation(t *testing.T) {
 		t.Fatalf("unexpected sanitized outputs: %s, %s, %s, %s", ssid, pass, ip, port)
 	}
 }
-
-	// 2. Reject control character injection & invalid IPv4/port in Wi-Fi inputs
-	if _, _, _, _, err := SanitizeWiFiInputs("MyWiFi\n{\"cmd\":\"evil\"}", "pass1234", "192.168.1.10", "8080"); err == nil {
-		t.Fatalf("expected SanitizeWiFiInputs to reject newline injection in SSID")
-	}
-	if _, _, _, _, err := SanitizeWiFiInputs("MyWiFi", "pass1234", "192.168.1.999; rm -rf /", "8080"); err == nil {
-		t.Fatalf("expected SanitizeWiFiInputs to reject invalid backend IPv4")
-	}
-	if _, _, _, _, err := SanitizeWiFiInputs("MyWiFi", "pass1234", "192.168.1.10", "99999"); err == nil {
-		t.Fatalf("expected SanitizeWiFiInputs to reject out-of-range port")
-	}
-
-	// 3. Accept valid inputs
-	ssid, pass, ip, port, err := SanitizeWiFiInputs("BawalLab_WiFi", "ValidPass#2026", "192.168.1.25", "8080")
-	if err != nil {
-		t.Fatalf("expected valid Wi-Fi inputs to pass, got error: %v", err)
-	}
-	if ssid != "BawalLab_WiFi" || pass != "ValidPass#2026" || ip != "192.168.1.25" || port != "8080" {
-		t.Fatalf("unexpected sanitized outputs: %s, %s, %s, %s", ssid, pass, ip, port)
-	}
-}
-
