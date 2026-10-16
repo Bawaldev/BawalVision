@@ -7,6 +7,15 @@ export interface FoodDetection {
     category?: 'Carbohydrate' | 'Protein' | 'Vegetable' | 'Fruit' | 'Side';
 }
 
+export interface SceneOpticalMetrics {
+    avg_r: number;
+    avg_g: number;
+    avg_b: number;
+    lux_luminance: number;
+    color_temperature: number;
+    white_balance_status: 'BALANCED' | 'WARM' | 'COOL' | 'UNDEREXPOSED' | 'OVEREXPOSED' | string;
+}
+
 export interface InspectionRecord {
     id: string;
     user_id?: string;
@@ -19,6 +28,10 @@ export interface InspectionRecord {
     cpu_load: number;
     is_spoiled: boolean;
     t_safe_hours: number;
+    lux_luminance?: number;
+    white_balance_status?: string;
+    color_temperature?: number;
+    scene_optical?: SceneOpticalMetrics;
     inspection_foods?: Array<{
         id: string;
         inspection_id: string;
@@ -47,6 +60,7 @@ export interface TelemetryPayload {
     server_memory_mb?: number | null;
     timestamp: number;
     is_connected?: boolean;
+    scene_optical?: SceneOpticalMetrics;
 }
 
 export interface InferenceLogEntry {

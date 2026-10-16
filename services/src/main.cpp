@@ -225,9 +225,18 @@ int main(int argc, char** argv) {
                 const bool debounce_ok = (elapsed_since_dispatch >= 1000);
 
                 if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty() && curl_db) {
+                    const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
                     std::ostringstream json_ss;
                     json_ss << "{"
                             << "\"device_id\":\"" << dev_id << "\","
+                            << "\"scene_optical\":{"
+                            << "\"avg_r\":" << std::fixed << std::setprecision(1) << optical.avg_r << ","
+                            << "\"avg_g\":" << optical.avg_g << ","
+                            << "\"avg_b\":" << optical.avg_b << ","
+                            << "\"lux_luminance\":" << optical.lux_luminance << ","
+                            << "\"color_temperature\":" << optical.color_temperature << ","
+                            << "\"white_balance_status\":\"" << optical.white_balance_status << "\""
+                            << "},"
                             << "\"detections\":[";
                     for (size_t i = 0; i < valid_detections.size(); ++i) {
                         const auto& vd = valid_detections[i];
@@ -253,6 +262,7 @@ int main(int argc, char** argv) {
                         last_state_signature = current_state_sig;
                         std::cout << "[DISPATCH] Inspection payload saved to PostgreSQL (" 
                                   << valid_detections.size() << " detected foods | "
+                                  << "Optical: " << int(optical.lux_luminance) << " lx, " << optical.white_balance_status << " | "
                                   << (state_changed ? "STATE CHANGE" : "HEARTBEAT") << ")\n";
                     }
                 }

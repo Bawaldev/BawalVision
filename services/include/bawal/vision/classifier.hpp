@@ -85,10 +85,38 @@ struct alignas(64) TrackedItem {
 static_assert(sizeof(TrackedItem) == 128, "TrackedItem must be exactly 128 bytes (2 CPU cache lines)");
 static_assert(alignof(TrackedItem) == 64, "TrackedItem must be 64-byte aligned");
 
+/**
+ * @brief High-speed hardware-accelerated scene optical and illumination telemetry.
+ */
+struct SceneOpticalMetrics {
+    double sum_b{0.0};
+    double sum_g{0.0};
+    double sum_r{0.0};
+    int sampled_pixels{0};
+    float avg_b{0.0f};
+    float avg_g{0.0f};
+    float avg_r{0.0f};
+    float lux_luminance{0.0f};           ///< Standard ITU-R BT.601 perceived luminance (lux proxy)
+    int color_temperature{6500};         ///< Estimated Correlated Color Temperature in Kelvin
+    std::string white_balance_status{"BALANCED"}; ///< BALANCED, WARM, COOL, UNDEREXPOSED, OVEREXPOSED
+};
+
+/**
+ * @brief Vectorized AVX2 / SIMD BGR channel summation across sampled matrix rows.
+ */
+void computeBGRSumsAVX2(const cv::Mat& bgr_mat, double& out_sum_b, double& out_sum_g, double& out_sum_r, int& out_sampled_pixels);
+
+/**
+ * @brief Computes ambient illumination and color balance for the scene or food ROI.
+ */
+[[nodiscard]] SceneOpticalMetrics evaluateSceneOptical(const cv::Mat& bgr_mat);
+
 class FoodClassifier {
 public:
     FoodClassifier();
     ~FoodClassifier() = default;
+
+    [[nodiscard]] const SceneOpticalMetrics& getLastOpticalMetrics() const noexcept { return m_last_optical; }
 
     /**
      * @brief Initializes the ONNX Runtime Engine with the YOLOv8 food detection model.
@@ -140,6 +168,7 @@ private:
     std::vector<std::string_view> m_class_names;
     std::mutex m_infer_mutex;
     bool m_is_ready{false};
+    SceneOpticalMetrics m_last_optical;
 
     // ONNX Runtime Native Resources
     Ort::Env m_env;

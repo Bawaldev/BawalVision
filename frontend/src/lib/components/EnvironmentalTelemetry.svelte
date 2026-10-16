@@ -1,10 +1,13 @@
 <script lang="ts">
+    import type { SceneOpticalMetrics } from '../types';
+
     interface Props {
         isConnected?: boolean;
         cpuTemperature?: number | null;
         temperature?: number | null;
         cpuLoad?: number | null;
         firmwareVersion?: string;
+        sceneOptical?: SceneOpticalMetrics;
     }
 
     let {
@@ -12,7 +15,8 @@
         cpuTemperature = null,
         temperature = null,
         cpuLoad = null,
-        firmwareVersion = '1.0.4'
+        firmwareVersion = '1.0.4',
+        sceneOptical = undefined
     }: Props = $props();
 
     // ESP32-S3 real temperature, CPU temp, and CPU utility are ONLY available if the ESP device is connected
@@ -94,6 +98,18 @@
                 <div class="progress-fill cpu" style={`width: ${isDeviceActive && cpuLoad != null ? Math.min(100, Math.max(0, cpuLoad)) : 0}%`}></div>
             </div>
         </div>
+
+        {#if sceneOptical && sceneOptical.lux_luminance != null && sceneOptical.lux_luminance > 0}
+            <div class="meter-bar-item">
+                <div class="meter-labels">
+                    <span>Ambient Illumination (AVX2 Lux)</span>
+                    <strong>{sceneOptical.lux_luminance.toFixed(0)} lx • {sceneOptical.white_balance_status} ({sceneOptical.color_temperature}K)</strong>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill optical" style={`width: ${Math.min(100, (sceneOptical.lux_luminance / 255) * 100)}%`}></div>
+                </div>
+            </div>
+        {/if}
     </div>
 </div>
 
@@ -281,6 +297,10 @@
 
     .progress-fill.cpu {
         background: #16a34a;
+    }
+
+    .progress-fill.optical {
+        background: linear-gradient(90deg, #f59e0b, #eab308);
     }
 
     @media (max-width: 420px) {

@@ -19,7 +19,8 @@
         FoodDetection,
         TelemetryPayload,
         InferenceLogEntry,
-        SystemConfig
+        SystemConfig,
+        SceneOpticalMetrics
     } from '$lib/types';
 
     // Helper to determine category
@@ -103,6 +104,7 @@
     let passRate = $derived(totalPlates > 0 ? (totalAccepted / totalPlates) * 100 : 0.0);
     let bufferedRecords = $state(0);
     let telemetryHistory = $state<TelemetryPayload[]>([]);
+    let latestOptical = $state<SceneOpticalMetrics | undefined>(undefined);
 
     let pollingTimer: any = null;
 
@@ -149,6 +151,9 @@
                 if (telemetry.is_connected && telemetry.temperature != null && !telemetryHistory.some(h => h.timestamp === telemetry.timestamp)) {
                     telemetryHistory = [...telemetryHistory.slice(-19), telemetry];
                 }
+                if (tel.scene_optical) {
+                    latestOptical = tel.scene_optical;
+                }
             } else {
                 isOnline = cam.active;
                 telemetry = {
@@ -167,6 +172,9 @@
             if (latestLive && latestLive.detections && latestLive.detections.length > 0) {
                 if (latestLive.is_live && (cam.active || (telemetry && telemetry.is_connected))) {
                     isOnline = true;
+                }
+                if (latestLive.scene_optical) {
+                    latestOptical = latestLive.scene_optical;
                 }
                 hasLiveDetections = true;
                 detections = latestLive.detections.map((det: any) => {
@@ -461,6 +469,7 @@
                     {hasCamera}
                     {bufferedRecords}
                     {isInspecting}
+                    sceneOptical={latestOptical || telemetry?.scene_optical}
                     onForceReject={handleForceReject}
                     onInspectTray={handleInspectTray}
                     onClearLogs={handleClearLogs}

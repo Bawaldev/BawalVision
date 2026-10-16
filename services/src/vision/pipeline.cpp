@@ -164,6 +164,7 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     out_inspection.dewarped_image = enhanced;
 
     out_inspection.detections = active_detections;
+    out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
     const int64_t t_end = cv::getTickCount();
