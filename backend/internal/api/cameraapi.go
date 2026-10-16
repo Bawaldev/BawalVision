@@ -24,7 +24,12 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 	clientIP := c.IP()
 
 	existing, hasExisting := inspection.GlobalInspectionStore.GetLatestTelemetry(deviceID)
-	if hasExisting && (nowUnix-existing.Timestamp) < 6 && c.Get("X-ESP-Temp") == "" {
+	if hasExisting && c.Get("X-ESP-Temp") == "" {
+		existing.Timestamp = nowUnix
+		if clientIP != "" {
+			existing.IPAddress = clientIP
+		}
+		inspection.GlobalInspectionStore.StoreTelemetry(existing)
 		return
 	}
 

@@ -96,9 +96,15 @@
         }
     }
 
+    $effect(() => {
+        if (!isOnline && connectionStatus === 'connected') {
+            connectionStatus = 'disconnected';
+        }
+    });
+
     onMount(() => {
         refreshHardwareStatus();
-        const timer = setInterval(refreshHardwareStatus, 4000);
+        const timer = setInterval(refreshHardwareStatus, 1000);
         return () => clearInterval(timer);
     });
 

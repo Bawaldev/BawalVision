@@ -147,7 +147,7 @@
             const latestLive: any = await fetchLatestInspection(systemConfig.backendUrl);
             let hasLiveDetections = false;
             if (latestLive && latestLive.detections && latestLive.detections.length > 0) {
-                if (latestLive.is_live) {
+                if (latestLive.is_live && (cam.active || (telemetry && telemetry.is_connected))) {
                     isOnline = true;
                 }
                 hasLiveDetections = true;
