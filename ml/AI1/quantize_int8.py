@@ -1,6 +1,5 @@
 import os
 import glob
-import shutil
 from pathlib import Path
 import cv2
 import numpy as np
@@ -12,18 +11,6 @@ from onnxruntime.quantization import (
     QuantFormat,
     CalibrationMethod
 )
-
-try:
-    import mlflow
-    MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
-    MLFLOW_EXPERIMENT_NAME = "MBG-BawalVision-YOLOv8n"
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
-    MLFLOW_ENABLED = True
-except Exception as e:
-    print(f"[!] MLflow tracking offline/skipped ({e}). Proceeding with local INT8 quantization.")
-    MLFLOW_ENABLED = False
-    mlflow = None
 
 # 1. Pipeline Reader Data Calibration 
 class YoloCalibrationDataReader(CalibrationDataReader):
@@ -71,20 +58,16 @@ class YoloCalibrationDataReader(CalibrationDataReader):
 
 # 2. Quantitze main funct
 SCRIPT_DIR = Path(__file__).resolve().parent
-INPUT_ONNX = SCRIPT_DIR / "model" / "ai1_vision.onnx"
-OUTPUT_ONNX = SCRIPT_DIR / "model" / "ai1_vision_int8.onnx"
+INPUT_ONNX = SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision.onnx"
+OUTPUT_DIR = SCRIPT_DIR / "model" / "yolov8n_int8"
+OUTPUT_ONNX = OUTPUT_DIR / "ai1_vision_int8.onnx"
 CALIB_DIR = SCRIPT_DIR / "yolo_dataset" / "images" / "train"
-DOCKER_WEIGHTS_INT8 = SCRIPT_DIR.parent.parent / "weights" / "yolo8n_int8.onnx"
-DOCKER_WEIGHTS_AI1_INT8 = SCRIPT_DIR.parent.parent / "weights" / "ai1_vision_int8.onnx"
-DOCKER_WEIGHTS_FALLBACK = SCRIPT_DIR.parent.parent / "weights" / "yolo8n.onnx"
 
 def main():
     if not INPUT_ONNX.exists():
         raise FileNotFoundError(f"Source FP32 model not found at: {INPUT_ONNX}")
 
-    if MLFLOW_ENABLED and mlflow:
-        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Retrieve input layer name from ONNX graph
     session = ort.InferenceSession(str(INPUT_ONNX), providers=["CPUExecutionProvider"])
@@ -102,7 +85,7 @@ def main():
         model_output=str(OUTPUT_ONNX),
         calibration_data_reader=reader,
         quant_format=QuantFormat.QDQ,     # Format QDQ optimal for AVX2/VNNI accel
-        per_channel=True,                # Universal per-tensor quantization (broad compatibility across ONNX opsets)
+        per_channel=False,               # Universal per-tensor quantization (broad compatibility across ONNX opsets)
         calibrate_method=CalibrationMethod.Entropy,  # Entropy calibration for better accuracy
         weight_type=QuantType.QInt8,       
         activation_type=QuantType.QUInt8, # UINT8 Activation
@@ -118,25 +101,6 @@ def main():
     print(f" -> FP32 Model Size : {fp32_size_mb:.2f} MB")
     print(f" -> INT8 Model Size : {int8_size_mb:.2f} MB ({reduction_pct:.1f}% reduction)")
 
-    if MLFLOW_ENABLED and mlflow:
-        with mlflow.start_run(run_name="yolov8n_ptq_int8"):
-            mlflow.log_params({
-                "quantization_type": "Static_PTQ_QDQ",
-                "per_channel": True,
-                "calibration_samples": 80
-            })
-            mlflow.log_metrics({
-                "model_fp32_size_mb": fp32_size_mb,
-                "model_int8_size_mb": int8_size_mb,
-                "size_reduction_pct": reduction_pct
-            })
-            mlflow.log_artifact(str(OUTPUT_ONNX), artifact_path="model_int8")
-
-    # Copy to Docker Vision weights folder
-    for target in (DOCKER_WEIGHTS_INT8, DOCKER_WEIGHTS_AI1_INT8):
-        if target.parent.exists():
-            shutil.copy2(OUTPUT_ONNX, target)
-            print(f"[✓] INT8 model synced to: {target}")
 
 if __name__ == "__main__":
     main()
