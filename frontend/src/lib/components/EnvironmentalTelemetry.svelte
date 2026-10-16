@@ -44,19 +44,7 @@
             <div class="stat-text">
                 {#if isDeviceActive && displayRealTemp != null}
                     <span class="val">{displayRealTemp.toFixed(1)} <small>°C</small></span>
-                    <span class="stat-tag">ESP32-S3</span>
-                {:else}
-                    <span class="val na">-- <small>°C</small></span>
-                    <span class="stat-tag offline">Offline</span>
-                {/if}
-            </div>
-        </div>
-        <div class="stat-item" class:is-disabled={!isDeviceActive}>
-            <span class="icon">💻</span>
-            <div class="stat-text">
-                {#if isDeviceActive && cpuTemperature != null}
-                    <span class="val">{cpuTemperature.toFixed(1)} <small>°C</small></span>
-                    <span class="stat-tag">MCU Core</span>
+                    <span class="stat-tag">ESP32-S3 Temp</span>
                 {:else}
                     <span class="val na">-- <small>°C</small></span>
                     <span class="stat-tag offline">Offline</span>
@@ -68,7 +56,7 @@
             <div class="stat-text">
                 {#if isDeviceActive && cpuLoad != null}
                     <span class="val">{cpuLoad} <small>%</small></span>
-                    <span class="stat-tag">Load</span>
+                    <span class="stat-tag">CPU Load</span>
                 {:else}
                     <span class="val na">-- <small>%</small></span>
                     <span class="stat-tag offline">Offline</span>
@@ -81,7 +69,7 @@
     <div class="meters-container">
         <div class="meter-bar-item" class:meter-disabled={!isDeviceActive}>
             <div class="meter-labels">
-                <span>ESP32-S3 Real Temperature</span>
+                <span>ESP32-S3 Temperature</span>
                 {#if isDeviceActive && displayRealTemp != null}
                     <strong>{displayRealTemp.toFixed(1)} °C</strong>
                 {:else}
@@ -193,7 +181,7 @@
 
     .metrics-row {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(2, 1fr);
         gap: 10px;
         background: #f8fafc;
         padding: 10px 14px;

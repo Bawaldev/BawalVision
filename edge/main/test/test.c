@@ -22,18 +22,16 @@ void test_telemetry_producer_task(void *pvParameters) {
     for (;;) {
         time_t now;
         time(&now);
-        float real_temp = get_esp32_cpu_temperature();
         live_data.timestamp = (int64_t)now;
-        live_data.cpu_temperature = real_temp;
-        live_data.temperature = real_temp;
+        live_data.temperature = get_esp32_cpu_temperature();
         live_data.current_cpu_load = get_cpu_usage_percentage();
 
-        ESP_LOGI(TAG, "Enqueuing hardware telemetry [ID: %s, RealTemp: %.2f C, CPUTemp: %.2f C, CPU: %d%%]...", 
-                 live_data.device_id, live_data.temperature, live_data.cpu_temperature, live_data.current_cpu_load);
+        ESP_LOGI(TAG, "Enqueuing hardware telemetry [ID: %s, Temp: %.2f C, CPU: %d%%]...", 
+                 live_data.device_id, live_data.temperature, live_data.current_cpu_load);
 
         /* Emit structured telemetry frame over USB Serial/UART for direct server detection */
-        printf("BAWAL_TELEMETRY:{\"device_id\":\"%s\",\"firmware_version\":\"%s\",\"temperature\":%.2f,\"cpu_temperature\":%.2f,\"cpu_load\":%u}\n",
-               live_data.device_id, live_data.firmware_version, live_data.temperature, live_data.cpu_temperature, live_data.current_cpu_load);
+        printf("BAWAL_TELEMETRY:{\"device_id\":\"%s\",\"firmware_version\":\"%s\",\"temperature\":%.2f,\"cpu_load\":%u}\n",
+               live_data.device_id, live_data.firmware_version, live_data.temperature, live_data.current_cpu_load);
         fflush(stdout);
 
         if (xQueueSend(data_queue, &live_data, pdMS_TO_TICKS(1000)) != pdTRUE) {
