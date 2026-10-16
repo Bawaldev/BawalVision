@@ -409,7 +409,7 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to open USB serial port %s: %w", validPort, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	_ = configureSerial115200(f.Fd())
 
