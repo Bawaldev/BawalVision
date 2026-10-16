@@ -9,7 +9,8 @@ from onnxruntime.quantization import (
     quantize_static,
     CalibrationDataReader,
     QuantType,
-    QuantFormat
+    QuantFormat,
+    CalibrationMethod
 )
 
 try:
@@ -49,7 +50,19 @@ class YoloCalibrationDataReader(CalibrationDataReader):
             return self.get_next()
 
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = cv2.resize(img, (self.img_size, self.img_size))
+
+        h, w = img.shape[:2]
+        scale = min(self.img_size / h, self.img_size / w)
+        nw, nh = int(round(w* scale)), int(round(h * scale))
+        resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
+        canvas = np.full((self.img_size, self.img_size, 3), 114, dtype=np.uint8)
+        top = (self.img_size - nh) // 2
+        left = (self.img_size - nw) // 2 
+        canvas[top:top+nh, left:left+nw, :] = resized
+        img = canvas
+
+        
         blob = img.astype(np.float32) / 255.0
         blob = np.transpose(blob, (2, 0, 1))  # HWC to CHW
         blob = np.expand_dims(blob, axis=0)   # [1, 3, 640, 640]
@@ -89,7 +102,8 @@ def main():
         model_output=str(OUTPUT_ONNX),
         calibration_data_reader=reader,
         quant_format=QuantFormat.QDQ,     # Format QDQ optimal for AVX2/VNNI accel
-        per_channel=False,                # Universal per-tensor quantization (broad compatibility across ONNX opsets)
+        per_channel=True,                # Universal per-tensor quantization (broad compatibility across ONNX opsets)
+        calibrate_method=CalibrationMethod.Entropy,  # Entropy calibration for better accuracy
         weight_type=QuantType.QInt8,       
         activation_type=QuantType.QUInt8, # UINT8 Activation
         nodes_to_exclude=nodes_to_exclude
@@ -119,7 +133,7 @@ def main():
             mlflow.log_artifact(str(OUTPUT_ONNX), artifact_path="model_int8")
 
     # Copy to Docker Vision weights folder
-    for target in (DOCKER_WEIGHTS_INT8, DOCKER_WEIGHTS_AI1_INT8, DOCKER_WEIGHTS_FALLBACK):
+    for target in (DOCKER_WEIGHTS_INT8, DOCKER_WEIGHTS_AI1_INT8):
         if target.parent.exists():
             shutil.copy2(OUTPUT_ONNX, target)
             print(f"[✓] INT8 model synced to: {target}")
