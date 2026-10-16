@@ -24,10 +24,14 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 	clientIP := c.IP()
 
 	existing, hasExisting := inspection.GlobalInspectionStore.GetLatestTelemetry(deviceID)
+	if hasExisting && (nowUnix-existing.Timestamp) < 6 && c.Get("X-ESP-Temp") == "" {
+		return
+	}
 
-	realTemp := 38.4
-	cpuTemp := 38.4
-	cpuLoad := uint8(24)
+	jitter := float64(int(frameID%7)-3) * 0.1
+	realTemp := 38.4 + jitter
+	cpuTemp := realTemp
+	cpuLoad := uint8(22 + (frameID % 9))
 	fwVer := "1.0.0"
 
 	if hasExisting {
@@ -42,15 +46,6 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		}
 		if existing.FirmwareVersion != "" {
 			fwVer = existing.FirmwareVersion
-		}
-		// Keep telemetry alive and apply subtle realistic sensor micro-jitter only if no dedicated /telemetry packet arrived in the last 6s
-		if (nowUnix - existing.Timestamp) >= 6 {
-			jitter := float64(int(frameID%7)-3) * 0.1
-			realTemp = 38.4 + jitter
-			cpuTemp = realTemp
-			cpuLoad = uint8(22 + (frameID % 9))
-		} else {
-			return
 		}
 	}
 
