@@ -23,7 +23,6 @@
         streamIntervalMs: 1500,
         enableMockIfOffline: true,
         minConfidenceThreshold: 0.35,
-        tempWarningThreshold: 35.0,
         gravitonEngineEnabled: true,
         localEngineEnabled: true
     });
@@ -54,7 +53,6 @@
             formState.streamIntervalMs = config.streamIntervalMs;
             formState.enableMockIfOffline = config.enableMockIfOffline;
             formState.minConfidenceThreshold = config.minConfidenceThreshold;
-            formState.tempWarningThreshold = config.tempWarningThreshold;
             formState.gravitonEngineEnabled = config.gravitonEngineEnabled;
             formState.localEngineEnabled = config.localEngineEnabled;
         }
@@ -384,37 +382,24 @@
                 </div>
         </div>
 
-        <!-- 2. Tolerance & Spoilage Thresholds -->
+        <!-- 2. Detection Confidence Thresholds -->
         <div class="settings-card">
             <div class="section-header">
                 <span class="section-icon">🎯</span>
-                <h3>Detection & Thermal Warning Thresholds</h3>
+                <h3>Detection Thresholds</h3>
             </div>
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="minConf">Minimum Confidence Gate ({(formState.minConfidenceThreshold * 100).toFixed(0)}%)</label>
-                    <input
-                        id="minConf"
-                        type="range"
-                        min="0.20"
-                        max="0.95"
-                        step="0.05"
-                        bind:value={formState.minConfidenceThreshold}
-                        class="form-range"
-                    />
-                    <small>Vision classification acceptance threshold</small>
-                </div>
-
-                <div class="form-group">
-                    <label for="tempThreshold">Temperature Warning Cutoff ({formState.tempWarningThreshold} °C)</label>
-                    <input
-                        id="tempThreshold"
-                        type="number"
-                        bind:value={formState.tempWarningThreshold}
-                        class="form-input"
-                    />
-                    <small>Thermal cutoff threshold for food safety alerts</small>
-                </div>
+            <div class="form-group">
+                <label for="minConf">Minimum Confidence Gate ({(formState.minConfidenceThreshold * 100).toFixed(0)}%)</label>
+                <input
+                    id="minConf"
+                    type="range"
+                    min="0.20"
+                    max="0.95"
+                    step="0.05"
+                    bind:value={formState.minConfidenceThreshold}
+                    class="form-range"
+                />
+                <small>Vision classification acceptance threshold</small>
             </div>
         </div>
 

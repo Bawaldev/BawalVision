@@ -77,7 +77,6 @@ export interface SystemConfig {
     streamIntervalMs: number;
     enableMockIfOffline: boolean;
     minConfidenceThreshold: number;
-    tempWarningThreshold: number;
     gravitonEngineEnabled: boolean;
     gravitonEngineAvailable?: boolean;
     localEngineEnabled: boolean;
