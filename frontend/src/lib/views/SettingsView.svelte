@@ -19,7 +19,7 @@
 
     let formState = $state({
         backendUrl: '/api/v1',
-        deviceId: 'ESP32S3_441BF6C95678',
+        deviceId: '',
         streamIntervalMs: 1500,
         enableMockIfOffline: true,
         minConfidenceThreshold: 0.35,
@@ -49,7 +49,7 @@
     $effect(() => {
         if (config) {
             formState.backendUrl = config.backendUrl;
-            formState.deviceId = config.deviceId || formState.deviceId;
+            formState.deviceId = config.deviceId ?? '';
             formState.streamIntervalMs = config.streamIntervalMs;
             formState.enableMockIfOffline = config.enableMockIfOffline;
             formState.minConfidenceThreshold = config.minConfidenceThreshold;
@@ -91,10 +91,7 @@
                     ? `Connected via USB Serial (${hw.ip_address}) — Server Wi-Fi Synced`
                     : `Connected on shared Wi-Fi network (${hw.ip_address || 'LAN'})`
             };
-            if (hw.device_id) {
-                formState.deviceId = hw.device_id;
-            }
-        } else if (connectionStatus === 'connected' && !isOnline) {
+        } else if (connectionStatus === 'connected') {
             connectionStatus = 'disconnected';
         }
     }
@@ -121,9 +118,6 @@
             if (res.success) {
                 connectionStatus = 'connected';
                 lastConnDetails = res;
-                if (res.deviceId) {
-                    formState.deviceId = res.deviceId;
-                }
                 onDeviceConnectionChange?.(true, res.deviceId);
                 await refreshHardwareStatus();
             } else {
@@ -154,9 +148,6 @@
         if (res.success) {
             connectionStatus = 'connected';
             lastConnDetails = res;
-            if (res.deviceId) {
-                formState.deviceId = res.deviceId;
-            }
             onDeviceConnectionChange?.(true, res.deviceId);
             await refreshHardwareStatus();
         } else {
@@ -166,12 +157,13 @@
     }
 
     async function handleDisconnectEsp() {
+        const targetId = formState.deviceId || lastConnDetails.deviceId || '*';
         try {
-            await disconnectEspDevice(formState.deviceId, formState.backendUrl);
+            await disconnectEspDevice(targetId, formState.backendUrl);
         } catch {}
         connectionStatus = 'disconnected';
         errorMessage = '';
-        onDeviceConnectionChange?.(false, formState.deviceId);
+        onDeviceConnectionChange?.(false, '');
     }
 
     let isSaved = $state(false);
@@ -281,35 +273,29 @@
                             <div class="usb-detected-banner">
                                 <span>✓ USB Serial Detected: <strong>{detectedUsbPorts.map(p => `${p.port}${p.product ? ` (${p.product})` : ''}`).join(', ')}</strong></span>
                             </div>
-                        {:else}
-                            <div class="usb-empty-banner">
-                                <span>No USB serial device currently detected on server slots. Plug ESP32-S3 into USB if Wi-Fi is not configured yet.</span>
-                            </div>
-                        {/if}
 
-                        <div class="form-grid usb-wifi-grid">
-                            <div class="form-group">
-                                <label for="serverWifiSsid">Server Wi-Fi SSID (Synced to ESP32-S3)</label>
-                                <input
-                                    id="serverWifiSsid"
-                                    type="text"
-                                    bind:value={serverWifiSsid}
-                                    placeholder="Auto-detected server SSID"
-                                    class="form-input"
-                                />
-                            </div>
-                            <div class="form-group">
-                                <label for="serverWifiPass">Server Wi-Fi Password (for USB Provisioning)</label>
-                                <div class="esp-input-action-bar">
+                            <div class="form-grid usb-wifi-grid">
+                                <div class="form-group">
+                                    <label for="serverWifiSsid">Server Wi-Fi SSID (Synced to ESP32-S3)</label>
                                     <input
-                                        id="serverWifiPass"
-                                        type="password"
-                                        bind:value={serverWifiPassword}
-                                        placeholder="Wi-Fi Password (or set WIFI_PASS)"
+                                        id="serverWifiSsid"
+                                        type="text"
+                                        bind:value={serverWifiSsid}
+                                        placeholder="Auto-detected server SSID"
                                         class="form-input"
-                                        style="flex: 1;"
                                     />
-                                    {#if detectedUsbPorts.length > 0}
+                                </div>
+                                <div class="form-group">
+                                    <label for="serverWifiPass">Server Wi-Fi Password (for USB Provisioning)</label>
+                                    <div class="esp-input-action-bar">
+                                        <input
+                                            id="serverWifiPass"
+                                            type="password"
+                                            bind:value={serverWifiPassword}
+                                            placeholder="Wi-Fi Password (or set WIFI_PASS)"
+                                            class="form-input"
+                                            style="flex: 1;"
+                                        />
                                         <button
                                             type="button"
                                             class="btn-esp-connect"
@@ -318,10 +304,14 @@
                                         >
                                             Sync Wi-Fi via USB
                                         </button>
-                                    {/if}
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        {:else}
+                            <div class="usb-empty-banner">
+                                <span>No USB serial device currently detected on server slots. Plug ESP32-S3 into USB if Wi-Fi is not configured yet.</span>
+                            </div>
+                        {/if}
                     </div>
 
                     <!-- Diagnostic Properties & Live Link Status Card -->

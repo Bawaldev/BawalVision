@@ -118,22 +118,24 @@
             // 2. Camera Status
             const cam = await fetchCameraStatus(systemConfig.backendUrl);
             hasCamera = cam.active;
-            if (cam.active && cam.deviceId) {
-                systemConfig.deviceId = cam.deviceId;
-            }
 
             // 3. Telemetry Ingress from ESP32-S3
             const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
             if (tel) {
-                telemetry = tel;
-                isOnline = Boolean(tel.is_connected) || cam.active;
-                if (tel.is_connected && !telemetryHistory.some(h => h.timestamp === tel.timestamp)) {
-                    telemetryHistory = [...telemetryHistory.slice(-19), tel];
+                telemetry = {
+                    ...tel,
+                    device_id: (cam.active && cam.deviceId && (!tel.device_id || tel.device_id === 'DISCONNECTED')) ? cam.deviceId : tel.device_id,
+                    is_connected: Boolean(tel.is_connected) || cam.active
+                };
+                isOnline = Boolean(telemetry.is_connected);
+                if (telemetry.is_connected && telemetry.temperature != null && !telemetryHistory.some(h => h.timestamp === telemetry.timestamp)) {
+                    telemetryHistory = [...telemetryHistory.slice(-19), telemetry];
                 }
             } else {
                 isOnline = cam.active;
                 telemetry = {
                     ...telemetry,
+                    device_id: cam.active && cam.deviceId ? cam.deviceId : 'DISCONNECTED',
                     temperature: null,
                     cpu_temperature: null,
                     cpu_load: null,
@@ -337,7 +339,8 @@
         }
 
         try {
-            await triggerManualInspection(systemConfig.deviceId, detections, systemConfig.backendUrl);
+            const targetDevice = systemConfig.deviceId || telemetry.device_id || 'ESP32S3';
+            await triggerManualInspection(targetDevice, detections, systemConfig.backendUrl);
             await pollBackendData();
         } catch (err) {
             console.warn('[MANUAL INSPECTION SYNC]', err);
@@ -362,6 +365,12 @@
             }
         ];
     }
+
+    let resolvedActiveDevice = $derived(
+        isOnline && telemetry?.device_id && telemetry.device_id !== 'DISCONNECTED' && telemetry.device_id !== 'WAITING_DEVICE'
+            ? telemetry.device_id
+            : systemConfig.deviceId
+    );
 </script>
 
 <svelte:head>
@@ -374,7 +383,7 @@
     <Sidebar
         {activeTab}
         onSelectTab={handleSelectTab}
-        activeDevice={systemConfig.deviceId}
+        activeDevice={resolvedActiveDevice}
         {isOnline}
     />
 
@@ -387,7 +396,7 @@
             gravitonAvailable={gravitonAvailable}
             localEngineEnabled={systemConfig.localEngineEnabled}
             localEngineAvailable={localEngineAvailable}
-            activeDevice={systemConfig.deviceId || 'DISCONNECTED'}
+            activeDevice={resolvedActiveDevice || 'DISCONNECTED'}
             fps={hasCamera ? 29.8 : 0.0}
             latencyMs={hasCamera ? 5.4 : 0.0}
             {isOnline}
@@ -437,7 +446,6 @@
                     {isOnline}
                     onDeviceConnectionChange={(connected, devId) => {
                         isOnline = connected;
-                        if (devId) systemConfig.deviceId = devId;
                         if (!connected) {
                             telemetry = {
                                 ...telemetry,
@@ -445,6 +453,12 @@
                                 cpu_temperature: null,
                                 cpu_load: null,
                                 is_connected: false
+                            };
+                        } else if (devId) {
+                            telemetry = {
+                                ...telemetry,
+                                device_id: devId,
+                                is_connected: true
                             };
                         }
                     }}
