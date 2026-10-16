@@ -251,51 +251,49 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     candidate_paths.push_back("../weights/yolo8n.onnx");
     candidate_paths.push_back("../../weights/yolo8n.onnx");
 
-    std::string resolved_path;
     for (const auto& path : candidate_paths) {
         std::ifstream f(path.c_str());
-        if (f.good()) {
-            resolved_path = path;
-            break;
+        if (!f.good()) {
+            continue;
         }
-    }
 
-    if (resolved_path.empty()) {
-        std::cerr << "[FoodClassifier] Error: INT8 / ONNX model file not found in candidate search paths.\n";
-        return false;
-    }
-
-    try {
-        m_session_options.SetIntraOpNumThreads(thread_count > 0 ? thread_count : 4);
-        m_session_options.SetInterOpNumThreads(1);
-        m_session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        m_session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+        try {
+            m_session_options.SetIntraOpNumThreads(thread_count > 0 ? thread_count : 4);
+            m_session_options.SetInterOpNumThreads(1);
+            m_session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+            m_session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
 
 #if defined(USE_DNNL) || defined(HAVE_DNNL)
-        try {
-            Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_Dnnl(m_session_options, 1));
-            std::cout << "[FoodClassifier] Intel oneDNN (DNNL) Execution Provider registered for Xeon acceleration.\n";
-        } catch (const std::exception& e) {
-            std::cout << "[FoodClassifier] Note: oneDNN Provider not available, using high-performance CPU execution provider.\n";
-        }
+            try {
+                Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_Dnnl(m_session_options, 1));
+                std::cout << "[FoodClassifier] Intel oneDNN (DNNL) Execution Provider registered for Xeon acceleration.\n";
+            } catch (const std::exception& e) {
+                // Default to standard high-performance CPU execution provider
+            }
 #endif
 
-        m_session = std::make_unique<Ort::Session>(m_env, resolved_path.c_str(), m_session_options);
+            m_session = std::make_unique<Ort::Session>(m_env, path.c_str(), m_session_options);
 
-        // Preprocessing buffer with 64-byte alignment for AVX2/AVX-512 vectorization
-        m_input_tensor_values.reset(
-            static_cast<float*>(::operator new[](K_TENSOR_ELEMENTS * sizeof(float), std::align_val_t{64}))
-        );
-        m_is_ready = true;
-        std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << resolved_path 
-                  << (resolved_path.find("int8") != std::string::npos ? " [INT8 Quantized QDQ Model]" : " [FP32 Model]") << "\n";
-        return true;
-    } catch (const Ort::Exception& e) {
-        std::cerr << "[FoodClassifier] ONNX Runtime Init Error (" << resolved_path << "): " << e.what() << "\n";
-    } catch (const std::exception& e) {
-        std::cerr << "[FoodClassifier] Exception: " << e.what() << "\n";
+            // Preprocessing buffer with 64-byte alignment for AVX2/AVX-512 vectorization
+            m_input_tensor_values.reset(
+                static_cast<float*>(::operator new[](K_TENSOR_ELEMENTS * sizeof(float), std::align_val_t{64}))
+            );
+            m_is_ready = true;
+            std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << path 
+                      << (path.find("int8") != std::string::npos ? " [INT8 Quantized QDQ Model]" : " [FP32 Model]") << "\n";
+            return true;
+        } catch (const Ort::Exception& e) {
+            std::cerr << "[FoodClassifier] Warning: Model load failed for (" << path << "): " << e.what() 
+                      << ". Attempting next candidate fallback...\n";
+            m_session.reset();
+        } catch (const std::exception& e) {
+            std::cerr << "[FoodClassifier] Warning: Exception loading (" << path << "): " << e.what() 
+                      << ". Attempting next candidate fallback...\n";
+            m_session.reset();
+        }
     }
 
+    std::cerr << "[FoodClassifier] Error: None of the candidate ONNX models could be successfully initialized.\n";
     return false;
 }
 
