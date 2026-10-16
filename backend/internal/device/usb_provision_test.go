@@ -114,3 +114,29 @@ func TestScanAvailableWiFiNetworks(t *testing.T) {
 		t.Errorf("expected at least one network marked IsServer: true")
 	}
 }
+
+func TestProbeESP32Security(t *testing.T) {
+	// 1. Validate that ProbeESP32ViaUSB rejects non-device / traversal paths
+	if _, err := ProbeESP32ViaUSB("../../../etc/shadow"); err == nil {
+		t.Fatalf("expected ProbeESP32ViaUSB to reject path traversal")
+	}
+	if _, err := ProbeESP32ViaUSB("/dev/null"); err == nil {
+		t.Fatalf("expected ProbeESP32ViaUSB to reject non-ttyACM/ttyUSB path")
+	}
+
+	// 2. Validate parsing of status command ACK containing SSID of a different network
+	ackLine := `BAWAL_ACK:{"status":"ok","device_id":"ESP32S3_58CF7912E340","firmware_version":"1.2.0","wifi_connected":true,"ssid":"DifferentWiFi_A","backend_ip":"192.168.100.165","temperature":38.12,"cpu_load":14}`
+	ack := parseSerialLine(ackLine, "/dev/ttyACM0")
+	if ack == nil {
+		t.Fatalf("expected parsed ACK from status response")
+	}
+	if ack.SSID != "DifferentWiFi_A" {
+		t.Fatalf("expected SSID 'DifferentWiFi_A', got '%s'", ack.SSID)
+	}
+	if !ack.WiFiConnected {
+		t.Fatalf("expected WiFiConnected true")
+	}
+	if ack.Temperature != 38.12 {
+		t.Fatalf("expected Temperature 38.12, got %f", ack.Temperature)
+	}
+}

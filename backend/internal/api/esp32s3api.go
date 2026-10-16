@@ -515,6 +515,18 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			connMode = "wifi_lan"
 		}
 
+		lastAck := device.GetLastUSBAck()
+		var espUSBStatus fiber.Map
+		if lastAck != nil {
+			espUSBStatus = fiber.Map{
+				"port":           lastAck.USBPort,
+				"device_id":      lastAck.DeviceID,
+				"current_ssid":   lastAck.SSID,
+				"wifi_connected": lastAck.WiFiConnected,
+				"temperature":    lastAck.Temperature,
+			}
+		}
+
 		return c.JSON(fiber.Map{
 			"connected":        connected,
 			"connection_mode":  connMode,
@@ -522,6 +534,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"firmware_version": fwVer,
 			"ip_address":       ipAddr,
 			"usb_ports":        usbPorts,
+			"esp_usb_status":   espUSBStatus,
 			"wifi_networks":    device.ScanAvailableWiFiNetworks(),
 			"server_wifi": fiber.Map{
 				"ssid":         wifiCfg.SSID,
@@ -538,6 +551,43 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		})
 	})
 
+	router.Post("/devices/usb/probe", func(c *fiber.Ctx) error {
+		var req struct {
+			Port string `json:"port"`
+		}
+		_ = c.BodyParser(&req)
+		port := strings.TrimSpace(req.Port)
+		if port == "" {
+			ports := device.ScanUSBSerialPorts()
+			if len(ports) > 0 {
+				port = ports[0].Port
+			}
+		}
+		if port == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"success": false,
+				"message": "No USB serial port detected (/dev/ttyACM* or /dev/ttyUSB*)",
+			})
+		}
+		ack, err := device.ProbeESP32ViaUSB(port)
+		if err != nil {
+			return c.Status(fiber.StatusGatewayTimeout).JSON(fiber.Map{
+				"success": false,
+				"message": fmt.Sprintf("Probe failed on %s: %v", port, err),
+			})
+		}
+		return c.JSON(fiber.Map{
+			"success":        true,
+			"port":           port,
+			"device_id":      ack.DeviceID,
+			"current_ssid":   ack.SSID,
+			"wifi_connected": ack.WiFiConnected,
+			"temperature":    ack.Temperature,
+			"cpu_load":       ack.CPULoad,
+			"message":        fmt.Sprintf("ESP32-S3 (%s) detected on %s currently connected to Wi-Fi '%s'", ack.DeviceID, port, ack.SSID),
+		})
+	})
+
 	// 6. POST Connect ESP32-S3 (Same Wi-Fi LAN Discovery + Automatic USB /dev/ttyACM* & /dev/ttyUSB* Wi-Fi Sync)
 	router.Post("/devices/connect", func(c *fiber.Ctx) error {
 		var req struct {
@@ -550,9 +600,27 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		requestedID := strings.TrimSpace(req.DeviceID)
 		nowUnix := time.Now().Unix()
 
-		// Step A: Check if ESP32-S3 is already connected on the same Wi-Fi LAN and sending live telemetry
-		if requestedID != "" {
-			if live, ok := inspection.GlobalInspectionStore.GetLatestTelemetry(requestedID); ok && (nowUnix-live.Timestamp) <= 3 {
+		// Only short-circuit via existing LAN telemetry if user is NOT explicitly requesting a Wi-Fi change
+		if strings.TrimSpace(req.SSID) == "" && strings.TrimSpace(req.USBPort) == "" {
+			// Step A: Check if ESP32-S3 is already connected on the same Wi-Fi LAN and sending live telemetry
+			if requestedID != "" {
+				if live, ok := inspection.GlobalInspectionStore.GetLatestTelemetry(requestedID); ok && (nowUnix-live.Timestamp) <= 3 {
+					mode := live.ConnectionMode
+					if mode == "" {
+						mode = "wifi_lan"
+					}
+					return c.JSON(fiber.Map{
+						"success":          true,
+						"device_id":        live.DeviceID,
+						"firmware_version": live.FirmwareVersion,
+						"ip_address":       live.IPAddress,
+						"connection_mode":  mode,
+						"latency_ms":       8,
+						"message":          fmt.Sprintf("ESP32-S3 (%s) detected on shared Wi-Fi network (%s)", live.DeviceID, live.IPAddress),
+					})
+				}
+			}
+			if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= 3 {
 				mode := live.ConnectionMode
 				if mode == "" {
 					mode = "wifi_lan"
@@ -563,38 +631,23 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					"firmware_version": live.FirmwareVersion,
 					"ip_address":       live.IPAddress,
 					"connection_mode":  mode,
-					"latency_ms":       8,
-					"message":          fmt.Sprintf("ESP32-S3 (%s) detected on shared Wi-Fi network (%s)", live.DeviceID, live.IPAddress),
+					"latency_ms":       9,
+					"message":          fmt.Sprintf("ESP32-S3 (%s) detected on shared connection (%s)", live.DeviceID, live.IPAddress),
 				})
 			}
-		}
-		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= 3 {
-			mode := live.ConnectionMode
-			if mode == "" {
-				mode = "wifi_lan"
-			}
-			return c.JSON(fiber.Map{
-				"success":          true,
-				"device_id":        live.DeviceID,
-				"firmware_version": live.FirmwareVersion,
-				"ip_address":       live.IPAddress,
-				"connection_mode":  mode,
-				"latency_ms":       9,
-				"message":          fmt.Sprintf("ESP32-S3 (%s) detected on shared connection (%s)", live.DeviceID, live.IPAddress),
-			})
-		}
 
-		// Step B: Check if ESP32-S3 is streaming camera frames on the same Wi-Fi LAN
-		if activeCamID := camera_handler.GlobalCameraStore.GetActiveDeviceID(); activeCamID != "" {
-			return c.JSON(fiber.Map{
-				"success":          true,
-				"device_id":        activeCamID,
-				"firmware_version": "1.0.0",
-				"ip_address":       c.IP(),
-				"connection_mode":  "wifi_lan",
-				"latency_ms":       11,
-				"message":          fmt.Sprintf("ESP32-S3 camera node (%s) active on shared Wi-Fi network", activeCamID),
-			})
+			// Step B: Check if ESP32-S3 is streaming camera frames on the same Wi-Fi LAN
+			if activeCamID := camera_handler.GlobalCameraStore.GetActiveDeviceID(); activeCamID != "" {
+				return c.JSON(fiber.Map{
+					"success":          true,
+					"device_id":        activeCamID,
+					"firmware_version": "1.0.0",
+					"ip_address":       c.IP(),
+					"connection_mode":  "wifi_lan",
+					"latency_ms":       11,
+					"message":          fmt.Sprintf("ESP32-S3 camera node (%s) active on shared Wi-Fi network", activeCamID),
+				})
+			}
 		}
 
 		// Step C: ESP32-S3 Wi-Fi not applied yet — scan USB serial slots (/dev/ttyACM* & /dev/ttyUSB*) and provision server's Wi-Fi

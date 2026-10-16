@@ -142,10 +142,41 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     m_is_ready = false;
 
     std::vector<std::string> candidate_paths;
+    // Prioritize High-Performance INT8 Quantized QDQ Models
     if (!model_path.empty()) {
+        if (model_path.find("int8") != std::string_view::npos) {
+            candidate_paths.emplace_back(model_path);
+        } else {
+            // Check for sibling int8 variant for the requested path (e.g., ai1_vision.onnx -> ai1_vision_int8.onnx)
+            std::string int8_path = std::string(model_path);
+            auto pos = int8_path.rfind(".onnx");
+            if (pos != std::string::npos) {
+                int8_path.insert(pos, "_int8");
+                candidate_paths.push_back(int8_path);
+            }
+        }
+    }
+
+    // 1. Prioritize New INT8 Models
+    candidate_paths.push_back("/app/ml/AI1/model/ai1_vision_int8.onnx");
+    candidate_paths.push_back("/app/weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("/app/weights/yolo8n_int8.onnx");
+    candidate_paths.push_back("ml/AI1/model/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../ml/AI1/model/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../ml/AI1/model/ai1_vision_int8.onnx");
+    candidate_paths.push_back("weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("weights/yolo8n_int8.onnx");
+    candidate_paths.push_back("../weights/yolo8n_int8.onnx");
+    candidate_paths.push_back("../../weights/yolo8n_int8.onnx");
+
+    // Explicit user-specified FP32 path (if provided)
+    if (!model_path.empty() && model_path.find("int8") == std::string_view::npos) {
         candidate_paths.emplace_back(model_path);
     }
-    // Prioritize Standard Full-Precision FP32 Model
+
+    // 2. Fallback to Standard Full-Precision FP32 Models
     candidate_paths.push_back("/app/ml/AI1/model/ai1_vision.onnx");
     candidate_paths.push_back("/app/weights/yolo8n.onnx");
     candidate_paths.push_back("ml/AI1/model/ai1_vision.onnx");
@@ -153,6 +184,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     candidate_paths.push_back("../../ml/AI1/model/ai1_vision.onnx");
     candidate_paths.push_back("weights/yolo8n.onnx");
     candidate_paths.push_back("../weights/yolo8n.onnx");
+    candidate_paths.push_back("../../weights/yolo8n.onnx");
 
     std::string resolved_path;
     for (const auto& path : candidate_paths) {
