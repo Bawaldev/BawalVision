@@ -59,6 +59,10 @@
     let isInspecting = $state(false);
     let gravitonAvailable = $state(false);
     let localEngineAvailable = $state(true);
+    let realFps = $state(0.0);
+    let realLatencyMs = $state(0.0);
+    let serverMemoryMB = $state<number | null>(null);
+    let parallelCores = $state(0);
 
     let systemConfig = $state<SystemConfig>({
         backendUrl: '/api/v1',
@@ -104,6 +108,7 @@
 
     // Real Backend Polling Step
     async function pollBackendData() {
+        const pollStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
         try {
             // 1. Hardware Engine Status
             const engines = await fetchEngineStatus(systemConfig.backendUrl);
@@ -111,6 +116,18 @@
             localEngineAvailable = engines.local_engine_available;
             systemConfig.gravitonEngineAvailable = engines.graviton_available;
             systemConfig.localEngineAvailable = engines.local_engine_available;
+            if (engines.memory_usage_mb != null && engines.memory_usage_mb > 0) {
+                serverMemoryMB = engines.memory_usage_mb;
+            } else if (engines.server_mem_sys_mb != null && engines.server_mem_sys_mb > 0) {
+                serverMemoryMB = engines.server_mem_sys_mb;
+            } else if (engines.server_mem_alloc_mb != null && engines.server_mem_alloc_mb > 0) {
+                serverMemoryMB = engines.server_mem_alloc_mb;
+            }
+            if (engines.parallel_cores != null && engines.parallel_cores > 0) {
+                parallelCores = engines.parallel_cores;
+            } else if (engines.num_cpu != null && engines.num_cpu > 0) {
+                parallelCores = engines.num_cpu;
+            }
             if (!gravitonAvailable && systemConfig.gravitonEngineEnabled) {
                 systemConfig.gravitonEngineEnabled = false;
             }
@@ -118,6 +135,7 @@
             // 2. Camera Status
             const cam = await fetchCameraStatus(systemConfig.backendUrl);
             hasCamera = cam.active;
+            realFps = cam.active ? (cam.fps > 0 ? cam.fps : 20.0) : 0.0;
 
             // 3. Telemetry Ingress from ESP32-S3
             const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
@@ -209,6 +227,9 @@
             }
         } catch (err) {
             console.warn('[BACKEND POLL] Offline or waiting for backend service:', err);
+        } finally {
+            const pollEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            realLatencyMs = Math.max(0.5, Math.round((pollEnd - pollStart) * 10) / 10);
         }
     }
 
@@ -371,6 +392,16 @@
             ? telemetry.device_id
             : systemConfig.deviceId
     );
+
+    let realMemoryText = $derived.by(() => {
+        if (serverMemoryMB != null && serverMemoryMB > 0) {
+            return `Memory usage: ${serverMemoryMB >= 1024 ? (serverMemoryMB / 1024).toFixed(2) + ' GB' : Math.round(serverMemoryMB) + ' MB'}`;
+        }
+        if (isOnline && telemetry?.heap_free != null && telemetry.heap_free > 0) {
+            return `ESP Heap: ${Math.round(telemetry.heap_free / 1024)} KB`;
+        }
+        return isOnline ? 'Memory: Active' : 'Memory: Offline';
+    });
 </script>
 
 <svelte:head>
@@ -397,8 +428,11 @@
             localEngineEnabled={systemConfig.localEngineEnabled}
             localEngineAvailable={localEngineAvailable}
             activeDevice={resolvedActiveDevice || 'DISCONNECTED'}
-            fps={hasCamera ? 29.8 : 0.0}
-            latencyMs={hasCamera ? 5.4 : 0.0}
+            fps={realFps}
+            latencyMs={isOnline || hasCamera ? realLatencyMs : 0.0}
+            memoryUsage={realMemoryText}
+            memoryMB={serverMemoryMB}
+            {parallelCores}
             {isOnline}
             onToggleGraviton={() => {
                 if (gravitonAvailable) {
@@ -444,6 +478,7 @@
                 <SettingsView
                     config={systemConfig}
                     {isOnline}
+                    {parallelCores}
                     onDeviceConnectionChange={(connected, devId) => {
                         isOnline = connected;
                         if (!connected) {

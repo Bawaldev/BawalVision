@@ -6,6 +6,7 @@
     interface Props {
         config: SystemConfig;
         isOnline?: boolean;
+        parallelCores?: number;
         onDeviceConnectionChange?: (connected: boolean, deviceId: string) => void;
         onSaveConfig: (updated: SystemConfig) => void;
     }
@@ -13,6 +14,7 @@
     let {
         config,
         isOnline = false,
+        parallelCores = 0,
         onDeviceConnectionChange,
         onSaveConfig
     }: Props = $props();
@@ -432,8 +434,8 @@
                 <label class="check-item">
                     <input type="checkbox" bind:checked={formState.localEngineEnabled} />
                     <div class="check-text">
-                        <strong>Local C++20 Vision Service (OpenMP SIMD)</strong>
-                        <small>Active on-premise zero-dependency machine vision pipeline</small>
+                        <strong>Local C++20 Vision Service ({parallelCores > 0 ? `${parallelCores}-Core ` : ''}OpenMP SIMD)</strong>
+                        <small>Active on-premise zero-dependency machine vision pipeline ({parallelCores > 0 ? `${parallelCores} parallel worker threads` : 'multi-threaded'})</small>
                     </div>
                 </label>
             </div>
