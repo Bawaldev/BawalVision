@@ -473,10 +473,20 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     char frame_id_str[16];
     snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)s_local_tx_frame.header.frame_id);
 
+    char temp_str[16];
+    char load_str[16];
+    float real_temp = get_esp32_cpu_temperature();
+    uint8_t cpu_load = get_cpu_usage_percentage();
+    snprintf(temp_str, sizeof(temp_str), "%.2f", real_temp > 0 ? real_temp : 38.4f);
+    snprintf(load_str, sizeof(load_str), "%u", cpu_load);
+
     esp_http_client_set_header(s_stream_client, "Content-Type", "image/jpeg");
     esp_http_client_set_header(s_stream_client, "Connection", "keep-alive");
     esp_http_client_set_header(s_stream_client, "X-Device-ID", device_id);
     esp_http_client_set_header(s_stream_client, "X-Frame-ID", frame_id_str);
+    esp_http_client_set_header(s_stream_client, "X-ESP-Temp", temp_str);
+    esp_http_client_set_header(s_stream_client, "X-ESP-CPU-Temp", temp_str);
+    esp_http_client_set_header(s_stream_client, "X-ESP-CPU-Load", load_str);
     esp_http_client_set_post_field(s_stream_client, (const char *)s_local_tx_frame.data, s_local_tx_frame.header.buffer_len);
 
     esp_err_t err = esp_http_client_perform(s_stream_client);

@@ -10,6 +10,7 @@ type CachedFrame struct {
 	FrameID     uint32
 	ImageBytes  []byte
 	TimestampMS int64
+	ClientIP    string
 }
 
 type subscriber struct {
@@ -32,6 +33,10 @@ var GlobalCameraStore = &CameraStore{
 }
 
 func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte) {
+	s.StoreRawFrameWithIP(deviceID, frameID, data, "")
+}
+
+func (s *CameraStore) StoreRawFrameWithIP(deviceID string, frameID uint32, data []byte, clientIP string) {
 	if deviceID == "" || deviceID == "\\" || deviceID == "/" || deviceID == "null" {
 		deviceID = "DEFAULT_CAMERA"
 	}
@@ -42,6 +47,7 @@ func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte
 		FrameID:     frameID,
 		ImageBytes:  data,
 		TimestampMS: now,
+		ClientIP:    clientIP,
 	}
 
 	// Check if vision service is actively streaming annotated frames (< 2500ms)
@@ -242,17 +248,44 @@ func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
 }
 
 func (s *CameraStore) GetActiveDeviceID() string {
+	id, _, _, ok := s.GetActiveDeviceMeta()
+	if !ok {
+		return ""
+	}
+	return id
+}
+
+func (s *CameraStore) GetActiveDeviceMeta() (string, string, uint32, bool) {
 	s.RLock()
 	defer s.RUnlock()
 
-	var latestID string
-	var maxTime int64 = 0
+	now := time.Now().UnixMilli()
+	var latest CachedFrame
+	var found bool
 	for id, f := range s.rawFrames {
-		if id != "" && id != "\\" && id != "/" && id != "null" && f.TimestampMS > maxTime {
-			maxTime = f.TimestampMS
-			latestID = id
+		if id != "" && id != "\\" && id != "/" && id != "null" && (now-f.TimestampMS) <= 10000 {
+			if !found || f.TimestampMS > latest.TimestampMS {
+				latest = f
+				found = true
+			}
 		}
 	}
-	return latestID
+	if !found {
+		return "", "", 0, false
+	}
+	return latest.DeviceID, latest.ClientIP, latest.FrameID, true
 }
+
+func (s *CameraStore) DisconnectDevice(deviceID string) {
+	s.Lock()
+	defer s.Unlock()
+	if deviceID == "" || deviceID == "*" {
+		s.rawFrames = make(map[string]CachedFrame)
+		s.annotatedFrames = make(map[string]CachedFrame)
+		return
+	}
+	delete(s.rawFrames, deviceID)
+	delete(s.annotatedFrames, deviceID)
+}
+
 
