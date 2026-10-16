@@ -349,8 +349,8 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		camID, camIP, camFrameID, camActive := camera_handler.GlobalCameraStore.GetActiveDeviceMeta()
 
 		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok {
-			// Device is actively connected if telemetry was received within the last 30 seconds OR camera is actively streaming (<10s)
-			isLiveConnected := (nowUnix-live.Timestamp) <= 30 || camActive
+			// Device is actively connected if telemetry was received within the last 3 seconds OR camera is actively streaming (<2.5s)
+			isLiveConnected := (nowUnix-live.Timestamp) <= 3 || camActive
 
 			devID := live.DeviceID
 			if devID == "" && camID != "" {
@@ -488,7 +488,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		fwVer := ""
 		ipAddr := ""
 
-		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= 30 {
+		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= 3 {
 			connected = true
 			devID = live.DeviceID
 			fwVer = live.FirmwareVersion
@@ -535,7 +535,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 		// Step A: Check if ESP32-S3 is already connected on the same Wi-Fi LAN and sending live telemetry
 		if requestedID != "" {
-			if live, ok := inspection.GlobalInspectionStore.GetLatestTelemetry(requestedID); ok && (nowUnix-live.Timestamp) <= 30 {
+			if live, ok := inspection.GlobalInspectionStore.GetLatestTelemetry(requestedID); ok && (nowUnix-live.Timestamp) <= 3 {
 				mode := live.ConnectionMode
 				if mode == "" {
 					mode = "wifi_lan"
@@ -551,7 +551,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				})
 			}
 		}
-		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= 30 {
+		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= 3 {
 			mode := live.ConnectionMode
 			if mode == "" {
 				mode = "wifi_lan"

@@ -11,10 +11,7 @@ Simulates environmental metric packets broadcast by the edge inspection device.
 ### Ingress Metrics:
 - **`device_id`**: Unique hardware identifier (MAC / device serial string).
 - **`firmware_version`**: Active ESP-IDF firmware build version.
-- **`temperature`**: Ambient temperature in Celsius (°C).
-- **`humidity`**: Relative humidity percentage (%RH).
-- **`gas_voc`**: Volatile Organic Compound gas resistance (kOhm).
-- **`pressure`**: Atmospheric barometric pressure (hPa).
+- **`temperature`**: ESP32-S3 internal temperature in Celsius (°C).
 - **`cpu_load`**: Edge CPU core utilization percentage (0 - 100%).
 - **`timestamp`**: Epoch timestamp (seconds).
 
@@ -27,10 +24,7 @@ curl -i -X POST http://localhost:8080/api/v1/telemetry \
     "device_name": "Optical Inspection Pod Alpha",
     "firmware_version": "1.0.4-prod",
     "device_core": 2,
-    "temperature": 4.25,
-    "humidity": 68.40,
-    "gas_voc": 115.80,
-    "pressure": 1013.20,
+    "temperature": 41.25,
     "cpu_load": 22,
     "timestamp": 1758412800
   }'

@@ -73,13 +73,6 @@
         return (sum / displayHistory.length).toFixed(1);
     });
 
-    let peakVoc = $derived.by(() => {
-        if (!isDeviceConnected || currentTelemetry?.temperature == null) return null;
-        const currentTemp = currentTelemetry.temperature;
-        const basePpb = 42 + Math.round(Math.max(0, currentTemp - 25) * 6.5);
-        return `${basePpb} ppb`;
-    });
-
     // Chart SVG Coordinates Calculations (Range: 15°C to 65°C)
     const CHART_WIDTH = 1000;
     const CHART_HEIGHT = 300;
@@ -309,24 +302,13 @@
 
         <!-- 2. Right Column (Stacked Cards matching Wireframe) -->
         <div class="telemetry-right-column">
-            <!-- Upper Card: Avg. Temp & Peak VOC -->
+            <!-- Upper Card: Avg. ESP32 Temp -->
             <div class="card metric-mini-card">
                 <div class="metric-row">
                     <span class="metric-label">Avg. ESP32 Temp</span>
                     <div class="value-box">
                         {#if isDeviceConnected && avgTemp != null}
                             <span class="value-text">{avgTemp} °C</span>
-                        {:else}
-                            <span class="value-text offline-val">Offline</span>
-                        {/if}
-                    </div>
-                </div>
-
-                <div class="metric-row">
-                    <span class="metric-label">Peak VOC</span>
-                    <div class="value-box">
-                        {#if isDeviceConnected && peakVoc != null}
-                            <span class="value-text">{peakVoc}</span>
                         {:else}
                             <span class="value-text offline-val">Offline</span>
                         {/if}

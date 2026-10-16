@@ -225,9 +225,11 @@ func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {
 }
 
 func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
+	now := time.Now().UnixMilli()
+
 	// Try exact device match first
 	if deviceID != "" && deviceID != "latest" && deviceID != "UNKNOWN_DEVICE" && deviceID != "*" {
-		if f, ok := s.rawFrames[deviceID]; ok && len(f.ImageBytes) > 0 {
+		if f, ok := s.rawFrames[deviceID]; ok && len(f.ImageBytes) > 0 && (now-f.TimestampMS) <= 2500 {
 			return f.ImageBytes, true
 		}
 	}
@@ -235,7 +237,7 @@ func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
 	// Fallback to latest raw frame across all devices
 	var latestFrame *CachedFrame
 	for _, f := range s.rawFrames {
-		if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+		if (now-f.TimestampMS) <= 2500 && (latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS) {
 			curr := f
 			latestFrame = &curr
 		}
@@ -263,7 +265,7 @@ func (s *CameraStore) GetActiveDeviceMeta() (string, string, uint32, bool) {
 	var latest CachedFrame
 	var found bool
 	for id, f := range s.rawFrames {
-		if id != "" && id != "\\" && id != "/" && id != "null" && (now-f.TimestampMS) <= 10000 {
+		if id != "" && id != "\\" && id != "/" && id != "null" && (now-f.TimestampMS) <= 2500 {
 			if !found || f.TimestampMS > latest.TimestampMS {
 				latest = f
 				found = true
