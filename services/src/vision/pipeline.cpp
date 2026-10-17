@@ -18,6 +18,13 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     m_width = target_width;
     m_height = target_height;
 
+    const char* env_c = std::getenv("CONF_THRESHOLD");
+    if (env_c != nullptr) {
+        try { m_conf_threshold = std::clamp(std::stof(env_c), 0.45f, 0.98f); } catch (...) {}
+    } else {
+        m_conf_threshold = 0.60f;
+    }
+
     auto calib = CameraCalibrationParams::createDefaultOV5640(cv::Size(m_width, m_height));
     if (!m_dewarper.initCameraCalibration(calib.camera_matrix, calib.dist_coeffs, calib.image_size)) {
         std::cerr << "[Pipeline] Warning: Camera calibration initialization failed.\n";
@@ -181,15 +188,9 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
     if (enhanced_frame.empty()) return false;
     out_detections.clear();
 
-    static float s_conf_thresh = -1.0f;
-    if (s_conf_thresh < 0.0f) {
-        const char* env_c = std::getenv("CONF_THRESHOLD");
-        s_conf_thresh = (env_c != nullptr) ? std::stof(env_c) : 0.58f;
-    }
-
     std::array<DetectionResult, 32> local_buf;
     size_t count = 0;
-    if (!m_classifier.detect(enhanced_frame, local_buf, count, s_conf_thresh, 0.40f)) {
+    if (!m_classifier.detect(enhanced_frame, local_buf, count, m_conf_threshold, 0.40f)) {
         return false;
     }
 
@@ -242,14 +243,8 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
 
     out_display = inspection.dewarped_image.clone();
 
-    static float s_render_conf_thresh = -1.0f;
-    if (s_render_conf_thresh < 0.0f) {
-        const char* env_c = std::getenv("CONF_THRESHOLD");
-        s_render_conf_thresh = (env_c != nullptr) ? std::stof(env_c) : 0.58f;
-    }
-
     for (const auto& det : inspection.detections) {
-        if (det.class_id < 0 || det.confidence < s_render_conf_thresh ||
+        if (det.class_id < 0 || det.confidence < m_conf_threshold ||
             det.class_name == "no_food" || det.class_name == "no_model") {
             continue;
         }

@@ -307,4 +307,35 @@ export async function probeEspUsbPort(port?: string, baseUrl = BASE_URL): Promis
     }
 }
 
+export async function fetchConfidenceThreshold(baseUrl = BASE_URL): Promise<{ threshold: number; min: number; max: number; default: number }> {
+    try {
+        const response = await fetch(`${baseUrl}/system/threshold`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (response.ok) {
+            return await response.json();
+        }
+    } catch {
+        // fallback
+    }
+    return { threshold: 0.60, min: 0.45, max: 0.98, default: 0.60 };
+}
+
+export async function updateConfidenceThreshold(threshold: number, baseUrl = BASE_URL): Promise<boolean> {
+    try {
+        const response = await fetch(`${baseUrl}/system/threshold`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({ threshold })
+        });
+        return response.ok;
+    } catch {
+        return false;
+    }
+}
+
+
 

@@ -24,7 +24,7 @@
         deviceId: '',
         streamIntervalMs: 1500,
         enableMockIfOffline: true,
-        minConfidenceThreshold: 0.35,
+        minConfidenceThreshold: 0.60,
         gravitonEngineEnabled: true,
         localEngineEnabled: true
     });
@@ -76,7 +76,10 @@
             formState.deviceId = config.deviceId ?? '';
             formState.streamIntervalMs = config.streamIntervalMs;
             formState.enableMockIfOffline = config.enableMockIfOffline;
-            formState.minConfidenceThreshold = config.minConfidenceThreshold;
+            const thresh = config.minConfidenceThreshold != null && config.minConfidenceThreshold > 0
+                ? config.minConfidenceThreshold
+                : 0.60;
+            formState.minConfidenceThreshold = Math.min(0.98, Math.max(0.45, thresh));
             formState.gravitonEngineEnabled = config.gravitonEngineEnabled;
             formState.localEngineEnabled = config.localEngineEnabled;
         }
@@ -891,13 +894,14 @@
                 <input
                     id="minConf"
                     type="range"
-                    min="0.20"
-                    max="0.95"
-                    step="0.05"
+                    min="0.45"
+                    max="0.98"
+                    step="0.01"
                     bind:value={formState.minConfidenceThreshold}
+                    oninput={() => onSaveConfig(formState)}
                     class="form-range"
                 />
-                <small>Vision classification acceptance threshold</small>
+                <small>Vision classification acceptance threshold (Range: 45% – 98%, Docker Default: 60%)</small>
             </div>
         </div>
 
