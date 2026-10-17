@@ -28,6 +28,7 @@ struct VideoSource {
     CURL* curl_handle{nullptr};
     std::string stream_url;
     std::vector<uint8_t> frame_buffer; // Reusable buffer to prevent heap reallocation
+    bool did_rewind{false};             ///< Flag indicating the video wrapped around to frame 0
 
     VideoSource();
     ~VideoSource();
@@ -54,6 +55,11 @@ struct VideoSource {
      * @return true if a valid frame was obtained, false otherwise.
      */
     [[nodiscard]] bool grabNextFrame(cv::Mat& out_frame);
+    [[nodiscard]] bool checkAndResetRewind() noexcept {
+        const bool ret = did_rewind;
+        did_rewind = false;
+        return ret;
+    }
 };
 
 } // namespace bawal::vision

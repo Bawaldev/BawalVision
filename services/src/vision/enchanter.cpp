@@ -35,20 +35,18 @@ namespace {
 static std::unique_ptr<ncnn::Net> s_realesrgan_net = nullptr;
 #endif
 
+#if BAWAL_HAVE_NCNN
 // Returns the number of threads to use for NCNN CPU inference.
 // We use 75% of available hardware threads, capped at 6.
 // On a 6-core Xeon W (12 threads) this gives 6 threads, which is
 // the sweet spot for NCNN without oversubscribing the CPU.
 int getOptimalCpuThreads() {
-#if BAWAL_HAVE_NCNN
     int hw_threads = ncnn::get_big_cpu_count();
     if (hw_threads <= 0) hw_threads = omp_get_max_threads();
     if (hw_threads <= 0) hw_threads = 4;
     return std::max(2, std::min(6, hw_threads * 3 / 4));
-#else
-    return 4;
-#endif
 }
+#endif
 
 } // anonymous namespace
 

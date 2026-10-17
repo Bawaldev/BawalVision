@@ -162,6 +162,14 @@ public:
 
     [[nodiscard]] bool isReady() const noexcept { return m_is_ready; }
 
+    /**
+     * @brief Reset temporal object tracks (e.g. on video rewind or scene cut).
+     */
+    void resetTracker() noexcept {
+        std::lock_guard<std::mutex> lock(m_infer_mutex);
+        m_tracked_items.clear();
+    }
+
 private:
 
     // Model metadata (static, zero heap overhead)
