@@ -429,12 +429,19 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
 
     tl_tone_mapped.create(denoised_src.size(), CV_8UC3);
 
+    const int tone_rows = denoised_src.rows;
+    const int tone_cols = denoised_src.cols;
+    const size_t src_step = denoised_src.step;
+    const size_t dst_step = tl_tone_mapped.step;
+    const uint8_t* src_base = denoised_src.data;
+    uint8_t* dst_base = tl_tone_mapped.data;
+
     #pragma omp parallel for schedule(static)
-    for (int y = 0; y < denoised_src.rows; ++y) {
-        const auto* __restrict s = denoised_src.ptr<cv::Vec3b>(y);
-        auto* __restrict d = tl_tone_mapped.ptr<cv::Vec3b>(y);
+    for (int y = 0; y < tone_rows; ++y) {
+        const auto* __restrict s = reinterpret_cast<const cv::Vec3b*>(src_base + y * src_step);
+        auto* __restrict d = reinterpret_cast<cv::Vec3b*>(dst_base + y * dst_step);
         #pragma omp simd
-        for (int x = 0; x < denoised_src.cols; ++x) {
+        for (int x = 0; x < tone_cols; ++x) {
             const int max_c = std::max({s[x][0], s[x][1], s[x][2]});
             const float hl_protect = std::clamp((static_cast<float>(max_c) - 175.0f) * (1.0f / 65.0f), 0.0f, 1.0f);
             const float gb = gain_b * (1.0f - hl_protect) + hl_protect;
@@ -460,14 +467,23 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
         cv::GaussianBlur(tl_planes[1], tl_planes[1], cv::Size(5, 5), 1.4); // In-place!
         cv::GaussianBlur(tl_planes[2], tl_planes[2], cv::Size(5, 5), 1.4); // In-place!
 
+        const size_t l_step = tl_planes[0].step;
+        const size_t a_step = tl_planes[1].step;
+        const size_t b_step = tl_planes[2].step;
+        const uint8_t* l_base = tl_planes[0].data;
+        uint8_t* a_base = tl_planes[1].data;
+        uint8_t* b_base = tl_planes[2].data;
+        const int lab_rows = tl_lab.rows;
+        const int lab_cols = tl_lab.cols;
         constexpr float vibrancy = 1.08f;
+
         #pragma omp parallel for schedule(static)
-        for (int y = 0; y < tl_lab.rows; ++y) {
-            const auto* __restrict l_row = tl_planes[0].ptr<uint8_t>(y);
-            auto* __restrict a_row = tl_planes[1].ptr<uint8_t>(y);
-            auto* __restrict b_row = tl_planes[2].ptr<uint8_t>(y);
+        for (int y = 0; y < lab_rows; ++y) {
+            const auto* __restrict l_row = l_base + y * l_step;
+            auto* __restrict a_row = a_base + y * a_step;
+            auto* __restrict b_row = b_base + y * b_step;
             #pragma omp simd
-            for (int x = 0; x < tl_lab.cols; ++x) {
+            for (int x = 0; x < lab_cols; ++x) {
                 const float l_val = static_cast<float>(l_row[x]);
                 float da = static_cast<float>(a_row[x]) - 128.0f;
                 float db = static_cast<float>(b_row[x]) - 128.0f;
