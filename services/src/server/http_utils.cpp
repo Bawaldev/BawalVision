@@ -1,5 +1,6 @@
 #include <bawal/server/http_utils.hpp>
 #include <curl/curl.h>
+#include <algorithm>
 #include <iostream>
 
 namespace bawal::server {
@@ -241,6 +242,38 @@ bool postVideoMetadata(
     long http_status_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
     return (http_status_code >= 200 && http_status_code < 300);
+}
+
+float fetchDynamicThreshold(
+    CURL* curl,
+    std::string_view backend_base_url,
+    float fallback_val
+) {
+    if (!curl || backend_base_url.empty()) {
+        return fallback_val;
+    }
+
+    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/system/threshold";
+    std::vector<uint8_t> response_buffer;
+
+    if (!fetchLatestFrame(curl, endpoint_url, response_buffer)) {
+        return fallback_val;
+    }
+
+    const std::string_view json(reinterpret_cast<const char*>(response_buffer.data()), response_buffer.size());
+    constexpr std::string_view key = "\"threshold\":";
+    const size_t pos = json.find(key);
+    if (pos == std::string_view::npos) {
+        return fallback_val;
+    }
+
+    const size_t val_start = pos + key.size();
+    try {
+        const float parsed = std::stof(std::string(json.substr(val_start, 10)));
+        return std::clamp(parsed, 0.45f, 0.98f);
+    } catch (...) {
+        return fallback_val;
+    }
 }
 
 } // namespace bawal::server

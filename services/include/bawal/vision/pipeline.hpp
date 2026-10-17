@@ -113,6 +113,14 @@ public:
      */
     void renderOverlay(const InspectionOutput& inspection, cv::Mat& out_display);
 
+    // Dynamic Confidence Threshold Accessors (Range: 0.45 - 0.98, Default: 0.60)
+    void setConfidenceThreshold(float thresh) noexcept {
+        m_conf_threshold = std::clamp(thresh, 0.45f, 0.98f);
+    }
+    [[nodiscard]] float getConfidenceThreshold() const noexcept {
+        return m_conf_threshold;
+    }
+
     // Component accessors
     [[nodiscard]] CameraReceiver& getReceiver() noexcept { return m_receiver; }
     [[nodiscard]] DewarpEngine& getDewarper() noexcept { return m_dewarper; }
@@ -125,6 +133,7 @@ private:
     RealESRGANEngine m_enhancer;
     FoodClassifier m_classifier;
     cv::Ptr<cv::CLAHE> m_clahe;
+    float m_conf_threshold{0.60f};
     int m_width{640};
     int m_height{480};
 };

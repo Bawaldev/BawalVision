@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"bawal_vision_backend/internal/inspection"
@@ -18,6 +19,20 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
+
+var (
+	globalThresholdMutex sync.RWMutex
+	globalConfidenceThreshold = initDefaultThreshold()
+)
+
+func initDefaultThreshold() float64 {
+	if env := os.Getenv("CONF_THRESHOLD"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil && val >= 0.45 && val <= 0.98 {
+			return val
+		}
+	}
+	return 0.60
+}
 
 type Handler struct {
 	db *gorm.DB
@@ -33,9 +48,45 @@ func RegisterFrontendRoutes(router fiber.Router, db *gorm.DB) {
 	router.Get("/records", h.GetRecords)
 	router.Get("/records/:id", h.GetRecordByID)
 	router.Get("/system/engines", h.GetEngineStatus)
+	router.Get("/system/threshold", h.GetThreshold)
+	router.Post("/system/threshold", h.SetThreshold)
 	router.Get("/examples", h.GetExampleVideos)
 	router.Get("/examples/videos", h.GetExampleVideos)
 	router.Get("/examples/file/:filename", h.ServeExampleVideo)
+}
+
+func (h *Handler) GetThreshold(c *fiber.Ctx) error {
+	globalThresholdMutex.RLock()
+	t := globalConfidenceThreshold
+	globalThresholdMutex.RUnlock()
+	return c.JSON(fiber.Map{
+		"threshold": t,
+		"min":       0.45,
+		"max":       0.98,
+		"default":   0.60,
+	})
+}
+
+func (h *Handler) SetThreshold(c *fiber.Ctx) error {
+	var req struct {
+		Threshold float64 `json:"threshold"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	if req.Threshold < 0.45 {
+		req.Threshold = 0.45
+	} else if req.Threshold > 0.98 {
+		req.Threshold = 0.98
+	}
+	globalThresholdMutex.Lock()
+	globalConfidenceThreshold = req.Threshold
+	globalThresholdMutex.Unlock()
+
+	return c.JSON(fiber.Map{
+		"success":   true,
+		"threshold": req.Threshold,
+	})
 }
 
 func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
