@@ -63,6 +63,7 @@ type TelemetryIngressPayload struct {
 	FreeHeap        uint32               `json:"free_heap,omitempty"`
 	HeapFree        uint32               `json:"heap_free,omitempty"`
 	RSSI            int                  `json:"rssi,omitempty"`
+	CameraModel     string               `json:"camera_model,omitempty"`
 	SceneOptical    *SceneOpticalMetrics `json:"scene_optical,omitempty"`
 }
 

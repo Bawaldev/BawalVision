@@ -74,6 +74,14 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		fwVer = hdrFw
 	}
 
+	camModel := "OV5640"
+	if hasExisting && existing.CameraModel != "" {
+		camModel = existing.CameraModel
+	}
+	if hdrModel := c.Get("X-Camera-Model"); hdrModel != "" {
+		camModel = hdrModel
+	}
+
 	connMode := "wifi_lan"
 	if deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_") {
 		connMode = "mock_video"
@@ -89,6 +97,7 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		CurrentCPULoad:  cpuLoad,
 		IPAddress:       clientIP,
 		ConnectionMode:  connMode,
+		CameraModel:     camModel,
 	})
 }
 
@@ -197,10 +206,15 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 		fps := camera_handler.GlobalCameraStore.GetActiveFPS()
+		camModel := "OV5640"
+		if live, ok := inspection.GlobalInspectionStore.GetLatestTelemetry(activeID); ok && live.CameraModel != "" {
+			camModel = live.CameraModel
+		}
 		return c.JSON(fiber.Map{
-			"active":    true,
-			"device_id": activeID,
-			"fps":       fps,
+			"active":       true,
+			"device_id":    activeID,
+			"fps":          fps,
+			"camera_model": camModel,
 		})
 	})
 
