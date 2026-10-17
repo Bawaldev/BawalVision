@@ -73,14 +73,14 @@ bool DewarpEngine::process(const cv::Mat& in_frame, cv::Mat& out_frame) {
     }
 
     if (m_has_fused_map) {
-        cv::remap(in_frame, out_frame, m_fused_map1, m_fused_map2, cv::INTER_LINEAR);
+        cv::remap(in_frame, out_frame, m_fused_map1, m_fused_map2, cv::INTER_LINEAR, cv::BORDER_CONSTANT);
     } else if (m_has_undistort_map && m_has_perspective) {
         cv::Mat intermediate;
-        cv::remap(in_frame, intermediate, m_map1, m_map2, cv::INTER_LINEAR);
+        cv::remap(in_frame, intermediate, m_map1, m_map2, cv::INTER_LINEAR, cv::BORDER_CONSTANT);
         cv::warpPerspective(intermediate, out_frame, m_perspective_matrix, 
                              m_config.target_size, cv::INTER_LINEAR);
     } else if (m_has_undistort_map) {
-        cv::remap(in_frame, out_frame, m_map1, m_map2, cv::INTER_LINEAR);
+        cv::remap(in_frame, out_frame, m_map1, m_map2, cv::INTER_LINEAR, cv::BORDER_CONSTANT);
     } else if (m_has_perspective) {
         cv::warpPerspective(in_frame, out_frame, m_perspective_matrix, 
                              m_config.target_size, cv::INTER_LINEAR);

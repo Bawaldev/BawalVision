@@ -46,11 +46,21 @@
     ];
 
     let activeTab = $state('Overview');
+    let transitionDirection = $state<'forward' | 'backward' | 'none'>('none');
+    let isHydrated = $state(false);
     let records = $state<InspectionRecord[]>([]);
+
+    function setTabWithTransition(tab: string) {
+        if (!VALID_TABS.includes(tab) || tab === activeTab) return;
+        const prevIdx = VALID_TABS.indexOf(activeTab);
+        const nextIdx = VALID_TABS.indexOf(tab);
+        transitionDirection = isHydrated ? (nextIdx >= prevIdx ? 'forward' : 'backward') : 'none';
+        activeTab = tab;
+    }
 
     function handleSelectTab(tab: string) {
         if (!VALID_TABS.includes(tab)) return;
-        activeTab = tab;
+        setTabWithTransition(tab);
         if (typeof window !== 'undefined') {
             try {
                 localStorage.setItem('bawal_active_tab', tab);
@@ -270,21 +280,23 @@
         if (typeof window === 'undefined') return;
         try {
             const hash = window.location.hash.toLowerCase();
+            let targetTab = 'Overview';
             if (hash.includes('telemetry') || hash.includes('result')) {
-                activeTab = 'Telemetry Analytics & Result Log';
+                targetTab = 'Telemetry Analytics & Result Log';
             } else if (hash.includes('setting')) {
-                activeTab = 'System & Cloud Settings';
+                targetTab = 'System & Cloud Settings';
             } else if (hash.includes('live') || hash.includes('inspect') || hash.includes('dashboard')) {
-                activeTab = 'Dashboard';
+                targetTab = 'Dashboard';
             } else if (hash.includes('overview')) {
-                activeTab = 'Overview';
+                targetTab = 'Overview';
             } else {
                 const savedTab = localStorage.getItem('bawal_active_tab');
                 if (savedTab && VALID_TABS.includes(savedTab)) {
-                    activeTab = savedTab;
-                } else {
-                    activeTab = 'Overview';
+                    targetTab = savedTab;
                 }
+            }
+            if (targetTab !== activeTab) {
+                setTabWithTransition(targetTab);
             }
         } catch {}
     }
@@ -292,6 +304,8 @@
     onMount(async () => {
         // Restore active tab from URL hash or localStorage and listen for SPA Back/Forward navigation
         syncTabFromLocation();
+        // Enable CSR tab transition animations exclusively after client-side hydration (zero SSR / initial load lag)
+        isHydrated = true;
         if (typeof window !== 'undefined') {
             window.addEventListener('hashchange', syncTabFromLocation);
             window.addEventListener('popstate', syncTabFromLocation);
@@ -494,9 +508,15 @@
             }}
         />
 
-        <!-- Page Content Router (Persistent View Panels: No DOM Destruction, Instant Switching) -->
+        <!-- Page Content Router (Persistent View Panels: No DOM Destruction, Instant Switching + CSR 60 FPS Transitions) -->
         <main class="page-body">
-            <div class="view-panel" class:is-hidden={activeTab !== 'Overview'}>
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Overview'} 
+                class:is-hidden={activeTab !== 'Overview'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
                 <OverviewView
                     {records}
                     {telemetry}
@@ -518,7 +538,13 @@
                 />
             </div>
 
-            <div class="view-panel" class:is-hidden={activeTab !== 'Dashboard'}>
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Dashboard'} 
+                class:is-hidden={activeTab !== 'Dashboard'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
                 <DashboardView
                     {detections}
                     {telemetry}
@@ -538,14 +564,26 @@
                 />
             </div>
 
-            <div class="view-panel" class:is-hidden={activeTab !== 'Telemetry Analytics & Result Log'}>
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Telemetry Analytics & Result Log'} 
+                class:is-hidden={activeTab !== 'Telemetry Analytics & Result Log'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
                 <TelemetryResultLogView
                     currentTelemetry={telemetry}
                     history={telemetryHistory}
                 />
             </div>
 
-            <div class="view-panel" class:is-hidden={activeTab !== 'System & Cloud Settings'}>
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'System & Cloud Settings'} 
+                class:is-hidden={activeTab !== 'System & Cloud Settings'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
                 <SettingsView
                     config={systemConfig}
                     {isOnline}

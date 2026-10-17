@@ -6,3 +6,4 @@
 #include "bawal/vision/simd_food_evaluator.hpp"
 #include "bawal/vision/enchanter.hpp"
 #include "bawal/vision/pipeline.hpp"
+#include "bawal/vision/video_source.hpp"
