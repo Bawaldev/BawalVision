@@ -284,7 +284,8 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
 
                         ncnn::Mat in = ncnn::Mat::from_pixels(tile.data,
                                                                ncnn::Mat::PIXEL_BGR2RGB,
-                                                               tile.cols, tile.rows);
+                                                               tile.cols, tile.rows,
+                                                               static_cast<int>(tile.step));
                         ncnn::Extractor ex = s_realesrgan_net->create_extractor();
                         ex.input("data", in);
                         ncnn::Mat out;

@@ -153,8 +153,6 @@ SceneOpticalMetrics evaluateSceneOptical(const cv::Mat& bgr_mat) {
 
 namespace {
 
-static std::vector<TrackedItem> s_tracked_items;
-
 inline float computeIoU(const CompactBBox& a, const CompactBBox& b) {
     int inter_x1 = std::max(a.x, b.x);
     int inter_y1 = std::max(a.y, b.y);
@@ -278,6 +276,8 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
             m_input_tensor_values.reset(
                 static_cast<float*>(::operator new[](K_TENSOR_ELEMENTS * sizeof(float), std::align_val_t{64}))
             );
+            m_tracked_items.clear();
+            m_tracked_items.reserve(32);
             m_is_ready = true;
             std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << path 
                       << (path.find("int8") != std::string::npos ? " [INT8 Quantized QDQ Model]" : " [FP32 Model]") << "\n";
@@ -491,18 +491,18 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
         // If YOLO detects no candidates this frame, age existing tracks instead of clearing immediately
         if (nms_indices.empty()) {
-            for (auto& item : s_tracked_items) {
+            for (auto& item : m_tracked_items) {
                 item.lost_frames++;
                 item.result.confidence *= 0.95f;
             }
-            s_tracked_items.erase(
-                std::remove_if(s_tracked_items.begin(), s_tracked_items.end(),
+            m_tracked_items.erase(
+                std::remove_if(m_tracked_items.begin(), m_tracked_items.end(),
                                [](const TrackedItem& item) { return item.lost_frames > 15; }),
-                s_tracked_items.end());
+                m_tracked_items.end());
 
             out_count = 0;
             const size_t max_capacity = out_buffer.size();
-            for (const auto& item : s_tracked_items) {
+            for (const auto& item : m_tracked_items) {
                 if (out_count < max_capacity) {
                     out_buffer[out_count++] = item.result;
                 } else {
@@ -537,15 +537,21 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             det.class_name = predicted_name;
             det.confidence = std::clamp(yolo_score, 0.0f, 1.0f);
 
-            // AVX2 SIMD color spoilage and freshness assessment
+            // AVX2 SIMD texture validity filter (rejects flat walls, tables, empty tray surfaces)
             cv::Mat final_food_roi = frame(det.bbox);
+            TextureMetric texture = evaluateTextureAVX2(final_food_roi);
+            if (!texture.is_valid_food_texture) {
+                continue;
+            }
+
+            // AVX2 SIMD color spoilage and freshness assessment
             det.spoilage = evaluateSpoilageAVX2(final_food_roi, det.class_name);
 
             current_detections.push_back(std::move(det));
         }
 
         if (current_detections.empty()) {
-            s_tracked_items.clear();
+            m_tracked_items.clear();
             out_count = 0;
             return true;
         }
@@ -553,7 +559,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         // 8. Temporal Tracking & Smoothing (Stabilizes Bounding Boxes & Suppresses Flicker)
         std::vector<bool> matched(current_detections.size(), false);
 
-        for (auto& tracked : s_tracked_items) {
+        for (auto& tracked : m_tracked_items) {
             float best_iou = 0.0f;
             int best_idx = -1;
 
@@ -623,20 +629,20 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 new_item.stable_frames = 0;
                 new_item.last_center = cv::Point(new_item.result.bbox.x + new_item.result.bbox.width / 2,
                                                  new_item.result.bbox.y + new_item.result.bbox.height / 2);
-                s_tracked_items.push_back(std::move(new_item));
+                m_tracked_items.push_back(std::move(new_item));
             }
         }
 
         // Remove tracks lost for more than 2 consecutive frames
-        s_tracked_items.erase(
-            std::remove_if(s_tracked_items.begin(), s_tracked_items.end(),
+        m_tracked_items.erase(
+            std::remove_if(m_tracked_items.begin(), m_tracked_items.end(),
                            [](const TrackedItem& item) { return item.lost_frames > 2; }),
-            s_tracked_items.end());
+            m_tracked_items.end());
 
         // Dispatch valid tracks directly into caller-provided span buffer
         out_count = 0;
         const size_t max_capacity = out_buffer.size();
-        for (const auto& item : s_tracked_items) {
+        for (const auto& item : m_tracked_items) {
             if (item.lost_frames <= 1) {
                 if (out_count < max_capacity) {
                     out_buffer[out_count++] = item.result;
