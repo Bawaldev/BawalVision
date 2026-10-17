@@ -56,6 +56,8 @@ type TelemetryIngressPayload struct {
 	Temperature     float64              `json:"temperature"`
 	CPUTemperature  float64              `json:"cpu_temperature,omitempty"`
 	CurrentCPULoad  uint8                `json:"cpu_load"`
+	CPUCore0Load    *uint8               `json:"cpu_core0_load,omitempty"`
+	CPUCore1Load    *uint8               `json:"cpu_core1_load,omitempty"`
 	IPAddress       string               `json:"ip_address,omitempty"`
 	ConnectionMode  string               `json:"connection_mode,omitempty"`
 	FreeHeap        uint32               `json:"free_heap,omitempty"`
