@@ -12,7 +12,9 @@
         fetchLatestTelemetry,
         fetchLatestInspection,
         fetchEngineStatus,
-        triggerManualInspection
+        triggerManualInspection,
+        fetchConfidenceThreshold,
+        updateConfidenceThreshold
     } from '$lib/api';
 
     import type {
@@ -70,7 +72,7 @@
         deviceId: '',
         streamIntervalMs: 1500,
         enableMockIfOffline: false,
-        minConfidenceThreshold: 0.35,
+        minConfidenceThreshold: 0.60,
         gravitonEngineEnabled: false,
         gravitonEngineAvailable: false,
         localEngineEnabled: true,
@@ -186,22 +188,25 @@
                     latestOptical = latestLive.scene_optical;
                 }
                 hasLiveDetections = true;
-                detections = latestLive.detections.map((det: any) => {
-                    const spoilage = Number(det.spoilage_score) || 0;
-                    const conf = Number(det.similarity_rate) || 0.0;
-                    let st: 'PASS' | 'REVIEW' | 'REJECT' = det.status;
-                    if (!st || (st as string) === '') {
-                        st = (spoilage >= 50 || conf < 0.55) ? 'REJECT' : ((spoilage >= 25 || conf < 0.68) ? 'REVIEW' : 'PASS');
-                    }
-                    return {
-                        food_name: det.food_name || 'food_item',
-                        similarity_rate: conf,
-                        spoilage_score: spoilage,
-                        status: st,
-                        category: getCategory(det.food_name || ''),
-                        box: det.box || []
-                    };
-                });
+                const activeThreshold = Math.min(0.98, Math.max(0.45, Number(systemConfig.minConfidenceThreshold) || 0.60));
+                detections = latestLive.detections
+                    .filter((det: any) => (Number(det.similarity_rate) || 0.0) >= activeThreshold)
+                    .map((det: any) => {
+                        const spoilage = Number(det.spoilage_score) || 0;
+                        const conf = Number(det.similarity_rate) || 0.0;
+                        let st: 'PASS' | 'REVIEW' | 'REJECT' = det.status;
+                        if (!st || (st as string) === '') {
+                            st = (spoilage >= 50 || conf < activeThreshold) ? 'REJECT' : ((spoilage >= 25 || conf < (activeThreshold + 0.10)) ? 'REVIEW' : 'PASS');
+                        }
+                        return {
+                            food_name: det.food_name || 'food_item',
+                            similarity_rate: conf,
+                            spoilage_score: spoilage,
+                            status: st,
+                            category: getCategory(det.food_name || ''),
+                            box: det.box || []
+                        };
+                    });
             }
 
             // 5. Inspections & Records from DB (Polled every 2.5s or fallback when no live detections)
@@ -278,6 +283,14 @@
             window.addEventListener('hashchange', syncTabFromLocation);
             window.addEventListener('popstate', syncTabFromLocation);
         }
+
+        // Initial sync of detection threshold from backend (or Docker env default)
+        try {
+            const threshRes = await fetchConfidenceThreshold(systemConfig.backendUrl);
+            if (threshRes && threshRes.threshold) {
+                systemConfig.minConfidenceThreshold = Math.min(0.98, Math.max(0.45, threshRes.threshold));
+            }
+        } catch {}
 
         // Initial polling
         await pollBackendData();
@@ -393,15 +406,18 @@
         logs = [];
     }
 
-    function handleSaveConfig(updated: SystemConfig) {
+    async function handleSaveConfig(updated: SystemConfig) {
         systemConfig = updated;
+        try {
+            await updateConfidenceThreshold(updated.minConfidenceThreshold, systemConfig.backendUrl);
+        } catch {}
         logs = [
             ...logs,
             {
                 id: Math.random().toString(36).substring(2, 9),
                 timestamp: new Date().toLocaleTimeString(),
                 level: 'INFO',
-                message: 'System configuration parameters updated.'
+                message: `System configuration updated (Confidence threshold: ${(updated.minConfidenceThreshold * 100).toFixed(0)}%).`
             }
         ];
     }

@@ -111,4 +111,20 @@ static_assert(sizeof(CameraConfig) == 72, "CameraConfig must have 72 bytes in 64
     long timeout_ms = 1500
 );
 
+/**
+ * @brief Queries the backend for dynamic detection confidence threshold.
+ * 
+ * Target endpoint: GET {backend_base_url}/api/v1/system/threshold
+ * 
+ * @param curl Active libcurl easy handle.
+ * @param backend_base_url Base URL of backend service.
+ * @param fallback_val Default fallback threshold (default 0.60f).
+ * @return Dynamic threshold value clamped between 0.45f and 0.98f.
+ */
+[[nodiscard]] float fetchDynamicThreshold(
+    CURL* curl,
+    std::string_view backend_base_url,
+    float fallback_val = 0.60f
+);
+
 } // namespace bawal::server

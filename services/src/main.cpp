@@ -187,12 +187,20 @@ int main(int argc, char** argv) {
             if (pipeline.runInference(frame_to_process, detected)) {
                 const double infer_ms = ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
                 
-                // Collect valid food detections meeting confidence threshold (default 58%)
-                float min_conf_threshold = 0.58f;
-                if (const char* env_conf = std::getenv("CONF_THRESHOLD")) {
-                    try { min_conf_threshold = std::stof(env_conf); } catch (...) {}
+                // Periodically synchronize dynamic confidence threshold from backend (every ~3 seconds)
+                static auto last_thresh_sync = std::chrono::steady_clock::now();
+                const auto now_thresh = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now_thresh - last_thresh_sync).count() >= 3) {
+                    last_thresh_sync = now_thresh;
+                    const float backend_thresh = bawal::server::fetchDynamicThreshold(curl_db, backend_base_url, pipeline.getConfidenceThreshold());
+                    if (std::abs(backend_thresh - pipeline.getConfidenceThreshold()) > 0.005f) {
+                        std::cout << "[CONFIG] Dynamically updated confidence threshold from backend: " 
+                                  << int(backend_thresh * 100) << "%\n";
+                        pipeline.setConfidenceThreshold(backend_thresh);
+                    }
                 }
 
+                const float min_conf_threshold = pipeline.getConfidenceThreshold();
                 std::vector<DetectionResult> valid_detections;
                 for (const auto& d : detected) {
                     if (d.class_id >= 0 && d.confidence >= min_conf_threshold && d.class_name != "no_food" && d.class_name != "no_model") {
