@@ -385,6 +385,7 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
     }
     cJSON_AddStringToObject(root, "device_name", data->device_name);
     cJSON_AddNumberToObject(root, "device_core", data->device_core);
+    cJSON_AddStringToObject(root, "camera_model", camera_get_sensor_name());
 
     char *json_string = cJSON_PrintUnformatted(root);
     if (json_string == NULL) {
@@ -496,6 +497,7 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     esp_http_client_set_header(s_stream_client, "X-Frame-ID", frame_id_str);
     esp_http_client_set_header(s_stream_client, "X-ESP-Temp", temp_str);
     esp_http_client_set_header(s_stream_client, "X-ESP-CPU-Load", load_str);
+    esp_http_client_set_header(s_stream_client, "X-Camera-Model", camera_get_sensor_name());
     esp_http_client_set_post_field(s_stream_client, (const char *)s_local_tx_frame.data, s_local_tx_frame.header.buffer_len);
 
     esp_err_t err = esp_http_client_perform(s_stream_client);

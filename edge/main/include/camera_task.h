@@ -66,6 +66,13 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame);
  */
 bool is_camera_streaming(void);
 
+/**
+ * @brief Returns the scanned camera sensor model name (e.g. "OV5640", "OV3660", "OV2640").
+ * 
+ * @return const char* Camera sensor model string.
+ */
+const char *camera_get_sensor_name(void);
+
 #ifdef __cplusplus
 }
 #endif

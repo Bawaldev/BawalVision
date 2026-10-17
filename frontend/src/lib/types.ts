@@ -60,6 +60,7 @@ export interface TelemetryPayload {
     free_heap?: number | null;
     rssi?: number | null;
     server_memory_mb?: number | null;
+    camera_model?: string | null;
     timestamp: number;
     is_connected?: boolean;
     scene_optical?: SceneOpticalMetrics;
