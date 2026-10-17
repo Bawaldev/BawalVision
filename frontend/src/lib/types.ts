@@ -54,6 +54,8 @@ export interface TelemetryPayload {
     cpu_temperature?: number | null;
     temperature: number | null;
     cpu_load?: number | null;
+    cpu_core0_load?: number | null;
+    cpu_core1_load?: number | null;
     heap_free?: number | null;
     free_heap?: number | null;
     rssi?: number | null;
