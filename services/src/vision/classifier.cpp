@@ -527,9 +527,9 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             int yolo_cls = class_ids[idx];
             float yolo_score = confidences[idx];
 
-            std::string predicted_name = (yolo_cls >= 0 && yolo_cls < static_cast<int>(m_class_names.size()))
-                                             ? std::string(m_class_names[yolo_cls])
-                                             : "food_item";
+            std::string_view predicted_name = (yolo_cls >= 0 && yolo_cls < static_cast<int>(m_class_names.size()))
+                                                 ? m_class_names[yolo_cls]
+                                                 : std::string_view("food_item");
 
             DetectionResult det;
             det.bbox = final_box;
