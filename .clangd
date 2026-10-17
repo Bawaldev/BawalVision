@@ -16,6 +16,7 @@ CompileFlags:
     - -Iedge/main/src
     - -Iedge/main
     - -Iedge/include
+    - -Iedge/managed_components/waveshare__esp_lcd_st7735/include
     - -iquoteedge/main/include
     - -iquoteedge/main/src
     - --target=riscv32

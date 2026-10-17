@@ -19,6 +19,7 @@
 #include "test.h"
 #include "wifi.h"
 #include "led_strip.h"
+#include "pins.h"
 
 static const char *TAG = "MAIN";
 
@@ -26,13 +27,13 @@ static const char *TAG = "MAIN";
 #define LCD_TASK_STACK_SIZE 4096
 #define WIFI_TASK_STACK_SIZE 4096
 #define HTTP_STREAM_STACK_SIZE 4096
-#define TEST_PRODUCER_STACK_SIZE 3072
+#define TEST_PRODUCER_STACK_SIZE 4096
 #define USB_PROV_STACK_SIZE 4096
+#define BUTTON_LED_TASK_STACK_SIZE 2048
 
 #define WS2812_LED_GPIO      GPIO_NUM_48
 
 static const int s_candidate_indicator_pins[] = {
-    2,   // Onboard classic status/flash LED (Active-LOW/HIGH)
     21,  // Secondary indicator / flash LED on S3 CAM
     38,  // Auxiliary indicator / backlight pin
 };
@@ -59,6 +60,10 @@ static TaskHandle_t s_test_task_handle = NULL;
 static StaticTask_t s_usb_prov_task_buffer;
 static StackType_t s_usb_prov_task_stack[USB_PROV_STACK_SIZE];
 static TaskHandle_t s_usb_prov_task_handle = NULL;
+
+static StaticTask_t s_button_led_task_buffer;
+static StackType_t s_button_led_task_stack[BUTTON_LED_TASK_STACK_SIZE];
+static TaskHandle_t s_button_led_task_handle = NULL;
 
 static TaskHandle_t s_camera_task_handle = NULL;
 
@@ -176,6 +181,42 @@ static void disable_all_indicator_leds(void) {
 }
 
 /* ============================================================
+ *  Button-LED Monitor Task (Momentary control)
+ *  Button: PIN_BTN_TRIGGER (GPIO 48, Active LOW, internal pull-up)
+ *  LED:    PIN_LED_FLASH (GPIO 2, Active HIGH)
+ * ============================================================ */
+static void button_led_task(void *pvParameters) {
+    gpio_config_t btn_cfg = {
+        .pin_bit_mask = (1ULL << PIN_BTN_TRIGGER),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&btn_cfg);
+
+    gpio_config_t led_cfg = {
+        .pin_bit_mask = (1ULL << PIN_LED_FLASH),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&led_cfg);
+    gpio_set_level(PIN_LED_FLASH, 0);
+
+    ESP_LOGI(TAG, "Button-LED task active: GPIO %d (btn) -> GPIO %d (LED)",
+             PIN_BTN_TRIGGER, PIN_LED_FLASH);
+
+    for (;;) {
+        // Active LOW button: 0 when pressed -> turn LED ON (1); 1 when released -> turn LED OFF (0)
+        int btn_state = gpio_get_level(PIN_BTN_TRIGGER);
+        gpio_set_level(PIN_LED_FLASH, (btn_state == 0) ? 1 : 0);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+/* ============================================================
  *  app_main
  * ============================================================ */
 void app_main(void) {
@@ -244,6 +285,11 @@ void app_main(void) {
     s_usb_prov_task_handle = xTaskCreateStaticPinnedToCore(
         usb_serial_provisioning_task, "USB_Prov_Task", USB_PROV_STACK_SIZE,
         NULL, 3, s_usb_prov_task_stack, &s_usb_prov_task_buffer, 0);
+
+    /* Button-controlled LED task pinned to Core 0 */
+    s_button_led_task_handle = xTaskCreateStaticPinnedToCore(
+        button_led_task, "Button_LED_Task", BUTTON_LED_TASK_STACK_SIZE,
+        NULL, 2, s_button_led_task_stack, &s_button_led_task_buffer, 0);
 
     ESP_LOGI(TAG, "All system static tasks started successfully.");
 }
