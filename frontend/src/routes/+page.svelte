@@ -2,6 +2,7 @@
     import { onMount, onDestroy } from 'svelte';
     import Sidebar from '$lib/components/Sidebar.svelte';
     import TopBar from '$lib/components/TopBar.svelte';
+    import OverviewView from '$lib/views/OverviewView.svelte';
     import DashboardView from '$lib/views/DashboardView.svelte';
     import TelemetryResultLogView from '$lib/views/TelemetryResultLogView.svelte';
     import SettingsView from '$lib/views/SettingsView.svelte';
@@ -22,7 +23,8 @@
         TelemetryPayload,
         InferenceLogEntry,
         SystemConfig,
-        SceneOpticalMetrics
+        SceneOpticalMetrics,
+        InspectionRecord
     } from '$lib/types';
 
     // Helper to determine category
@@ -37,12 +39,14 @@
 
     // State Variables
     const VALID_TABS = [
+        'Overview',
         'Dashboard',
         'Telemetry Analytics & Result Log',
         'System & Cloud Settings'
     ];
 
-    let activeTab = $state('Dashboard');
+    let activeTab = $state('Overview');
+    let records = $state<InspectionRecord[]>([]);
 
     function handleSelectTab(tab: string) {
         if (!VALID_TABS.includes(tab)) return;
@@ -50,9 +54,11 @@
         if (typeof window !== 'undefined') {
             try {
                 localStorage.setItem('bawal_active_tab', tab);
-                const slug = tab === 'Telemetry Analytics & Result Log'
-                    ? 'telemetry'
-                    : (tab === 'System & Cloud Settings' ? 'settings' : 'dashboard');
+                const slug = tab === 'Overview'
+                    ? 'overview'
+                    : (tab === 'Telemetry Analytics & Result Log'
+                        ? 'telemetry'
+                        : (tab === 'System & Cloud Settings' ? 'settings' : 'live'));
                 window.location.hash = slug;
             } catch {}
         }
@@ -212,6 +218,9 @@
             // 5. Inspections & Records from DB (Polled every 2.5s or fallback when no live detections)
             if (shouldRunSlowPoll || !hasLiveDetections) {
                 const allRecords = await fetchRecords(systemConfig.backendUrl);
+                if (allRecords && allRecords.length > 0) {
+                    records = allRecords;
+                }
                 const validRecords = (allRecords || []).filter(
                     r => r.inspection_foods && r.inspection_foods.length > 0
                 );
@@ -265,12 +274,16 @@
                 activeTab = 'Telemetry Analytics & Result Log';
             } else if (hash.includes('setting')) {
                 activeTab = 'System & Cloud Settings';
-            } else if (hash.includes('dashboard')) {
+            } else if (hash.includes('live') || hash.includes('inspect') || hash.includes('dashboard')) {
                 activeTab = 'Dashboard';
+            } else if (hash.includes('overview')) {
+                activeTab = 'Overview';
             } else {
                 const savedTab = localStorage.getItem('bawal_active_tab');
                 if (savedTab && VALID_TABS.includes(savedTab)) {
                     activeTab = savedTab;
+                } else {
+                    activeTab = 'Overview';
                 }
             }
         } catch {}
@@ -483,6 +496,28 @@
 
         <!-- Page Content Router (Persistent View Panels: No DOM Destruction, Instant Switching) -->
         <main class="page-body">
+            <div class="view-panel" class:is-hidden={activeTab !== 'Overview'}>
+                <OverviewView
+                    {records}
+                    {telemetry}
+                    {totalAccepted}
+                    {totalRejected}
+                    {totalPlates}
+                    {passRate}
+                    {isOnline}
+                    {hasCamera}
+                    {realFps}
+                    {realLatencyMs}
+                    {serverMemoryMB}
+                    {parallelCores}
+                    {gravitonAvailable}
+                    gravitonEnabled={systemConfig.gravitonEngineEnabled}
+                    {localEngineAvailable}
+                    confidenceThreshold={systemConfig.minConfidenceThreshold}
+                    onNavigateTab={handleSelectTab}
+                />
+            </div>
+
             <div class="view-panel" class:is-hidden={activeTab !== 'Dashboard'}>
                 <DashboardView
                     {detections}
