@@ -61,15 +61,15 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     // RealESRGAN model (~17 MB) and runs well on CPU. Override via env var
     // REALESRGAN_MODEL if a different model is needed.
     std::string model_name = "realesr-general-x4v3";
-    int model_scale = 2;
+    int model_scale = 4;
 
     const char* env_model = std::getenv("REALESRGAN_MODEL");
     if (env_model && std::string(env_model).length() > 0) {
         model_name = env_model;
-        if (model_name.find("x2") != std::string::npos) model_scale = 2;
-        else if (model_name.find("x3") != std::string::npos) model_scale = 3;
-        else if (model_name.find("x4") != std::string::npos) model_scale = 4;
     }
+    if (model_name.find("x2") != std::string::npos) model_scale = 2;
+    else if (model_name.find("x3") != std::string::npos) model_scale = 3;
+    else if (model_name.find("x4") != std::string::npos) model_scale = 4;
 
     const std::filesystem::path param_file = weight_dir / (model_name + ".param");
     const std::filesystem::path bin_file = weight_dir / (model_name + ".bin");
@@ -222,15 +222,47 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
 bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_inspection) {
     if (frame.empty()) return false;
 
-    std::vector<DetectionResult> detected;
-    if (!processStream(frame, {}, out_inspection)) {
-        return false;
+    const int64_t t_start = cv::getTickCount();
+
+    // Camera orientation from environment. Read once and cached.
+    static int s_vflip = -1, s_hflip = -1;
+    if (s_vflip == -1) {
+        const char* ev = std::getenv("CAMERA_VFLIP");
+        s_vflip = (ev && (std::string(ev) == "1" || std::string(ev) == "true")) ? 1 : 0;
+        const char* eh = std::getenv("CAMERA_HFLIP");
+        s_hflip = (eh && (std::string(eh) == "1" || std::string(eh) == "true")) ? 1 : 0;
     }
 
+    cv::Mat oriented;
+    if (s_vflip && s_hflip) cv::flip(frame, oriented, -1);
+    else if (s_vflip) cv::flip(frame, oriented, 0);
+    else if (s_hflip) cv::flip(frame, oriented, 1);
+    else oriented = frame;
+
+    // Lens dewarping
+    cv::Mat dewarped;
+    if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented.clone();
+    out_inspection.raw_image = dewarped;
+
+    // ISP enhancement
+    cv::Mat enhanced;
+    enhanceImage(dewarped, enhanced);
+    out_inspection.dewarped_image = enhanced;
+
+    std::vector<DetectionResult> detected;
     if (runInference(out_inspection.dewarped_image, detected)) {
         out_inspection.detections = detected;
-        renderOverlay(out_inspection, out_inspection.annotated_image);
+    } else {
+        out_inspection.detections.clear();
     }
+    out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
+
+    // Single-pass render overlay at the very end (zero duplicate clone)
+    renderOverlay(out_inspection, out_inspection.annotated_image);
+
+    const int64_t t_end = cv::getTickCount();
+    out_inspection.processing_time_ms = ((t_end - t_start) * 1000.0) / cv::getTickFrequency();
+    out_inspection.is_valid = true;
     return true;
 }
 

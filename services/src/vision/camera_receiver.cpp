@@ -1,4 +1,5 @@
 #include "bawal/vision/camera_receiver.hpp"
+#include <charconv>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -137,41 +138,53 @@ bool CameraReceiver::decodeFromBinaryPacket(const uint8_t* packet_bytes, size_t 
     return decode(header, payload_ptr, payload_len, out_frame);
 }
 
+static size_t findJsonKey(std::string_view json, std::string_view key) {
+    size_t pos = 0;
+    while ((pos = json.find(key, pos)) != std::string_view::npos) {
+        if (pos > 0 && json[pos - 1] == '"' && 
+            (pos + key.size()) < json.size() && json[pos + key.size()] == '"') {
+            return pos + key.size() + 1;
+        }
+        pos += key.size();
+    }
+    return std::string_view::npos;
+}
+
 static std::string_view extractJsonString(std::string_view json, std::string_view key) {
-    std::string pattern = "\"" + std::string(key) + "\"";
-    size_t pos = json.find(pattern);
-    if (pos == std::string_view::npos) return "";
+    size_t pos = findJsonKey(json, key);
+    if (pos == std::string_view::npos) return {};
 
     pos = json.find(':', pos);
-    if (pos == std::string_view::npos) return "";
+    if (pos == std::string_view::npos) return {};
 
     size_t start = json.find('"', pos);
-    if (start == std::string_view::npos) return "";
+    if (start == std::string_view::npos) return {};
 
     size_t end = json.find('"', start + 1);
-    if (end == std::string_view::npos) return "";
+    if (end == std::string_view::npos) return {};
 
     return json.substr(start + 1, end - start - 1);
 }
 
-static uint64_t extractJsonNumber(std::string_view json, std::string_view key, uint64_t default_val = 0) {
-    std::string pattern = "\"" + std::string(key) + "\"";
-    size_t pos = json.find(pattern);
+static int64_t extractJsonNumber(std::string_view json, std::string_view key, int64_t default_val = 0) {
+    size_t pos = findJsonKey(json, key);
     if (pos == std::string_view::npos) return default_val;
 
     pos = json.find(':', pos);
     if (pos == std::string_view::npos) return default_val;
 
     pos++;
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n')) pos++;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) pos++;
 
     size_t end = pos;
     while (end < json.size() && (isdigit(static_cast<unsigned char>(json[end])) || json[end] == '-')) end++;
 
     if (end > pos) {
-        try {
-            return std::stoull(std::string(json.substr(pos, end - pos)));
-        } catch (...) {}
+        int64_t val = default_val;
+        auto [ptr, ec] = std::from_chars(json.data() + pos, json.data() + end, val);
+        if (ec == std::errc()) {
+            return val;
+        }
     }
     return default_val;
 }
