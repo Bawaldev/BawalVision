@@ -35,8 +35,13 @@ static SemaphoreHandle_t s_camera_mutex = NULL;
 static uint32_t s_frame_counter = 0;
 static bool s_is_initialized = false;
 static bool s_is_streaming = false;
+static char s_detected_camera_model[32] = "OV5640";
 
 bool is_camera_streaming(void) { return s_is_streaming; }
+
+const char *camera_get_sensor_name(void) {
+  return s_detected_camera_model;
+}
 
 esp_err_t camera_task_init(void) {
   if (s_is_initialized)
@@ -100,7 +105,18 @@ esp_err_t camera_task_init(void) {
 
   sensor_t *s = esp_camera_sensor_get();
   if (s != NULL) {
-    ESP_LOGI(TAG, "OV5640 sensor detected successfully (PID: 0x%02x)", s->id.PID);
+    if (s->id.PID == 0x5640 || (s->id.PID >> 8) == 0x56) {
+      strncpy(s_detected_camera_model, "OV5640", sizeof(s_detected_camera_model) - 1);
+    } else if (s->id.PID == 0x3660 || (s->id.PID >> 8) == 0x36) {
+      strncpy(s_detected_camera_model, "OV3660", sizeof(s_detected_camera_model) - 1);
+    } else if (s->id.PID == 0x2642 || s->id.PID == 0x2640 || (s->id.PID >> 8) == 0x26) {
+      strncpy(s_detected_camera_model, "OV2640", sizeof(s_detected_camera_model) - 1);
+    } else if (s->id.PID == 0x7721 || (s->id.PID >> 8) == 0x77) {
+      strncpy(s_detected_camera_model, "OV7725", sizeof(s_detected_camera_model) - 1);
+    } else {
+      snprintf(s_detected_camera_model, sizeof(s_detected_camera_model), "SENSOR_0x%04X", (unsigned int)s->id.PID);
+    }
+    ESP_LOGI(TAG, "Camera sensor scanned successfully: %s (PID: 0x%04x)", s_detected_camera_model, (unsigned int)s->id.PID);
     s->set_vflip(s, 0);
     s->set_hmirror(s, 0);
     s->set_framesize(s, FRAMESIZE_VGA);

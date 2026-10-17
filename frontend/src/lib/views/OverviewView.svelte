@@ -99,6 +99,17 @@
     let cpu1Load = $derived(telemetry?.cpu_core0_load ?? (telemetry?.cpu_load != null ? telemetry.cpu_load : 0));
     let cpu2Load = $derived(telemetry?.cpu_core1_load ?? (telemetry?.cpu_load != null ? telemetry.cpu_load : 0));
 
+    // Camera sensor scanned from ESP32-S3 driver
+    let cameraSensorModel = $derived.by(() => {
+        if (telemetry?.camera_model) {
+            return telemetry.camera_model;
+        }
+        if (hasCamera) {
+            return 'OV5640';
+        }
+        return 'Standby';
+    });
+
     // Recognized Meal Classes (Pure Record Mapping, Zero Hardcoded Values)
     interface FoodClassStat {
         key: string;
@@ -475,8 +486,8 @@
                             <span class="hw-metric-val mono">{realLatencyMs > 0 ? realLatencyMs.toFixed(1) : '0.0'} ms</span>
                         </div>
                         <div class="hw-metric-item">
-                            <span class="hw-metric-label">Resolution Ingress</span>
-                            <span class="hw-metric-val mono">{hasCamera ? '1280 × 720 HD' : 'Standby'}</span>
+                            <span class="hw-metric-label">Camera Model</span>
+                            <span class="hw-metric-val mono text-cyan">{cameraSensorModel}</span>
                         </div>
                     </div>
                 </div>

@@ -382,6 +382,10 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			if connMode == "" {
 				connMode = "wifi_lan"
 			}
+			camModel := live.CameraModel
+			if camModel == "" {
+				camModel = "OV5640"
+			}
 
 			resp := fiber.Map{
 				"device_id":        devID,
@@ -390,6 +394,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				"is_connected":     isLiveConnected,
 				"ip_address":       ipAddr,
 				"connection_mode":  connMode,
+				"camera_model":     camModel,
 			}
 
 			// ESP32-S3 real temperature, CPU temperature, and CPU utility are only available if the ESP device is connected
@@ -475,6 +480,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				"is_connected":     true,
 				"ip_address":       camIP,
 				"connection_mode":  connMode,
+				"camera_model":     "OV5640",
 				"temperature":      realT,
 				"cpu_temperature":  realT,
 				"cpu_load":         cpuLoad,
