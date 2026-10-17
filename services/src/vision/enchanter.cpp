@@ -424,7 +424,9 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
         gain_b /= g_norm; gain_g /= g_norm; gain_r /= g_norm;
     }
 
-    thread_local cv::Mat tl_tone_mapped;
+    thread_local cv::Mat tl_tone_mapped, tl_lab, tl_sharpened;
+    thread_local std::vector<cv::Mat> tl_planes(3);
+
     tl_tone_mapped.create(denoised_src.size(), CV_8UC3);
 
     #pragma omp parallel for schedule(static)
@@ -445,56 +447,57 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
         }
     }
 
-    thread_local cv::Mat tl_lab;
-    thread_local std::vector<cv::Mat> tl_planes(3);
-
     cv::cvtColor(tl_tone_mapped, tl_lab, cv::COLOR_BGR2Lab);
     cv::split(tl_lab, tl_planes);
 
     const double dynamic_clip = is_backlit ? 1.85 : ((avg_lum < 70.0f) ? 1.0 : 1.45);
-    if (persistent_clahe) {
+    if (persistent_clahe && !tl_planes.empty()) {
         persistent_clahe->setClipLimit(dynamic_clip);
-        persistent_clahe->apply(tl_planes[0], tl_planes[0]);
+        persistent_clahe->apply(tl_planes[0], tl_planes[0]); // In-place! Tanpa cv::Mat clahe_l baru
     }
 
-    cv::GaussianBlur(tl_planes[1], tl_planes[1], cv::Size(5, 5), 1.4);
-    cv::GaussianBlur(tl_planes[2], tl_planes[2], cv::Size(5, 5), 1.4);
+    if (tl_planes.size() >= 3) {
+        cv::GaussianBlur(tl_planes[1], tl_planes[1], cv::Size(5, 5), 1.4); // In-place!
+        cv::GaussianBlur(tl_planes[2], tl_planes[2], cv::Size(5, 5), 1.4); // In-place!
 
-    constexpr float vibrancy = 1.08f;
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < tl_lab.rows; ++y) {
-        const auto* __restrict l_row = tl_planes[0].ptr<uint8_t>(y);
-        auto* __restrict a_row = tl_planes[1].ptr<uint8_t>(y);
-        auto* __restrict b_row = tl_planes[2].ptr<uint8_t>(y);
-        #pragma omp simd
-        for (int x = 0; x < tl_lab.cols; ++x) {
-            const float l_val = static_cast<float>(l_row[x]);
-            float da = static_cast<float>(a_row[x]) - 128.0f;
-            float db = static_cast<float>(b_row[x]) - 128.0f;
+        constexpr float vibrancy = 1.08f;
+        #pragma omp parallel for schedule(static)
+        for (int y = 0; y < tl_lab.rows; ++y) {
+            const auto* __restrict l_row = tl_planes[0].ptr<uint8_t>(y);
+            auto* __restrict a_row = tl_planes[1].ptr<uint8_t>(y);
+            auto* __restrict b_row = tl_planes[2].ptr<uint8_t>(y);
+            #pragma omp simd
+            for (int x = 0; x < tl_lab.cols; ++x) {
+                const float l_val = static_cast<float>(l_row[x]);
+                float da = static_cast<float>(a_row[x]) - 128.0f;
+                float db = static_cast<float>(b_row[x]) - 128.0f;
 
-            const float chroma_sq = da * da + db * db;
-            if (chroma_sq < 25.0f) {
-                const float factor = chroma_sq * (1.0f / 25.0f);
-                da *= factor;
-                db *= factor;
+                const float chroma_sq = da * da + db * db;
+                if (chroma_sq < 25.0f) {
+                    const float factor = chroma_sq * (1.0f / 25.0f);
+                    da *= factor;
+                    db *= factor;
+                }
+
+                const float shadow_scale = std::clamp((l_val - 15.0f) * (1.0f / 35.0f), 0.0f, 1.0f);
+                a_row[x] = cv::saturate_cast<uint8_t>(128.0f + da * shadow_scale * vibrancy);
+                b_row[x] = cv::saturate_cast<uint8_t>(128.0f + db * shadow_scale * vibrancy);
             }
-
-            const float shadow_scale = std::clamp((l_val - 15.0f) * (1.0f / 35.0f), 0.0f, 1.0f);
-            a_row[x] = cv::saturate_cast<uint8_t>(128.0f + da * shadow_scale * vibrancy);
-            b_row[x] = cv::saturate_cast<uint8_t>(128.0f + db * shadow_scale * vibrancy);
         }
-    }
 
-    cv::merge(tl_planes, tl_lab);
-    cv::cvtColor(tl_lab, dst, cv::COLOR_Lab2BGR);
+        cv::merge(tl_planes, tl_lab);
+        cv::cvtColor(tl_lab, tl_sharpened, cv::COLOR_Lab2BGR);
+    } else {
+        tl_sharpened = tl_tone_mapped;
+    }
 
     const float sharp_strength = (avg_lum < 65.0f) ? 0.08f : 0.15f;
     const float center_weight = 1.0f + 4.0f * sharp_strength;
-    cv::Mat kernel = (cv::Mat_<float>(3, 3) <<
+    const cv::Matx33f kernel(
          0.0f, -sharp_strength, 0.0f,
         -sharp_strength, center_weight, -sharp_strength,
          0.0f, -sharp_strength, 0.0f);
-    cv::filter2D(dst, dst, -1, kernel);
+    cv::filter2D(tl_sharpened, dst, -1, kernel);
 }
 
 } // namespace bawal::vision

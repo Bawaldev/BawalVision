@@ -115,16 +115,65 @@ button, input, select, textarea {
     overflow-x: hidden;
 }
 
+/* ==============================================================================
+   Ultra-Lightweight 60 FPS CSR Tab Transition System
+   Engineered for maximum smoothness on low-end hardware ("device butut")
+   Uses 100% GPU-composited 3D transforms & opacity - ZERO layout thrashing
+   ============================================================================== */
 .view-panel {
     display: block;
     width: 100%;
     min-width: 0;
+    backface-visibility: hidden;
+    transform: translateZ(0); /* Promotes to hardware-accelerated GPU render layer */
 }
 
 .view-panel.is-hidden {
     display: none !important;
 }
 
+/* Tab animations activate strictly on client-side navigation (CSR), never on initial load */
+.view-panel.is-active.slide-forward {
+    display: block;
+    animation: tabSlideForward 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.view-panel.is-active.slide-backward {
+    display: block;
+    animation: tabSlideBackward 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes tabSlideForward {
+    0% {
+        opacity: 0;
+        transform: translate3d(12px, 0, 0);
+    }
+    100% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+    }
+}
+
+@keyframes tabSlideBackward {
+    0% {
+        opacity: 0;
+        transform: translate3d(-12px, 0, 0);
+    }
+    100% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .view-panel.is-active.slide-forward,
+    .view-panel.is-active.slide-backward {
+        animation: none !important;
+        transform: none !important;
+    }
+}
+
+/* Mobile & Low-End Potato Phone Optimizations (< 768px) */
 @media (max-width: 768px) {
     .app-root {
         flex-direction: column;
@@ -132,6 +181,29 @@ button, input, select, textarea {
 
     .page-body {
         padding: 12px 10px 24px;
+    }
+
+    /* Vertical 5px micro-glide: eliminates horizontal layout shifting & subpixel blur on narrow mobile screens */
+    @keyframes tabSlideForward {
+        0% {
+            opacity: 0;
+            transform: translate3d(0, 5px, 0);
+        }
+        100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0);
+        }
+    }
+
+    @keyframes tabSlideBackward {
+        0% {
+            opacity: 0;
+            transform: translate3d(0, 5px, 0);
+        }
+        100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0);
+        }
     }
 }
 

@@ -58,7 +58,9 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="title-icon">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
             </svg>
-            <h1>{currentTitle}</h1>
+            {#key currentTitle}
+                <h1>{currentTitle}</h1>
+            {/key}
         </div>
         <div class="status-chip" class:offline={!isOnline}>
             <span class="pulse-dot" class:online={isOnline}></span>
@@ -178,6 +180,18 @@
         margin: 0;
         color: #1e293b;
         letter-spacing: -0.01em;
+        animation: titleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+
+    @keyframes titleIn {
+        0% {
+            opacity: 0;
+            transform: translate3d(0, -4px, 0);
+        }
+        100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0);
+        }
     }
 
     .status-chip {

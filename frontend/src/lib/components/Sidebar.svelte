@@ -214,13 +214,17 @@
         font-weight: 600;
         text-align: left;
         cursor: pointer;
-        transition: all 0.12s ease;
+        transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
         position: relative;
     }
 
     .nav-btn:hover {
         background: #f8fafc;
         color: var(--text-primary);
+    }
+
+    .nav-btn:active {
+        transform: scale(0.975);
     }
 
     .nav-btn.active {
@@ -239,12 +243,13 @@
         align-items: center;
         justify-content: center;
         color: #64748b;
-        transition: all 0.12s ease;
+        transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background 0.16s ease, color 0.16s ease;
     }
 
     .nav-btn.active .icon-circle {
         background: #3679a8;
         color: #ffffff;
+        transform: scale(1.06);
     }
 
     .nav-svg {
@@ -259,9 +264,21 @@
 
     .active-pill-marker {
         width: 3px;
-        height: 16px;
+        height: 18px;
         background: #3679a8;
         border-radius: var(--radius-pill);
+        animation: markerIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+
+    @keyframes markerIn {
+        0% {
+            opacity: 0;
+            transform: scaleY(0.2) translate3d(3px, 0, 0);
+        }
+        100% {
+            opacity: 1;
+            transform: scaleY(1) translate3d(0, 0, 0);
+        }
     }
 
     .sidebar-status-box {
