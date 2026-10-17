@@ -23,6 +23,7 @@
 #include "data.h"
 #include "wifi.h"
 #include "lcd_task.h"
+#include "camera_task.h"
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -431,8 +432,6 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
 
     return err;
 }
-
-#include "camera_task.h"
 
 esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, const char *device_id) {
     if (backend_ip == NULL || device_id == NULL) {

@@ -5,16 +5,15 @@
 #include "esp_chip_info.h"
 #include "sdkconfig.h"
 
-
 /**
  * @file pins.h
  * @brief Hardware pin mapping and peripheral assignments for BawalVision edge
- * node. Architecture: ESP32-S3-CAM + OV3660 + ST7789 TFT 1.3" + GY906
+ * node. Architecture: ESP32-S3-CAM + OV3660 + ST7735 TFT 128x160 + GY906
  * (BawalVision v3 Schematic)
  */
 
 /* =========================================================================
- * ST7789 SPI LCD Display Wiring (TFT 1.3" 240x240)
+ * ST7735 SPI LCD Display Wiring (128x160)
  * ========================================================================= */
 
 /** @brief SPI controller host used by the display panel (SPI2_HOST = FSPI). */
@@ -35,8 +34,8 @@
 /** @brief SPI chip select pin. */
 #define LCD_PIN_CS -1
 
-/** @brief Backlight control pin (-1 = disabled / off). */
-#define LCD_PIN_BCKL -1
+/** @brief Backlight control pin. */
+#define LCD_PIN_BCKL 38
 
 /** @brief Horizontal resolution in pixels (128x160 SPI TFT). */
 #define LCD_H_RES 128
@@ -50,11 +49,12 @@
 /* =========================================================================
  * I2C Sensors (GY906 MLX90614 Contactless IR Temperature)
  * ========================================================================= */
+// DEPRECATED
 
-#define I2C_MASTER_NUM 0
-#define I2C_PIN_SDA 1  /* GPIO 1 / Pin 23 */
-#define I2C_PIN_SCL 47 /* GPIO 47 / Pin 36 */
-#define I2C_MASTER_FREQ_HZ 100000
+// #define I2C_MASTER_NUM 0
+// #define I2C_PIN_SDA 1  /* GPIO 1 / Pin 23 */
+// #define I2C_PIN_SCL 47 /* GPIO 47 / Pin 36 */
+// #define I2C_MASTER_FREQ_HZ 100000
 
 /* =========================================================================
  * System Control & Status
@@ -63,11 +63,12 @@
 /** @brief Boot button (GPIO 0 / Pin 33). */
 #define PIN_BTN_BOOT 0
 
-/** @brief External inspection trigger button (GPIO 48). Active LOW with internal pull-up. */
+/** @brief External inspection trigger button (GPIO 48). Active LOW with
+ * internal pull-up. */
 #define PIN_BTN_TRIGGER 48
 
-/** @brief Status / Flash LED (GPIO 2 / Pin 24). */
-#define PIN_LED_STATUS 2
+/** @brief Flash LED (GPIO 2 / Pin 24). */
+#define PIN_LED_FLASH 2
 
 /* =========================================================================
  * OV3660 / OV5640 DVP Camera Interface Wiring (esp_camera.h)

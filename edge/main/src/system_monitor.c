@@ -44,22 +44,22 @@ float get_esp32_cpu_temperature(void) {
 static uint32_t s_prev_total_runtime = 0;
 static uint32_t s_prev_idle_runtime = 0;
 static uint8_t s_last_cpu_percent = 0;
+static portMUX_TYPE s_cpu_mux = portMUX_INITIALIZER_UNLOCKED;
 #endif
 
 uint8_t get_cpu_usage_percentage(void) {
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
     UBaseType_t task_count = uxTaskGetNumberOfTasks();
     UBaseType_t array_size = task_count + 8;
-    TaskStatus_t stack_tasks[36];
-    TaskStatus_t *task_array = (array_size <= 36) ? stack_tasks : (TaskStatus_t *)pvPortMalloc(array_size * sizeof(TaskStatus_t));
+    TaskStatus_t *task_array = (TaskStatus_t *)pvPortMalloc(array_size * sizeof(TaskStatus_t));
     if (task_array == NULL) {
         return s_last_cpu_percent;
     }
 
     uint32_t current_total_time = 0;
-    UBaseType_t actual_count = uxTaskGetSystemState(task_array, (task_array == stack_tasks) ? 36 : array_size, &current_total_time);
+    UBaseType_t actual_count = uxTaskGetSystemState(task_array, array_size, &current_total_time);
     if (actual_count == 0) {
-        if (task_array != stack_tasks) vPortFree(task_array);
+        vPortFree(task_array);
         return s_last_cpu_percent;
     }
 
@@ -71,22 +71,24 @@ uint8_t get_cpu_usage_percentage(void) {
         }
     }
 
-    if (task_array != stack_tasks) {
-        vPortFree(task_array);
-    }
+    vPortFree(task_array);
+
+    portENTER_CRITICAL(&s_cpu_mux);
 
     // First call initialization: take a short baseline sample once
     if (s_prev_total_runtime == 0) {
         s_prev_total_runtime = current_total_time;
         s_prev_idle_runtime = current_idle_time;
-        vTaskDelay(pdMS_TO_TICKS(50));
-        return get_cpu_usage_percentage();
+        portEXIT_CRITICAL(&s_cpu_mux);
+        return 0;
     }
 
     uint32_t delta_total = current_total_time - s_prev_total_runtime;
     // Debounce rapid consecutive reads (< 25ms) to preserve accuracy
     if (delta_total < 25000) {
-        return s_last_cpu_percent;
+        uint8_t cached = s_last_cpu_percent;
+        portEXIT_CRITICAL(&s_cpu_mux);
+        return cached;
     }
 
     uint32_t delta_idle = current_idle_time - s_prev_idle_runtime;
@@ -98,7 +100,10 @@ uint8_t get_cpu_usage_percentage(void) {
 
     // Total execution capacity across all active physical cores in the sample interval
     uint32_t total_capacity = delta_total * num_cores;
-    if (total_capacity == 0) return 0;
+    if (total_capacity == 0) {
+        portEXIT_CRITICAL(&s_cpu_mux);
+        return 0;
+    }
 
     uint32_t idle_clamped = (delta_idle > total_capacity) ? total_capacity : delta_idle;
     uint32_t cpu_busy = total_capacity - idle_clamped;
@@ -106,6 +111,7 @@ uint8_t get_cpu_usage_percentage(void) {
 
     if (cpu_percentage > 100) cpu_percentage = 100;
     s_last_cpu_percent = (uint8_t)cpu_percentage;
+    portEXIT_CRITICAL(&s_cpu_mux);
     return s_last_cpu_percent;
 #else
     return 0;

@@ -30,6 +30,8 @@ idf_component_register(
         esp_lvgl_port
         lvgl
         esp32-camera
+        esp_lcd_st7735
+        esp_driver_tsens
 )
 
 set(ENV_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../.env")
