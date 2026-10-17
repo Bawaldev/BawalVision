@@ -52,17 +52,6 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
     cv::split(tl_converted, tl_planes);
     const cv::Mat& active_channel = use_v_channel ? tl_planes[2] : tl_planes[0];
 
-    thread_local cv::Mat tl_converted;
-    thread_local std::vector<cv::Mat> tl_planes(3);
-
-    if (use_v_channel) {
-        cv::cvtColor(roi_continuous, tl_converted, cv::COLOR_BGR2HSV);
-    } else {
-        cv::cvtColor(roi_continuous, tl_converted, cv::COLOR_BGR2Lab);
-    }
-    cv::split(tl_converted, tl_planes);
-    const cv::Mat& active_channel = use_v_channel ? tl_planes[2] : tl_planes[0];
-
     // Pass 1: Vectorized accumulation of total luminance to establish dynamic illumination baseline
     uint64_t total_l_sum = 0;
 #if defined(__AVX2__)

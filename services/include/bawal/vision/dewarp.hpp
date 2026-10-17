@@ -63,11 +63,16 @@ public:
     }
 
 private:
-    cv::Mat m_map1, m_map2;
+    void updateFusedMaps();
+
+    cv::Mat m_map_x, m_map_y;           ///< Float maps for map fusion
+    cv::Mat m_map1, m_map2;             ///< Fixed-point maps for undistort only
+    cv::Mat m_fused_map1, m_fused_map2; ///< Fused undistort + perspective maps
     cv::Mat m_perspective_matrix;
     DewarpConfig m_config;
     bool m_has_undistort_map{false};
     bool m_has_perspective{false};
+    bool m_has_fused_map{false};
 };
 
 } // namespace bawal::vision

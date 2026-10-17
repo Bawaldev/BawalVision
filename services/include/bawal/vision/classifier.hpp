@@ -190,6 +190,7 @@ private:
     };
     std::unique_ptr<float[], AlignedDeleter> m_input_tensor_values;
     cv::Mat m_resized_buffer;
+    std::vector<TrackedItem> m_tracked_items;
 };
 
 } // namespace bawal::vision
