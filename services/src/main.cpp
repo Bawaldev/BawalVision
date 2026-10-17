@@ -314,6 +314,7 @@ int main(int argc, char** argv) {
     };
 
     while (true) {
+        const auto loop_start_time = std::chrono::steady_clock::now();
         bool frame_ok = false;
         InspectionOutput inspection;
 
@@ -360,7 +361,7 @@ int main(int argc, char** argv) {
         // Avoid re-processing and flood-broadcasting duplicate frames via O(1) sampling fingerprint
         const uint64_t cur_hash = computeFastFingerprint(raw_bytes);
         if (cur_hash == prev_frame_hash) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(12));
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
         }
         prev_frame_hash = cur_hash;
@@ -440,6 +441,13 @@ int main(int argc, char** argv) {
         } else {
             if (idle_backoff_ms > 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(idle_backoff_ms));
+            } else {
+                // Rate pacing in headless mode: target ~30 FPS to prevent busy-spinning and saturating backend network I/O
+                const auto loop_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - loop_start_time).count();
+                if (loop_elapsed_ms < 30) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(30 - loop_elapsed_ms));
+                }
             }
         }
     }

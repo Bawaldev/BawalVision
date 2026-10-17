@@ -107,31 +107,40 @@
     let latestOptical = $state<SceneOpticalMetrics | undefined>(undefined);
 
     let pollingTimer: any = null;
+    let lastSlowPoll = 0;
 
     // Real Backend Polling Step
     async function pollBackendData() {
         const pollStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const shouldRunSlowPoll = (nowMs - lastSlowPoll) >= 2500;
+        if (shouldRunSlowPoll) {
+            lastSlowPoll = nowMs;
+        }
+
         try {
-            // 1. Hardware Engine Status
-            const engines = await fetchEngineStatus(systemConfig.backendUrl);
-            gravitonAvailable = engines.graviton_available;
-            localEngineAvailable = engines.local_engine_available;
-            systemConfig.gravitonEngineAvailable = engines.graviton_available;
-            systemConfig.localEngineAvailable = engines.local_engine_available;
-            if (engines.memory_usage_mb != null && engines.memory_usage_mb > 0) {
-                serverMemoryMB = engines.memory_usage_mb;
-            } else if (engines.server_mem_sys_mb != null && engines.server_mem_sys_mb > 0) {
-                serverMemoryMB = engines.server_mem_sys_mb;
-            } else if (engines.server_mem_alloc_mb != null && engines.server_mem_alloc_mb > 0) {
-                serverMemoryMB = engines.server_mem_alloc_mb;
-            }
-            if (engines.parallel_cores != null && engines.parallel_cores > 0) {
-                parallelCores = engines.parallel_cores;
-            } else if (engines.num_cpu != null && engines.num_cpu > 0) {
-                parallelCores = engines.num_cpu;
-            }
-            if (!gravitonAvailable && systemConfig.gravitonEngineEnabled) {
-                systemConfig.gravitonEngineEnabled = false;
+            // 1. Hardware Engine Status (Polled periodically every 2.5s to minimize backend load)
+            if (shouldRunSlowPoll) {
+                const engines = await fetchEngineStatus(systemConfig.backendUrl);
+                gravitonAvailable = engines.graviton_available;
+                localEngineAvailable = engines.local_engine_available;
+                systemConfig.gravitonEngineAvailable = engines.graviton_available;
+                systemConfig.localEngineAvailable = engines.local_engine_available;
+                if (engines.memory_usage_mb != null && engines.memory_usage_mb > 0) {
+                    serverMemoryMB = engines.memory_usage_mb;
+                } else if (engines.server_mem_sys_mb != null && engines.server_mem_sys_mb > 0) {
+                    serverMemoryMB = engines.server_mem_sys_mb;
+                } else if (engines.server_mem_alloc_mb != null && engines.server_mem_alloc_mb > 0) {
+                    serverMemoryMB = engines.server_mem_alloc_mb;
+                }
+                if (engines.parallel_cores != null && engines.parallel_cores > 0) {
+                    parallelCores = engines.parallel_cores;
+                } else if (engines.num_cpu != null && engines.num_cpu > 0) {
+                    parallelCores = engines.num_cpu;
+                }
+                if (!gravitonAvailable && systemConfig.gravitonEngineEnabled) {
+                    systemConfig.gravitonEngineEnabled = false;
+                }
             }
 
             // 2. Camera Status
@@ -195,43 +204,45 @@
                 });
             }
 
-            // 5. Inspections & Records from DB (Only count actual meals with scanned food items!)
-            const allRecords = await fetchRecords(systemConfig.backendUrl);
-            const validRecords = (allRecords || []).filter(
-                r => r.inspection_foods && r.inspection_foods.length > 0
-            );
+            // 5. Inspections & Records from DB (Polled every 2.5s or fallback when no live detections)
+            if (shouldRunSlowPoll || !hasLiveDetections) {
+                const allRecords = await fetchRecords(systemConfig.backendUrl);
+                const validRecords = (allRecords || []).filter(
+                    r => r.inspection_foods && r.inspection_foods.length > 0
+                );
 
-            if (validRecords.length > 0) {
-                const spoiled = validRecords.filter(r => r.is_spoiled || (r.inspection_foods && r.inspection_foods.some(f => f.status === 'REJECT'))).length;
-                const accepted = validRecords.length - spoiled;
-                totalRejected = Math.max(totalRejected, spoiled);
-                totalAccepted = Math.max(totalAccepted, accepted);
+                if (validRecords.length > 0) {
+                    const spoiled = validRecords.filter(r => r.is_spoiled || (r.inspection_foods && r.inspection_foods.some(f => f.status === 'REJECT'))).length;
+                    const accepted = validRecords.length - spoiled;
+                    totalRejected = Math.max(totalRejected, spoiled);
+                    totalAccepted = Math.max(totalAccepted, accepted);
 
-                if (!hasLiveDetections) {
-                    const latest = validRecords[0];
-                    if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
-                        detections = latest.inspection_foods.map(item => {
-                            const name = item.food_item?.name || 'food_item';
-                            const sp = Number(item.spoilage_score) || 0;
-                            const cf = Number(item.similarity_rate) || 0.0;
-                            let st: 'PASS' | 'REVIEW' | 'REJECT' = (item.status as any);
-                            if (!st || (st as string) === '') {
-                                st = (sp >= 50 || cf < 0.55) ? 'REJECT' : ((sp >= 25 || cf < 0.68) ? 'REVIEW' : 'PASS');
-                            }
-                            return {
-                                food_name: name,
-                                similarity_rate: cf,
-                                spoilage_score: sp,
-                                status: st,
-                                category: getCategory(name)
-                            };
-                        });
-                    } else {
-                        detections = [];
+                    if (!hasLiveDetections) {
+                        const latest = validRecords[0];
+                        if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
+                            detections = latest.inspection_foods.map(item => {
+                                const name = item.food_item?.name || 'food_item';
+                                const sp = Number(item.spoilage_score) || 0;
+                                const cf = Number(item.similarity_rate) || 0.0;
+                                let st: 'PASS' | 'REVIEW' | 'REJECT' = (item.status as any);
+                                if (!st || (st as string) === '') {
+                                    st = (sp >= 50 || cf < 0.55) ? 'REJECT' : ((sp >= 25 || cf < 0.68) ? 'REVIEW' : 'PASS');
+                                }
+                                return {
+                                    food_name: name,
+                                    similarity_rate: cf,
+                                    spoilage_score: sp,
+                                    status: st,
+                                    category: getCategory(name)
+                                };
+                            });
+                        } else {
+                            detections = [];
+                        }
                     }
+                } else if (!hasLiveDetections) {
+                    detections = [];
                 }
-            } else if (!hasLiveDetections) {
-                detections = [];
             }
         } catch (err) {
             console.warn('[BACKEND POLL] Offline or waiting for backend service:', err);
