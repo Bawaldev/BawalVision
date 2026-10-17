@@ -21,44 +21,47 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
 
     cv::Mat roi_continuous = core_roi.isContinuous() ? core_roi : core_roi.clone();
 
-    cv::Mat lab, hsv;
-    cv::cvtColor(roi_continuous, lab, cv::COLOR_BGR2Lab);
-    cv::cvtColor(roi_continuous, hsv, cv::COLOR_BGR2HSV);
-
-    std::vector<cv::Mat> lab_planes, hsv_planes;
-    cv::split(lab, lab_planes);
-    cv::split(hsv, hsv_planes);
-
-    const cv::Mat& l_channel = lab_planes[0]; // Luminance (0 - 255)
-    const cv::Mat& v_channel = hsv_planes[2]; // Value (0 - 255)
-
     const int total_pixels = core_h * core_w;
     if (total_pixels <= 0) {
         return metric;
     }
 
-    // Baseline thresholds calibrated for standard illumination (~140-180 L*):
-    // - rice: L < 35 (abnormal dark discoloration)
-    // - spinach / water_spinach: V < 25 (decaying blackened leaves)
-    // - banana / orange: V < 25 (severe overripe rot)
-    // - tofu / tempeh: L < 35 (black mold / fungal spoilage)
-    // - chicken / egg: L < 30 (dark oxidation / burning)
+    // Tentukan channel yang dibutuhkan SEBELUM melakukan cv::cvtColor
     uint8_t base_thresh = 30;
     bool use_v_channel = false;
 
-    if (food_class == "rice") {
+    if (food_class == "rice" || food_class == "tofu" || food_class == "tempeh") {
         base_thresh = 35;
-    } else if (food_class == "spinach" || food_class == "water_spinach") {
+    } else if (food_class == "spinach" || food_class == "water_spinach" ||
+               food_class == "banana"  || food_class == "orange") {
         base_thresh = 25;
         use_v_channel = true;
-    } else if (food_class == "banana" || food_class == "orange") {
-        base_thresh = 25;
-        use_v_channel = true;
-    } else if (food_class == "tofu" || food_class == "tempeh") {
-        base_thresh = 35;
     } else if (food_class == "chicken" || food_class == "egg") {
         base_thresh = 30;
     }
+
+    // Hanya jalankan 1 kali konversi warna sesuai kebutuhan kelas
+    thread_local cv::Mat tl_converted;
+    thread_local std::vector<cv::Mat> tl_planes(3);
+
+    if (use_v_channel) {
+        cv::cvtColor(roi_continuous, tl_converted, cv::COLOR_BGR2HSV);
+    } else {
+        cv::cvtColor(roi_continuous, tl_converted, cv::COLOR_BGR2Lab);
+    }
+    cv::split(tl_converted, tl_planes);
+    const cv::Mat& active_channel = use_v_channel ? tl_planes[2] : tl_planes[0];
+
+    thread_local cv::Mat tl_converted;
+    thread_local std::vector<cv::Mat> tl_planes(3);
+
+    if (use_v_channel) {
+        cv::cvtColor(roi_continuous, tl_converted, cv::COLOR_BGR2HSV);
+    } else {
+        cv::cvtColor(roi_continuous, tl_converted, cv::COLOR_BGR2Lab);
+    }
+    cv::split(tl_converted, tl_planes);
+    const cv::Mat& active_channel = use_v_channel ? tl_planes[2] : tl_planes[0];
 
     // Pass 1: Vectorized accumulation of total luminance to establish dynamic illumination baseline
     uint64_t total_l_sum = 0;
@@ -66,7 +69,7 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
     const __m256i zero_vec = _mm256_setzero_si256();
 
     for (int y = 0; y < core_h; ++y) {
-        const uint8_t* l_ptr = use_v_channel ? v_channel.ptr<uint8_t>(y) : l_channel.ptr<uint8_t>(y);
+        const uint8_t* l_ptr = active_channel.ptr<uint8_t>(y);
         int x = 0;
 
         for (; x <= core_w - 32; x += 32) {
@@ -83,7 +86,7 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
     }
 #else
     for (int y = 0; y < core_h; ++y) {
-        const uint8_t* l_ptr = use_v_channel ? v_channel.ptr<uint8_t>(y) : l_channel.ptr<uint8_t>(y);
+        const uint8_t* l_ptr = active_channel.ptr<uint8_t>(y);
         uint64_t local_sum = 0;
 
         #pragma omp simd reduction(+:local_sum)
@@ -117,7 +120,7 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
     const __m256i thresh_vec = _mm256_set1_epi8(static_cast<char>(dynamic_thresh));
 
     for (int y = 0; y < core_h; ++y) {
-        const uint8_t* l_ptr = use_v_channel ? v_channel.ptr<uint8_t>(y) : l_channel.ptr<uint8_t>(y);
+        const uint8_t* l_ptr = active_channel.ptr<uint8_t>(y);
         int x = 0;
 
         for (; x <= core_w - 32; x += 32) {
@@ -137,7 +140,7 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
     }
 #else
     for (int y = 0; y < core_h; ++y) {
-        const uint8_t* l_ptr = use_v_channel ? v_channel.ptr<uint8_t>(y) : l_channel.ptr<uint8_t>(y);
+        const uint8_t* l_ptr = active_channel.ptr<uint8_t>(y);
         int local_bad = 0;
 
         #pragma omp simd reduction(+:local_bad)

@@ -196,9 +196,6 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
 
     out_detections.assign(local_buf.begin(), local_buf.begin() + count);
 
-    // Run RealESRGAN on each food crop for texture and spoilage analysis.
-    // Typical crop size is 50x50 to 150x150 pixels, so CPU inference stays
-    // around 30-60 ms per crop.
     for (auto& det : out_detections) {
         if (det.class_id < 0 || det.class_name == "no_food") continue;
 
@@ -207,9 +204,15 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
             cv::Mat food_crop = enhanced_frame(crop_rect);
             cv::Mat sr_crop;
 
-            // Only run super-resolution enhancement if active; preserve temporally tracked spoilage
             if (m_enhancer.process(food_crop, sr_crop) && !sr_crop.empty()) {
-                det.spoilage = evaluateSpoilageAVX2(sr_crop, det.class_name);
+                SpoilageMetric sr_spoilage = evaluateSpoilageAVX2(sr_crop, det.class_name);
+
+                det.spoilage.avg_luminance = 0.5f * sr_spoilage.avg_luminance + 0.5f * det.spoilage.avg_luminance;
+                det.spoilage.discoloration_ratio = 0.5f * sr_spoilage.discoloration_ratio + 0.5f * det.spoilage.discoloration_ratio;
+                det.spoilage.is_visually_spoiled = (det.spoilage.discoloration_ratio > 0.35f);
+                cv::Mat restored_roi;
+                cv::resize(sr_crop, restored_roi, crop_rect.size(), 0, 0, cv::INTER_AREA);
+                restored_roi.copyTo(const_cast<cv::Mat&>(enhanced_frame)(crop_rect));
             }
         }
     }
