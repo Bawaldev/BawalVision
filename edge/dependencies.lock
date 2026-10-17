@@ -68,6 +68,13 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 8.4.0
+  waveshare/esp_lcd_st7735:
+    component_hash: bf2af3e1b6c6388030d7922f2fa2a2d4efd179561ed0ea7fc89cd7d0b7ac6a52
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.0.0
 direct_dependencies:
 - espressif/cjson
 - espressif/esp32-camera
@@ -75,6 +82,7 @@ direct_dependencies:
 - espressif/led_strip
 - idf
 - lvgl/lvgl
-manifest_hash: e7a361adc59189c54e43146d4de54894ed8f06edfa4f950d81e329ad4f200372
+- waveshare/esp_lcd_st7735
+manifest_hash: a25f53e7f0382b50fc3ac93dbac0cb6d04c7bd3453a643c6a4ca4ce4ec2655e4
 target: esp32s3
 version: 3.0.0

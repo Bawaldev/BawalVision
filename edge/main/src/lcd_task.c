@@ -16,6 +16,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_st7735.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
@@ -347,7 +348,7 @@ void lcd_task(void *pvParameters) {
       .bits_per_pixel = 16,
   };
   ESP_ERROR_CHECK(
-      esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
+      esp_lcd_new_panel_st7735(io_handle, &panel_config, &panel_handle));
   ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
 
   // Software reset and display init
@@ -396,7 +397,7 @@ void lcd_task(void *pvParameters) {
   }
 
 // 6. Start Heartbeat / Connection Monitor Task (Static Allocation)
-#define LCD_HB_TASK_STACK_SIZE 2048
+#define LCD_HB_TASK_STACK_SIZE 3072
   static StaticTask_t s_lcd_hb_task_buffer;
   static StackType_t s_lcd_hb_task_stack[LCD_HB_TASK_STACK_SIZE];
 
