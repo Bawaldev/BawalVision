@@ -493,8 +493,8 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			return c.JSON(resp)
 		}
 
-		var record inspection.InspectionRecord
-		if err := db.Order("created_at DESC").First(&record).Error; err != nil {
+		var records []inspection.InspectionRecord
+		if err := db.Order("created_at DESC").Limit(1).Find(&records).Error; err != nil || len(records) == 0 {
 			return c.JSON(fiber.Map{
 				"device_id":        "DISCONNECTED",
 				"firmware_version": "1.0.0",
@@ -505,6 +505,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				"is_connected":     false,
 			})
 		}
+		record := records[0]
 		return c.JSON(fiber.Map{
 			"device_id":        record.DeviceID,
 			"firmware_version": record.FirmwareVersion,
@@ -542,11 +543,15 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			return c.JSON(resp)
 		}
 
-		var record inspection.InspectionRecord
-		if err := db.Preload("InspectionFoods.FoodItem").Order("created_at DESC").First(&record).Error; err != nil {
-			return c.Status(404).JSON(fiber.Map{"error": "No inspection records found"})
+		var records []inspection.InspectionRecord
+		if err := db.Preload("InspectionFoods.FoodItem").Order("created_at DESC").Limit(1).Find(&records).Error; err != nil || len(records) == 0 {
+			return c.JSON(fiber.Map{
+				"device_id":  "",
+				"detections": []interface{}{},
+				"is_live":    false,
+			})
 		}
-		return c.JSON(record)
+		return c.JSON(records[0])
 	})
 
 	// 5. GET ESP32-S3 Hardware Connection & USB Serial Slot Status

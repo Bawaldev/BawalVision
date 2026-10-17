@@ -146,6 +146,17 @@ int main(int argc, char** argv) {
         cv::resizeWindow(window_name, 800, 600);
     }
 
+    VideoSource video_source;
+    bool use_video_source = false;
+    if (const char* env_video = std::getenv("VIDEO_PATH")) {
+        if (std::string(env_video).length() > 0) {
+            if (video_source.open(SourceMode::LOCAL_MP4, env_video)) {
+                use_video_source = true;
+                std::cout << "[INFO] VideoSource initialized with local MP4: " << env_video << "\n";
+            }
+        }
+    }
+
     std::vector<uint8_t> raw_bytes;
     raw_bytes.reserve(256 * 1024);
     uint64_t prev_frame_hash = 0;
@@ -326,59 +337,73 @@ int main(int argc, char** argv) {
         bool frame_ok = false;
         InspectionOutput inspection;
 
-        if (device_id.empty() || idle_backoff_ms > 0 || (discovery_tick++ % 15 == 0)) {
-            const std::string discovered = discoverActiveDeviceID(curl_fetch, backend_base_url);
-            if (!discovered.empty() && discovered != "\\" && discovered != "/" && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
-                device_id = discovered;
-                {
-                    std::lock_guard<std::mutex> lock(ai_mutex);
-                    current_device_id = device_id;
-                }
-                stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
-                std::cout << "[SUCCESS] Active camera stream connected: " << device_id << "\n";
-                std::cout << "[INFO] Ingestion URL: " << stream_url << "\n";
-            } else if (discovered.empty() && idle_backoff_ms > 200 && !device_id.empty()) {
-                device_id = "";
-                stream_url = backend_base_url + "/api/v1/camera/latest/raw";
-            }
-        }
+        cv::Mat frame_to_stream;
 
-        bool got_frame = fetchLatestFrame(curl_fetch, stream_url, raw_bytes) && !raw_bytes.empty();
-        if (!got_frame && !device_id.empty()) {
-            const std::string fallback_url = backend_base_url + "/api/v1/camera/latest/raw";
-            got_frame = fetchLatestFrame(curl_fetch, fallback_url, raw_bytes) && !raw_bytes.empty();
-        }
-
-        if (got_frame) {
-            if (idle_backoff_ms > 0) {
-                std::cout << "[INFO] Camera frames resumed.\n";
+        if (use_video_source) {
+            if (!video_source.grabNextFrame(frame_to_stream) || frame_to_stream.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                continue;
             }
-            idle_backoff_ms = 0;
+            if (video_source.didRewind()) {
+                pipeline.resetTracker();
+            }
+            inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
         } else {
-            if (idle_backoff_ms == 0) {
-                std::cout << "[INFO] No camera frame available. Backing off until an ESP32 stream appears...\n";
-                idle_backoff_ms = kIdleBackoffMinMs;
-            } else {
-                idle_backoff_ms = std::min(idle_backoff_ms * 2, kIdleBackoffMaxMs);
+            if (device_id.empty() || idle_backoff_ms > 0 || (discovery_tick++ % 15 == 0)) {
+                const std::string discovered = discoverActiveDeviceID(curl_fetch, backend_base_url);
+                if (!discovered.empty() && discovered != "\\" && discovered != "/" && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
+                    device_id = discovered;
+                    {
+                        std::lock_guard<std::mutex> lock(ai_mutex);
+                        current_device_id = device_id;
+                    }
+                    stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
+                    std::cout << "[SUCCESS] Active camera stream connected: " << device_id << "\n";
+                    std::cout << "[INFO] Ingestion URL: " << stream_url << "\n";
+                } else if (discovered.empty() && idle_backoff_ms > 200 && !device_id.empty()) {
+                    device_id = "";
+                    stream_url = backend_base_url + "/api/v1/camera/latest/raw";
+                }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(idle_backoff_ms));
-            raw_bytes.clear();
-            continue;
-        }
 
-        // Avoid re-processing and flood-broadcasting duplicate frames via O(1) sampling fingerprint
-        const uint64_t cur_hash = computeFastFingerprint(raw_bytes);
-        if (cur_hash == prev_frame_hash) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            continue;
-        }
-        prev_frame_hash = cur_hash;
-        inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
+            bool got_frame = fetchLatestFrame(curl_fetch, stream_url, raw_bytes) && !raw_bytes.empty();
+            if (!got_frame && !device_id.empty()) {
+                const std::string fallback_url = backend_base_url + "/api/v1/camera/latest/raw";
+                got_frame = fetchLatestFrame(curl_fetch, fallback_url, raw_bytes) && !raw_bytes.empty();
+            }
 
-        // Decode incoming JPEG frame
-        DecodedFrame decoded;
-        if (!pipeline.getReceiver().decodeMJPEG(raw_bytes.data(), raw_bytes.size(), decoded) || decoded.image.empty()) {
-            continue;
+            if (got_frame) {
+                if (idle_backoff_ms > 0) {
+                    std::cout << "[INFO] Camera frames resumed.\n";
+                }
+                idle_backoff_ms = 0;
+            } else {
+                if (idle_backoff_ms == 0) {
+                    std::cout << "[INFO] No camera frame available. Backing off until an ESP32 stream appears...\n";
+                    idle_backoff_ms = kIdleBackoffMinMs;
+                } else {
+                    idle_backoff_ms = std::min(idle_backoff_ms * 2, kIdleBackoffMaxMs);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(idle_backoff_ms));
+                raw_bytes.clear();
+                continue;
+            }
+
+            // Avoid re-processing and flood-broadcasting duplicate frames via O(1) sampling fingerprint
+            const uint64_t cur_hash = computeFastFingerprint(raw_bytes);
+            if (cur_hash == prev_frame_hash) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                continue;
+            }
+            prev_frame_hash = cur_hash;
+            inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
+
+            // Decode incoming JPEG frame
+            DecodedFrame decoded;
+            if (!pipeline.getReceiver().decodeMJPEG(raw_bytes.data(), raw_bytes.size(), decoded) || decoded.image.empty()) {
+                continue;
+            }
+            frame_to_stream = decoded.image;
         }
 
         // Get currently active detections
@@ -389,7 +414,7 @@ int main(int argc, char** argv) {
         }
 
         // High-Speed Real-Time Video Streaming Pass (Dewarp + Fast ISP + Overlay, < 6 ms)
-        if (pipeline.processStream(decoded.image, current_detections, inspection)) {
+        if (pipeline.processStream(frame_to_stream, current_detections, inspection)) {
             frame_ok = true;
             frame_seq++;
 
