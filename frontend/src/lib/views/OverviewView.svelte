@@ -36,7 +36,7 @@
         totalAccepted = 0,
         totalRejected = 0,
         totalPlates = 0,
-        passRate = 100.0,
+        passRate = 0.0,
         isOnline = true,
         hasCamera = true,
         realFps = 20.0,
@@ -69,7 +69,7 @@
 
     let displayPassRate = $derived.by(() => {
         if (displayTotalPlates === 0) {
-            return passRate > 0 ? passRate.toFixed(1) : '100.0';
+            return '0.0';
         }
         return ((displayAccepted / displayTotalPlates) * 100).toFixed(1);
     });
@@ -92,7 +92,7 @@
                 return (sum / count).toFixed(1);
             }
         }
-        return displayRejected === 0 ? '98.2' : '92.4';
+        return '0.0';
     });
 
     // Dual-core load helpers
@@ -238,49 +238,75 @@
         </div>
 
         <!-- 2. QC Acceptance Rate -->
-        <div class="kpi-card highlight-green">
+        <div class="kpi-card" class:highlight-green={displayTotalPlates > 0}>
             <div class="kpi-header">
                 <span class="kpi-label">QC ACCEPTANCE RATE</span>
-                <span class="kpi-badge pass">● COMPLIANT</span>
+                {#if displayTotalPlates === 0}
+                    <span class="kpi-badge neutral">STANDBY</span>
+                {:else}
+                    <span class="kpi-badge pass">● COMPLIANT</span>
+                {/if}
             </div>
             <div class="kpi-main">
-                <span class="kpi-value mono text-green">{displayPassRate}%</span>
-                <span class="kpi-unit text-green">Yield</span>
+                <span class="kpi-value mono" class:text-green={displayTotalPlates > 0}>{displayPassRate}%</span>
+                <span class="kpi-unit" class:text-green={displayTotalPlates > 0}>Yield</span>
             </div>
             <div class="kpi-footer">
-                <span class="kpi-subtext"><strong>{displayAccepted.toLocaleString()}</strong> trays meet food quality standards</span>
+                <span class="kpi-subtext">
+                    {#if displayTotalPlates === 0}
+                        Awaiting initial tray inspection
+                    {:else}
+                        <strong>{displayAccepted.toLocaleString()}</strong> trays meet food quality standards
+                    {/if}
+                </span>
             </div>
         </div>
 
         <!-- 3. Optical Quality & Freshness Score (Replaced Food Temperature) -->
-        <div class="kpi-card highlight-cyan">
+        <div class="kpi-card" class:highlight-cyan={displayTotalPlates > 0 && Number(avgFreshnessScore) > 0}>
             <div class="kpi-header">
                 <span class="kpi-label">AVERAGE FRESHNESS INDEX</span>
-                <span class="kpi-badge cyan">CIE-LAB ΔE</span>
+                {#if displayTotalPlates === 0 || Number(avgFreshnessScore) === 0}
+                    <span class="kpi-badge neutral">AWAITING INGESTION</span>
+                {:else}
+                    <span class="kpi-badge cyan">CIE-LAB ΔE</span>
+                {/if}
             </div>
             <div class="kpi-main">
-                <span class="kpi-value mono text-cyan">{avgFreshnessScore}%</span>
-                <span class="kpi-unit text-cyan">Optical Quality</span>
+                <span class="kpi-value mono" class:text-cyan={displayTotalPlates > 0 && Number(avgFreshnessScore) > 0}>{avgFreshnessScore}%</span>
+                <span class="kpi-unit" class:text-cyan={displayTotalPlates > 0 && Number(avgFreshnessScore) > 0}>Optical Quality</span>
             </div>
             <div class="kpi-footer">
-                <span class="kpi-subtext">Vision chromatic stability & chemical freshness analysis</span>
+                <span class="kpi-subtext">
+                    {#if displayTotalPlates === 0 || Number(avgFreshnessScore) === 0}
+                        Awaiting camera stream & food item detection
+                    {:else}
+                        Vision chromatic stability & chemical freshness analysis
+                    {/if}
+                </span>
             </div>
         </div>
 
         <!-- 4. Incident Rejects -->
-        <div class="kpi-card highlight-red">
+        <div class="kpi-card" class:highlight-red={displayRejected > 0}>
             <div class="kpi-header">
                 <span class="kpi-label">REJECTION INCIDENTS</span>
-                <span class="kpi-badge reject">
+                <span class="kpi-badge" class:reject={displayRejected > 0} class:neutral={displayRejected === 0}>
                     DEFECT {displayTotalPlates > 0 ? ((displayRejected / displayTotalPlates) * 100).toFixed(1) : '0.0'}%
                 </span>
             </div>
             <div class="kpi-main">
-                <span class="kpi-value mono text-red">{displayRejected}</span>
-                <span class="kpi-unit text-red">Defective Trays</span>
+                <span class="kpi-value mono" class:text-red={displayRejected > 0}>{displayRejected}</span>
+                <span class="kpi-unit" class:text-red={displayRejected > 0}>Defective Trays</span>
             </div>
             <div class="kpi-footer">
-                <span class="kpi-subtext">Automatically diverted from delivery line</span>
+                <span class="kpi-subtext">
+                    {#if displayRejected > 0}
+                        Automatically diverted from delivery line
+                    {:else}
+                        Zero defective trays detected
+                    {/if}
+                </span>
             </div>
         </div>
     </section>
@@ -668,6 +694,12 @@
     .kpi-badge.shift {
         background: var(--bg-inset);
         color: var(--text-secondary);
+        border: 1px solid var(--border-subtle);
+    }
+
+    .kpi-badge.neutral {
+        background: var(--bg-inset);
+        color: var(--text-muted);
         border: 1px solid var(--border-subtle);
     }
 
