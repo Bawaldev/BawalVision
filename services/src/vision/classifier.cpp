@@ -537,11 +537,13 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             det.class_name = predicted_name;
             det.confidence = std::clamp(yolo_score, 0.0f, 1.0f);
 
-            // AVX2 SIMD texture validity filter (rejects flat walls, tables, empty tray surfaces)
+            // AVX2 SIMD texture validity filter (only reject flat walls/tables if YOLO confidence is uncertain < 0.75)
             cv::Mat final_food_roi = frame(det.bbox);
-            TextureMetric texture = evaluateTextureAVX2(final_food_roi);
-            if (!texture.is_valid_food_texture) {
-                continue;
+            if (det.confidence < 0.75f) {
+                TextureMetric texture = evaluateTextureAVX2(final_food_roi);
+                if (!texture.is_valid_food_texture) {
+                    continue;
+                }
             }
 
             // AVX2 SIMD color spoilage and freshness assessment

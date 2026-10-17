@@ -55,6 +55,11 @@ struct VideoSource {
      * @return true if a valid frame was obtained, false otherwise.
      */
     [[nodiscard]] bool grabNextFrame(cv::Mat& out_frame);
+    [[nodiscard]] bool didRewind() noexcept {
+        const bool ret = did_rewind;
+        did_rewind = false;
+        return ret;
+    }
     [[nodiscard]] bool checkAndResetRewind() noexcept {
         const bool ret = did_rewind;
         did_rewind = false;

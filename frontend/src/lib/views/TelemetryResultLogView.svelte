@@ -252,7 +252,9 @@
 
             <!-- Chart Container with HTML Layout & SVG Vector Line Plot -->
             <div class="chart-layout-box">
-                {#if activeChartTab === 'both'}
+                {#key activeChartTab}
+                    <div class="chart-tab-transition">
+                        {#if activeChartTab === 'both'}
                     <!-- DUAL VIEW: Stacked Temperature + CPU 1 & 2 Charts -->
                     <div class="dual-charts-stack">
                         <!-- Sub-chart 1: Temperature -->
@@ -631,6 +633,8 @@
                         </div>
                     </div>
                 {/if}
+                    </div>
+                {/key}
 
                 <!-- Bottom X-Axis Row (HTML: crisp typography, centered under plot) -->
                 <div class="x-axis-row">
@@ -1245,6 +1249,26 @@
         flex: 1;
         width: 100%;
         min-height: 0;
+    }
+
+    .chart-tab-transition {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        width: 100%;
+        min-height: 0;
+        animation: chartTabFade 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+
+    @keyframes chartTabFade {
+        0% {
+            opacity: 0;
+            transform: translate3d(0, 6px, 0);
+        }
+        100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0);
+        }
     }
 
     .chart-main-row {
