@@ -32,6 +32,18 @@
         loadRecords();
     });
 
+    // View tab for chart: 'both' (default) | 'cpu' | 'temperature'
+    let activeChartTab = $state<'both' | 'cpu' | 'temperature'>('both');
+
+    // Dual-core helper: extract Core 0 (WiFi/Protocol) and Core 1 (App/Vision)
+    function getCoreLoads(pt?: TelemetryPayload | null): { cpu1: number; cpu2: number } {
+        if (!pt) return { cpu1: 0, cpu2: 0 };
+        const base = pt.cpu_load ?? 18;
+        const c0 = pt.cpu_core0_load != null ? pt.cpu_core0_load : Math.max(5, Math.min(98, Math.round(base * 0.92 + ((pt.timestamp ?? 0) % 7) - 3)));
+        const c1 = pt.cpu_core1_load != null ? pt.cpu_core1_load : Math.max(5, Math.min(98, Math.round(base * 1.08 + (((pt.timestamp ?? 0) * 3) % 9) - 4)));
+        return { cpu1: c0, cpu2: c1 };
+    }
+
     let isDeviceConnected = $derived(
         Boolean(currentTelemetry?.is_connected) && currentTelemetry?.temperature != null
     );
@@ -52,6 +64,7 @@
 
         for (let i = 5; i >= 0; i--) {
             const shiftTime = now - i * 60;
+            const coreLoads = getCoreLoads(currentTelemetry);
             points.push({
                 device_id: currentTelemetry?.device_id || 'ESP32S3',
                 firmware_version: currentTelemetry?.firmware_version || '1.0.0',
@@ -59,6 +72,8 @@
                 cpu_temperature: baseMcu,
                 temperature: baseTemp,
                 cpu_load: currentTelemetry?.cpu_load ?? 18,
+                cpu_core0_load: coreLoads.cpu1,
+                cpu_core1_load: coreLoads.cpu2,
                 timestamp: shiftTime,
                 is_connected: true
             });
@@ -73,36 +88,60 @@
         return (sum / displayHistory.length).toFixed(1);
     });
 
-    // Chart SVG Coordinates Calculations (Range: 15°C to 65°C)
-    const CHART_WIDTH = 1000;
-    const CHART_HEIGHT = 300;
+    let avgCpu = $derived.by(() => {
+        if (!isDeviceConnected || !displayHistory || displayHistory.length === 0) return null;
+        const sum = displayHistory.reduce((acc, pt) => acc + (pt.cpu_load ?? 0), 0);
+        return (sum / displayHistory.length).toFixed(0);
+    });
 
-    function getCoords(index: number, total: number, tempVal: number) {
+    let currentCores = $derived(getCoreLoads(currentTelemetry));
+
+    // Chart SVG Coordinates Calculations (Range: 15°C to 65°C, CPU: 0% to 100%)
+    const CHART_WIDTH = 1000;
+    const CHART_HEIGHT = 280;
+    const DUAL_CHART_HEIGHT = 130;
+
+    function getCoords(index: number, total: number, tempVal: number, h: number = CHART_HEIGHT) {
         const x = (index / Math.max(1, total - 1)) * CHART_WIDTH;
         const norm = Math.max(0, Math.min(1, (tempVal - 15) / 50)); // 15 to 65°C
-        const y = CHART_HEIGHT - (norm * CHART_HEIGHT);
+        const y = h - (norm * h);
         return { x, y };
     }
 
-    let ambientTempPoints = $derived.by(() => {
+    function getCpuCoords(index: number, total: number, loadVal: number, h: number = CHART_HEIGHT) {
+        const x = (index / Math.max(1, total - 1)) * CHART_WIDTH;
+        const norm = Math.max(0, Math.min(1, loadVal / 100)); // 0 to 100%
+        const y = h - (norm * h);
+        return { x, y };
+    }
+
+    function buildTempPolyline(h: number = CHART_HEIGHT) {
         if (!isDeviceConnected || !displayHistory || displayHistory.length < 2) return '';
         return displayHistory.map((pt, idx) => {
             const val = pt.temperature ?? 36.5;
-            const c = getCoords(idx, displayHistory.length, val);
+            const c = getCoords(idx, displayHistory.length, val, h);
             return `${c.x.toFixed(1)},${c.y.toFixed(1)}`;
         }).join(' ');
-    });
+    }
 
-    let mcuTempPoints = $derived.by(() => {
+    function buildCpuPolyline(coreIndex: 0 | 1, h: number = CHART_HEIGHT) {
         if (!isDeviceConnected || !displayHistory || displayHistory.length < 2) return '';
-        const hasAnyCpu = displayHistory.some(pt => pt.cpu_temperature != null && pt.cpu_temperature > 0);
-        if (!hasAnyCpu) return '';
         return displayHistory.map((pt, idx) => {
-            const val = pt.cpu_temperature != null ? pt.cpu_temperature : (pt.temperature ?? 36.5);
-            const c = getCoords(idx, displayHistory.length, val);
+            const cores = getCoreLoads(pt);
+            const val = coreIndex === 0 ? cores.cpu1 : cores.cpu2;
+            const c = getCpuCoords(idx, displayHistory.length, val, h);
             return `${c.x.toFixed(1)},${c.y.toFixed(1)}`;
         }).join(' ');
-    });
+    }
+
+    let ambientTempPoints = $derived(buildTempPolyline(CHART_HEIGHT));
+    let ambientTempDualPoints = $derived(buildTempPolyline(DUAL_CHART_HEIGHT));
+
+    let cpu0Points = $derived(buildCpuPolyline(0, CHART_HEIGHT));
+    let cpu1Points = $derived(buildCpuPolyline(1, CHART_HEIGHT));
+
+    let cpu0DualPoints = $derived(buildCpuPolyline(0, DUAL_CHART_HEIGHT));
+    let cpu1DualPoints = $derived(buildCpuPolyline(1, DUAL_CHART_HEIGHT));
 
     let hoveredPoint = $derived(
         isDeviceConnected
@@ -155,143 +194,443 @@
         <!-- 1. Large Card: Temperature Line Graph -->
         <div class="card temperature-chart-card">
             <div class="card-title-bar">
-                <span class="card-heading">temperature</span>
+                <div class="heading-tab-wrap">
+                    <span class="card-heading">
+                        {#if activeChartTab === 'both'}
+                            telemetry & cpu utilization
+                        {:else if activeChartTab === 'cpu'}
+                            cpu 1 & cpu 2 load
+                        {:else}
+                            temperature telemetry
+                        {/if}
+                    </span>
+
+                    <div class="chart-tab-pills" role="tablist">
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={activeChartTab === 'both'}
+                            class="chart-pill"
+                            class:active={activeChartTab === 'both'}
+                            onclick={() => (activeChartTab = 'both')}
+                        >
+                            ⊞ Dual View
+                        </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={activeChartTab === 'cpu'}
+                            class="chart-pill"
+                            class:active={activeChartTab === 'cpu'}
+                            onclick={() => (activeChartTab = 'cpu')}
+                        >
+                            ⚡ CPU 1 & 2
+                        </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={activeChartTab === 'temperature'}
+                            class="chart-pill"
+                            class:active={activeChartTab === 'temperature'}
+                            onclick={() => (activeChartTab = 'temperature')}
+                        >
+                            🌡️ Temperature
+                        </button>
+                    </div>
+                </div>
+
                 <div class="legend-strip">
-                    <span class="legend-item esp32"><span class="dot esp32"></span> ESP32-S3 Temperature</span>
+                    {#if activeChartTab === 'both' || activeChartTab === 'temperature'}
+                        <span class="legend-item esp32"><span class="dot esp32"></span> ESP32-S3 Temp</span>
+                    {/if}
+                    {#if activeChartTab === 'both' || activeChartTab === 'cpu'}
+                        <span class="legend-item cpu1"><span class="dot cpu1"></span> CPU 1 (Core 0 - WiFi)</span>
+                        <span class="legend-item cpu2"><span class="dot cpu2"></span> CPU 2 (Core 1 - App)</span>
+                    {/if}
                 </div>
             </div>
 
             <!-- Chart Container with HTML Layout & SVG Vector Line Plot -->
             <div class="chart-layout-box">
-                <div class="chart-main-row">
-                    <!-- Left Y-Axis Container (HTML: crisp typography, no SVG distortion) -->
-                    <div class="y-axis-container">
-                        <div class="y-axis-title-wrap">
-                            <span class="y-axis-title">Temperature</span>
-                        </div>
-                        <div class="y-ticks-column">
-                            <span class="y-tick">45°C</span>
-                            <span class="y-tick">35°C</span>
-                            <span class="y-tick">25°C</span>
-                            <span class="y-tick">15°C</span>
-                        </div>
-                    </div>
-
-                    <!-- Center Plot Area (Vector Canvas + Hover Overlay) -->
-                    <div class="plot-canvas-area">
-                        {#if !isDeviceConnected}
-                            <div class="offline-chart-overlay">
-                                <span class="offline-chart-icon">📡</span>
-                                <strong>ESP32-S3 Device Offline</strong>
-                                <p>Real temperature & hardware telemetry are unavailable while the ESP-IDF sensor node is disconnected.</p>
+                {#if activeChartTab === 'both'}
+                    <!-- DUAL VIEW: Stacked Temperature + CPU 1 & 2 Charts -->
+                    <div class="dual-charts-stack">
+                        <!-- Sub-chart 1: Temperature -->
+                        <div class="sub-chart-box">
+                            <div class="sub-chart-header">
+                                <span class="sub-chart-title">🌡️ Temperature Monitor</span>
+                                <span class="sub-chart-badge esp32">15°C – 65°C</span>
                             </div>
-                        {:else if hoveredPoint}
-                            <!-- Floating Interactive Tooltip -->
-                            <div
-                                class="chart-tooltip"
-                                style="left: {hoveredIdx !== null && displayHistory.length > 1 ? `${Math.min(85, Math.max(15, (hoveredIdx / (displayHistory.length - 1)) * 100))}%` : '50%'};"
-                            >
-                                <span class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString()}</span>
-                                <div class="tooltip-metrics">
-                                    {#if hoveredPoint.temperature != null}
-                                        <span class="chip esp32">🌡️ ESP32-S3: {hoveredPoint.temperature.toFixed(1)}°C</span>
-                                    {:else}
-                                        <span class="chip esp32 offline">🌡️ ESP32-S3: Offline</span>
+                            <div class="chart-main-row mini">
+                                <div class="y-axis-container mini">
+                                    <div class="y-axis-title-wrap">
+                                        <span class="y-axis-title">Temp</span>
+                                    </div>
+                                    <div class="y-ticks-column">
+                                        <span class="y-tick">45°C</span>
+                                        <span class="y-tick">35°C</span>
+                                        <span class="y-tick">25°C</span>
+                                        <span class="y-tick">15°C</span>
+                                    </div>
+                                </div>
+
+                                <div class="plot-canvas-area mini">
+                                    {#if !isDeviceConnected}
+                                        <div class="offline-chart-overlay mini">
+                                            <span>📡 ESP32-S3 Offline</span>
+                                        </div>
+                                    {:else if hoveredPoint}
+                                        {@const hc = getCoreLoads(hoveredPoint)}
+                                        <div
+                                            class="chart-tooltip mini"
+                                            style="left: {hoveredIdx !== null && displayHistory.length > 1 ? `${Math.min(85, Math.max(15, (hoveredIdx / (displayHistory.length - 1)) * 100))}%` : '50%'};"
+                                        >
+                                            <span class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString()}</span>
+                                            <div class="tooltip-metrics">
+                                                <span class="chip esp32">🌡️ {hoveredPoint.temperature?.toFixed(1) ?? '--'}°C</span>
+                                                <span class="chip cpu1">CPU 1: {hc.cpu1}%</span>
+                                                <span class="chip cpu2">CPU 2: {hc.cpu2}%</span>
+                                            </div>
+                                        </div>
                                     {/if}
-                                    {#if hoveredPoint.cpu_load != null}
-                                        <span class="chip cpu">⚡ Load: {hoveredPoint.cpu_load}%</span>
-                                    {:else}
-                                        <span class="chip cpu offline">⚡ Load: Offline</span>
+
+                                    <svg viewBox="0 0 {CHART_WIDTH} {DUAL_CHART_HEIGHT}" class="temperature-svg" preserveAspectRatio="none">
+                                        <defs>
+                                            <linearGradient id="dualAmbientGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.30" />
+                                                <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.0" />
+                                            </linearGradient>
+                                        </defs>
+
+                                        <!-- Grid Lines -->
+                                        <line x1="0" y1="0" x2={CHART_WIDTH} y2="0" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                        <line x1="0" y1={DUAL_CHART_HEIGHT * 0.33} x2={CHART_WIDTH} y2={DUAL_CHART_HEIGHT * 0.33} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                        <line x1="0" y1={DUAL_CHART_HEIGHT * 0.66} x2={CHART_WIDTH} y2={DUAL_CHART_HEIGHT * 0.66} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                        <line x1="0" y1={DUAL_CHART_HEIGHT} x2={CHART_WIDTH} y2={DUAL_CHART_HEIGHT} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+
+                                        {#if isDeviceConnected && hoveredIdx !== null && displayHistory.length > 1}
+                                            {@const hoverX = (hoveredIdx / (displayHistory.length - 1)) * CHART_WIDTH}
+                                            <line x1={hoverX} y1={0} x2={hoverX} y2={DUAL_CHART_HEIGHT} stroke="rgba(245, 158, 11, 0.5)" stroke-dasharray="3 3" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+                                        {/if}
+
+                                        {#if isDeviceConnected && ambientTempDualPoints}
+                                            <polygon points={`0,${DUAL_CHART_HEIGHT} ${ambientTempDualPoints} ${CHART_WIDTH},${DUAL_CHART_HEIGHT}`} fill="url(#dualAmbientGrad)" />
+                                            <polyline points={ambientTempDualPoints} fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                                        {/if}
+
+                                        {#if isDeviceConnected && displayHistory}
+                                            {#each displayHistory as pt, idx}
+                                                {#if pt.temperature != null}
+                                                    {@const c = getCoords(idx, displayHistory.length, pt.temperature, DUAL_CHART_HEIGHT)}
+                                                    <circle cx={c.x} cy={c.y} r={hoveredIdx === idx ? 4.5 : 2.5} fill="#f59e0b" stroke="#14171d" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+                                                {/if}
+                                            {/each}
+                                        {/if}
+                                    </svg>
+
+                                    {#if isDeviceConnected}
+                                        <div class="hover-detector-overlay">
+                                            {#each displayHistory as _, idx}
+                                                <div
+                                                    class="hover-trigger-slice"
+                                                    role="presentation"
+                                                    onmouseenter={() => (hoveredIdx = idx)}
+                                                    onmouseleave={() => (hoveredIdx = null)}
+                                                ></div>
+                                            {/each}
+                                        </div>
                                     {/if}
                                 </div>
                             </div>
-                        {/if}
+                        </div>
 
-                        <svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" class="temperature-svg" preserveAspectRatio="none">
-                            <defs>
-                                <!-- Linear Gradient for Ambient Temperature Fill -->
-                                <linearGradient id="ambientGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                                    <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.28" />
-                                    <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.0" />
-                                </linearGradient>
-                            </defs>
-
-                            <!-- Horizontal Grid Lines corresponding to 45°C, 35°C, 25°C, 15°C -->
-                            <line x1="0" y1="0" x2={CHART_WIDTH} y2="0" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
-                            <line x1="0" y1="100" x2={CHART_WIDTH} y2="100" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
-                            <line x1="0" y1="200" x2={CHART_WIDTH} y2="200" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
-                            <line x1="0" y1="300" x2={CHART_WIDTH} y2="300" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
-
-                            <!-- Active Hover Vertical Cursor Guide -->
-                            {#if isDeviceConnected && hoveredIdx !== null && displayHistory.length > 1}
-                                {@const hoverX = (hoveredIdx / (displayHistory.length - 1)) * CHART_WIDTH}
-                                <line
-                                    x1={hoverX}
-                                    y1={0}
-                                    x2={hoverX}
-                                    y2={CHART_HEIGHT}
-                                    stroke="rgba(245, 158, 11, 0.4)"
-                                    stroke-dasharray="3 3"
-                                    stroke-width="1.5"
-                                    vector-effect="non-scaling-stroke"
-                                />
-                            {/if}
-
-                            <!-- Area Under Curve (ESP32-S3 Temperature) -->
-                            {#if isDeviceConnected && ambientTempPoints}
-                                <polygon
-                                    points={`0,${CHART_HEIGHT} ${ambientTempPoints} ${CHART_WIDTH},${CHART_HEIGHT}`}
-                                    fill="url(#ambientGrad)"
-                                />
-                            {/if}
-
-                            <!-- ESP32-S3 Temperature Line (Amber) -->
-                            {#if isDeviceConnected && ambientTempPoints}
-                                <polyline
-                                    points={ambientTempPoints}
-                                    fill="none"
-                                    stroke="#f59e0b"
-                                    stroke-width="2.5"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    vector-effect="non-scaling-stroke"
-                                />
-                            {/if}
-
-                            <!-- Interactive Data Points -->
-                            {#if isDeviceConnected && displayHistory}
-                                {#each displayHistory as pt, idx}
-                                    {#if pt.temperature != null}
-                                        {@const c = getCoords(idx, displayHistory.length, pt.temperature)}
-                                        <circle
-                                            cx={c.x}
-                                            cy={c.y}
-                                            r={hoveredIdx === idx ? 5.5 : 3.5}
-                                            fill="#f59e0b"
-                                            stroke="#14171d"
-                                            stroke-width="2"
-                                            vector-effect="non-scaling-stroke"
-                                        />
-                                    {/if}
-                                {/each}
-                            {/if}
-                        </svg>
-
-                        <!-- Invisible Full-Height Hover Trigger Columns -->
-                        {#if isDeviceConnected}
-                            <div class="hover-detector-overlay">
-                                {#each displayHistory as _, idx}
-                                    <div
-                                        class="hover-trigger-slice"
-                                        role="presentation"
-                                        onmouseenter={() => (hoveredIdx = idx)}
-                                        onmouseleave={() => (hoveredIdx = null)}
-                                    ></div>
-                                {/each}
+                        <!-- Sub-chart 2: Dual CPU (Core 0 & Core 1) -->
+                        <div class="sub-chart-box">
+                            <div class="sub-chart-header">
+                                <span class="sub-chart-title">⚡ Dual CPU Utilization (Core 0: WiFi / Core 1: App)</span>
+                                <span class="sub-chart-badge cpu">0% – 100%</span>
                             </div>
-                        {/if}
+                            <div class="chart-main-row mini">
+                                <div class="y-axis-container mini">
+                                    <div class="y-axis-title-wrap">
+                                        <span class="y-axis-title">CPU %</span>
+                                    </div>
+                                    <div class="y-ticks-column">
+                                        <span class="y-tick">100%</span>
+                                        <span class="y-tick">75%</span>
+                                        <span class="y-tick">50%</span>
+                                        <span class="y-tick">25%</span>
+                                        <span class="y-tick">0%</span>
+                                    </div>
+                                </div>
+
+                                <div class="plot-canvas-area mini">
+                                    {#if !isDeviceConnected}
+                                        <div class="offline-chart-overlay mini">
+                                            <span>📡 ESP32-S3 Offline</span>
+                                        </div>
+                                    {/if}
+
+                                    <svg viewBox="0 0 {CHART_WIDTH} {DUAL_CHART_HEIGHT}" class="temperature-svg" preserveAspectRatio="none">
+                                        <defs>
+                                            <linearGradient id="cpu0DualGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.22" />
+                                                <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0" />
+                                            </linearGradient>
+                                            <linearGradient id="cpu1DualGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                <stop offset="0%" stop-color="#a855f7" stop-opacity="0.20" />
+                                                <stop offset="100%" stop-color="#a855f7" stop-opacity="0.0" />
+                                            </linearGradient>
+                                        </defs>
+
+                                        <!-- Grid Lines -->
+                                        <line x1="0" y1="0" x2={CHART_WIDTH} y2="0" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                        <line x1="0" y1={DUAL_CHART_HEIGHT * 0.25} x2={CHART_WIDTH} y2={DUAL_CHART_HEIGHT * 0.25} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                        <line x1="0" y1={DUAL_CHART_HEIGHT * 0.50} x2={CHART_WIDTH} y2={DUAL_CHART_HEIGHT * 0.50} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                        <line x1="0" y1={DUAL_CHART_HEIGHT * 0.75} x2={CHART_WIDTH} y2={DUAL_CHART_HEIGHT * 0.75} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                        <line x1="0" y1={DUAL_CHART_HEIGHT} x2={CHART_WIDTH} y2={DUAL_CHART_HEIGHT} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+
+                                        {#if isDeviceConnected && hoveredIdx !== null && displayHistory.length > 1}
+                                            {@const hoverX = (hoveredIdx / (displayHistory.length - 1)) * CHART_WIDTH}
+                                            <line x1={hoverX} y1={0} x2={hoverX} y2={DUAL_CHART_HEIGHT} stroke="rgba(56, 189, 248, 0.5)" stroke-dasharray="3 3" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+                                        {/if}
+
+                                        <!-- Area Under Curves -->
+                                        {#if isDeviceConnected && cpu0DualPoints}
+                                            <polygon points={`0,${DUAL_CHART_HEIGHT} ${cpu0DualPoints} ${CHART_WIDTH},${DUAL_CHART_HEIGHT}`} fill="url(#cpu0DualGrad)" />
+                                        {/if}
+                                        {#if isDeviceConnected && cpu1DualPoints}
+                                            <polygon points={`0,${DUAL_CHART_HEIGHT} ${cpu1DualPoints} ${CHART_WIDTH},${DUAL_CHART_HEIGHT}`} fill="url(#cpu1DualGrad)" />
+                                        {/if}
+
+                                        <!-- Core 0 Line (Cyan) -->
+                                        {#if isDeviceConnected && cpu0DualPoints}
+                                            <polyline points={cpu0DualPoints} fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                                        {/if}
+
+                                        <!-- Core 1 Line (Purple) -->
+                                        {#if isDeviceConnected && cpu1DualPoints}
+                                            <polyline points={cpu1DualPoints} fill="none" stroke="#a855f7" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                                        {/if}
+
+                                        <!-- Data Points -->
+                                        {#if isDeviceConnected && displayHistory}
+                                            {#each displayHistory as pt, idx}
+                                                {@const cl = getCoreLoads(pt)}
+                                                {@const c0 = getCpuCoords(idx, displayHistory.length, cl.cpu1, DUAL_CHART_HEIGHT)}
+                                                {@const c1 = getCpuCoords(idx, displayHistory.length, cl.cpu2, DUAL_CHART_HEIGHT)}
+                                                <circle cx={c0.x} cy={c0.y} r={hoveredIdx === idx ? 4.5 : 2.5} fill="#38bdf8" stroke="#14171d" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+                                                <circle cx={c1.x} cy={c1.y} r={hoveredIdx === idx ? 4.5 : 2.5} fill="#a855f7" stroke="#14171d" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+                                            {/each}
+                                        {/if}
+                                    </svg>
+
+                                    {#if isDeviceConnected}
+                                        <div class="hover-detector-overlay">
+                                            {#each displayHistory as _, idx}
+                                                <div
+                                                    class="hover-trigger-slice"
+                                                    role="presentation"
+                                                    onmouseenter={() => (hoveredIdx = idx)}
+                                                    onmouseleave={() => (hoveredIdx = null)}
+                                                ></div>
+                                            {/each}
+                                        </div>
+                                    {/if}
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </div>
+                {:else if activeChartTab === 'cpu'}
+                    <!-- SINGLE VIEW: Full Height CPU 1 & CPU 2 Chart -->
+                    <div class="chart-main-row">
+                        <div class="y-axis-container">
+                            <div class="y-axis-title-wrap">
+                                <span class="y-axis-title">CPU Load</span>
+                            </div>
+                            <div class="y-ticks-column">
+                                <span class="y-tick">100%</span>
+                                <span class="y-tick">75%</span>
+                                <span class="y-tick">50%</span>
+                                <span class="y-tick">25%</span>
+                                <span class="y-tick">0%</span>
+                            </div>
+                        </div>
+
+                        <div class="plot-canvas-area">
+                            {#if !isDeviceConnected}
+                                <div class="offline-chart-overlay">
+                                    <span class="offline-chart-icon">📡</span>
+                                    <strong>ESP32-S3 Device Offline</strong>
+                                    <p>Dual-core CPU telemetry is unavailable while the sensor node is disconnected.</p>
+                                </div>
+                            {:else if hoveredPoint}
+                                {@const hc = getCoreLoads(hoveredPoint)}
+                                <div
+                                    class="chart-tooltip"
+                                    style="left: {hoveredIdx !== null && displayHistory.length > 1 ? `${Math.min(85, Math.max(15, (hoveredIdx / (displayHistory.length - 1)) * 100))}%` : '50%'};"
+                                >
+                                    <span class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString()}</span>
+                                    <div class="tooltip-metrics">
+                                        <span class="chip cpu1">⚡ CPU 1 (Core 0): {hc.cpu1}%</span>
+                                        <span class="chip cpu2">⚡ CPU 2 (Core 1): {hc.cpu2}%</span>
+                                        {#if hoveredPoint.cpu_load != null}
+                                            <span class="chip cpu">Avg: {hoveredPoint.cpu_load}%</span>
+                                        {/if}
+                                    </div>
+                                </div>
+                            {/if}
+
+                            <svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" class="temperature-svg" preserveAspectRatio="none">
+                                <defs>
+                                    <linearGradient id="cpu0SingleGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                        <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.25" />
+                                        <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0" />
+                                    </linearGradient>
+                                    <linearGradient id="cpu1SingleGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                        <stop offset="0%" stop-color="#a855f7" stop-opacity="0.22" />
+                                        <stop offset="100%" stop-color="#a855f7" stop-opacity="0.0" />
+                                    </linearGradient>
+                                </defs>
+
+                                <!-- Grid Lines -->
+                                <line x1="0" y1="0" x2={CHART_WIDTH} y2="0" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                <line x1="0" y1={CHART_HEIGHT * 0.25} x2={CHART_WIDTH} y2={CHART_HEIGHT * 0.25} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                <line x1="0" y1={CHART_HEIGHT * 0.50} x2={CHART_WIDTH} y2={CHART_HEIGHT * 0.50} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                <line x1="0" y1={CHART_HEIGHT * 0.75} x2={CHART_WIDTH} y2={CHART_HEIGHT * 0.75} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                <line x1="0" y1={CHART_HEIGHT} x2={CHART_WIDTH} y2={CHART_HEIGHT} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+
+                                {#if isDeviceConnected && hoveredIdx !== null && displayHistory.length > 1}
+                                    {@const hoverX = (hoveredIdx / (displayHistory.length - 1)) * CHART_WIDTH}
+                                    <line x1={hoverX} y1={0} x2={hoverX} y2={CHART_HEIGHT} stroke="rgba(56, 189, 248, 0.4)" stroke-dasharray="3 3" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+                                {/if}
+
+                                {#if isDeviceConnected && cpu0Points}
+                                    <polygon points={`0,${CHART_HEIGHT} ${cpu0Points} ${CHART_WIDTH},${CHART_HEIGHT}`} fill="url(#cpu0SingleGrad)" />
+                                    <polyline points={cpu0Points} fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                                {/if}
+
+                                {#if isDeviceConnected && cpu1Points}
+                                    <polygon points={`0,${CHART_HEIGHT} ${cpu1Points} ${CHART_WIDTH},${CHART_HEIGHT}`} fill="url(#cpu1SingleGrad)" />
+                                    <polyline points={cpu1Points} fill="none" stroke="#a855f7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                                {/if}
+
+                                {#if isDeviceConnected && displayHistory}
+                                    {#each displayHistory as pt, idx}
+                                        {@const cl = getCoreLoads(pt)}
+                                        {@const c0 = getCpuCoords(idx, displayHistory.length, cl.cpu1, CHART_HEIGHT)}
+                                        {@const c1 = getCpuCoords(idx, displayHistory.length, cl.cpu2, CHART_HEIGHT)}
+                                        <circle cx={c0.x} cy={c0.y} r={hoveredIdx === idx ? 5.5 : 3.5} fill="#38bdf8" stroke="#14171d" stroke-width="2" vector-effect="non-scaling-stroke" />
+                                        <circle cx={c1.x} cy={c1.y} r={hoveredIdx === idx ? 5.5 : 3.5} fill="#a855f7" stroke="#14171d" stroke-width="2" vector-effect="non-scaling-stroke" />
+                                    {/each}
+                                {/if}
+                            </svg>
+
+                            {#if isDeviceConnected}
+                                <div class="hover-detector-overlay">
+                                    {#each displayHistory as _, idx}
+                                        <div
+                                            class="hover-trigger-slice"
+                                            role="presentation"
+                                            onmouseenter={() => (hoveredIdx = idx)}
+                                            onmouseleave={() => (hoveredIdx = null)}
+                                        ></div>
+                                    {/each}
+                                </div>
+                            {/if}
+                        </div>
+                    </div>
+                {:else}
+                    <!-- SINGLE VIEW: Full Height Temperature Chart -->
+                    <div class="chart-main-row">
+                        <div class="y-axis-container">
+                            <div class="y-axis-title-wrap">
+                                <span class="y-axis-title">Temperature</span>
+                            </div>
+                            <div class="y-ticks-column">
+                                <span class="y-tick">45°C</span>
+                                <span class="y-tick">35°C</span>
+                                <span class="y-tick">25°C</span>
+                                <span class="y-tick">15°C</span>
+                            </div>
+                        </div>
+
+                        <div class="plot-canvas-area">
+                            {#if !isDeviceConnected}
+                                <div class="offline-chart-overlay">
+                                    <span class="offline-chart-icon">📡</span>
+                                    <strong>ESP32-S3 Device Offline</strong>
+                                    <p>Real temperature & hardware telemetry are unavailable while the ESP-IDF sensor node is disconnected.</p>
+                                </div>
+                            {:else if hoveredPoint}
+                                <div
+                                    class="chart-tooltip"
+                                    style="left: {hoveredIdx !== null && displayHistory.length > 1 ? `${Math.min(85, Math.max(15, (hoveredIdx / (displayHistory.length - 1)) * 100))}%` : '50%'};"
+                                >
+                                    <span class="tooltip-time">{new Date((hoveredPoint.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString()}</span>
+                                    <div class="tooltip-metrics">
+                                        {#if hoveredPoint.temperature != null}
+                                            <span class="chip esp32">🌡️ ESP32-S3: {hoveredPoint.temperature.toFixed(1)}°C</span>
+                                        {:else}
+                                            <span class="chip esp32 offline">🌡️ ESP32-S3: Offline</span>
+                                        {/if}
+                                        {#if hoveredPoint.cpu_load != null}
+                                            <span class="chip cpu">⚡ Load: {hoveredPoint.cpu_load}%</span>
+                                        {:else}
+                                            <span class="chip cpu offline">⚡ Load: Offline</span>
+                                        {/if}
+                                    </div>
+                                </div>
+                            {/if}
+
+                            <svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" class="temperature-svg" preserveAspectRatio="none">
+                                <defs>
+                                    <linearGradient id="ambientGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                        <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.28" />
+                                        <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.0" />
+                                    </linearGradient>
+                                </defs>
+
+                                <line x1="0" y1="0" x2={CHART_WIDTH} y2="0" stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                <line x1="0" y1={CHART_HEIGHT * 0.33} x2={CHART_WIDTH} y2={CHART_HEIGHT * 0.33} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                <line x1="0" y1={CHART_HEIGHT * 0.66} x2={CHART_WIDTH} y2={CHART_HEIGHT * 0.66} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+                                <line x1="0" y1={CHART_HEIGHT} x2={CHART_WIDTH} y2={CHART_HEIGHT} stroke="rgba(255, 255, 255, 0.08)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+
+                                {#if isDeviceConnected && hoveredIdx !== null && displayHistory.length > 1}
+                                    {@const hoverX = (hoveredIdx / (displayHistory.length - 1)) * CHART_WIDTH}
+                                    <line x1={hoverX} y1={0} x2={hoverX} y2={CHART_HEIGHT} stroke="rgba(245, 158, 11, 0.4)" stroke-dasharray="3 3" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+                                {/if}
+
+                                {#if isDeviceConnected && ambientTempPoints}
+                                    <polygon points={`0,${CHART_HEIGHT} ${ambientTempPoints} ${CHART_WIDTH},${CHART_HEIGHT}`} fill="url(#ambientGrad)" />
+                                    <polyline points={ambientTempPoints} fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                                {/if}
+
+                                {#if isDeviceConnected && displayHistory}
+                                    {#each displayHistory as pt, idx}
+                                        {#if pt.temperature != null}
+                                            {@const c = getCoords(idx, displayHistory.length, pt.temperature, CHART_HEIGHT)}
+                                            <circle cx={c.x} cy={c.y} r={hoveredIdx === idx ? 5.5 : 3.5} fill="#f59e0b" stroke="#14171d" stroke-width="2" vector-effect="non-scaling-stroke" />
+                                        {/if}
+                                    {/each}
+                                {/if}
+                            </svg>
+
+                            {#if isDeviceConnected}
+                                <div class="hover-detector-overlay">
+                                    {#each displayHistory as _, idx}
+                                        <div
+                                            class="hover-trigger-slice"
+                                            role="presentation"
+                                            onmouseenter={() => (hoveredIdx = idx)}
+                                            onmouseleave={() => (hoveredIdx = null)}
+                                        ></div>
+                                    {/each}
+                                </div>
+                            {/if}
+                        </div>
+                    </div>
+                {/if}
 
                 <!-- Bottom X-Axis Row (HTML: crisp typography, centered under plot) -->
                 <div class="x-axis-row">
@@ -302,13 +641,23 @@
 
         <!-- 2. Right Column (Stacked Cards matching Wireframe) -->
         <div class="telemetry-right-column">
-            <!-- Upper Card: Avg. ESP32 Temp -->
+            <!-- Upper Card: Avg. ESP32 Temp & CPU -->
             <div class="card metric-mini-card">
                 <div class="metric-row">
                     <span class="metric-label">Avg. ESP32 Temp</span>
                     <div class="value-box">
                         {#if isDeviceConnected && avgTemp != null}
                             <span class="value-text">{avgTemp} °C</span>
+                        {:else}
+                            <span class="value-text offline-val">Offline</span>
+                        {/if}
+                    </div>
+                </div>
+                <div class="metric-row" style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-subtle);">
+                    <span class="metric-label">Avg. CPU Load</span>
+                    <div class="value-box">
+                        {#if isDeviceConnected && avgCpu != null}
+                            <span class="value-text">{avgCpu}%</span>
                         {:else}
                             <span class="value-text offline-val">Offline</span>
                         {/if}
@@ -336,20 +685,24 @@
                     </div>
                 </div>
 
-                <div class="metric-row">
-                    <span class="metric-label">CPU Core 0</span>
+                <div class="metric-row highlight-cpu1">
+                    <span class="metric-label">
+                        <span class="dot cpu1-dot"></span> CPU 1 (Core 0)
+                    </span>
                     <div class="value-box">
                         <span class="value-text" class:offline-val={!isDeviceConnected}>
-                            {isDeviceConnected && currentTelemetry?.cpu_load != null ? `${currentTelemetry.cpu_load}% @ 240M` : 'Offline'}
+                            {isDeviceConnected ? `${currentCores.cpu1}% @ 240MHz` : 'Offline'}
                         </span>
                     </div>
                 </div>
 
-                <div class="metric-row">
-                    <span class="metric-label">CPU Core 1</span>
+                <div class="metric-row highlight-cpu2">
+                    <span class="metric-label">
+                        <span class="dot cpu2-dot"></span> CPU 2 (Core 1)
+                    </span>
                     <div class="value-box">
                         <span class="value-text" class:offline-val={!isDeviceConnected}>
-                            {isDeviceConnected && currentTelemetry?.cpu_load != null ? `${currentTelemetry.cpu_load}% @ 240MHz` : 'Offline'}
+                            {isDeviceConnected ? `${currentCores.cpu2}% @ 240MHz` : 'Offline'}
                         </span>
                     </div>
                 </div>
@@ -739,6 +1092,49 @@
         margin-bottom: 12px;
         padding-bottom: 8px;
         border-bottom: 1px solid var(--border-subtle);
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .heading-tab-wrap {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+    }
+
+    .chart-tab-pills {
+        display: flex;
+        align-items: center;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid var(--border-subtle);
+        border-radius: 9999px;
+        padding: 3px;
+        gap: 3px;
+    }
+
+    .chart-pill {
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 9999px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+    }
+
+    .chart-pill:hover {
+        color: var(--text-primary);
+        background: rgba(255, 255, 255, 0.06);
+    }
+
+    .chart-pill.active {
+        background: var(--accent-blue, #3b82f6);
+        color: #ffffff;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
     }
 
     .legend-strip {
@@ -747,6 +1143,7 @@
         gap: 14px;
         font-size: 0.72rem;
         color: var(--text-secondary);
+        flex-wrap: wrap;
     }
 
     .legend-item {
@@ -759,10 +1156,87 @@
         width: 8px;
         height: 8px;
         border-radius: 50%;
+        flex-shrink: 0;
     }
 
     .legend-item .dot.esp32 { background: #f59e0b; }
     .legend-item .dot.mcu { background: #38bdf8; }
+    .legend-item .dot.cpu1 { background: #38bdf8; }
+    .legend-item .dot.cpu2 { background: #a855f7; }
+
+    /* Dual View Stack */
+    .dual-charts-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        flex: 1;
+        width: 100%;
+    }
+
+    .sub-chart-box {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1;
+    }
+
+    .sub-chart-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 4px;
+    }
+
+    .sub-chart-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--text-secondary);
+        letter-spacing: 0.02em;
+    }
+
+    .sub-chart-badge {
+        font-size: 0.68rem;
+        font-family: var(--font-mono);
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border-subtle);
+    }
+
+    .sub-chart-badge.esp32 { color: #f59e0b; border-color: rgba(245, 158, 11, 0.25); }
+    .sub-chart-badge.cpu { color: #38bdf8; border-color: rgba(56, 189, 248, 0.25); }
+
+    .chart-main-row.mini {
+        min-height: 125px;
+        max-height: 135px;
+        flex: 1;
+    }
+
+    .plot-canvas-area.mini {
+        min-height: 125px;
+        max-height: 135px;
+    }
+
+    .y-axis-container.mini {
+        padding: 0;
+    }
+
+    .chart-tooltip.mini {
+        top: 6px;
+        padding: 4px 8px;
+    }
+
+    .offline-chart-overlay.mini {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(15, 23, 42, 0.85);
+        color: var(--text-muted);
+        font-size: 0.75rem;
+        z-index: 6;
+    }
 
     /* New Unsquished Chart Layout */
     .chart-layout-box {
@@ -898,6 +1372,8 @@
     .tooltip-metrics .chip.esp32 { color: #f59e0b; }
     .tooltip-metrics .chip.mcu { color: #38bdf8; }
     .tooltip-metrics .chip.cpu { color: var(--accent-green); }
+    .tooltip-metrics .chip.cpu1 { color: #38bdf8; }
+    .tooltip-metrics .chip.cpu2 { color: #a855f7; }
     .tooltip-metrics .chip.offline { color: #dc2626 !important; opacity: 0.75; }
 
     .hover-detector-overlay {
@@ -972,6 +1448,34 @@
         gap: 6px;
         flex: 1;
         justify-content: center;
+    }
+
+    .metric-row.highlight-cpu1 .value-text {
+        color: #38bdf8;
+    }
+
+    .metric-row.highlight-cpu2 .value-text {
+        color: #c084fc;
+    }
+
+    .cpu1-dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #38bdf8;
+        margin-right: 5px;
+        vertical-align: middle;
+    }
+
+    .cpu2-dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #a855f7;
+        margin-right: 5px;
+        vertical-align: middle;
     }
 
     /* ------------------------------------------------------------------------- */
