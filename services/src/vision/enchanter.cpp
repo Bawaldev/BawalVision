@@ -355,170 +355,147 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
         src_in.convertTo(src, CV_8UC3);
     }
 
-    // 1. Fast Luminance & Scene Analysis via Strided Sampling
+
     const int step_y = std::max(1, src.rows / 32);
     const int step_x = std::max(1, src.cols / 32);
-    uint64_t sum_lum = 0;
-    int sample_count = 0;
+    const int cx0 = src.cols / 4, cx1 = (src.cols * 3) / 4;
+    const int cy0 = src.rows / 4, cy1 = (src.rows * 3) / 4;
+
+    uint64_t sum_lum_weighted = 0;
+    uint64_t total_weight = 0;
+    int dark_pixels = 0, bright_pixels = 0, total_samples = 0;
     double sum_b = 0, sum_g = 0, sum_r = 0;
     int mid_count = 0;
 
     for (int y = 0; y < src.rows; y += step_y) {
         const auto* row = src.ptr<cv::Vec3b>(y);
+        const bool in_center_y = (y >= cy0 && y <= cy1);
         for (int x = 0; x < src.cols; x += step_x) {
             const uint8_t b = row[x][0];
             const uint8_t g = row[x][1];
             const uint8_t r = row[x][2];
-            const uint8_t lum = cv::saturate_cast<uint8_t>(0.114f * b + 0.587f * g + 0.299f * r);
-            sum_lum += lum;
-            sample_count++;
-            if (lum >= 25 && lum <= 220) {
+            const uint8_t lum = static_cast<uint8_t>((29 * b + 150 * g + 77 * r) >> 8);
+            const uint64_t w = (in_center_y && x >= cx0 && x <= cx1) ? 3 : 1;
+            sum_lum_weighted += lum * w;
+            total_weight += w;
+            total_samples++;
+
+            if (lum < 65) dark_pixels++;
+            else if (lum > 200) bright_pixels++;
+
+            if (lum >= 30 && lum <= 210) {
                 sum_b += b; sum_g += g; sum_r += r;
                 mid_count++;
             }
         }
     }
-    const float avg_lum = sample_count > 0 ? static_cast<float>(sum_lum) / sample_count : 128.0f;
 
-    // 2. Pre-Tone Fast Spatial Smoothing (AVX2 Vectorized Gaussian Filter < 1 ms)
+    const float avg_lum = total_weight > 0 ? static_cast<float>(sum_lum_weighted) / total_weight : 128.0f;
+    const float dark_ratio = total_samples > 0 ? static_cast<float>(dark_pixels) / total_samples : 0.0f;
+    const float bright_ratio = total_samples > 0 ? static_cast<float>(bright_pixels) / total_samples : 0.0f;
+    const bool is_backlit = (dark_ratio > 0.20f && bright_ratio > 0.10f);
     cv::Mat denoised_src;
-    const double spatial_sigma = (avg_lum < 75.0f) ? 0.9 : 0.6;
+    const double spatial_sigma = (avg_lum < 80.0f || is_backlit) ? 0.85 : 0.55;
     cv::GaussianBlur(src, denoised_src, cv::Size(3, 3), spatial_sigma);
 
-    // 3. Smooth Continuous Tone Curve via Precomputed Look-Up Table (LUT)
-    // Avoid aggressive gamma pulling in low-light to suppress sensor noise floor
-    const float target_gamma = (avg_lum < 70.0f)
-        ? 0.75f
-        : std::clamp(std::pow(avg_lum / 128.0f, 0.40f), 0.65f, 0.90f);
-
-    uint8_t gamma_lut[256];
+    const float shadow_gamma = is_backlit ? 0.62f : std::clamp(std::pow(avg_lum / 135.0f, 0.38f), 0.65f, 0.92f);
+    uint8_t tone_lut[256];
     for (int i = 0; i < 256; ++i) {
-        float x = static_cast<float>(i) / 255.0f;
-        float y = std::pow(x, target_gamma);
-        if (y > 0.82f) {
-            y = 0.82f + (y - 0.82f) * 0.65f;
+        float x = static_cast<float>(i) * (1.0f / 255.0f);
+        float y = std::pow(x, shadow_gamma);
+        if (y > 0.72f) {
+            const float excess = y - 0.72f;
+            y = 0.72f + (0.28f * excess) / (excess + 0.22f);
         }
-        gamma_lut[i] = cv::saturate_cast<uint8_t>(y * 255.0f);
+        tone_lut[i] = cv::saturate_cast<uint8_t>(y * 255.0f);
     }
 
-    // 4. Auto White Balance (Midtone Gray World with Highlight Protection)
     float gain_b = 1.0f, gain_g = 1.0f, gain_r = 1.0f;
-    if (mid_count > 50) {
+    if (mid_count > 32) {
         const double avg_b = sum_b / mid_count;
         const double avg_g = sum_g / mid_count;
         const double avg_r = sum_r / mid_count;
         const double gray_target = (avg_b + avg_g + avg_r) / 3.0;
 
-        gain_b = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_b)), 0.90f, 1.15f);
-        gain_g = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_g)), 0.90f, 1.05f);
-        gain_r = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_r)), 0.90f, 1.15f);
+        gain_b = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_b)), 0.88f, 1.18f);
+        gain_g = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_g)), 0.92f, 1.08f);
+        gain_r = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_r)), 0.88f, 1.18f);
 
-        const float g_norm = (gain_b + gain_g + gain_r) / 3.0f;
-        gain_b /= g_norm;
-        gain_g /= g_norm;
-        gain_r /= g_norm;
+        const float g_norm = (gain_b + gain_g + gain_r) * (1.0f / 3.0f);
+        gain_b /= g_norm; gain_g /= g_norm; gain_r /= g_norm;
     }
 
-    // 5. Apply Tone Curve + White Balance (OpenMP SIMD Parallel)
-    cv::Mat tone_mapped(denoised_src.size(), CV_8UC3);
+    thread_local cv::Mat tl_tone_mapped;
+    tl_tone_mapped.create(denoised_src.size(), CV_8UC3);
+
     #pragma omp parallel for schedule(static)
     for (int y = 0; y < denoised_src.rows; ++y) {
-        const auto* s = denoised_src.ptr<cv::Vec3b>(y);
-        auto* d = tone_mapped.ptr<cv::Vec3b>(y);
+        const auto* __restrict s = denoised_src.ptr<cv::Vec3b>(y);
+        auto* __restrict d = tl_tone_mapped.ptr<cv::Vec3b>(y);
         #pragma omp simd
         for (int x = 0; x < denoised_src.cols; ++x) {
-            const int max_val = std::max({s[x][0], s[x][1], s[x][2]});
-            const float hl_blend = std::clamp((static_cast<float>(max_val) - 180.0f) / 60.0f, 0.0f, 1.0f);
-            const float gb = gain_b * (1.0f - hl_blend) + hl_blend;
-            const float gg = gain_g * (1.0f - hl_blend) + hl_blend;
-            const float gr = gain_r * (1.0f - hl_blend) + hl_blend;
+            const int max_c = std::max({s[x][0], s[x][1], s[x][2]});
+            const float hl_protect = std::clamp((static_cast<float>(max_c) - 175.0f) * (1.0f / 65.0f), 0.0f, 1.0f);
+            const float gb = gain_b * (1.0f - hl_protect) + hl_protect;
+            const float gg = gain_g * (1.0f - hl_protect) + hl_protect;
+            const float gr = gain_r * (1.0f - hl_protect) + hl_protect;
 
-            d[x][0] = cv::saturate_cast<uint8_t>(static_cast<float>(gamma_lut[s[x][0]]) * gb);
-            d[x][1] = cv::saturate_cast<uint8_t>(static_cast<float>(gamma_lut[s[x][1]]) * gg);
-            d[x][2] = cv::saturate_cast<uint8_t>(static_cast<float>(gamma_lut[s[x][2]]) * gr);
+            d[x][0] = cv::saturate_cast<uint8_t>(static_cast<float>(tone_lut[s[x][0]]) * gb);
+            d[x][1] = cv::saturate_cast<uint8_t>(static_cast<float>(tone_lut[s[x][1]]) * gg);
+            d[x][2] = cv::saturate_cast<uint8_t>(static_cast<float>(tone_lut[s[x][2]]) * gr);
         }
     }
 
-    // 6. Lab Domain Processing: Contrast & Chroma Denoising
     thread_local cv::Mat tl_lab;
     thread_local std::vector<cv::Mat> tl_planes(3);
-    
-    cv::cvtColor(tone_mapped, tl_lab, cv::COLOR_BGR2Lab);
+
+    cv::cvtColor(tl_tone_mapped, tl_lab, cv::COLOR_BGR2Lab);
     cv::split(tl_lab, tl_planes);
 
-    // Dynamic CLAHE on L-channel (reusing persistent CLAHE instance, 0 heap allocations)
-    const double dynamic_clip = (avg_lum < 70.0f) ? 0.8 : 1.2;
+    const double dynamic_clip = is_backlit ? 1.85 : ((avg_lum < 70.0f) ? 1.0 : 1.45);
     if (persistent_clahe) {
         persistent_clahe->setClipLimit(dynamic_clip);
         persistent_clahe->apply(tl_planes[0], tl_planes[0]);
-    } else {
-        static cv::Ptr<cv::CLAHE> s_clahe = cv::createCLAHE(dynamic_clip, cv::Size(8, 8));
-        s_clahe->setClipLimit(dynamic_clip);
-        s_clahe->apply(tl_planes[0], tl_planes[0]);
     }
 
-    // Fast SIMD Chroma Denoise (< 0.5 ms)
-    cv::GaussianBlur(tl_planes[1], tl_planes[1], cv::Size(5, 5), 1.5);
-    cv::GaussianBlur(tl_planes[2], tl_planes[2], cv::Size(5, 5), 1.5);
+    cv::GaussianBlur(tl_planes[1], tl_planes[1], cv::Size(5, 5), 1.4);
+    cv::GaussianBlur(tl_planes[2], tl_planes[2], cv::Size(5, 5), 1.4);
 
-    // 7. Fused Chroma Coring + Green Suppression + Shadow Desaturation + Vibrancy (Single SIMD Pass)
-    constexpr float vibrancy = 1.05f;
+    constexpr float vibrancy = 1.08f;
     #pragma omp parallel for schedule(static)
     for (int y = 0; y < tl_lab.rows; ++y) {
-        const auto* l_row = tl_planes[0].ptr<uint8_t>(y);
-        auto* a_row = tl_planes[1].ptr<uint8_t>(y);
-        auto* b_row = tl_planes[2].ptr<uint8_t>(y);
+        const auto* __restrict l_row = tl_planes[0].ptr<uint8_t>(y);
+        auto* __restrict a_row = tl_planes[1].ptr<uint8_t>(y);
+        auto* __restrict b_row = tl_planes[2].ptr<uint8_t>(y);
         #pragma omp simd
         for (int x = 0; x < tl_lab.cols; ++x) {
             const float l_val = static_cast<float>(l_row[x]);
             float da = static_cast<float>(a_row[x]) - 128.0f;
             float db = static_cast<float>(b_row[x]) - 128.0f;
 
-            // Green suppression for weak sensor tints (da < 0 in Lab is green)
-            if (da < 0.0f) {
-                if (da > -14.0f) {
-                    da *= 0.35f;
-                } else {
-                    da += 8.0f;
-                }
+            const float chroma_sq = da * da + db * db;
+            if (chroma_sq < 25.0f) {
+                const float factor = chroma_sq * (1.0f / 25.0f);
+                da *= factor;
+                db *= factor;
             }
 
-            // Chroma Coring: suppress low-amplitude chroma noise without sqrt
-            const float chroma_mag_sq = da * da + db * db;
-            if (chroma_mag_sq < 36.0f) {
-                const float coring_factor = chroma_mag_sq * (1.0f / 36.0f);
-                da *= coring_factor;
-                db *= coring_factor;
-            }
-
-            // Shadow Desaturation (L < 45) to ensure clean deep neutral darks
-            const float shadow_scale = std::clamp((l_val - 12.0f) / 36.0f, 0.0f, 1.0f);
-            da *= (shadow_scale * vibrancy);
-            db *= (shadow_scale * vibrancy);
-
-            a_row[x] = cv::saturate_cast<uint8_t>(128.0f + da);
-            b_row[x] = cv::saturate_cast<uint8_t>(128.0f + db);
+            const float shadow_scale = std::clamp((l_val - 15.0f) * (1.0f / 35.0f), 0.0f, 1.0f);
+            a_row[x] = cv::saturate_cast<uint8_t>(128.0f + da * shadow_scale * vibrancy);
+            b_row[x] = cv::saturate_cast<uint8_t>(128.0f + db * shadow_scale * vibrancy);
         }
     }
 
     cv::merge(tl_planes, tl_lab);
     cv::cvtColor(tl_lab, dst, cv::COLOR_Lab2BGR);
 
-    // 8. Fast AVX2 Unsharp Mask (< 1 ms via filter2D)
-    if (avg_lum >= 75.0f) {
-        static const cv::Mat s_unsharp_kernel = (cv::Mat_<float>(3, 3) <<
-             0.0f,  -0.12f,  0.0f,
-            -0.12f,  1.48f, -0.12f,
-             0.0f,  -0.12f,  0.0f);
-        cv::filter2D(dst, dst, -1, s_unsharp_kernel);
-    }
-
-    // 9. Debug log
-    static int s_debug_counter = 0;
-    if (s_debug_counter++ % 60 == 0) {
-        std::cout << "[ISP] avg=" << avg_lum << " gamma=" << target_gamma
-                  << " gain_rgb=(" << gain_r << "," << gain_g << "," << gain_b << ")" << std::endl;
-    }
+    const float sharp_strength = (avg_lum < 65.0f) ? 0.08f : 0.15f;
+    const float center_weight = 1.0f + 4.0f * sharp_strength;
+    cv::Mat kernel = (cv::Mat_<float>(3, 3) <<
+         0.0f, -sharp_strength, 0.0f,
+        -sharp_strength, center_weight, -sharp_strength,
+         0.0f, -sharp_strength, 0.0f);
+    cv::filter2D(dst, dst, -1, kernel);
 }
 
 } // namespace bawal::vision
