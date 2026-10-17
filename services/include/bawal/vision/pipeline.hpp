@@ -113,6 +113,13 @@ public:
      */
     void renderOverlay(const InspectionOutput& inspection, cv::Mat& out_display);
 
+    /**
+     * @brief Reset temporal object tracks (e.g. on video rewind or scene cut).
+     */
+    void resetTracker() noexcept {
+        m_classifier.resetTracker();
+    }
+
     // Dynamic Confidence Threshold Accessors (Range: 0.45 - 0.98, Default: 0.60)
     void setConfidenceThreshold(float thresh) noexcept {
         m_conf_threshold = std::clamp(thresh, 0.45f, 0.98f);

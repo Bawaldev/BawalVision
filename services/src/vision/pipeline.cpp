@@ -143,8 +143,17 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
                                        InspectionOutput& out_inspection) {
     if (frame.empty()) return false;
 
+    // Ensure incoming frame dimensions from Mock Video (MP4) or Camera Stream
+    // are strictly normalized to (m_width, m_height) before entering Dewarp map and ISP
+    cv::Mat normalized_frame;
+    if (frame.cols != m_width || frame.rows != m_height) {
+        cv::resize(frame, normalized_frame, cv::Size(m_width, m_height), 0, 0, cv::INTER_AREA);
+    } else {
+        normalized_frame = frame;
+    }
+
     const int64_t t_start = cv::getTickCount();
-    out_inspection.raw_image = frame;
+    out_inspection.raw_image = normalized_frame;
     out_inspection.is_valid = false;
 
     // Camera orientation from environment. Read once and cached.
@@ -157,10 +166,10 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
 
     cv::Mat oriented;
-    if (s_vflip && s_hflip) cv::flip(frame, oriented, -1);
-    else if (s_vflip) cv::flip(frame, oriented, 0);
-    else if (s_hflip) cv::flip(frame, oriented, 1);
-    else oriented = frame;
+    if (s_vflip && s_hflip) cv::flip(normalized_frame, oriented, -1);
+    else if (s_vflip) cv::flip(normalized_frame, oriented, 0);
+    else if (s_hflip) cv::flip(normalized_frame, oriented, 1);
+    else oriented = normalized_frame;
 
     // Lens dewarping.
     cv::Mat dewarped;
@@ -222,6 +231,15 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
 bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_inspection) {
     if (frame.empty()) return false;
 
+    // Ensure incoming frame dimensions from Mock Video (MP4) or Camera Stream
+    // are strictly normalized to (m_width, m_height) before entering Dewarp map and ISP
+    cv::Mat normalized_frame;
+    if (frame.cols != m_width || frame.rows != m_height) {
+        cv::resize(frame, normalized_frame, cv::Size(m_width, m_height), 0, 0, cv::INTER_AREA);
+    } else {
+        normalized_frame = frame;
+    }
+
     const int64_t t_start = cv::getTickCount();
 
     // Camera orientation from environment. Read once and cached.
@@ -234,10 +252,10 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     }
 
     cv::Mat oriented;
-    if (s_vflip && s_hflip) cv::flip(frame, oriented, -1);
-    else if (s_vflip) cv::flip(frame, oriented, 0);
-    else if (s_hflip) cv::flip(frame, oriented, 1);
-    else oriented = frame;
+    if (s_vflip && s_hflip) cv::flip(normalized_frame, oriented, -1);
+    else if (s_vflip) cv::flip(normalized_frame, oriented, 0);
+    else if (s_hflip) cv::flip(normalized_frame, oriented, 1);
+    else oriented = normalized_frame;
 
     // Lens dewarping
     cv::Mat dewarped;
