@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -95,7 +96,17 @@ END $$;`).Error; err != nil {
 	})
 
 	app.Use(recover.New())
-	app.Use(logger.New())
+	app.Use(logger.New(logger.Config{
+		Next: func(c *fiber.Ctx) bool {
+			path := c.Path()
+			// Skip repetitive high-frequency camera streaming & frame ingress to eliminate stdout / disk I/O bottlenecks
+			return strings.HasPrefix(path, "/api/v1/camera/latest") ||
+				path == "/api/v1/camera/frame" ||
+				path == "/api/v1/camera/annotated" ||
+				path == "/api/v1/camera/raw" ||
+				path == "/api/v1/camera/stream"
+		},
+	}))
 
 	apiGroup := app.Group("/api/v1")
 	api.RegisterUserRoutes(apiGroup, db)
