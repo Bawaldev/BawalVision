@@ -88,7 +88,7 @@
         deviceId: '',
         streamIntervalMs: 1500,
         enableMockIfOffline: false,
-        minConfidenceThreshold: 0.60,
+        minConfidenceThreshold: 0.35,
         gravitonEngineEnabled: false,
         gravitonEngineAvailable: false,
         localEngineEnabled: true,
@@ -204,7 +204,7 @@
                     latestOptical = latestLive.scene_optical;
                 }
                 hasLiveDetections = true;
-                const activeThreshold = Math.min(0.98, Math.max(0.45, Number(systemConfig.minConfidenceThreshold) || 0.60));
+                const activeThreshold = Math.min(0.98, Math.max(0.25, Number(systemConfig.minConfidenceThreshold) || 0.35));
                 detections = latestLive.detections
                     .filter((det: any) => (Number(det.similarity_rate) || 0.0) >= activeThreshold)
                     .map((det: any) => {
@@ -250,7 +250,7 @@
                                 const cf = Number(item.similarity_rate) || 0.0;
                                 let st: 'PASS' | 'REVIEW' | 'REJECT' = (item.status as any);
                                 if (!st || (st as string) === '') {
-                                    st = (sp >= 50 || cf < 0.55) ? 'REJECT' : ((sp >= 25 || cf < 0.68) ? 'REVIEW' : 'PASS');
+                                    st = (sp >= 50 || cf < 0.35) ? 'REJECT' : ((sp >= 25 || cf < 0.55) ? 'REVIEW' : 'PASS');
                                 }
                                 return {
                                     food_name: name,
@@ -315,7 +315,7 @@
         try {
             const threshRes = await fetchConfidenceThreshold(systemConfig.backendUrl);
             if (threshRes && threshRes.threshold) {
-                systemConfig.minConfidenceThreshold = Math.min(0.98, Math.max(0.45, threshRes.threshold));
+                systemConfig.minConfidenceThreshold = Math.min(0.98, Math.max(0.25, threshRes.threshold));
             }
         } catch {}
 

@@ -26,7 +26,7 @@ INPUT_RESOLUTION = 640     # Fixed 640x640 frame resolution (OpenCV DNN compatib
 BATCH_SIZE = 8             # Calibrated for 4GB VRAM (NVIDIA RTX A2000 Laptop / GTX 1650)
 MAX_EPOCHS = 100
 EARLY_STOP_PATIENCE = 15   # Extended patience for optimal mAP convergence
-ONNX_OPSET = 12            # Standard ONNX opset for OpenCV DNN & ONNX Runtime C++ engine
+ONNX_OPSET = 13            # Standard ONNX opset for OpenCV DNN & ONNX Runtime C++ engine
 NUM_CLASSES = 9            # banana, chicken, egg, orange, rice, spinach, tempeh, tofu, water_spinach
 
 
@@ -160,16 +160,16 @@ def main() -> None:
             dfl=1.5,
             hsv_h=0.015,
             hsv_s=0.7,
-            degrees=180.0,
+            degrees=15.0,
             perspective=0.001,
             shear=10.0,
             scale=0.7,
             translate=0.15,
-            flipud=0.5,
+            flipud=0.0,
             fliplr=0.5,
             mosaic=1.0,
-            mixup=0.15,
-            copy_paste=0.1,
+            mixup=0.0,
+            copy_paste=0.0,
             close_mosaic=10,
             plots=True,
             save=True,
@@ -215,11 +215,10 @@ def main() -> None:
     if os.path.exists(exported_onnx):
         shutil.copy2(exported_onnx, FINAL_ONNX_TARGET)
         shutil.copy2(exported_onnx, FINAL_YOLO8N_TARGET)
+        shutil.copy2(exported_onnx, SCRIPT_DIR / "model" / "ai1_vision.onnx")
         os.remove(exported_onnx)
         print(f"[✓] Static FP32 ONNX binary deployed to: {FINAL_ONNX_TARGET}")
-        print(f"[✓] Synced yolo8n alias to            : {FINAL_YOLO8N_TARGET}")
-
-    # ==============================================================================
+        # ==============================================================================
     # 3. NUMERICAL SANITY CHECK (PyTorch vs ONNX Runtime Multi-Threaded CPU)
     # ==============================================================================
     print("\n=== Executing Parity Sanity Check ===")

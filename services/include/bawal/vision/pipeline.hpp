@@ -85,7 +85,8 @@ public:
      */
     [[nodiscard]] bool processStream(const cv::Mat& frame, 
                                      const std::vector<DetectionResult>& active_detections, 
-                                     InspectionOutput& out_inspection);
+                                     InspectionOutput& out_inspection,
+                                     bool is_mock_video = false);
 
     /**
      * @brief High-performance AI detection and SIMD spoilage evaluation pass.
@@ -120,9 +121,9 @@ public:
         m_classifier.resetTracker();
     }
 
-    // Dynamic Confidence Threshold Accessors (Range: 0.45 - 0.98, Default: 0.60)
+    // Dynamic Confidence Threshold Accessors (Range: 0.25 - 0.98, Default: 0.35)
     void setConfidenceThreshold(float thresh) noexcept {
-        m_conf_threshold = std::clamp(thresh, 0.45f, 0.98f);
+        m_conf_threshold = std::clamp(thresh, 0.25f, 0.98f);
     }
     [[nodiscard]] float getConfidenceThreshold() const noexcept {
         return m_conf_threshold;
@@ -140,7 +141,7 @@ private:
     RealESRGANEngine m_enhancer;
     FoodClassifier m_classifier;
     cv::Ptr<cv::CLAHE> m_clahe;
-    float m_conf_threshold{0.60f};
+    float m_conf_threshold{0.35f};
     int m_width{640};
     int m_height{480};
 };
