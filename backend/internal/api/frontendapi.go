@@ -27,11 +27,11 @@ var (
 
 func initDefaultThreshold() float64 {
 	if env := os.Getenv("CONF_THRESHOLD"); env != "" {
-		if val, err := strconv.ParseFloat(env, 64); err == nil && val >= 0.45 && val <= 0.98 {
+		if val, err := strconv.ParseFloat(env, 64); err == nil && val >= 0.25 && val <= 0.98 {
 			return val
 		}
 	}
-	return 0.60
+	return 0.35
 }
 
 type Handler struct {
@@ -61,9 +61,9 @@ func (h *Handler) GetThreshold(c *fiber.Ctx) error {
 	globalThresholdMutex.RUnlock()
 	return c.JSON(fiber.Map{
 		"threshold": t,
-		"min":       0.45,
+		"min":       0.25,
 		"max":       0.98,
-		"default":   0.60,
+		"default":   0.35,
 	})
 }
 
@@ -74,8 +74,8 @@ func (h *Handler) SetThreshold(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
-	if req.Threshold < 0.45 {
-		req.Threshold = 0.45
+	if req.Threshold < 0.25 {
+		req.Threshold = 0.25
 	} else if req.Threshold > 0.98 {
 		req.Threshold = 0.98
 	}

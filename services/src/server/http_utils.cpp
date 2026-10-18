@@ -270,7 +270,7 @@ float fetchDynamicThreshold(
     const size_t val_start = pos + key.size();
     try {
         const float parsed = std::stof(std::string(json.substr(val_start, 10)));
-        return std::clamp(parsed, 0.45f, 0.98f);
+        return std::clamp(parsed, 0.25f, 0.98f);
     } catch (...) {
         return fallback_val;
     }

@@ -75,7 +75,7 @@ services:
       - OMP_SCHEDULE=static
       - CAMERA_VFLIP=${CAMERA_VFLIP:-1}
       - CAMERA_HFLIP=${CAMERA_HFLIP:-0}
-      - CONF_THRESHOLD=${CONF_THRESHOLD:-0.6}
+      - CONF_THRESHOLD=${CONF_THRESHOLD:-0.35}
     volumes:
       - ../weights:/app/weights:rw
       - ../ml/AI1/model:/app/ml/AI1/model:ro

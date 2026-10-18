@@ -71,7 +71,7 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		}
 	}
 	if hdrFw := c.Get("X-Firmware-Version"); hdrFw != "" {
-		fwVer = hdrFw
+		fwVer = strings.Clone(hdrFw)
 	}
 
 	camModel := "OV5640"
@@ -79,7 +79,7 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		camModel = existing.CameraModel
 	}
 	if hdrModel := c.Get("X-Camera-Model"); hdrModel != "" {
-		camModel = hdrModel
+		camModel = strings.Clone(hdrModel)
 	}
 
 	connMode := "wifi_lan"
@@ -124,8 +124,10 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 					}
 				}
 				if len(imageBytes) > 0 {
-					camera_handler.GlobalCameraStore.StoreRawFrameWithIP(payload.DeviceID, payload.FrameID, imageBytes, c.IP())
-					syncTelemetryFromCameraIngress(c, payload.DeviceID, payload.FrameID)
+					devID := strings.Clone(payload.DeviceID)
+					ipStr := strings.Clone(c.IP())
+					camera_handler.GlobalCameraStore.StoreRawFrameWithIP(devID, payload.FrameID, imageBytes, ipStr)
+					syncTelemetryFromCameraIngress(c, devID, payload.FrameID)
 				}
 				return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 					"status":    "success",
@@ -135,7 +137,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			}
 		}
 
-		deviceID := c.Get("X-Device-ID")
+		deviceID := strings.Clone(c.Get("X-Device-ID"))
 		if deviceID == "" {
 			deviceID = "DEFAULT_CAMERA"
 		}
@@ -146,7 +148,8 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		imageBytes := make([]byte, len(body))
 		copy(imageBytes, body)
 
-		camera_handler.GlobalCameraStore.StoreRawFrameWithIP(deviceID, uint32(frameID), imageBytes, c.IP())
+		ipStr := strings.Clone(c.IP())
+		camera_handler.GlobalCameraStore.StoreRawFrameWithIP(deviceID, uint32(frameID), imageBytes, ipStr)
 		syncTelemetryFromCameraIngress(c, deviceID, uint32(frameID))
 
 		return c.SendStatus(fiber.StatusOK)
@@ -158,7 +161,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			return c.SendStatus(fiber.StatusBadRequest)
 		}
 
-		deviceID := c.Get("X-Device-ID")
+		deviceID := strings.Clone(c.Get("X-Device-ID"))
 		if deviceID == "" {
 			deviceID = "DEFAULT_CAMERA"
 		}

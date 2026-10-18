@@ -4,6 +4,7 @@ import random
 from pathlib import Path
 import cv2
 import numpy as np
+import shutil
 import onnx
 import onnxruntime as ort
 from onnxruntime.quantization import (
@@ -71,21 +72,20 @@ CALIB_DIR = SCRIPT_DIR / "yolo_dataset" / "images" / "train"
 
 
 def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
+    """
+    HANYA kecualikan node yang berada di Detection Head (model.22).
+    Jangan mengecualikan Mul/Add/Sigmoid/Concat di backbone/neck agar fusi INT8 QDQ maksimal!
+    """
     model_proto = onnx.load(str(model_path))
     exclude_set = set()
     for node in model_proto.graph.node:
         name_l = node.name.lower()
-        op_l = node.op_type.lower()
-        if (
-            "model.22" in name_l
-            or "dfl" in name_l
-            or "sigmoid" in name_l
-            or op_l in ("sigmoid", "concat", "split", "softmax", "reshape", "transpose", "sub", "div", "mul", "add")
-        ):
+        # Cek nama node maupun nama tensor outputnya
+        outputs_l = " ".join(node.output).lower()
+        if "model.22" in name_l or "model.22" in outputs_l or "dfl" in name_l:
             exclude_set.add(node.name)
 
     return list(exclude_set)
-
 
 def main():
     if not INPUT_ONNX.exists():
@@ -93,18 +93,27 @@ def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. Pre-processing graf ONNX sebelum kuantisasi
-    print("[+] Menjalankan ONNX quantization pre-processing...")
+    # 1. Upgrade Opset ke >= 13 (wajib agar DequantizeLinear mendukung atribut 'axis' pada per_channel=True)
+    #    serta jalankan ONNX quantization pre-processing
+    print("[+] Memeriksa & meng-upgrade ONNX Opset (>= 13) + pre-processing...")
+    UPGRADED_ONNX = SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision_opset13_tmp.onnx"
     try:
+        orig_model = onnx.load(str(INPUT_ONNX))
+        current_opset = orig_model.opset_import[0].version if orig_model.opset_import else 12
+        if current_opset < 13:
+            print(f" -> Mengonversi ONNX Opset {current_opset} -> Opset 13 untuk dukungan Per-Channel QDQ...")
+            orig_model = onnx.version_converter.convert_version(orig_model, 13)
+        onnx.save(orig_model, str(UPGRADED_ONNX))
+
         quant_pre_process(
-            input_model_path=str(INPUT_ONNX),
+            input_model_path=str(UPGRADED_ONNX),
             output_model_path=str(PREPROC_ONNX),
             skip_symbolic_shape=False,
         )
         quant_source = PREPROC_ONNX
     except Exception as e:
-        print(f"[!] Pre-process dilewati ({e}), menggunakan model asli.")
-        quant_source = INPUT_ONNX
+        print(f"[!] Pre-process dilewati ({e}), menggunakan model Opset 13 langsung.")
+        quant_source = UPGRADED_ONNX if UPGRADED_ONNX.exists() else INPUT_ONNX
 
     sess_fp32 = ort.InferenceSession(str(INPUT_ONNX), providers=["CPUExecutionProvider"])
     input_name = sess_fp32.get_inputs()[0].name
@@ -120,15 +129,33 @@ def main():
         model_output=str(OUTPUT_ONNX),
         calibration_data_reader=reader,
         quant_format=QuantFormat.QDQ,
-        per_channel=True,                            # WAJIB True untuk konvolusi YOLOv8
-        calibrate_method=CalibrationMethod.MinMax,   # MinMax lebih stabil menjaga puncak skor confidence dibanding Entropy
+        per_channel=True,
+        reduce_range=True,  # Mencegah overflow pada instruksi AVX2 CPU
+        calibrate_method=CalibrationMethod.MinMax,
         weight_type=QuantType.QInt8,
         activation_type=QuantType.QUInt8,
         nodes_to_exclude=nodes_to_exclude,
+        extra_options={
+            "WeightSymmetric": True,
+            "ActivationSymmetric": False,
+        },
     )
+
+    deploy_targets = [
+        SCRIPT_DIR / "model" / "ai1_vision_int8.onnx",
+        SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision_int8.onnx",
+        SCRIPT_DIR.parent.parent / "weights" / "yolo8n_int8.onnx",
+        SCRIPT_DIR.parent.parent / "weights" / "ai1_vision_int8.onnx",
+    ]
+    for target in deploy_targets:
+        if target.parent.exists():
+            shutil.copy2(OUTPUT_ONNX, target)
+            print(f"[✓] Synced INT8 model to: {target}")
 
     if PREPROC_ONNX.exists():
         PREPROC_ONNX.unlink()
+    if UPGRADED_ONNX.exists():
+        UPGRADED_ONNX.unlink()
 
     print(f"[✓] Quantization successful: {OUTPUT_ONNX}")
 

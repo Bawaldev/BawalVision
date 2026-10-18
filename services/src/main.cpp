@@ -100,30 +100,15 @@ int main(int argc, char** argv) {
         : (backend_base_url + "/api/v1/camera/latest/raw");
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
-    // 4. Initialize Inspection Pipeline Orchestrator
-    // Prioritize INT8 model (ml/AI1/model/yolov8n_int8) with fallback to FP32 (ml/AI1/model/yolov8n)
-    std::string model_path;
+    // 4. Initialize Inspection Pipeline Orchestrator (Single Final Model: ai1_vision_int8.onnx)
+    std::string model_path = "/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx";
     if (const char* env_model = std::getenv("MODEL_PATH")) {
-        model_path = env_model;
-    } else {
-        const std::array<std::string, 8> default_model_candidates = {
-            "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
-            "/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
-            "../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
-            "ml/AI1/model/yolov8n/ai1_vision.onnx",
-            "ml/AI1/model/yolov8n/yolo8n.onnx",
-            "/app/ml/AI1/model/yolov8n/ai1_vision.onnx",
-            "/app/ml/AI1/model/yolov8n/yolo8n.onnx",
-            "../ml/AI1/model/yolov8n/ai1_vision.onnx"
-        };
-        for (const auto& candidate : default_model_candidates) {
-            std::ifstream check_file(candidate);
-            if (check_file.good()) {
-                model_path = candidate;
-                break;
-            }
+        if (std::string(env_model).length() > 0) {
+            model_path = env_model;
         }
-        if (model_path.empty()) {
+    } else {
+        std::ifstream docker_check(model_path);
+        if (!docker_check.good()) {
             model_path = "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx";
         }
     }
@@ -169,8 +154,10 @@ int main(int argc, char** argv) {
     cv::Mat ai_input_frame;
     bool new_ai_frame_available = false;
     std::atomic<bool> ai_worker_running{true};
+    std::atomic<bool> ai_detections_updated{false};
     std::vector<DetectionResult> shared_detections;
     std::string current_device_id = device_id;
+    cv::Mat last_decoded_image;
 
     auto last_valid_detection_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
@@ -219,17 +206,21 @@ int main(int argc, char** argv) {
                     }
                 }
 
+                bool should_clear_backend = false;
                 {
                     std::lock_guard<std::mutex> lock(ai_mutex);
                     if (!valid_detections.empty()) {
                         shared_detections = valid_detections;
                         last_valid_detection_time = std::chrono::steady_clock::now();
+                        ai_detections_updated.store(true);
                     } else {
                         // Only clear after 1.5s of no detections to avoid HUD flicker
                         const auto now = std::chrono::steady_clock::now();
                         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_valid_detection_time).count();
-                        if (elapsed_ms > 1500) {
+                        if (elapsed_ms > 1500 && !shared_detections.empty()) {
                             shared_detections.clear();
+                            ai_detections_updated.store(true);
+                            should_clear_backend = true;
                         }
                     }
                 }
@@ -265,7 +256,7 @@ int main(int argc, char** argv) {
 
                 const bool state_changed = (current_state_sig != last_state_signature);
                 const bool heartbeat_sync = (elapsed_since_dispatch >= 15000);
-                const bool debounce_ok = (elapsed_since_dispatch >= 1000);
+                const bool debounce_ok = (elapsed_since_dispatch >= 800);
 
                 if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty() && curl_db) {
                     const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
@@ -307,6 +298,12 @@ int main(int argc, char** argv) {
                                   << valid_detections.size() << " detected foods | "
                                   << "Optical: " << int(optical.lux_luminance) << " lx, " << optical.white_balance_status << " | "
                                   << (state_changed ? "STATE CHANGE" : "HEARTBEAT") << ")\n";
+                    }
+                } else if (should_clear_backend && !dev_id.empty() && curl_db) {
+                    const std::string clear_json = "{\"device_id\":\"" + dev_id + "\",\"detections\":[]}";
+                    if (bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_json)) {
+                        last_dispatch_time = current_time;
+                        last_state_signature.clear();
                     }
                 }
             }
@@ -352,10 +349,18 @@ int main(int argc, char** argv) {
             if (device_id.empty() || idle_backoff_ms > 0 || (discovery_tick++ % 15 == 0)) {
                 const std::string discovered = discoverActiveDeviceID(curl_fetch, backend_base_url);
                 if (!discovered.empty() && discovered != "\\" && discovered != "/" && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
+                    const bool device_changed = (discovered != device_id);
                     device_id = discovered;
                     {
                         std::lock_guard<std::mutex> lock(ai_mutex);
                         current_device_id = device_id;
+                        if (device_changed) {
+                            shared_detections.clear();
+                        }
+                    }
+                    if (device_changed) {
+                        pipeline.resetTracker();
+                        prev_frame_hash = 0;
                     }
                     stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
                     std::cout << "[SUCCESS] Active camera stream connected: " << device_id << "\n";
@@ -389,21 +394,23 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            // Avoid re-processing and flood-broadcasting duplicate frames via O(1) sampling fingerprint
+            // Avoid re-processing and flood-broadcasting duplicate frames unless async AI detections updated
             const uint64_t cur_hash = computeFastFingerprint(raw_bytes);
-            if (cur_hash == prev_frame_hash) {
+            const bool detections_changed = ai_detections_updated.exchange(false);
+            if (cur_hash == prev_frame_hash && !detections_changed) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
-            prev_frame_hash = cur_hash;
-            inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
-
-            // Decode incoming JPEG frame
-            DecodedFrame decoded;
-            if (!pipeline.getReceiver().decodeMJPEG(raw_bytes.data(), raw_bytes.size(), decoded) || decoded.image.empty()) {
-                continue;
+            if (cur_hash != prev_frame_hash || last_decoded_image.empty()) {
+                prev_frame_hash = cur_hash;
+                DecodedFrame decoded;
+                if (!pipeline.getReceiver().decodeMJPEG(raw_bytes.data(), raw_bytes.size(), decoded) || decoded.image.empty()) {
+                    continue;
+                }
+                last_decoded_image = decoded.image;
             }
-            frame_to_stream = decoded.image;
+            frame_to_stream = last_decoded_image;
+            inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
         }
 
         // Get currently active detections
@@ -414,14 +421,15 @@ int main(int argc, char** argv) {
         }
 
         // High-Speed Real-Time Video Streaming Pass (Dewarp + Fast ISP + Overlay, < 6 ms)
-        if (pipeline.processStream(frame_to_stream, current_detections, inspection)) {
+        const bool is_mock_video = use_video_source || (device_id.find("MOCK") != std::string::npos);
+        if (pipeline.processStream(frame_to_stream, current_detections, inspection, is_mock_video)) {
             frame_ok = true;
             frame_seq++;
 
-            // Dispatch frame to background AI worker with throttling (at most ~3 inferences/sec)
+            // Dispatch frame to background AI worker with throttling (~6 inferences/sec)
             const auto now_ai = std::chrono::steady_clock::now();
             const auto ms_since_ai = std::chrono::duration_cast<std::chrono::milliseconds>(now_ai - last_ai_dispatch).count();
-            if (ms_since_ai >= 300) {
+            if (ms_since_ai >= 160) {
                 std::unique_lock<std::mutex> lock(ai_mutex, std::try_to_lock);
                 if (lock.owns_lock() && !new_ai_frame_available) {
                     ai_input_frame = inspection.dewarped_image.clone();

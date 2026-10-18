@@ -205,49 +205,14 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     m_is_ready = false;
 
     std::vector<std::string> candidate_paths;
-
-    // Prioritize explicit model path if provided
     if (!model_path.empty()) {
         candidate_paths.emplace_back(model_path);
-
-        // If FP32 model was requested, also check if INT8 version exists in yolov8n_int8
-        if (model_path.find("int8") == std::string_view::npos) {
-            std::string int8_path = std::string(model_path);
-            auto pos_yolo = int8_path.find("yolov8n");
-            if (pos_yolo != std::string::npos && int8_path.find("yolov8n_int8") == std::string::npos) {
-                int8_path.replace(pos_yolo, 7, "yolov8n_int8");
-                auto pos_ext = int8_path.rfind(".onnx");
-                if (pos_ext != std::string::npos && int8_path.find("_int8.onnx") == std::string::npos) {
-                    int8_path.insert(pos_ext, "_int8");
-                }
-                candidate_paths.insert(candidate_paths.begin(), int8_path);
-            }
-        }
     }
 
-    // 1. High-Performance INT8 Models (ml/AI1/model/yolov8n_int8/)
+    // Single Final Model: ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx (Docker & local relative paths)
     candidate_paths.push_back("/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
     candidate_paths.push_back("ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
     candidate_paths.push_back("../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
-    candidate_paths.push_back("../../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
-
-    // 2. Full-Precision FP32 Models (ml/AI1/model/yolov8n/)
-    candidate_paths.push_back("/app/ml/AI1/model/yolov8n/ai1_vision.onnx");
-    candidate_paths.push_back("/app/ml/AI1/model/yolov8n/yolo8n.onnx");
-    candidate_paths.push_back("ml/AI1/model/yolov8n/ai1_vision.onnx");
-    candidate_paths.push_back("ml/AI1/model/yolov8n/yolo8n.onnx");
-    candidate_paths.push_back("../ml/AI1/model/yolov8n/ai1_vision.onnx");
-    candidate_paths.push_back("../ml/AI1/model/yolov8n/yolo8n.onnx");
-    candidate_paths.push_back("../../ml/AI1/model/yolov8n/ai1_vision.onnx");
-    candidate_paths.push_back("../../ml/AI1/model/yolov8n/yolo8n.onnx");
-
-    // 3. Backward-Compatibility Legacy Paths
-    candidate_paths.push_back("/app/ml/AI1/model/ai1_vision_int8.onnx");
-    candidate_paths.push_back("ml/AI1/model/ai1_vision_int8.onnx");
-    candidate_paths.push_back("/app/ml/AI1/model/ai1_vision.onnx");
-    candidate_paths.push_back("ml/AI1/model/ai1_vision.onnx");
-    candidate_paths.push_back("/app/weights/yolo8n.onnx");
-    candidate_paths.push_back("weights/yolo8n.onnx");
 
     for (const auto& path : candidate_paths) {
         std::ifstream f(path.c_str());
@@ -279,21 +244,18 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
             m_tracked_items.clear();
             m_tracked_items.reserve(32);
             m_is_ready = true;
-            std::cout << "[FoodClassifier] ONNX Runtime successfully loaded model: " << path 
-                      << (path.find("int8") != std::string::npos ? " [INT8 Quantized QDQ Model]" : " [FP32 Model]") << "\n";
+            std::cout << "[FoodClassifier] ONNX Runtime loaded final model: " << path << "\n";
             return true;
         } catch (const Ort::Exception& e) {
-            std::cerr << "[FoodClassifier] Warning: Model load failed for (" << path << "): " << e.what() 
-                      << ". Attempting next candidate fallback...\n";
+            std::cerr << "[FoodClassifier] Error loading model (" << path << "): " << e.what() << "\n";
             m_session.reset();
         } catch (const std::exception& e) {
-            std::cerr << "[FoodClassifier] Warning: Exception loading (" << path << "): " << e.what() 
-                      << ". Attempting next candidate fallback...\n";
+            std::cerr << "[FoodClassifier] Exception loading model (" << path << "): " << e.what() << "\n";
             m_session.reset();
         }
     }
 
-    std::cerr << "[FoodClassifier] Error: None of the candidate ONNX models could be successfully initialized.\n";
+    std::cerr << "[FoodClassifier] Error: Final ONNX model (ai1_vision_int8.onnx) could not be initialized.\n";
     return false;
 }
 
@@ -493,20 +455,22 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         if (nms_indices.empty()) {
             for (auto& item : m_tracked_items) {
                 item.lost_frames++;
-                item.result.confidence *= 0.95f;
+                item.result.confidence *= 0.90f;
             }
             m_tracked_items.erase(
                 std::remove_if(m_tracked_items.begin(), m_tracked_items.end(),
-                               [](const TrackedItem& item) { return item.lost_frames > 15; }),
+                               [](const TrackedItem& item) { return item.lost_frames > 2; }),
                 m_tracked_items.end());
 
             out_count = 0;
             const size_t max_capacity = out_buffer.size();
             for (const auto& item : m_tracked_items) {
-                if (out_count < max_capacity) {
-                    out_buffer[out_count++] = item.result;
-                } else {
-                    break;
+                if (item.lost_frames <= 1) {
+                    if (out_count < max_capacity) {
+                        out_buffer[out_count++] = item.result;
+                    } else {
+                        break;
+                    }
                 }
             }
             return true;
@@ -603,9 +567,9 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 tracked.result.confidence = 0.70f * cur.confidence + 0.30f * tracked.result.confidence;
 
                 // Motion / Stability Filter:
-                // Only update spoilage evaluation when the container/plate has remained static for >= 15 frames (~0.5s at 30-45 FPS).
+                // Only update spoilage evaluation when the container/plate has remained static for >= 2 AI passes (~0.4s).
                 // If the food container is in motion or being occluded by passing hands, lock the previous stable rating!
-                if (tracked.stable_frames >= 15) {
+                if (tracked.stable_frames >= 2) {
                     // Smooth discoloration ratio with EMA to eliminate frame-to-frame noise
                     tracked.result.spoilage.avg_luminance = 0.30f * cur.spoilage.avg_luminance + 0.70f * tracked.result.spoilage.avg_luminance;
                     tracked.result.spoilage.discoloration_ratio = 0.30f * cur.spoilage.discoloration_ratio + 0.70f * tracked.result.spoilage.discoloration_ratio;
