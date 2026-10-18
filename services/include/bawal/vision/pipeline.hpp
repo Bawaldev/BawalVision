@@ -131,12 +131,10 @@ public:
     void renderOverlay(const InspectionOutput& inspection, cv::Mat& out_display);
 
     /**
-     * @brief Reset temporal object tracks and cached super-resolved ROIs (e.g. on video rewind or scene cut).
+     * @brief Reset temporal object tracks (e.g. on video rewind or scene cut).
      */
     void resetTracker() noexcept {
         m_classifier.resetTracker();
-        std::lock_guard<std::mutex> lock(m_sr_mutex);
-        m_sr_rois.clear();
     }
 
     // Dynamic Confidence Threshold Accessors (Range: 0.25 - 0.98, Default: 0.35)
@@ -161,8 +159,6 @@ private:
     RealESRGANEngine m_enhancer;
     FoodClassifier m_classifier;
     cv::Ptr<cv::CLAHE> m_clahe;
-    std::mutex m_sr_mutex;
-    std::vector<std::pair<cv::Rect, cv::Mat>> m_sr_rois;
     float m_conf_threshold{0.35f};
     int m_width{640};
     int m_height{480};
