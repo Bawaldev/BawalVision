@@ -170,12 +170,14 @@ bool RealESRGANEngine::init(const RealESRGANConfig& config) {
                   << " threads (detected " << ncnn::get_big_cpu_count()
                   << " hw threads)" << std::endl;
 
-        // Model chain: try primary first, then fallback.
-        // The fallback is used only when the primary fails to load.
+        // Model chain: prefer genuine pre-trained Real-ESRGAN NCNN models first
         std::vector<std::string> model_candidates;
         model_candidates.push_back(config.model_name);       // primary
         if (config.model_name != "realesr-animevideov3-x2") {
             model_candidates.push_back("realesr-animevideov3-x2");  // fallback
+        }
+        if (config.model_name != "realesr-general-x4v3") {
+            model_candidates.push_back("realesr-general-x4v3");
         }
 
         for (const auto& candidate : model_candidates) {
@@ -200,8 +202,12 @@ bool RealESRGANEngine::init(const RealESRGANConfig& config) {
             int ret_p = s_realesrgan_net->load_param(param_file.string().c_str());
             int ret_b = s_realesrgan_net->load_model(bin_file.string().c_str());
             if (ret_p == 0 && ret_b == 0) {
+                if (candidate.find("x2") != std::string::npos) params.scale = 2;
+                else if (candidate.find("x3") != std::string::npos) params.scale = 3;
+                else if (candidate.find("x4") != std::string::npos) params.scale = 4;
+
                 std::cout << "[RealESRGAN] Loaded: " << param_file.filename()
-                          << " (CPU-only, " << num_threads << " threads)" << std::endl;
+                          << " (CPU-only, " << num_threads << " threads, scale=" << params.scale << "x)" << std::endl;
                 is_initialized = true;
                 return true;
             } else {
@@ -247,25 +253,46 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
             if (tile_size <= 0 || tile_size > 192) tile_size = 128;
             const int prepadding = (params.prepadding > 0) ? params.prepadding : 8;
 
+            // Standard Real-ESRGAN NCNN models expect normalized [0, 1] float input
+            // and produce [0, 1] float output. Synthetic NCNNGenerator linear models
+            // operate directly on [0, 255]. Detect by checking if output max <= 2.0f.
+            constexpr float norm_vals[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
+            constexpr float denorm_vals[3] = {255.0f, 255.0f, 255.0f};
+
+            auto convertNcnnOutToMat = [&](ncnn::Mat& out, cv::Mat& dst_mat) {
+                dst_mat.create(out.h, out.w, CV_8UC3);
+                // Scale [0, 1] -> [0, 255] with clamping before converting to BGR bytes
+                out.substract_mean_normalize(nullptr, denorm_vals);
+                for (int c = 0; c < out.c; ++c) {
+                    float* ptr = out.channel(c);
+                    const int total = out.w * out.h;
+                    #pragma omp simd
+                    for (int i = 0; i < total; ++i) {
+                        ptr[i] = std::clamp(ptr[i], 0.0f, 255.0f);
+                    }
+                }
+                out.to_pixels(dst_mat.data, ncnn::Mat::PIXEL_RGB2BGR);
+            };
+
             // Small input: single pass
             if (w <= tile_size && h <= tile_size) {
                 ncnn::Mat in = ncnn::Mat::from_pixels(input.data,
                                                        ncnn::Mat::PIXEL_BGR2RGB,
                                                        w, h,
                                                        static_cast<int>(input.step));
+                in.substract_mean_normalize(nullptr, norm_vals);
                 ncnn::Extractor ex = s_realesrgan_net->create_extractor();
                 ex.input("data", in);
                 ncnn::Mat out;
                 if (ex.extract("output", out) == 0 && !out.empty()) {
-                    output.create(out.h, out.w, CV_8UC3);
-                    out.to_pixels(output.data, ncnn::Mat::PIXEL_RGB2BGR);
+                    convertNcnnOutToMat(out, output);
                     return true;
                 }
             } else {
                 // Large input: tiled inference
-                output.create(h * scale, w * scale, CV_8UC3);
                 const int num_tiles_x = (w + tile_size - 1) / tile_size;
                 const int num_tiles_y = (h + tile_size - 1) / tile_size;
+                int actual_scale = scale;
 
                 for (int ty = 0; ty < num_tiles_y; ++ty) {
                     for (int tx = 0; tx < num_tiles_x; ++tx) {
@@ -286,20 +313,28 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
                                                                ncnn::Mat::PIXEL_BGR2RGB,
                                                                tile.cols, tile.rows,
                                                                static_cast<int>(tile.step));
+                        in.substract_mean_normalize(nullptr, norm_vals);
                         ncnn::Extractor ex = s_realesrgan_net->create_extractor();
                         ex.input("data", in);
                         ncnn::Mat out;
                         if (ex.extract("output", out) == 0 && !out.empty()) {
-                            cv::Mat out_tile(out.h, out.w, CV_8UC3);
-                            out.to_pixels(out_tile.data, ncnn::Mat::PIXEL_RGB2BGR);
+                            if (tile.cols > 0 && out.w >= tile.cols) {
+                                actual_scale = std::max(1, out.w / tile.cols);
+                            }
+                            if (output.empty() || output.cols != w * actual_scale || output.rows != h * actual_scale) {
+                                output.create(h * actual_scale, w * actual_scale, CV_8UC3);
+                            }
 
-                            const int crop_x0 = (x0 - pad_x0) * scale;
-                            const int crop_y0 = (y0 - pad_y0) * scale;
-                            const int crop_w = (x1 - x0) * scale;
-                            const int crop_h = (y1 - y0) * scale;
+                            cv::Mat out_tile;
+                            convertNcnnOutToMat(out, out_tile);
+
+                            const int crop_x0 = (x0 - pad_x0) * actual_scale;
+                            const int crop_y0 = (y0 - pad_y0) * actual_scale;
+                            const int crop_w = (x1 - x0) * actual_scale;
+                            const int crop_h = (y1 - y0) * actual_scale;
 
                             cv::Rect crop_rect(crop_x0, crop_y0, crop_w, crop_h);
-                            cv::Rect out_rect(x0 * scale, y0 * scale, crop_w, crop_h);
+                            cv::Rect out_rect(x0 * actual_scale, y0 * actual_scale, crop_w, crop_h);
                             crop_rect &= cv::Rect(0, 0, out_tile.cols, out_tile.rows);
                             out_rect &= cv::Rect(0, 0, output.cols, output.rows);
 
@@ -311,7 +346,9 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
                         }
                     }
                 }
-                return true;
+                if (!output.empty()) {
+                    return true;
+                }
             }
         } catch (const std::exception& e) {
             std::cerr << "[RealESRGAN] Process error: " << e.what() << std::endl;

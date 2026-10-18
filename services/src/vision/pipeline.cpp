@@ -60,11 +60,10 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     const std::filesystem::path weight_dir =
         std::filesystem::exists(default_weight_dir) ? default_weight_dir : local_weight_dir;
 
-    // Model selection. realesr-general-x4v3 is the smallest general-purpose
-    // RealESRGAN model (~17 MB) and runs well on CPU. Override via env var
-    // REALESRGAN_MODEL if a different model is needed.
-    std::string model_name = "realesr-general-x4v3";
-    int model_scale = 4;
+    // Model selection: use the genuine pre-trained realesr-animevideov3-x2 (2x) NCNN model
+    // by default for fast, artifact-free CPU super-resolution. Override via REALESRGAN_MODEL.
+    std::string model_name = "realesr-animevideov3-x2";
+    int model_scale = 2;
 
     const char* env_model = std::getenv("REALESRGAN_MODEL");
     if (env_model && std::string(env_model).length() > 0) {
@@ -107,7 +106,7 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
 
     if (m_enhancer.init(enhancer_cfg)) {
         std::cout << "[Pipeline] RealESRGAN engine initialized: "
-                  << model_name << " (" << model_scale << "x, CPU-only)\n";
+                  << model_name << " (" << m_enhancer.params.scale << "x, CPU-only)\n";
     }
 
     return true;
@@ -217,17 +216,6 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
         enhanceImage(dewarped, enhanced);
     }
 
-    // Fuse super-resolved RealESRGAN food ROI crops from background AI worker onto the enhanced stream frame
-    if (!active_detections.empty()) {
-        std::lock_guard<std::mutex> lock(m_sr_mutex);
-        for (const auto& [roi_rect, roi_mat] : m_sr_rois) {
-            cv::Rect valid_rect = roi_rect & cv::Rect(0, 0, enhanced.cols, enhanced.rows);
-            if (valid_rect.width == roi_mat.cols && valid_rect.height == roi_mat.rows && !roi_mat.empty()) {
-                cv::addWeighted(roi_mat, 0.65, enhanced(valid_rect), 0.35, 0.0, enhanced(valid_rect));
-            }
-        }
-    }
-
     out_inspection.dewarped_image = enhanced;
     out_inspection.detections = active_detections;
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
@@ -252,9 +240,6 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
 
     out_detections.assign(local_buf.begin(), local_buf.begin() + count);
 
-    std::vector<std::pair<cv::Rect, cv::Mat>> new_sr_rois;
-    new_sr_rois.reserve(out_detections.size());
-
     for (auto& det : out_detections) {
         if (det.class_id < 0 || det.class_name == "no_food") continue;
 
@@ -271,15 +256,9 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
                 det.spoilage.is_visually_spoiled = (det.spoilage.discoloration_ratio > 0.35f);
                 cv::Mat restored_roi;
                 cv::resize(sr_crop, restored_roi, crop_rect.size(), 0, 0, cv::INTER_AREA);
-                restored_roi.copyTo(const_cast<cv::Mat&>(enhanced_frame)(crop_rect));
-                new_sr_rois.emplace_back(crop_rect, std::move(restored_roi));
+                cv::addWeighted(restored_roi, 0.5, enhanced_frame(crop_rect), 0.5, 0.0, const_cast<cv::Mat&>(enhanced_frame)(crop_rect));
             }
         }
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_sr_mutex);
-        m_sr_rois = std::move(new_sr_rois);
     }
     return true;
 }
