@@ -80,12 +80,15 @@ ENV/
 htmlcov/
 .ipynb_checkpoints/
 
-# Model checkpoints berukuran besar (disimpan di cloud / AWS S3 / DVC)
+# Model checkpoints & intermediate exports (only final INT8 model is tracked)
+*.onnx
+!ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx
 ml/model/*.pt
 ml/AI1/model/ai1_vision.onnx
+ml/AI1/model/ai1_vision_int8.onnx
 ml/AI1/model/yolov8n/*.onnx
 ml/AI1/model/yolov8n/*.pt
-weights/yolo8n.onnx
+weights/
 ml/model/*.pths
 ml/model/*.engine
 !ml/model/.gitkeep

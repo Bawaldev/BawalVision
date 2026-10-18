@@ -20,9 +20,9 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
 
     const char* env_c = std::getenv("CONF_THRESHOLD");
     if (env_c != nullptr) {
-        try { m_conf_threshold = std::clamp(std::stof(env_c), 0.45f, 0.98f); } catch (...) {}
+        try { m_conf_threshold = std::clamp(std::stof(env_c), 0.25f, 0.98f); } catch (...) {}
     } else {
-        m_conf_threshold = 0.60f;
+        m_conf_threshold = 0.35f;
     }
 
     auto calib = CameraCalibrationParams::createDefaultOV5640(cv::Size(m_width, m_height));
@@ -140,7 +140,8 @@ void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
 
 bool InspectionPipeline::processStream(const cv::Mat& frame,
                                        const std::vector<DetectionResult>& active_detections,
-                                       InspectionOutput& out_inspection) {
+                                       InspectionOutput& out_inspection,
+                                       bool is_mock_video) {
     if (frame.empty()) return false;
 
     // Ensure incoming frame dimensions from Mock Video (MP4) or Camera Stream
@@ -156,7 +157,7 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     out_inspection.raw_image = normalized_frame;
     out_inspection.is_valid = false;
 
-    // Camera orientation from environment. Read once and cached.
+    // Camera orientation from environment (applies to physical ESP32-S3 hardware sensor mount, not mock MP4 files).
     static int s_vflip = -1, s_hflip = -1;
     if (s_vflip == -1) {
         const char* ev = std::getenv("CAMERA_VFLIP");
@@ -166,14 +167,22 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
 
     cv::Mat oriented;
-    if (s_vflip && s_hflip) cv::flip(normalized_frame, oriented, -1);
-    else if (s_vflip) cv::flip(normalized_frame, oriented, 0);
-    else if (s_hflip) cv::flip(normalized_frame, oriented, 1);
-    else oriented = normalized_frame;
+    if (!is_mock_video) {
+        if (s_vflip && s_hflip) cv::flip(normalized_frame, oriented, -1);
+        else if (s_vflip) cv::flip(normalized_frame, oriented, 0);
+        else if (s_hflip) cv::flip(normalized_frame, oriented, 1);
+        else oriented = normalized_frame;
+    } else {
+        oriented = normalized_frame;
+    }
 
-    // Lens dewarping.
+    // Lens dewarping (only for physical ESP32-S3 OV5640 wide-angle lens; rectilinear MP4 videos need no fisheye warp).
     cv::Mat dewarped;
-    if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented.clone();
+    if (!is_mock_video) {
+        if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented.clone();
+    } else {
+        dewarped = oriented;
+    }
     out_inspection.raw_image = dewarped;
 
     // ISP enhancement only. RealESRGAN runs on the AI worker thread over

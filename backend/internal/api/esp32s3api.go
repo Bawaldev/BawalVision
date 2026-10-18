@@ -126,14 +126,16 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
-		if len(req.Detections) == 0 {
-			return c.Status(400).JSON(fiber.Map{
-				"error": "Detections list cannot be empty",
-			})
-		}
-
 		// Cache live detections in-memory for instant frontend HUD overlay rendering
 		inspection.GlobalInspectionStore.StoreLatestInspection(req)
+
+		if len(req.Detections) == 0 {
+			return c.Status(200).JSON(fiber.Map{
+				"status":    "cleared",
+				"device_id": req.DeviceID,
+				"message":   "Live detections cleared",
+			})
+		}
 
 		// Retrieve latest telemetry cache for this device as fallback for missing sensor values
 		latestTelemetry, hasCached := inspection.GlobalInspectionStore.GetLatestTelemetry(req.DeviceID)

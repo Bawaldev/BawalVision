@@ -82,6 +82,21 @@
             });
     });
 
+    function drawVideoPreservingAspect(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, cw: number, ch: number) {
+        const vw = video.videoWidth || cw;
+        const vh = video.videoHeight || ch;
+        const scale = Math.min(cw / vw, ch / vh);
+        const dw = Math.round(vw * scale);
+        const dh = Math.round(vh * scale);
+        const dx = Math.floor((cw - dw) / 2);
+        const dy = Math.floor((ch - dh) / 2);
+        if (dx > 0 || dy > 0) {
+            ctx.fillStyle = '#727272';
+            ctx.fillRect(0, 0, cw, ch);
+        }
+        ctx.drawImage(video, dx, dy, dw, dh);
+    }
+
     function captureAndPushFrame() {
         if (!mockVideoEl || !mockCanvasEl || isPushingFrame) return;
         if (mockVideoEl.paused || mockVideoEl.ended || mockVideoEl.readyState < 2) return;
@@ -91,7 +106,7 @@
 
         isPushingFrame = true;
         try {
-            ctx.drawImage(mockVideoEl, 0, 0, mockCanvasEl.width, mockCanvasEl.height);
+            drawVideoPreservingAspect(ctx, mockVideoEl, mockCanvasEl.width, mockCanvasEl.height);
             mockCanvasEl.toBlob((blob) => {
                 if (!blob) {
                     isPushingFrame = false;
@@ -129,7 +144,7 @@
         const ctx = mockCanvasEl.getContext('2d');
         if (!ctx) return;
         try {
-            ctx.drawImage(mockVideoEl, 0, 0, mockCanvasEl.width, mockCanvasEl.height);
+            drawVideoPreservingAspect(ctx, mockVideoEl, mockCanvasEl.width, mockCanvasEl.height);
             mockCanvasEl.toBlob((blob) => {
                 if (!blob) return;
                 fetch('/api/v1/camera/frame', {
