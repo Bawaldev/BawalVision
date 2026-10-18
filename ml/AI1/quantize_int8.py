@@ -15,6 +15,8 @@ from onnxruntime.quantization import (
     CalibrationMethod,
 )
 from onnxruntime.quantization.shape_inference import quant_pre_process
+
+
 class YoloCalibrationDataReader(CalibrationDataReader):
     def __init__(self, image_folder: Path, input_name: str, img_size: int = 640, max_samples: int = 100):
         extensions = ("*.jpg", "*.jpeg", "*.png")
@@ -72,8 +74,14 @@ CALIB_DIR = SCRIPT_DIR / "yolo_dataset" / "images" / "train"
 
 
 def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
+    """
+    Kecualikan seluruh node di Detection Head (model.22) + lacak mundur 5 lapis
+    dari output utama agar presisi bbox & confidence tetap 100% FP32.
+    """
     model_proto = onnx.load(str(model_path))
     exclude_set = set()
+
+    # 1. Backward traversal 5 lapis dari output0
     frontier = {out.name for out in model_proto.graph.output}
     for _ in range(5):
         next_frontier = set()
@@ -83,6 +91,7 @@ def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
                 next_frontier.update(node.input)
         frontier = next_frontier
 
+    # 2. Kecualikan Detection Head (model.22) dan transisi Neck-ke-Head
     sensitive_prefixes = ("model.22", "dfl", "model.15", "model.18", "model.21")
     for node in model_proto.graph.node:
         name_l = node.name.lower()
@@ -92,11 +101,13 @@ def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
 
     return list(exclude_set)
 
+
 def main():
     if not INPUT_ONNX.exists():
         raise FileNotFoundError(f"Source FP32 model not found at: {INPUT_ONNX}")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
     print("[+] Memeriksa & meng-upgrade ONNX Opset (>= 13) + pre-processing...")
     UPGRADED_ONNX = SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision_opset13_tmp.onnx"
     try:
@@ -132,8 +143,8 @@ def main():
         calibration_data_reader=reader,
         quant_format=QuantFormat.QDQ,
         per_channel=True,
-        reduce_range=False,
-        calibrate_method=CalibrationMethod.MinMax,
+        reduce_range=False,                      # 8-bit penuh agar confidence tidak drop ke 40%
+        calibrate_method=CalibrationMethod.MinMax, # Ringan di RAM, bebas OOM / crash VS Code!
         weight_type=QuantType.QInt8,
         activation_type=QuantType.QUInt8,
         nodes_to_exclude=nodes_to_exclude,
@@ -160,11 +171,13 @@ def main():
         UPGRADED_ONNX.unlink()
 
     print(f"[✓] Quantization successful: {OUTPUT_ONNX}")
+
     fp32_size_mb = os.path.getsize(INPUT_ONNX) / (1024 * 1024)
     int8_size_mb = os.path.getsize(OUTPUT_ONNX) / (1024 * 1024)
     reduction_pct = ((fp32_size_mb - int8_size_mb) / fp32_size_mb) * 100
     print(f" -> FP32 Model Size : {fp32_size_mb:.2f} MB")
     print(f" -> INT8 Model Size : {int8_size_mb:.2f} MB ({reduction_pct:.1f}% reduction)")
+
     print("\n=== Verifikasi Akurasi Deteksi (FP32 vs INT8) ===")
     sess_int8 = ort.InferenceSession(str(OUTPUT_ONNX), providers=["CPUExecutionProvider"])
 
