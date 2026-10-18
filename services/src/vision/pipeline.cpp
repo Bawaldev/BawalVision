@@ -50,6 +50,9 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     // for food imagery — high enough to bring out texture, low enough
     // to avoid amplifying sensor noise.
     m_clahe = cv::createCLAHE(1.5, cv::Size(8, 8));
+    m_video_source.clahe = m_clahe;
+    m_video_source.target_width = m_width;
+    m_video_source.target_height = m_height;
 
     // Locate weight directory
     const std::filesystem::path default_weight_dir = "/app/weights";
@@ -108,6 +111,27 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     }
 
     return true;
+}
+
+bool InspectionPipeline::openVideoSource(SourceMode mode, const std::string& uri) {
+    m_video_source.target_width = m_width;
+    m_video_source.target_height = m_height;
+    m_video_source.clahe = m_clahe;
+    return m_video_source.open(mode, uri);
+}
+
+bool InspectionPipeline::processNextSourceFrame(const std::vector<DetectionResult>& active_detections,
+                                                InspectionOutput& out_inspection,
+                                                bool is_mock_video) {
+    cv::Mat frame;
+    if (!m_video_source.grabNextFrame(frame) || frame.empty()) {
+        return false;
+    }
+    if (m_video_source.didRewind()) {
+        resetTracker();
+    }
+    const bool mock_flag = is_mock_video || (m_video_source.mode == SourceMode::LOCAL_MP4);
+    return processStream(frame, active_detections, out_inspection, mock_flag);
 }
 
 bool InspectionPipeline::execute(const uint8_t* raw_bytes, size_t len, InspectionOutput& out_inspection) {
@@ -185,12 +209,26 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
     out_inspection.raw_image = dewarped;
 
-    // ISP enhancement only. RealESRGAN runs on the AI worker thread over
-    // small crops; running it here would drop the stream below 30 FPS.
+    // ISP enhancement (IlluminationEnhancerAI)
     cv::Mat enhanced;
-    enhanceImage(dewarped, enhanced);
-    out_inspection.dewarped_image = enhanced;
+    if (m_video_source.enable_enchant) {
+        enhanced = dewarped;
+    } else {
+        enhanceImage(dewarped, enhanced);
+    }
 
+    // Fuse super-resolved RealESRGAN food ROI crops from background AI worker onto the enhanced stream frame
+    if (!active_detections.empty()) {
+        std::lock_guard<std::mutex> lock(m_sr_mutex);
+        for (const auto& [roi_rect, roi_mat] : m_sr_rois) {
+            cv::Rect valid_rect = roi_rect & cv::Rect(0, 0, enhanced.cols, enhanced.rows);
+            if (valid_rect.width == roi_mat.cols && valid_rect.height == roi_mat.rows && !roi_mat.empty()) {
+                cv::addWeighted(roi_mat, 0.65, enhanced(valid_rect), 0.35, 0.0, enhanced(valid_rect));
+            }
+        }
+    }
+
+    out_inspection.dewarped_image = enhanced;
     out_inspection.detections = active_detections;
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
     renderOverlay(out_inspection, out_inspection.annotated_image);
@@ -214,6 +252,9 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
 
     out_detections.assign(local_buf.begin(), local_buf.begin() + count);
 
+    std::vector<std::pair<cv::Rect, cv::Mat>> new_sr_rois;
+    new_sr_rois.reserve(out_detections.size());
+
     for (auto& det : out_detections) {
         if (det.class_id < 0 || det.class_name == "no_food") continue;
 
@@ -231,8 +272,14 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
                 cv::Mat restored_roi;
                 cv::resize(sr_crop, restored_roi, crop_rect.size(), 0, 0, cv::INTER_AREA);
                 restored_roi.copyTo(const_cast<cv::Mat&>(enhanced_frame)(crop_rect));
+                new_sr_rois.emplace_back(crop_rect, std::move(restored_roi));
             }
         }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_sr_mutex);
+        m_sr_rois = std::move(new_sr_rois);
     }
     return true;
 }
