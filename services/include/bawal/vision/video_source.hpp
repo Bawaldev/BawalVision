@@ -1,8 +1,12 @@
 #pragma once
 
 #include "bawal/server/http_utils.hpp"
+#include "bawal/vision/camera_receiver.hpp"
+#include "bawal/vision/enchanter.hpp"
 #include <opencv2/core/mat.hpp>
+#include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -18,17 +22,29 @@ enum class SourceMode {
 };
 
 /**
- * @brief Unified video source abstraction supporting local MP4 files, USB webcams, and HTTP pull streams.
+ * @brief Unified video source abstraction supporting local MP4 files, USB webcams, and HTTP pull streams
+ * with integrated ISP IlluminationEnhancerAI and RealESRGANEngine support.
  */
 struct VideoSource {
     SourceMode mode{SourceMode::LOCAL_MP4};
     cv::VideoCapture cap;
 
-    // HTTP pull ingestion resources
+    // HTTP pull ingestion & MJPEG/binary frame decoding resources
     CURL* curl_handle{nullptr};
     std::string stream_url;
+    std::string fallback_url;
     std::vector<uint8_t> frame_buffer; // Reusable buffer to prevent heap reallocation
-    bool did_rewind{false};             ///< Flag indicating the video wrapped around to frame 0
+    CameraReceiver receiver;           // Integrated binary header & MJPEG decoder
+    cv::Mat last_decoded_frame;        // Cached decoded frame for duplicate fingerprint skipping
+    uint64_t last_frame_hash{0};       // O(1) 24-byte frame fingerprint
+
+    // Integrated Vision Enchanter (ISP / CLAHE) resources
+    cv::Ptr<cv::CLAHE> clahe;
+    int target_width{640};
+    int target_height{480};
+    bool enable_enchant{false};        ///< If true, grabNextFrame automatically applies IlluminationEnhancerAI
+    bool did_rewind{false};            ///< Flag indicating the video wrapped around to frame 0
+    bool is_duplicate_frame{false};    ///< True if the latest HTTP frame matched last_frame_hash
 
     VideoSource();
     ~VideoSource();
@@ -50,11 +66,31 @@ struct VideoSource {
     [[nodiscard]] bool open(SourceMode new_mode, const std::string& uri);
 
     /**
+     * @brief Update the stream ingestion URL and optional fallback URL dynamically without recreating CURL handle.
+     */
+    void setStreamUrl(const std::string& primary_url, const std::string& backup_url = "") noexcept {
+        if (stream_url != primary_url) {
+            stream_url = primary_url;
+            last_frame_hash = 0;
+        }
+        fallback_url = backup_url;
+    }
+
+    /**
      * @brief Fetch the next frame transparently with zero latency buffer accumulation.
-     * @param out_frame Destination cv::Mat for decoded BGR frame.
+     * @param out_frame Destination cv::Mat for decoded (and optionally enchanted) BGR frame.
      * @return true if a valid frame was obtained, false otherwise.
      */
     [[nodiscard]] bool grabNextFrame(cv::Mat& out_frame);
+
+    /**
+     * @brief Fetch the next frame and directly run IlluminationEnhancerAI + optional RealESRGAN super-resolution.
+     * @param out_frame Destination cv::Mat for enchanted BGR frame.
+     * @param sr_engine Optional RealESRGANEngine pointer for neural/SIMD super-resolution.
+     * @return true if a valid frame was grabbed and enchanted, false otherwise.
+     */
+    [[nodiscard]] bool grabAndEnchantFrame(cv::Mat& out_frame, RealESRGANEngine* sr_engine = nullptr);
+
     [[nodiscard]] bool didRewind() noexcept {
         const bool ret = did_rewind;
         did_rewind = false;

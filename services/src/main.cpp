@@ -131,20 +131,24 @@ int main(int argc, char** argv) {
         cv::resizeWindow(window_name, 800, 600);
     }
 
-    VideoSource video_source;
     bool use_video_source = false;
     if (const char* env_video = std::getenv("VIDEO_PATH")) {
         if (std::string(env_video).length() > 0) {
-            if (video_source.open(SourceMode::LOCAL_MP4, env_video)) {
+            if (pipeline.openVideoSource(SourceMode::LOCAL_MP4, env_video)) {
                 use_video_source = true;
+                if (device_id.empty()) {
+                    device_id = "MOCK_VIDEO_CAM";
+                    std::cout << "[CONFIG] Assigned default Device ID for local MP4 VideoSource: " << device_id << "\n";
+                }
                 std::cout << "[INFO] VideoSource initialized with local MP4: " << env_video << "\n";
             }
         }
     }
+    if (!use_video_source) {
+        (void)pipeline.openVideoSource(SourceMode::ESP32_STREAM, stream_url);
+        pipeline.getVideoSource().setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
+    }
 
-    std::vector<uint8_t> raw_bytes;
-    raw_bytes.reserve(256 * 1024);
-    uint64_t prev_frame_hash = 0;
     uint64_t frame_seq = 0;
     int discovery_tick = 0;
     auto last_ai_dispatch = std::chrono::steady_clock::now() - std::chrono::seconds(1);
@@ -157,7 +161,6 @@ int main(int argc, char** argv) {
     std::atomic<bool> ai_detections_updated{false};
     std::vector<DetectionResult> shared_detections;
     std::string current_device_id = device_id;
-    cv::Mat last_decoded_image;
 
     auto last_valid_detection_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
@@ -314,20 +317,6 @@ int main(int argc, char** argv) {
     constexpr int kIdleBackoffMinMs = 50;
     constexpr int kIdleBackoffMaxMs = 1000;
     int idle_backoff_ms = 0;  
-    
-    auto computeFastFingerprint = [](const std::vector<uint8_t>& buf) noexcept -> uint64_t {
-        const size_t len = buf.size();
-        if (len < 16) return len;
-        uint64_t head = 0, mid = 0, tail = 0;
-        std::memcpy(&head, buf.data(), 8);
-        std::memcpy(&mid, buf.data() + (len / 2), 8);
-        std::memcpy(&tail, buf.data() + len - 8, 8);
-        uint64_t h = len;
-        h ^= head + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-        h ^= mid  + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-        h ^= tail + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-        return h;
-    };
 
     while (true) {
         const auto loop_start_time = std::chrono::steady_clock::now();
@@ -335,6 +324,7 @@ int main(int argc, char** argv) {
         InspectionOutput inspection;
 
         cv::Mat frame_to_stream;
+        auto& video_source = pipeline.getVideoSource();
 
         if (use_video_source) {
             if (!video_source.grabNextFrame(frame_to_stream) || frame_to_stream.empty()) {
@@ -360,24 +350,19 @@ int main(int argc, char** argv) {
                     }
                     if (device_changed) {
                         pipeline.resetTracker();
-                        prev_frame_hash = 0;
                     }
                     stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
+                    video_source.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
                     std::cout << "[SUCCESS] Active camera stream connected: " << device_id << "\n";
                     std::cout << "[INFO] Ingestion URL: " << stream_url << "\n";
                 } else if (discovered.empty() && idle_backoff_ms > 200 && !device_id.empty()) {
                     device_id = "";
                     stream_url = backend_base_url + "/api/v1/camera/latest/raw";
+                    video_source.setStreamUrl(stream_url, stream_url);
                 }
             }
 
-            bool got_frame = fetchLatestFrame(curl_fetch, stream_url, raw_bytes) && !raw_bytes.empty();
-            if (!got_frame && !device_id.empty()) {
-                const std::string fallback_url = backend_base_url + "/api/v1/camera/latest/raw";
-                got_frame = fetchLatestFrame(curl_fetch, fallback_url, raw_bytes) && !raw_bytes.empty();
-            }
-
-            if (got_frame) {
+            if (video_source.grabNextFrame(frame_to_stream) && !frame_to_stream.empty()) {
                 if (idle_backoff_ms > 0) {
                     std::cout << "[INFO] Camera frames resumed.\n";
                 }
@@ -390,26 +375,15 @@ int main(int argc, char** argv) {
                     idle_backoff_ms = std::min(idle_backoff_ms * 2, kIdleBackoffMaxMs);
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(idle_backoff_ms));
-                raw_bytes.clear();
                 continue;
             }
 
             // Avoid re-processing and flood-broadcasting duplicate frames unless async AI detections updated
-            const uint64_t cur_hash = computeFastFingerprint(raw_bytes);
             const bool detections_changed = ai_detections_updated.exchange(false);
-            if (cur_hash == prev_frame_hash && !detections_changed) {
+            if (video_source.is_duplicate_frame && !detections_changed) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
-            if (cur_hash != prev_frame_hash || last_decoded_image.empty()) {
-                prev_frame_hash = cur_hash;
-                DecodedFrame decoded;
-                if (!pipeline.getReceiver().decodeMJPEG(raw_bytes.data(), raw_bytes.size(), decoded) || decoded.image.empty()) {
-                    continue;
-                }
-                last_decoded_image = decoded.image;
-            }
-            frame_to_stream = last_decoded_image;
             inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
         }
 
