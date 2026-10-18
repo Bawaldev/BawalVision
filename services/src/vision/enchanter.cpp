@@ -250,7 +250,9 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
             // Small input: single pass
             if (w <= tile_size && h <= tile_size) {
                 ncnn::Mat in = ncnn::Mat::from_pixels(input.data,
-                                                       ncnn::Mat::PIXEL_BGR2RGB, w, h);
+                                                       ncnn::Mat::PIXEL_BGR2RGB,
+                                                       w, h,
+                                                       static_cast<int>(input.step));
                 ncnn::Extractor ex = s_realesrgan_net->create_extractor();
                 ex.input("data", in);
                 ncnn::Mat out;
