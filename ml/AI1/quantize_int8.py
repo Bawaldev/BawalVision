@@ -72,17 +72,22 @@ CALIB_DIR = SCRIPT_DIR / "yolo_dataset" / "images" / "train"
 
 
 def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
-    """
-    HANYA kecualikan node yang berada di Detection Head (model.22).
-    Jangan mengecualikan Mul/Add/Sigmoid/Concat di backbone/neck agar fusi INT8 QDQ maksimal!
-    """
     model_proto = onnx.load(str(model_path))
     exclude_set = set()
+    frontier = {out.name for out in model_proto.graph.output}
+    for _ in range(5):
+        next_frontier = set()
+        for node in model_proto.graph.node:
+            if any(out in frontier for out in node.output):
+                exclude_set.add(node.name)
+                next_frontier.update(node.input)
+        frontier = next_frontier
+
+    sensitive_prefixes = ("model.22", "dfl", "model.15", "model.18", "model.21")
     for node in model_proto.graph.node:
         name_l = node.name.lower()
-        # Cek nama node maupun nama tensor outputnya
         outputs_l = " ".join(node.output).lower()
-        if "model.22" in name_l or "model.22" in outputs_l or "dfl" in name_l:
+        if any(k in name_l or k in outputs_l for k in sensitive_prefixes):
             exclude_set.add(node.name)
 
     return list(exclude_set)
@@ -92,9 +97,6 @@ def main():
         raise FileNotFoundError(f"Source FP32 model not found at: {INPUT_ONNX}")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 1. Upgrade Opset ke >= 13 (wajib agar DequantizeLinear mendukung atribut 'axis' pada per_channel=True)
-    #    serta jalankan ONNX quantization pre-processing
     print("[+] Memeriksa & meng-upgrade ONNX Opset (>= 13) + pre-processing...")
     UPGRADED_ONNX = SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision_opset13_tmp.onnx"
     try:
@@ -130,7 +132,7 @@ def main():
         calibration_data_reader=reader,
         quant_format=QuantFormat.QDQ,
         per_channel=True,
-        reduce_range=True,  # Mencegah overflow pada instruksi AVX2 CPU
+        reduce_range=False,
         calibrate_method=CalibrationMethod.MinMax,
         weight_type=QuantType.QInt8,
         activation_type=QuantType.QUInt8,
@@ -158,15 +160,11 @@ def main():
         UPGRADED_ONNX.unlink()
 
     print(f"[✓] Quantization successful: {OUTPUT_ONNX}")
-
-    # 2. Ukuran File
     fp32_size_mb = os.path.getsize(INPUT_ONNX) / (1024 * 1024)
     int8_size_mb = os.path.getsize(OUTPUT_ONNX) / (1024 * 1024)
     reduction_pct = ((fp32_size_mb - int8_size_mb) / fp32_size_mb) * 100
     print(f" -> FP32 Model Size : {fp32_size_mb:.2f} MB")
     print(f" -> INT8 Model Size : {int8_size_mb:.2f} MB ({reduction_pct:.1f}% reduction)")
-
-    # 3. Verifikasi Paritas Confidence FP32 vs INT8 pada Gambar Riil
     print("\n=== Verifikasi Akurasi Deteksi (FP32 vs INT8) ===")
     sess_int8 = ort.InferenceSession(str(OUTPUT_ONNX), providers=["CPUExecutionProvider"])
 
