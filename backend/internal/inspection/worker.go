@@ -31,15 +31,16 @@ type BatchInspectionTask struct {
 // InspectionBatchWorker decouples HTTP ingress from PostgreSQL I/O using a buffered channel
 // and asynchronous batched transaction flushes.
 type InspectionBatchWorker struct {
-	db          *gorm.DB
-	queue       chan BatchInspectionTask
-	batchSize   int
-	flushPeriod time.Duration
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	running     bool
-	mu          sync.Mutex
+	db           *gorm.DB
+	queue        chan BatchInspectionTask
+	flushTrigger chan struct{}
+	batchSize    int
+	flushPeriod  time.Duration
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	running      bool
+	mu           sync.Mutex
 }
 
 var GlobalBatchWorker *InspectionBatchWorker
@@ -58,18 +59,30 @@ func InitGlobalBatchWorker(db *gorm.DB, bufferCap, batchSize int, flushPeriod ti
 
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &InspectionBatchWorker{
-		db:          db,
-		queue:       make(chan BatchInspectionTask, bufferCap),
-		batchSize:   batchSize,
-		flushPeriod: flushPeriod,
-		ctx:         ctx,
-		cancel:      cancel,
-		running:     true,
+		db:           db,
+		queue:        make(chan BatchInspectionTask, bufferCap),
+		flushTrigger: make(chan struct{}, 1),
+		batchSize:    batchSize,
+		flushPeriod:  flushPeriod,
+		ctx:          ctx,
+		cancel:       cancel,
+		running:      true,
 	}
 
 	GlobalBatchWorker = w
 	w.Start()
 	return w
+}
+
+// FlushNow triggers an immediate flush of any pending queued inspection tasks to PostgreSQL.
+func (w *InspectionBatchWorker) FlushNow() {
+	if w == nil || !w.running {
+		return
+	}
+	select {
+	case w.flushTrigger <- struct{}{}:
+	default:
+	}
 }
 
 // Enqueue pushes an inspection task into the buffered channel non-blockingly.
@@ -131,6 +144,22 @@ func (w *InspectionBatchWorker) Start() {
 			case task := <-w.queue:
 				batch = append(batch, task)
 				if len(batch) >= w.batchSize {
+					w.flushBatch(batch)
+					batch = make([]BatchInspectionTask, 0, w.batchSize)
+				}
+
+			case <-w.flushTrigger:
+				// Drain whatever is currently queued into the batch and flush immediately
+				for {
+					select {
+					case task := <-w.queue:
+						batch = append(batch, task)
+					default:
+						goto doFlush
+					}
+				}
+			doFlush:
+				if len(batch) > 0 {
 					w.flushBatch(batch)
 					batch = make([]BatchInspectionTask, 0, w.batchSize)
 				}
@@ -349,11 +378,11 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 			}
 		}
 
-		// D. Batch upsert inspection records (prevents duplicate rows for deterministic Mock Video UUIDs)
+		// D. Batch upsert inspection records (dynamically updates existing rows on reinspect with latest timestamp and detections)
 		if len(records) > 0 {
 			if err := tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "id"}},
-				DoUpdates: clause.AssignmentColumns([]string{"is_spoiled", "t_safe_hours", "lux_luminance", "white_balance_status", "color_temperature", "image_s3_uri"}),
+				DoUpdates: clause.AssignmentColumns([]string{"created_at", "is_spoiled", "t_safe_hours", "lux_luminance", "white_balance_status", "color_temperature", "image_s3_uri", "temperature", "cpu_temperature", "cpu_load"}),
 			}).CreateInBatches(records, 50).Error; err != nil {
 				return err
 			}

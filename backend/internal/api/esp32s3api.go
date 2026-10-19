@@ -265,7 +265,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			}
 			if err := tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "id"}},
-				DoUpdates: clause.AssignmentColumns([]string{"is_spoiled", "t_safe_hours", "lux_luminance", "white_balance_status", "color_temperature", "image_s3_uri"}),
+				DoUpdates: clause.AssignmentColumns([]string{"created_at", "is_spoiled", "t_safe_hours", "lux_luminance", "white_balance_status", "color_temperature", "image_s3_uri", "temperature", "cpu_temperature", "cpu_load"}),
 			}).Create(&record).Error; err != nil {
 				return err
 			}
@@ -429,11 +429,17 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
+		// Per-Video Unique UUID Gatekeeper: prevents duplicate Trays on page reload or video loop, while allowing dynamic updates on reinspect
+		isExplicitReinspect := mockReq.IsReinspect || c.Get("X-Reinspect") == "1" || c.Get("X-Manual-Inspection") == "1" || c.Get("X-Is-Manual") == "1"
+		if isExplicitReinspect {
+			camera_handler.GlobalCameraStore.ResetDeviceRewind(mockReq.DeviceID)
+		}
+
 		isRewind := mockReq.IsRewind || c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
 		if !isRewind {
 			isRewind = camera_handler.GlobalCameraStore.IsDeviceInRewind(mockReq.DeviceID)
 		}
-		if isRewind {
+		if isRewind && !isExplicitReinspect {
 			return c.Status(fiber.StatusOK).JSON(fiber.Map{
 				"status":            "success",
 				"id":                videoUUID,
@@ -448,35 +454,38 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
-		// Per-Video Unique UUID Gatekeeper: prevents duplicate Trays on page reload or video loop
 		globalMockInspectMutex.Lock()
 		alreadyRecorded := globalMockRecorded[videoUUID]
-		reinspectAllowed := globalMockReinspectAllowed[videoUUID] || globalMockReinspectAllowed["*"]
-		if !alreadyRecorded && !reinspectAllowed && db != nil {
-			var existingCount int64
-			if err := db.Model(&inspection.InspectionRecord{}).Where("id = ?", videoUUID).Count(&existingCount).Error; err == nil && existingCount > 0 {
-				alreadyRecorded = true
-				globalMockRecorded[videoUUID] = true
+		reinspectAllowed := isExplicitReinspect || globalMockReinspectAllowed[videoUUID] || globalMockReinspectAllowed["*"]
+		if !reinspectAllowed {
+			if !alreadyRecorded && db != nil {
+				var existingCount int64
+				if err := db.Model(&inspection.InspectionRecord{}).Where("id = ?", videoUUID).Count(&existingCount).Error; err == nil && existingCount > 0 {
+					alreadyRecorded = true
+					globalMockRecorded[videoUUID] = true
+				}
+			}
+			if alreadyRecorded {
+				globalMockInspectMutex.Unlock()
+				return c.Status(fiber.StatusOK).JSON(fiber.Map{
+					"status":            "success",
+					"id":                videoUUID,
+					"mock_id":           mockReq.MockID,
+					"video_uuid":        videoUUID,
+					"video_source":      mockReq.VideoSource,
+					"device_id":         mockReq.DeviceID,
+					"source_type":       "mock_video",
+					"inspection_struct": "MockInspectionRecord",
+					"message":           "Mock video sample tray already recorded for this unique video UUID: HUD updated without duplicate record",
+					"is_rewind":         true,
+				})
 			}
 		}
-		if !alreadyRecorded && len(mockReq.Detections) > 0 {
+
+		if len(mockReq.Detections) > 0 {
 			globalMockRecorded[videoUUID] = true
 			delete(globalMockReinspectAllowed, videoUUID)
 			delete(globalMockReinspectAllowed, "*")
-		} else if alreadyRecorded {
-			globalMockInspectMutex.Unlock()
-			return c.Status(fiber.StatusOK).JSON(fiber.Map{
-				"status":            "success",
-				"id":                videoUUID,
-				"mock_id":           mockReq.MockID,
-				"video_uuid":        videoUUID,
-				"video_source":      mockReq.VideoSource,
-				"device_id":         mockReq.DeviceID,
-				"source_type":       "mock_video",
-				"inspection_struct": "MockInspectionRecord",
-				"message":           "Mock video sample tray already recorded for this unique video UUID: HUD updated without duplicate record",
-				"is_rewind":         true,
-			})
 		}
 		globalMockInspectMutex.Unlock()
 
@@ -511,6 +520,9 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to save mock inspection to database",
 			})
+		}
+		if inspection.GlobalBatchWorker != nil {
+			inspection.GlobalBatchWorker.FlushNow()
 		}
 
 		return c.Status(201).JSON(fiber.Map{

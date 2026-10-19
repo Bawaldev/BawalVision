@@ -296,16 +296,21 @@
         }
     }
 
-    function setSourceMode(mode: SourceModeType) {
+    let isSwitchingMode = $state(false);
+
+    async function setSourceMode(mode: SourceModeType) {
+        if (sourceMode === mode && !isSwitchingMode) return;
+        isSwitchingMode = true;
         sourceMode = mode;
         if (typeof localStorage !== 'undefined') {
             try { localStorage.setItem('bawal_source_mode', mode); } catch {}
         }
         streamError = false;
         retryCount = 0;
+
         if (mode === 'mock') {
-            // ALL LIVE STREAM MUST BE TURNED OFF on backend and camera store
-            fetch('/api/v1/camera/mode', {
+            // 1. Immediately request backend mode change and wipe frames/detections
+            await fetch('/api/v1/camera/mode', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -314,24 +319,36 @@
                     video_uuid: mockVideoUUID
                 })
             }).catch(() => {});
-            setTimeout(() => {
-                if (mockVideoEl) {
-                    mockVideoEl.play().catch(() => {});
-                }
-                startMockPushing();
-            }, 60);
+
+            // 2. Strict Pipeline Drain Delay: Wait 800ms so all YOLO detection boxes turn off
+            // and the previous live camera stream is cleanly drained before mock frames start
+            await new Promise(r => setTimeout(r, 800));
+
+            if (mockVideoEl) {
+                mockVideoEl.play().catch(() => {});
+            }
+            startMockPushing();
+            isSwitchingMode = false;
         } else {
+            // 1. Stop mock pushing and pause video immediately
             stopMockPushing();
             if (mockVideoEl) {
                 mockVideoEl.pause();
             }
-            // TURN ON LIVE STREAMING AGAIN
-            fetch('/api/v1/camera/mode', {
+
+            // 2. Immediately request backend to switch to live mode and clear mock detections
+            await fetch('/api/v1/camera/mode', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: 'live' })
             }).catch(() => {});
+
+            // 3. Strict Pipeline Drain Delay: Wait 800ms so mock detection boxes turn off
+            // and live camera stream connects cleanly without leftover boxes
+            await new Promise(r => setTimeout(r, 800));
+
             streamEpoch = Date.now();
+            isSwitchingMode = false;
         }
     }
 
@@ -343,7 +360,9 @@
             headers: {
                 'Content-Type': 'application/json',
                 'X-Mock-Video-Source': mockFileName,
-                'X-Mock-Video-UUID': mockVideoUUID
+                'X-Mock-Video-UUID': mockVideoUUID,
+                'X-Reinspect': '1',
+                'X-Manual-Inspection': '1'
             },
             body: JSON.stringify({
                 video_source: mockFileName,
@@ -353,17 +372,18 @@
         pushCurrentFrameOnce();
     }
 
-    function selectExample(name: string) {
+    async function selectExample(name: string) {
         selectedVideo = name;
         mockFileName = name;
         isCustomUpload = false;
         isRewound = false;
         lastVideoTime = 0;
+        isSwitchingMode = true;
         if (typeof localStorage !== 'undefined') {
             try { localStorage.setItem('bawal_mock_selected_video', name); } catch {}
         }
         const nextUUID = videoUUIDMap[name] || computeMockVideoUUID(name);
-        fetch('/api/v1/camera/mode', {
+        await fetch('/api/v1/camera/mode', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -378,13 +398,15 @@
         mockVideoSrc = `/api/v1/examples/file/${name}`;
         streamError = false;
         streamEpoch = Date.now();
-        setTimeout(() => {
-            if (mockVideoEl) {
-                mockVideoEl.currentTime = 0;
-                mockVideoEl.play().catch(() => {});
-                pushCurrentFrameOnce();
-            }
-        }, 80);
+
+        // 600ms pipeline drain delay when switching sample videos
+        await new Promise(r => setTimeout(r, 600));
+        if (mockVideoEl) {
+            mockVideoEl.currentTime = 0;
+            mockVideoEl.play().catch(() => {});
+            pushCurrentFrameOnce();
+        }
+        isSwitchingMode = false;
     }
 
     function handleFileUpload(event: Event) {
@@ -649,8 +671,8 @@
                     onpause={() => (mockIsPlaying = false)}
                 ></video>
 
-                <!-- Dynamic AI Bounding Box HUD Overlay for Mock Video -->
-                {#if detections && detections.length > 0}
+                <!-- Dynamic AI Bounding Box HUD Overlay for Mock Video (Turned OFF during mode switching transitions) -->
+                {#if !isSwitchingMode && detections && detections.length > 0}
                     <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
                         {#each detections as det}
                             {#if det.box && det.box.length === 4}
@@ -714,6 +736,16 @@
                         {/if}
                     </div>
                 {/if}
+            {/if}
+
+            {#if isSwitchingMode}
+                <div class="mode-switching-scrim">
+                    <div class="switching-spinner"></div>
+                    <div class="switching-status-text">
+                        <strong>Switching to {sourceMode === 'mock' ? 'Mock Simulation' : 'Live ESP32-S3'}</strong>
+                        <span>Turning off YOLO detection boxes & synchronizing stream pipeline...</span>
+                    </div>
+                </div>
             {/if}
         </div>
 
@@ -1918,5 +1950,58 @@
             gap: 4px;
             padding: 8px 12px;
         }
+    }
+
+    .mode-switching-scrim {
+        position: absolute;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.78);
+        backdrop-filter: blur(4px);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        z-index: 40;
+        animation: fadeInScrim 0.15s ease-out;
+    }
+
+    .switching-spinner {
+        width: 36px;
+        height: 36px;
+        border: 3px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #38bdf8;
+        border-radius: 50%;
+        animation: spinScrim 0.7s linear infinite;
+    }
+
+    .switching-status-text {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        color: #ffffff;
+        gap: 4px;
+    }
+
+    .switching-status-text strong {
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: #f8fafc;
+    }
+
+    .switching-status-text span {
+        font-size: 0.78rem;
+        color: #94a3b8;
+    }
+
+    @keyframes fadeInScrim {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    @keyframes spinScrim {
+        to { transform: rotate(360deg); }
     }
 </style>

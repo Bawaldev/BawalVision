@@ -22,14 +22,46 @@
     // Hover tooltip state for temperature chart
     let hoveredIdx = $state<number | null>(null);
 
-    async function loadRecords() {
-        isLoading = true;
-        records = await fetchRecords();
-        isLoading = false;
+    let recentlyUpdatedUIDs = $state<Record<string, number>>({});
+
+    async function loadRecords(showLoading = true) {
+        if (showLoading && records.length === 0) isLoading = true;
+        try {
+            const nextRecords = await fetchRecords();
+            if (nextRecords && Array.isArray(nextRecords)) {
+                // Track dynamic updates on existing UIDs
+                const now = Date.now();
+                const newUpdateMap: Record<string, number> = { ...recentlyUpdatedUIDs };
+                for (const nr of nextRecords) {
+                    const existing = records.find(r => r.id === nr.id);
+                    if (existing && (existing.created_at !== nr.created_at || existing.is_spoiled !== nr.is_spoiled)) {
+                        newUpdateMap[nr.id] = now;
+                    }
+                }
+                recentlyUpdatedUIDs = newUpdateMap;
+                records = nextRecords;
+
+                // Dynamically update the selectedRecord detail modal if open
+                if (selectedRecord) {
+                    const updated = nextRecords.find(r => r.id === selectedRecord!.id || (r.video_uuid && r.video_uuid === selectedRecord!.video_uuid));
+                    if (updated) {
+                        selectedRecord = updated;
+                    }
+                }
+            }
+        } finally {
+            if (showLoading) isLoading = false;
+        }
     }
 
     onMount(() => {
-        loadRecords();
+        loadRecords(true);
+        const pollTimer = setInterval(() => {
+            loadRecords(false);
+        }, 2000);
+        return () => {
+            clearInterval(pollTimer);
+        };
     });
 
     // View tab for chart: 'both' (default) | 'cpu' | 'temperature'
@@ -857,11 +889,17 @@
                             </td>
                         </tr>
                     {:else}
-                        {#each filteredRecords as rec}
-                            <tr class="log-row" onclick={() => (selectedRecord = rec)}>
+                        {#each filteredRecords as rec (rec.id)}
+                            {@const isRecentlyUpdated = Boolean(recentlyUpdatedUIDs[rec.id] && (Date.now() - recentlyUpdatedUIDs[rec.id]) < 6000)}
+                            <tr class="log-row" class:row-reinspected={isRecentlyUpdated} onclick={() => (selectedRecord = rec)}>
                                 <!-- ID Column -->
                                 <td class="col-id">
-                                    <span class="id-badge">#{rec.id.slice(0, 8).toUpperCase()}</span>
+                                    <div class="id-wrapper">
+                                        <span class="id-badge">#{rec.id.slice(0, 8).toUpperCase()}</span>
+                                        {#if isRecentlyUpdated}
+                                            <span class="reinspect-pill" title="Record dynamically updated via re-inspection">↻ Updated</span>
+                                        {/if}
+                                    </div>
                                 </td>
 
                                 <!-- Timestamp Column -->
@@ -2062,6 +2100,42 @@
         .modal-details-grid {
             grid-template-columns: 1fr;
         }
+    }
+
+    .row-reinspected {
+        background: rgba(56, 189, 248, 0.08) !important;
+        transition: background 0.3s ease;
+        animation: highlightPulse 2s ease-out;
+    }
+
+    .id-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .reinspect-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 1px 6px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        background: #e0f2fe;
+        color: #0284c7;
+        border: 1px solid #bae6fd;
+        border-radius: 9999px;
+        letter-spacing: 0.02em;
+        animation: fadeInBadge 0.3s ease-out;
+    }
+
+    @keyframes highlightPulse {
+        0% { background: rgba(56, 189, 248, 0.22); }
+        100% { background: rgba(56, 189, 248, 0.08); }
+    }
+
+    @keyframes fadeInBadge {
+        from { opacity: 0; transform: scale(0.9); }
+        to { opacity: 1; transform: scale(1); }
     }
 </style>
 

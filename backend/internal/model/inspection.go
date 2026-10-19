@@ -105,6 +105,7 @@ type IngressInspectionRequest struct {
 	SceneOptical    *SceneOpticalMetrics `json:"scene_optical,omitempty"`
 	Detections      []FoodDetection      `json:"detections"`
 	IsRewind        bool                 `json:"is_rewind,omitempty"`
+	IsReinspect     bool                 `json:"is_reinspect,omitempty"`
 }
 
 // MockTelemetryPayload is a dedicated telemetry struct for Mock Video streams.
@@ -137,6 +138,7 @@ type MockInspectionRequest struct {
 	VideoSource      string               `json:"video_source,omitempty"`
 	FrameID          uint32               `json:"frame_id,omitempty"`
 	IsRewind         bool                 `json:"is_rewind,omitempty"`
+	IsReinspect      bool                 `json:"is_reinspect,omitempty"`
 	EnginePipeline   string               `json:"engine_pipeline,omitempty"`
 	SceneOptical     *SceneOpticalMetrics `json:"scene_optical,omitempty"`
 	Detections       []FoodDetection      `json:"detections"`

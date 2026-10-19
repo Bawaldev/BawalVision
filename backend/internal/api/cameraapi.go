@@ -371,6 +371,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			mode = "live"
 		}
 		camera_handler.GlobalCameraStore.SetStreamMode(mode)
+		inspection.GlobalInspectionStore.ClearAllDetections()
 		if mode == "mock" {
 			inspection.GlobalInspectionStore.DisconnectNonMock()
 			if req.VideoSource != "" || req.VideoUUID != "" {
