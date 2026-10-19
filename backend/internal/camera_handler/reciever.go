@@ -2,6 +2,7 @@ package camera_handler
 
 import (
 	"math"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,12 +30,60 @@ type CameraStore struct {
 	lastFrameTimeMS int64
 	frameCount      uint64
 	fps             float64
+	streamMode      string // "live" (default) or "mock"
 }
 
 var GlobalCameraStore = &CameraStore{
 	rawFrames:       make(map[string]CachedFrame),
 	annotatedFrames: make(map[string]CachedFrame),
 	subscribers:     make(map[uint64]*subscriber),
+	streamMode:      "live",
+}
+
+func (s *CameraStore) SetStreamMode(mode string) {
+	s.Lock()
+	defer s.Unlock()
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "mock" && mode != "live" {
+		mode = "live"
+	}
+	s.streamMode = mode
+	if mode == "mock" {
+		// When entering mock mode: ALL LIVE STREAM MUST BE TURNED OFF (wipe real camera caches)
+		for id := range s.rawFrames {
+			if id != "MOCK_VIDEO_CAM" && !strings.HasPrefix(id, "MOCK_") {
+				delete(s.rawFrames, id)
+			}
+		}
+		for id := range s.annotatedFrames {
+			if id != "MOCK_VIDEO_CAM" && !strings.HasPrefix(id, "MOCK_") {
+				delete(s.annotatedFrames, id)
+			}
+		}
+	} else {
+		// When entering live mode: wipe mock frames to resume live camera immediately
+		delete(s.rawFrames, "MOCK_VIDEO_CAM")
+		delete(s.annotatedFrames, "MOCK_VIDEO_CAM")
+		for id := range s.rawFrames {
+			if strings.HasPrefix(id, "MOCK_") {
+				delete(s.rawFrames, id)
+			}
+		}
+		for id := range s.annotatedFrames {
+			if strings.HasPrefix(id, "MOCK_") {
+				delete(s.annotatedFrames, id)
+			}
+		}
+	}
+}
+
+func (s *CameraStore) GetStreamMode() string {
+	s.RLock()
+	defer s.RUnlock()
+	if s.streamMode == "" {
+		return "live"
+	}
+	return s.streamMode
 }
 
 func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte) {
@@ -50,6 +99,18 @@ func (s *CameraStore) StoreRawFrameWithMeta(deviceID string, frameID uint32, dat
 		deviceID = "DEFAULT_CAMERA"
 	}
 	s.Lock()
+
+	isMockDevice := deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_")
+	currentMode := s.streamMode
+	if currentMode == "" {
+		currentMode = "live"
+	}
+
+	// IF in MOCK mode: ALL LIVE STREAM MUST BE TURNED OFF (drop non-mock camera frames)
+	if currentMode == "mock" && !isMockDevice {
+		s.Unlock()
+		return
+	}
 	now := time.Now().UnixMilli()
 	if s.lastFrameTimeMS > 0 && now > s.lastFrameTimeMS {
 		dt := float64(now-s.lastFrameTimeMS) / 1000.0
@@ -121,7 +182,23 @@ func (s *CameraStore) StoreRawFrameWithMeta(deviceID string, frameID uint32, dat
 }
 
 func (s *CameraStore) StoreAnnotatedFrame(deviceID string, frameID uint32, data []byte) {
+	if deviceID == "" || deviceID == "\\" || deviceID == "/" || deviceID == "null" {
+		deviceID = "DEFAULT_CAMERA"
+	}
 	s.Lock()
+
+	isMockDevice := deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_")
+	currentMode := s.streamMode
+	if currentMode == "" {
+		currentMode = "live"
+	}
+
+	// IF in MOCK mode: ALL LIVE STREAM MUST BE TURNED OFF (drop non-mock frames)
+	if currentMode == "mock" && !isMockDevice {
+		s.Unlock()
+		return
+	}
+
 	now := time.Now().UnixMilli()
 	s.annotatedFrames[deviceID] = CachedFrame{
 		DeviceID:    deviceID,
@@ -347,10 +424,22 @@ func (s *CameraStore) GetActiveDeviceMeta() (string, string, uint32, bool) {
 	defer s.RUnlock()
 
 	now := time.Now().UnixMilli()
+	currentMode := s.streamMode
+	if currentMode == "" {
+		currentMode = "live"
+	}
+
 	var latest CachedFrame
 	var found bool
 	for id, f := range s.rawFrames {
 		if id != "" && id != "\\" && id != "/" && id != "null" && (now-f.TimestampMS) <= 2500 {
+			isMock := id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_")
+			if currentMode == "mock" && !isMock {
+				continue
+			}
+			if currentMode == "live" && isMock {
+				continue
+			}
 			if !found || f.TimestampMS > latest.TimestampMS {
 				latest = f
 				found = true

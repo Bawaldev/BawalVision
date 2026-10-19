@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import type { FoodDetection, SceneOpticalMetrics } from '../types';
 
     interface Props {
@@ -67,8 +67,14 @@
         streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`
     );
 
-    // Fetch list of modular examples from backend /examples directory
-    $effect(() => {
+    // Initial mount: restore persisted source mode and fetch examples list
+    onMount(() => {
+        if (typeof localStorage !== 'undefined') {
+            const saved = localStorage.getItem('bawal_source_mode');
+            if (saved === 'mock' || saved === 'live') {
+                sourceMode = saved;
+            }
+        }
         fetch('/api/v1/examples')
             .then(res => res.ok ? res.json() : null)
             .then(data => {
@@ -210,9 +216,18 @@
 
     function setSourceMode(mode: SourceModeType) {
         sourceMode = mode;
+        if (typeof localStorage !== 'undefined') {
+            try { localStorage.setItem('bawal_source_mode', mode); } catch {}
+        }
+        streamError = false;
+        retryCount = 0;
         if (mode === 'mock') {
-            streamError = false;
-            streamEpoch = Date.now();
+            // ALL LIVE STREAM MUST BE TURNED OFF on backend and camera store
+            fetch('/api/v1/camera/mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: 'mock' })
+            }).catch(() => {});
             setTimeout(() => {
                 if (mockVideoEl) {
                     mockVideoEl.play().catch(() => {});
@@ -224,13 +239,13 @@
             if (mockVideoEl) {
                 mockVideoEl.pause();
             }
-            // Disconnect MOCK_VIDEO_CAM so live camera immediately becomes the active device
-            fetch('/api/v1/devices/disconnect', {
+            // TURN ON LIVE STREAMING AGAIN
+            fetch('/api/v1/camera/mode', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ device_id: 'MOCK_VIDEO_CAM' })
+                body: JSON.stringify({ mode: 'live' })
             }).catch(() => {});
-            retryCount = 0;
+            fetch('/api/v1/devices/mock/reset', { method: 'POST' }).catch(() => {});
             streamEpoch = Date.now();
         }
     }
@@ -491,20 +506,7 @@
         </div>
 
         <div class="canvas-container">
-            <!-- Hidden Offscreen Video & Canvas for Mock Video AI Frame Ingestion -->
-            <video
-                bind:this={mockVideoEl}
-                src={mockVideoSrc}
-                crossorigin="anonymous"
-                playsinline
-                muted
-                loop
-                style="display: none;"
-                onloadedmetadata={handleVideoLoaded}
-                ontimeupdate={handleVideoTimeUpdate}
-                onplay={() => (mockIsPlaying = true)}
-                onpause={() => (mockIsPlaying = false)}
-            ></video>
+            <!-- Hidden Canvas for Mock Video AI Frame Ingestion -->
             <canvas
                 bind:this={mockCanvasEl}
                 width="640"
@@ -512,29 +514,88 @@
                 style="display: none;"
             ></canvas>
 
-            {#if (hasCamera || sourceMode === 'mock') && !streamError}
-                <!-- Unified MJPEG Stream: Live or Mock frames processed identically by C++ YOLOv8 & Real-ESRGAN -->
-                <img
-                    src={activeStreamUrl}
-                    alt="AI Inspection Stream"
+            {#if sourceMode === 'mock'}
+                <!-- Smooth Native 60 FPS Mock Video Player -->
+                <video
+                    bind:this={mockVideoEl}
+                    src={mockVideoSrc}
+                    alt="Mock Video Feed"
                     class="feed-video"
-                    onload={() => { streamError = false; retryCount = 0; }}
-                    onerror={() => {
-                        if (sourceMode === 'live') streamError = true;
-                    }}
-                />
+                    crossorigin="anonymous"
+                    playsinline
+                    muted
+                    loop
+                    onloadedmetadata={handleVideoLoaded}
+                    ontimeupdate={handleVideoTimeUpdate}
+                    onplay={() => (mockIsPlaying = true)}
+                    onpause={() => (mockIsPlaying = false)}
+                ></video>
+
+                <!-- Dynamic AI Bounding Box HUD Overlay for Mock Video -->
+                {#if detections && detections.length > 0}
+                    <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
+                        {#each detections as det}
+                            {#if det.box && det.box.length === 4}
+                                {@const [bx, by, bw, bh] = det.box}
+                                {@const status = getItemStatus(det)}
+                                {@const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444')}
+                                <rect
+                                    x={bx}
+                                    y={by}
+                                    width={bw}
+                                    height={bh}
+                                    fill="none"
+                                    stroke={strokeColor}
+                                    stroke-width="2.5"
+                                    rx="4"
+                                />
+                                <rect
+                                    x={bx}
+                                    y={Math.max(0, by - 20)}
+                                    width={Math.max(60, (det.food_name || '').length * 8 + 36)}
+                                    height="20"
+                                    fill={strokeColor}
+                                    rx="3"
+                                />
+                                <text
+                                    x={bx + 4}
+                                    y={Math.max(14, by - 5)}
+                                    fill="#ffffff"
+                                    font-size="11"
+                                    font-weight="bold"
+                                    font-family="sans-serif"
+                                >
+                                    {det.food_name} {Math.round((det.similarity_rate || 0) * (det.similarity_rate <= 1 ? 100 : 1))}%
+                                </text>
+                            {/if}
+                        {/each}
+                    </svg>
+                {/if}
             {:else}
-                <!-- Standby State -->
-                <div class="standby-box">
-                    <span class="standby-icon">📷</span>
-                    <h4>No Camera Stream Connected</h4>
-                    <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
-                    {#if streamError}
-                        <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
-                            ↻ Reconnect Stream
-                        </button>
-                    {/if}
-                </div>
+                <!-- Live Stream Mode (Unified MJPEG Ingress from ESP32-S3 Camera) -->
+                {#if hasCamera || !streamError}
+                    <img
+                        src={activeStreamUrl}
+                        alt="AI Live Inspection Stream"
+                        class="feed-video"
+                        onload={() => { streamError = false; retryCount = 0; }}
+                        onerror={() => {
+                            if (!hasCamera) streamError = true;
+                        }}
+                    />
+                {:else}
+                    <!-- Standby State -->
+                    <div class="standby-box">
+                        <span class="standby-icon">📷</span>
+                        <h4>No Camera Stream Connected</h4>
+                        <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
+                        {#if streamError}
+                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
+                                ↻ Reconnect Stream
+                            </button>
+                        {/if}
+                    </div>
+                {/if}
             {/if}
         </div>
 
@@ -1175,6 +1236,16 @@
         object-fit: contain;
         display: block;
         margin: auto;
+    }
+
+    .hud-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 5;
     }
 
     .standby-box {

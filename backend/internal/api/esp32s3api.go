@@ -944,6 +944,33 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"message": "Mock inspection and rewind state cleared. Ready for fresh inspection run.",
 		})
 	})
+
+	// 10. POST/GET Device Streaming Mode (live vs mock)
+	router.Post("/devices/mode", func(c *fiber.Ctx) error {
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		_ = c.BodyParser(&req)
+		mode := strings.ToLower(strings.TrimSpace(req.Mode))
+		if mode != "mock" && mode != "live" {
+			mode = "live"
+		}
+		camera_handler.GlobalCameraStore.SetStreamMode(mode)
+		if mode == "mock" {
+			inspection.GlobalInspectionStore.DisconnectNonMock()
+		} else {
+			inspection.GlobalInspectionStore.DisconnectDevice("MOCK_VIDEO_CAM")
+		}
+		return c.JSON(fiber.Map{
+			"status": "success",
+			"mode":   mode,
+		})
+	})
+	router.Get("/devices/mode", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"mode": camera_handler.GlobalCameraStore.GetStreamMode(),
+		})
+	})
 }
 
 // EvaluateFoodQuality applies multi-sensor quality & food safety rules combining:

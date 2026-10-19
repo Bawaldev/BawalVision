@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
@@ -105,8 +106,25 @@ func (s *InspectionStore) DisconnectDevice(deviceID string) {
 	defer s.Unlock()
 	if deviceID == "" || deviceID == "*" {
 		s.readings = make(map[string]TelemetryIngressPayload)
+		s.latestInspections = make(map[string]IngressInspectionRequest)
 		return
 	}
 	delete(s.readings, deviceID)
+	delete(s.latestInspections, deviceID)
+}
+
+func (s *InspectionStore) DisconnectNonMock() {
+	s.Lock()
+	defer s.Unlock()
+	for id := range s.readings {
+		if id != "MOCK_VIDEO_CAM" && !strings.HasPrefix(id, "MOCK_") {
+			delete(s.readings, id)
+		}
+	}
+	for id := range s.latestInspections {
+		if id != "MOCK_VIDEO_CAM" && !strings.HasPrefix(id, "MOCK_") {
+			delete(s.latestInspections, id)
+		}
+	}
 }
 
