@@ -303,8 +303,20 @@ int main(int argc, char** argv) {
                                   << (state_changed ? "STATE CHANGE" : "HEARTBEAT") << ")\n";
                     }
                 } else if (should_clear_backend && !dev_id.empty() && curl_db) {
-                    const std::string clear_json = "{\"device_id\":\"" + dev_id + "\",\"detections\":[]}";
-                    if (bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_json)) {
+                    const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
+                    std::ostringstream clear_ss;
+                    clear_ss << "{"
+                             << "\"device_id\":\"" << dev_id << "\","
+                             << "\"scene_optical\":{"
+                             << "\"avg_r\":" << std::fixed << std::setprecision(1) << optical.avg_r << ","
+                             << "\"avg_g\":" << optical.avg_g << ","
+                             << "\"avg_b\":" << optical.avg_b << ","
+                             << "\"lux_luminance\":" << optical.lux_luminance << ","
+                             << "\"color_temperature\":" << optical.color_temperature << ","
+                             << "\"white_balance_status\":\"" << optical.white_balance_status << "\""
+                             << "},"
+                             << "\"detections\":[]}";
+                    if (bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_ss.str())) {
                         last_dispatch_time = current_time;
                         last_state_signature.clear();
                     }
@@ -340,6 +352,7 @@ int main(int argc, char** argv) {
                 const std::string discovered = discoverActiveDeviceID(curl_fetch, backend_base_url);
                 if (!discovered.empty() && discovered != "\\" && discovered != "/" && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
                     const bool device_changed = (discovered != device_id);
+                    const std::string prev_device_id = device_id;
                     device_id = discovered;
                     {
                         std::lock_guard<std::mutex> lock(ai_mutex);
@@ -350,6 +363,14 @@ int main(int argc, char** argv) {
                     }
                     if (device_changed) {
                         pipeline.resetTracker();
+                        if (!prev_device_id.empty() && curl_post) {
+                            const std::string clear_prev = "{\"device_id\":\"" + prev_device_id + "\",\"detections\":[]}";
+                            (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_prev);
+                        }
+                        if (curl_post) {
+                            const std::string clear_new = "{\"device_id\":\"" + device_id + "\",\"detections\":[]}";
+                            (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_new);
+                        }
                     }
                     stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
                     video_source.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
@@ -419,10 +440,10 @@ int main(int argc, char** argv) {
                           << current_detections.size() << "\n";
             }
 
-            // Push OpenCV Annotated Frame to backend camera stream (Clear High Quality 78)
+            // Push OpenCV Annotated Frame to backend camera stream (Crisp High Quality 92)
             if (!inspection.annotated_image.empty() && !device_id.empty()) {
                 std::vector<uint8_t> annotated_jpeg;
-                std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, 78};
+                std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, 92};
                 if (cv::imencode(".jpg", inspection.annotated_image, annotated_jpeg, encode_params)) {
                     [[maybe_unused]] bool pushed = bawal::server::postAnnotatedFrame(curl_post, backend_base_url, device_id, inspection.frame_id, annotated_jpeg);
                 }

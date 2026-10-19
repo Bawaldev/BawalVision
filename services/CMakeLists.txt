@@ -143,14 +143,24 @@ endif()
 set(ML_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ml/include)
 set(ML_GENERATOR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../ml/src/ncnn_generator.cpp)
 
-file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+set(CORE_SOURCES
+    src/server/jpeg_utils.cpp
+    src/server/http_utils.cpp
+    src/vision/camera_receiver.cpp
+    src/vision/simd_food_evaluator.cpp
+    src/vision/video_source.cpp
+    src/vision/classifier.cpp
+    src/vision/dewarp.cpp
+    src/vision/enchanter.cpp
+    src/vision/pipeline.cpp
+)
 if(EXISTS ${ML_GENERATOR_SRC})
-    list(APPEND SERVICE_SOURCES ${ML_GENERATOR_SRC})
+    list(APPEND CORE_SOURCES ${ML_GENERATOR_SRC})
 endif()
 
-add_executable(vision_service ${SERVICE_SOURCES})
+add_library(bawal_vision_core STATIC ${CORE_SOURCES})
 
-target_include_directories(vision_service PRIVATE
+target_include_directories(bawal_vision_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${ML_INCLUDE_DIR}
     ${OpenCV_INCLUDE_DIRS}
@@ -162,10 +172,10 @@ target_include_directories(vision_service PRIVATE
 
 # Add NCNN include directory if not using imported target
 if(NCNN_INCLUDE_DIR)
-    target_include_directories(vision_service PRIVATE ${NCNN_INCLUDE_DIR})
+    target_include_directories(bawal_vision_core PUBLIC ${NCNN_INCLUDE_DIR})
 endif()
 
-target_link_libraries(vision_service PRIVATE
+target_link_libraries(bawal_vision_core PUBLIC
     Threads::Threads
     OpenMP::OpenMP_CXX
     ${OpenCV_LIBS}
@@ -174,27 +184,35 @@ target_link_libraries(vision_service PRIVATE
 
 # Link NCNN library if available
 if(TARGET ncnn)
-    target_link_libraries(vision_service PRIVATE ncnn)
-    target_compile_definitions(vision_service PRIVATE HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
+    target_link_libraries(bawal_vision_core PUBLIC ncnn)
+    target_compile_definitions(bawal_vision_core PUBLIC HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
 elseif(NCNN_LIB)
-    target_link_libraries(vision_service PRIVATE ${NCNN_LIB})
-    target_compile_definitions(vision_service PRIVATE HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
+    target_link_libraries(bawal_vision_core PUBLIC ${NCNN_LIB})
+    target_compile_definitions(bawal_vision_core PUBLIC HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
 endif()
 
 # Link Vulkan if NCNN GPU acceleration is enabled
 if(Vulkan_FOUND AND (TARGET ncnn OR NCNN_LIB))
-    target_link_libraries(vision_service PRIVATE Vulkan::Vulkan)
-    target_compile_definitions(vision_service PRIVATE USE_NCNN_VULKAN=1)
+    target_link_libraries(bawal_vision_core PUBLIC Vulkan::Vulkan)
+    target_compile_definitions(bawal_vision_core PUBLIC USE_NCNN_VULKAN=1)
 endif()
 
 if(TARGET CURL::libcurl)
-    target_link_libraries(vision_service PRIVATE CURL::libcurl)
+    target_link_libraries(bawal_vision_core PUBLIC CURL::libcurl)
 else()
-    target_link_libraries(vision_service PRIVATE ${CURL_LIBRARIES})
+    target_link_libraries(bawal_vision_core PUBLIC ${CURL_LIBRARIES})
 endif()
 
 if(TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(vision_service PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(bawal_vision_core PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
-install(TARGETS vision_service DESTINATION bin)
+# 1. Main Streaming Vision Service Daemon
+add_executable(vision_service src/main.cpp)
+target_link_libraries(vision_service PRIVATE bawal_vision_core)
+
+# 2. Serverless AWS Lambda & Per-Tray Inspection Microservice
+add_executable(vision_lambda src/lambda_main.cpp)
+target_link_libraries(vision_lambda PRIVATE bawal_vision_core)
+
+install(TARGETS vision_service vision_lambda DESTINATION bin)

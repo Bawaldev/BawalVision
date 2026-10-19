@@ -523,7 +523,13 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 	// 4. GET Latest Inspection with Detections & Real-time Bounding Boxes
 	router.Get("/inspections/latest", func(c *fiber.Ctx) error {
-		if live, ok := inspection.GlobalInspectionStore.GetLatestInspection(""); ok && len(live.Detections) > 0 {
+		camID, _, _, camActive := camera_handler.GlobalCameraStore.GetActiveDeviceMeta()
+		targetDeviceID := ""
+		if camActive && camID != "" {
+			targetDeviceID = camID
+		}
+
+		if live, ok := inspection.GlobalInspectionStore.GetLatestInspection(targetDeviceID); ok {
 			realT := 36.5
 			if live.Temperature != nil && *live.Temperature > 0 {
 				realT = *live.Temperature
@@ -532,17 +538,31 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			} else if live.FoodTemperature != nil && *live.FoodTemperature > 0 {
 				realT = *live.FoodTemperature
 			}
+			var detections interface{} = live.Detections
+			if live.Detections == nil {
+				detections = []interface{}{}
+			}
 			resp := fiber.Map{
 				"device_id":       live.DeviceID,
 				"temperature":     realT,
 				"cpu_temperature": live.CPUTemperature,
-				"detections":      live.Detections,
+				"detections":      detections,
 				"is_live":         true,
 			}
 			if live.SceneOptical != nil {
 				resp["scene_optical"] = live.SceneOptical
 			}
 			return c.JSON(resp)
+		}
+
+		// If a live camera is actively streaming but has no current detections, return empty live state
+		// rather than falling back to an old historical database record from a previous inspection!
+		if camActive && camID != "" {
+			return c.JSON(fiber.Map{
+				"device_id":  camID,
+				"detections": []interface{}{},
+				"is_live":    true,
+			})
 		}
 
 		var records []inspection.InspectionRecord
