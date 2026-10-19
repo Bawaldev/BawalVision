@@ -6,7 +6,6 @@ import (
 	"bawal_vision_backend/internal/device"
 	"bawal_vision_backend/internal/food"
 	"bawal_vision_backend/internal/inspection"
-	"bawal_vision_backend/internal/user_handler"
 	"fmt"
 	"log"
 	"os"
@@ -50,7 +49,6 @@ func main() {
 	}
 
 	if err := db.AutoMigrate(
-		&user_handler.User{},
 		&device.Device{},
 		&food.FoodItem{},
 		&inspection.InspectionRecord{},
@@ -61,6 +59,8 @@ func main() {
 	}
 
 	// Clean up legacy columns if they exist in existing database volumes and ensure new sensor columns exist
+	_ = db.Exec("ALTER TABLE inspections DROP COLUMN IF EXISTS user_id")
+	_ = db.Exec("DROP TABLE IF EXISTS users CASCADE")
 	_ = db.Exec("ALTER TABLE inspections DROP COLUMN IF EXISTS humidity, DROP COLUMN IF EXISTS gas_voc, DROP COLUMN IF EXISTS pressure")
 	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS cpu_temperature NUMERIC(5, 2) NOT NULL DEFAULT 35.00")
 	_ = db.Exec("ALTER TABLE inspections ADD COLUMN IF NOT EXISTS lux_luminance NUMERIC(5, 2) NOT NULL DEFAULT 120.00")
@@ -109,7 +109,6 @@ END $$;`).Error; err != nil {
 	}))
 
 	apiGroup := app.Group("/api/v1")
-	api.RegisterUserRoutes(apiGroup, db)
 	api.RegisterDeviceRoutes(apiGroup, db)
 	api.RegisterFrontendRoutes(apiGroup, db)
 	api.RegisterCameraRoutes(apiGroup, db)

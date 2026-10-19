@@ -275,7 +275,6 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 
 			records = append(records, InspectionRecord{
 				ID:                 task.RecordID,
-				UserID:             task.Request.UserID,
 				DeviceID:           task.Request.DeviceID,
 				FirmwareVersion:    task.FirmwareVersion,
 				CreatedAt:          task.CreatedAt,

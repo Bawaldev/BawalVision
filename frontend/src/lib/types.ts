@@ -18,7 +18,6 @@ export interface SceneOpticalMetrics {
 
 export interface InspectionRecord {
     id: string;
-    user_id?: string;
     device_id: string;
     firmware_version: string;
     created_at: string;
