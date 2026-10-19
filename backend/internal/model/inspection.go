@@ -19,7 +19,6 @@ func (InspectionFood) TableName() string { return "inspection_foods" }
 
 type InspectionRecord struct {
 	ID              string           `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
-	UserID          *string          `json:"user_id,omitempty" gorm:"type:uuid;index"`
 	DeviceID        string           `json:"device_id" gorm:"column:device_id;type:varchar(64);not null"`
 	FirmwareVersion string           `json:"firmware_version" gorm:"column:firmware_version;type:varchar(32);not null;default:'1.0.0'"`
 	CreatedAt       time.Time        `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:NOW()"`
@@ -84,7 +83,6 @@ type FoodDetection struct {
 type IngressInspectionRequest struct {
 	DeviceID        string                `json:"device_id"`
 	FirmwareVersion string                `json:"firmware_version,omitempty"`
-	UserID          *string               `json:"user_id,omitempty"`
 	FoodTemperature *float64              `json:"food_temperature,omitempty"`
 	Temperature     *float64              `json:"temperature,omitempty"`
 	CPUTemperature  *float64              `json:"cpu_temperature,omitempty"`

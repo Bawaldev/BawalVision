@@ -8,7 +8,6 @@ set -eo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080/api/v1}"
 CACHE_DIR=".cache_trash"
-COOKIE_JAR="${CACHE_DIR}/cookies.txt"
 
 # Color Codes for Competition Logging
 GREEN='\033[0;32m'
@@ -20,61 +19,14 @@ NC='\033[0m' # No Color
 mkdir -p "${CACHE_DIR}"
 
 echo -e "${BLUE}======================================================${NC}"
-echo -e "${BLUE}  BawalVision Backend API & Session Test Runner       ${NC}"
+echo -e "${BLUE}  BawalVision Backend Open Web API Test Runner        ${NC}"
 echo -e "${BLUE}  Target: ${BASE_URL}                                 ${NC}"
 echo -e "${BLUE}======================================================${NC}\n"
 
 # ------------------------------------------------------------------------------
-# STEP 1: USER REGISTRATION
+# STEP 1: EDGE TELEMETRY INGRESS (ESP32-S3 SIMULATION)
 # ------------------------------------------------------------------------------
-TEST_EMAIL="bench-$(date +%s%N)@bawalvision.ai"
-TEST_PASS="BenchPass2026!"
-
-echo -e "${YELLOW}[1/4] Testing User Registration...${NC}"
-REG_RESP=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/auth/register" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"name\": \"Benchmark Agent\",
-    \"email\": \"${TEST_EMAIL}\",
-    \"password\": \"${TEST_PASS}\"
-  }")
-
-REG_BODY=$(echo "${REG_RESP}" | head -n -1)
-REG_CODE=$(echo "${REG_RESP}" | tail -n 1)
-
-if [ "${REG_CODE}" -eq 201 ]; then
-  echo -e "${GREEN}✓ Registration Passed (HTTP 201)${NC}: ${REG_BODY}"
-else
-  echo -e "${RED}✗ Registration Failed (HTTP ${REG_CODE})${NC}: ${REG_BODY}"
-  exit 1
-fi
-
-# ------------------------------------------------------------------------------
-# STEP 2: USER LOGIN & ENCRYPTED SESSION COOKIE
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[2/4] Testing Login & Session Cookie Extraction...${NC}"
-LOGIN_HEADERS=$(curl -s -i -X POST "${BASE_URL}/auth/login" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"email\": \"${TEST_EMAIL}\",
-    \"password\": \"${TEST_PASS}\"
-  }" \
-  -c "${COOKIE_JAR}")
-
-if echo "${LOGIN_HEADERS}" | grep -q "Set-Cookie: session="; then
-  echo -e "${GREEN}✓ Session Cookie Received & Saved to ${COOKIE_JAR}${NC}"
-  echo -e "  Extracted Cookie Header:"
-  echo "${LOGIN_HEADERS}" | grep "Set-Cookie:" | sed 's/^/    /'
-else
-  echo -e "${RED}✗ Session Cookie Missing in Login Response!${NC}"
-  echo "${LOGIN_HEADERS}"
-  exit 1
-fi
-
-# ------------------------------------------------------------------------------
-# STEP 3: EDGE TELEMETRY INGRESS (ESP32-S3 SIMULATION)
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[3/4] Testing ESP32-S3 Edge Telemetry Ingress...${NC}"
+echo -e "\n${YELLOW}[1/3] Testing ESP32-S3 Edge Telemetry Ingress...${NC}"
 TELEMETRY_RESP=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/telemetry" \
   -H "Content-Type: application/json" \
   -d '{
@@ -99,11 +51,10 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# STEP 4: FETCH INSPECTION RECORDS WITH SESSION COOKIE
+# STEP 2: FETCH INSPECTION RECORDS (OPEN SOURCE WEB ACCESS)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[4/4] Testing Query Records using Active Session Cookie...${NC}"
-RECORDS_RESP=$(curl -s -w "\n%{http_code}" -X GET "${BASE_URL}/records" \
-  -b "${COOKIE_JAR}")
+echo -e "\n${YELLOW}[2/3] Testing Query Records (Open Web Access)...${NC}"
+RECORDS_RESP=$(curl -s -w "\n%{http_code}" -X GET "${BASE_URL}/records")
 
 RECORDS_BODY=$(echo "${RECORDS_RESP}" | head -n -1)
 RECORDS_CODE=$(echo "${RECORDS_RESP}" | tail -n 1)
