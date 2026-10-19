@@ -1,3 +1,4 @@
+import gc
 import os
 import glob
 import random
@@ -18,7 +19,7 @@ from onnxruntime.quantization.shape_inference import quant_pre_process
 
 
 class YoloCalibrationDataReader(CalibrationDataReader):
-    def __init__(self, image_folder: Path, input_name: str, img_size: int = 640, max_samples: int = 100):
+    def __init__(self, image_folder: Path, input_name: str, img_size: int = 640, max_samples: int = 50):
         extensions = ("*.jpg", "*.jpeg", "*.png")
         all_paths = []
         for ext in extensions:
@@ -81,7 +82,7 @@ def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
     model_proto = onnx.load(str(model_path))
     exclude_set = set()
 
-    # 1. Backward traversal 5 lapis dari output0
+    # 1. Backward traversal 5 lapis dari output0 agar Concat/Sigmoid/Mul akhir murni FP32
     frontier = {out.name for out in model_proto.graph.output}
     for _ in range(5):
         next_frontier = set()
@@ -99,6 +100,8 @@ def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
         if any(k in name_l or k in outputs_l for k in sensitive_prefixes):
             exclude_set.add(node.name)
 
+    del model_proto
+    gc.collect()
     return list(exclude_set)
 
 
@@ -117,6 +120,8 @@ def main():
             print(f" -> Mengonversi ONNX Opset {current_opset} -> Opset 13 untuk dukungan Per-Channel QDQ...")
             orig_model = onnx.version_converter.convert_version(orig_model, 13)
         onnx.save(orig_model, str(UPGRADED_ONNX))
+        del orig_model
+        gc.collect()
 
         quant_pre_process(
             input_model_path=str(UPGRADED_ONNX),
@@ -130,11 +135,14 @@ def main():
 
     sess_fp32 = ort.InferenceSession(str(INPUT_ONNX), providers=["CPUExecutionProvider"])
     input_name = sess_fp32.get_inputs()[0].name
+    del sess_fp32
+    gc.collect()
 
     nodes_to_exclude = get_head_nodes_to_exclude(quant_source)
     print(f"[+] Mengecualikan {len(nodes_to_exclude)} node sensitif/head agar presisi bbox & confidence tetap FP32.")
 
-    reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=100)
+    # Gunakan 50 sampel acak (cukup untuk MinMax & hemat RAM 50%)
+    reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=50)
 
     print(f"\n=== Starting Static PTQ INT8 ({INPUT_ONNX.name}) ===")
     quantize_static(
@@ -142,23 +150,30 @@ def main():
         model_output=str(OUTPUT_ONNX),
         calibration_data_reader=reader,
         quant_format=QuantFormat.QDQ,
-        per_channel=True,
-        reduce_range=False,                      # 8-bit penuh agar confidence tidak drop ke 40%
-        calibrate_method=CalibrationMethod.MinMax, # Ringan di RAM, bebas OOM / crash VS Code!
-        weight_type=QuantType.QInt8,
-        activation_type=QuantType.QUInt8,
+        per_channel=True,                          # Presisi tinggi per filter untuk AVX2
+        reduce_range=False,                        # 8-bit penuh agar confidence tidak drop
+        calibrate_method=CalibrationMethod.MinMax, # Ringan (<400MB RAM), anti-crash VS Code
+        weight_type=QuantType.QInt8,               # Signed INT8 untuk bobot di VPMADDUBSW
+        activation_type=QuantType.QUInt8,          # Unsigned INT8 untuk aktivasi di VPMADDUBSW
         nodes_to_exclude=nodes_to_exclude,
         extra_options={
             "WeightSymmetric": True,
             "ActivationSymmetric": False,
+            "CalibMovingAverage": True,            # Meredam outlier di AVX2 tanpa boros RAM!
+            "CalibMovingAverageConstant": 0.01,
         },
     )
+    del reader
+    gc.collect()
 
+    repo_root = SCRIPT_DIR.parent.parent
     deploy_targets = [
         SCRIPT_DIR / "model" / "ai1_vision_int8.onnx",
         SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision_int8.onnx",
-        SCRIPT_DIR.parent.parent / "weights" / "yolo8n_int8.onnx",
-        SCRIPT_DIR.parent.parent / "weights" / "ai1_vision_int8.onnx",
+        repo_root / "weights" / "yolo8n_int8.onnx",
+        repo_root / "weights" / "ai1_vision_int8.onnx",
+        repo_root / "services" / "build" / "weights" / "ai1_vision_int8.onnx",
+        repo_root / "services" / "build" / "bin" / "weights" / "ai1_vision_int8.onnx",
     ]
     for target in deploy_targets:
         if target.parent.exists():
@@ -179,6 +194,7 @@ def main():
     print(f" -> INT8 Model Size : {int8_size_mb:.2f} MB ({reduction_pct:.1f}% reduction)")
 
     print("\n=== Verifikasi Akurasi Deteksi (FP32 vs INT8) ===")
+    sess_fp32 = ort.InferenceSession(str(INPUT_ONNX), providers=["CPUExecutionProvider"])
     sess_int8 = ort.InferenceSession(str(OUTPUT_ONNX), providers=["CPUExecutionProvider"])
 
     sample_reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=5)
