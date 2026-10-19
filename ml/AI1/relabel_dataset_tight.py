@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""
-BawalVision High-Precision YOLO-World Dataset Relabeler
-======================================================
-Replaces all dummy / pseudo (0.85x0.85 and 0.55x0.55) bounding boxes with real,
-tight, multi-instance bounding boxes detected by YOLO-World v2 and LAB color
-saliency across all 9 food categories. Never writes blind static fallback boxes.
-"""
-
 import gc
 import os
 import sys
