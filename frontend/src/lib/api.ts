@@ -96,22 +96,56 @@ export async function fetchLatestInspection(baseUrl = BASE_URL): Promise<Inspect
     return null;
 }
 
+/**
+ * @brief Submits a manual food inspection request to the backend.
+ * @param deviceId Target camera or mock simulation device identifier.
+ * @param detections Array of detected food bounding boxes and classification scores.
+ * @param baseUrl Base HTTP endpoint URL for the backend API.
+ * @param sourceMode Stream source mode ('live' or 'mock').
+ * @param videoSource Relative video file path if in mock simulation mode.
+ * @param videoUUID Unique deterministic UUID of the mock video.
+ * @return Promise resolving to status and created inspection ID.
+ */
 export async function triggerManualInspection(
     deviceId: string,
     detections: FoodDetection[],
-    baseUrl = BASE_URL
+    baseUrl = BASE_URL,
+    sourceMode?: string,
+    videoSource?: string,
+    videoUUID?: string
 ): Promise<{ status: string; id?: string }> {
     try {
-        const response = await fetch(`${baseUrl}/inspections`, {
+        const isMock = sourceMode === 'mock' || deviceId === 'MOCK_VIDEO_CAM' || (deviceId && deviceId.startsWith('MOCK_'));
+        const endpoint = isMock ? `${baseUrl}/inspections/mock` : `${baseUrl}/inspections`;
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        };
+        if (isMock) {
+            headers['X-Stream-Source'] = 'MOCK_VIDEO';
+            headers['X-Inspection-Source'] = 'MOCK_VIDEO';
+            headers['X-Inspection-Struct'] = 'MockInspectionRequest';
+            if (videoSource) headers['X-Mock-Video-Source'] = videoSource;
+            if (videoUUID) headers['X-Mock-Video-UUID'] = videoUUID;
+        }
+
+        const bodyPayload = isMock ? {
+            mock_id: videoUUID || 'MOCK_VIDEO_CAM',
+            device_id: 'MOCK_VIDEO_CAM',
+            source_type: 'mock_video',
+            inspection_struct: 'MockInspectionRequest',
+            video_source: videoSource || '',
+            video_uuid: videoUUID || '',
+            detections: detections
+        } : {
+            device_id: deviceId || 'ESP32S3_441BF6C95678',
+            detections: detections
+        };
+
+        const response = await fetch(endpoint, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify({
-                device_id: deviceId || 'ESP32S3_441BF6C95678',
-                detections: detections
-            })
+            headers,
+            body: JSON.stringify(bodyPayload)
         });
         if (response.ok) {
             return await response.json();

@@ -317,68 +317,94 @@ func (s *CameraStore) GetRawFrame(deviceID string) ([]byte, bool) {
 	s.RLock()
 	defer s.RUnlock()
 
-	if deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "ESP32-S3-BENCH-01" {
-		var latestFrame *CachedFrame
-		for _, f := range s.rawFrames {
-			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
-				curr := f
-				latestFrame = &curr
-			}
-		}
-		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
-			return latestFrame.ImageBytes, true
-		}
+	currentMode := s.streamMode
+	if currentMode == "" {
+		currentMode = "live"
+	}
+	isMockDev := deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_")
+	isGenericReq := deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "ESP32-S3-BENCH-01"
+
+	// Strict Stream Isolation:
+	// In mock mode, a request for a specific real hardware ESP device must NEVER receive mock frames.
+	if currentMode == "mock" && !isGenericReq && !isMockDev {
+		return nil, false
+	}
+	// In live mode, a request for a mock video device must NEVER receive live frames.
+	if currentMode == "live" && isMockDev {
+		return nil, false
 	}
 
-	frame, exists := s.rawFrames[deviceID]
-	if !exists || len(frame.ImageBytes) == 0 {
-		var latestFrame *CachedFrame
-		for _, f := range s.rawFrames {
-			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
-				curr := f
-				latestFrame = &curr
-			}
-		}
-		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
-			return latestFrame.ImageBytes, true
+	if !isGenericReq {
+		if frame, exists := s.rawFrames[deviceID]; exists && len(frame.ImageBytes) > 0 {
+			return frame.ImageBytes, true
 		}
 		return nil, false
 	}
-	return frame.ImageBytes, true
+
+	var latestFrame *CachedFrame
+	for id, f := range s.rawFrames {
+		idIsMock := id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_")
+		if currentMode == "mock" && !idIsMock {
+			continue
+		}
+		if currentMode == "live" && idIsMock {
+			continue
+		}
+		if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+			curr := f
+			latestFrame = &curr
+		}
+	}
+	if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
+		return latestFrame.ImageBytes, true
+	}
+	return nil, false
 }
 
 func (s *CameraStore) GetRawFrameWithRewind(deviceID string) ([]byte, bool, bool) {
 	s.RLock()
 	defer s.RUnlock()
 
-	if deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "ESP32-S3-BENCH-01" {
-		var latestFrame *CachedFrame
-		for _, f := range s.rawFrames {
-			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
-				curr := f
-				latestFrame = &curr
-			}
-		}
-		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
-			return latestFrame.ImageBytes, latestFrame.IsRewind, true
-		}
+	currentMode := s.streamMode
+	if currentMode == "" {
+		currentMode = "live"
+	}
+	isMockDev := deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_")
+	isGenericReq := deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "ESP32-S3-BENCH-01"
+
+	// Strict Stream Isolation:
+	if currentMode == "mock" && !isGenericReq && !isMockDev {
+		return nil, false, false
+	}
+	if currentMode == "live" && isMockDev {
+		return nil, false, false
 	}
 
-	frame, exists := s.rawFrames[deviceID]
-	if !exists || len(frame.ImageBytes) == 0 {
-		var latestFrame *CachedFrame
-		for _, f := range s.rawFrames {
-			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
-				curr := f
-				latestFrame = &curr
-			}
-		}
-		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
-			return latestFrame.ImageBytes, latestFrame.IsRewind, true
+	if !isGenericReq {
+		if frame, exists := s.rawFrames[deviceID]; exists && len(frame.ImageBytes) > 0 {
+			return frame.ImageBytes, frame.IsRewind, true
 		}
 		return nil, false, false
 	}
-	return frame.ImageBytes, frame.IsRewind, true
+
+	var latestFrame *CachedFrame
+	for id, f := range s.rawFrames {
+		idIsMock := id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_")
+		if currentMode == "mock" && !idIsMock {
+			continue
+		}
+		if currentMode == "live" && idIsMock {
+			continue
+		}
+		if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+			curr := f
+			latestFrame = &curr
+		}
+	}
+	if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
+		return latestFrame.ImageBytes, latestFrame.IsRewind, true
+	}
+	return nil, false, false
 }
 
 func (s *CameraStore) IsDeviceInRewind(deviceID string) bool {
@@ -413,24 +439,44 @@ func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {
 	defer s.RUnlock()
 
 	now := time.Now().UnixMilli()
+	currentMode := s.streamMode
+	if currentMode == "" {
+		currentMode = "live"
+	}
+	isMockDev := deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_")
+	isGenericReq := deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*"
+
+	if currentMode == "mock" && !isGenericReq && !isMockDev {
+		return nil, false
+	}
+	if currentMode == "live" && isMockDev {
+		return nil, false
+	}
 
 	// 1. Try exact device match for fresh annotated frame
-	if deviceID != "" && deviceID != "latest" && deviceID != "UNKNOWN_DEVICE" && deviceID != "*" {
+	if !isGenericReq {
 		if f, ok := s.annotatedFrames[deviceID]; ok && len(f.ImageBytes) > 0 && (now-f.TimestampMS < 2500) {
 			return f.ImageBytes, true
 		}
-	}
-
-	// 2. Fallback to latest active annotated frame across any device
-	var latestAnn *CachedFrame
-	for _, f := range s.annotatedFrames {
-		if latestAnn == nil || f.TimestampMS > latestAnn.TimestampMS {
-			curr := f
-			latestAnn = &curr
+	} else {
+		// 2. Fallback to latest active annotated frame across devices matching stream mode
+		var latestAnn *CachedFrame
+		for id, f := range s.annotatedFrames {
+			idIsMock := id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_")
+			if currentMode == "mock" && !idIsMock {
+				continue
+			}
+			if currentMode == "live" && idIsMock {
+				continue
+			}
+			if latestAnn == nil || f.TimestampMS > latestAnn.TimestampMS {
+				curr := f
+				latestAnn = &curr
+			}
 		}
-	}
-	if latestAnn != nil && len(latestAnn.ImageBytes) > 0 && (now-latestAnn.TimestampMS < 2500) {
-		return latestAnn.ImageBytes, true
+		if latestAnn != nil && len(latestAnn.ImageBytes) > 0 && (now-latestAnn.TimestampMS < 2500) {
+			return latestAnn.ImageBytes, true
+		}
 	}
 
 	// 3. Fallback to raw frame
@@ -439,17 +485,38 @@ func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {
 
 func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
 	now := time.Now().UnixMilli()
+	currentMode := s.streamMode
+	if currentMode == "" {
+		currentMode = "live"
+	}
+	isMockDev := deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_")
+	isGenericReq := deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*"
+
+	if currentMode == "mock" && !isGenericReq && !isMockDev {
+		return nil, false
+	}
+	if currentMode == "live" && isMockDev {
+		return nil, false
+	}
 
 	// Try exact device match first
-	if deviceID != "" && deviceID != "latest" && deviceID != "UNKNOWN_DEVICE" && deviceID != "*" {
+	if !isGenericReq {
 		if f, ok := s.rawFrames[deviceID]; ok && len(f.ImageBytes) > 0 && (now-f.TimestampMS) <= 2500 {
 			return f.ImageBytes, true
 		}
+		return nil, false
 	}
 
-	// Fallback to latest raw frame across all devices
+	// Fallback to latest raw frame across devices matching stream mode
 	var latestFrame *CachedFrame
-	for _, f := range s.rawFrames {
+	for id, f := range s.rawFrames {
+		idIsMock := id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_")
+		if currentMode == "mock" && !idIsMock {
+			continue
+		}
+		if currentMode == "live" && idIsMock {
+			continue
+		}
 		if (now-f.TimestampMS) <= 2500 && (latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS) {
 			curr := f
 			latestFrame = &curr
@@ -480,15 +547,20 @@ func (s *CameraStore) GetActiveDeviceMeta() (string, string, uint32, bool) {
 		currentMode = "live"
 	}
 
+	if currentMode == "mock" {
+		if f, ok := s.rawFrames["MOCK_VIDEO_CAM"]; ok && (now-f.TimestampMS) <= 5000 {
+			return f.DeviceID, f.ClientIP, f.FrameID, true
+		}
+		// In mock mode, the active device is ALWAYS MOCK_VIDEO_CAM, never an ESP32 hardware device
+		return "MOCK_VIDEO_CAM", "127.0.0.1", 0, true
+	}
+
 	var latest CachedFrame
 	var found bool
 	for id, f := range s.rawFrames {
 		if id != "" && id != "\\" && id != "/" && id != "null" && (now-f.TimestampMS) <= 2500 {
 			isMock := id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_")
-			if currentMode == "mock" && !isMock {
-				continue
-			}
-			if currentMode == "live" && isMock {
+			if isMock {
 				continue
 			}
 			if !found || f.TimestampMS > latest.TimestampMS {

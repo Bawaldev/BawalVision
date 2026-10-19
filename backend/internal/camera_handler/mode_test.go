@@ -45,5 +45,27 @@ func TestStreamModeSeparation(t *testing.T) {
 	if activeLive != "ESP32S3_CAM" {
 		t.Fatalf("expected active device to be ESP32S3_CAM, got: %s", activeLive)
 	}
+
+	// In live mode, querying MOCK_VIDEO_CAM must NOT return live frames
+	if _, ok := GlobalCameraStore.GetRawFrame("MOCK_VIDEO_CAM"); ok {
+		t.Fatalf("expected GetRawFrame(MOCK_VIDEO_CAM) to return false in live mode")
+	}
+
+	// Switch back to mock mode
+	GlobalCameraStore.SetStreamMode("mock")
+	GlobalCameraStore.StoreRawFrameWithMeta("MOCK_VIDEO_CAM", 11, []byte("mock_banana"), "127.0.0.1", false)
+
+	// Querying specific ESP32S3_CAM in mock mode must NOT return mock frames
+	if _, ok := GlobalCameraStore.GetRawFrame("ESP32S3_CAM"); ok {
+		t.Fatalf("expected GetRawFrame(ESP32S3_CAM) to return false in mock mode to prevent cross-contamination")
+	}
+
+	// Querying mock device or generic latest must succeed
+	if frame, ok := GlobalCameraStore.GetRawFrame("MOCK_VIDEO_CAM"); !ok || string(frame) != "mock_banana" {
+		t.Fatalf("expected GetRawFrame(MOCK_VIDEO_CAM) to return mock_banana, got %s", string(frame))
+	}
+	if frame, ok := GlobalCameraStore.GetRawFrame("latest"); !ok || string(frame) != "mock_banana" {
+		t.Fatalf("expected GetRawFrame(latest) to return mock_banana, got %s", string(frame))
+	}
 }
 
