@@ -3,7 +3,7 @@ COMPOSE_FILE := justfile_directory() + "/deploy/docker-compose.yml"
 setup-deps:
     sudo apt update
     sudo apt install -y build-essential cmake ninja-build pkg-config \
-        libopencv-dev libomp-dev libhwy-dev nlohmann-json3-dev
+        libopencv-dev libomp-dev libhwy-dev libfmt-dev libcpp-httplib-dev nlohmann-json3-dev
 
 configure-vision target="Release":
     cd {{ justfile_directory() }} && cmake -B services/build -S services \
