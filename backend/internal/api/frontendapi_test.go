@@ -42,11 +42,15 @@ func TestGetExampleVideosAndServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/v1/examples failed: %v", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read response body: %v", err)
+	}
 	var result struct {
 		Status string   `json:"status"`
 		Videos []string `json:"videos"`
@@ -73,10 +77,14 @@ func TestGetExampleVideosAndServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to request file: %v", err)
 	}
+	defer fileResp.Body.Close()
 	if fileResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK when requesting valid example file, got %d", fileResp.StatusCode)
 	}
-	fileBody, _ := io.ReadAll(fileResp.Body)
+	fileBody, err := io.ReadAll(fileResp.Body)
+	if err != nil {
+		t.Fatalf("failed to read file body: %v", err)
+	}
 	if len(fileBody) == 0 {
 		t.Errorf("expected non-empty video file body")
 	}
@@ -87,6 +95,7 @@ func TestGetExampleVideosAndServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed bad request: %v", err)
 	}
+	defer badResp.Body.Close()
 	if badResp.StatusCode != http.StatusBadRequest && badResp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 400 or 404 for path traversal attempt, got %d", badResp.StatusCode)
 	}
