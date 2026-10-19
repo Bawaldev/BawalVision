@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -18,23 +20,34 @@ type InspectionFood struct {
 func (InspectionFood) TableName() string { return "inspection_foods" }
 
 type InspectionRecord struct {
-	ID              string           `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
-	DeviceID        string           `json:"device_id" gorm:"column:device_id;type:varchar(64);not null"`
-	FirmwareVersion string           `json:"firmware_version" gorm:"column:firmware_version;type:varchar(32);not null;default:'1.0.0'"`
-	CreatedAt       time.Time        `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:NOW()"`
-	ImageS3URI      *string          `json:"image_s3_uri,omitempty" gorm:"column:image_s3_uri;type:text"`
-	CPUTemperature  float64          `json:"cpu_temperature" gorm:"column:cpu_temperature;type:numeric(5,2);not null;default:35.00"`
-	Temperature     float64          `json:"temperature" gorm:"column:temperature;type:numeric(5,2);not null;default:25.00"`
-	CPULoad         uint8            `json:"cpu_load" gorm:"column:cpu_load;type:smallint;not null;default:0"`
-	IsSpoiled          bool                 `json:"is_spoiled" gorm:"column:is_spoiled;not null;default:false"`
-	TSafeHours         float64              `json:"t_safe_hours" gorm:"column:t_safe_hours;type:numeric(5,2);not null;default:0.00"`
-	LuxLuminance       float64              `json:"lux_luminance" gorm:"column:lux_luminance;type:numeric(5,2);not null;default:120.00"`
-	WhiteBalanceStatus string               `json:"white_balance_status" gorm:"column:white_balance_status;type:varchar(32);not null;default:'BALANCED'"`
-	ColorTemperature   int                  `json:"color_temperature" gorm:"column:color_temperature;type:int;not null;default:6500"`
-	InspectionFoods    []InspectionFood     `json:"inspection_foods,omitempty" gorm:"foreignKey:InspectionID"`
+	ID                 string           `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	DeviceID           string           `json:"device_id" gorm:"column:device_id;type:varchar(64);not null"`
+	FirmwareVersion    string           `json:"firmware_version,omitempty" gorm:"column:firmware_version;type:varchar(32);not null;default:'1.0.0'"`
+	CreatedAt          time.Time        `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:NOW()"`
+	ImageS3URI         *string          `json:"image_s3_uri,omitempty" gorm:"column:image_s3_uri;type:text"`
+	CPUTemperature     float64          `json:"cpu_temperature,omitempty" gorm:"column:cpu_temperature;type:numeric(5,2);not null;default:35.00"`
+	Temperature        float64          `json:"temperature,omitempty" gorm:"column:temperature;type:numeric(5,2);not null;default:25.00"`
+	CPULoad            uint8            `json:"cpu_load,omitempty" gorm:"column:cpu_load;type:smallint;not null;default:0"`
+	IsSpoiled          bool             `json:"is_spoiled" gorm:"column:is_spoiled;not null;default:false"`
+	TSafeHours         float64          `json:"t_safe_hours" gorm:"column:t_safe_hours;type:numeric(5,2);not null;default:0.00"`
+	LuxLuminance       float64          `json:"lux_luminance" gorm:"column:lux_luminance;type:numeric(5,2);not null;default:120.00"`
+	WhiteBalanceStatus string           `json:"white_balance_status" gorm:"column:white_balance_status;type:varchar(32);not null;default:'BALANCED'"`
+	ColorTemperature   int              `json:"color_temperature" gorm:"column:color_temperature;type:int;not null;default:6500"`
+	InspectionFoods    []InspectionFood `json:"inspection_foods,omitempty" gorm:"foreignKey:InspectionID"`
 }
 
 func (InspectionRecord) TableName() string { return "inspections" }
+
+// MarshalJSON automatically delegates serialization to MockInspectionRecord whenever the record
+// originated from a mock video stream or virtual camera. This guarantees mock video records never
+// leak physical ESP32-S3 hardware metrics (firmware_version, cpu_temperature, temperature, cpu_load).
+func (r InspectionRecord) MarshalJSON() ([]byte, error) {
+	if r.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(r.DeviceID, "MOCK_") || (r.ImageS3URI != nil && strings.Contains(*r.ImageS3URI, ".mp4")) {
+		return json.Marshal(r.ToMockInspectionRecord(""))
+	}
+	type Alias InspectionRecord
+	return json.Marshal((Alias)(r))
+}
 
 type SceneOpticalMetrics struct {
 	AvgR               float64 `json:"avg_r"`
@@ -140,6 +153,7 @@ type MockInspectionRecord struct {
 	SourceType         string               `json:"source_type"`       // "mock_video"
 	InspectionStruct   string               `json:"inspection_struct"` // "MockInspectionRecord"
 	VideoSource        string               `json:"video_source,omitempty"`
+	ImageS3URI         *string              `json:"image_s3_uri,omitempty"`
 	EnginePipeline     string               `json:"engine_pipeline"`   // "YOLOv8n-INT8 + OpenCV HSV"
 	CreatedAt          time.Time            `json:"created_at"`
 	IsSpoiled          bool                 `json:"is_spoiled"`
@@ -172,6 +186,7 @@ func (r InspectionRecord) ToMockInspectionRecord(videoSource string) MockInspect
 		SourceType:         "mock_video",
 		InspectionStruct:   "MockInspectionRecord",
 		VideoSource:        videoSource,
+		ImageS3URI:         r.ImageS3URI,
 		EnginePipeline:     "YOLOv8n-INT8 + OpenCV HSV",
 		CreatedAt:          r.CreatedAt,
 		IsSpoiled:          r.IsSpoiled,
