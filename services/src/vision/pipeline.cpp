@@ -352,7 +352,7 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
 
     out_display = inspection.dewarped_image.clone();
 
-    // Low-light underexposure banner if detected by Highway SIMD
+    // Low-light underexposure or backlight hotspot conflict banner
     if (inspection.dark_status.is_dark) {
         std::ostringstream ss_dark;
         ss_dark << "LOW LIGHT [Hwy SIMD] Gain: " << std::fixed << std::setprecision(1)
@@ -364,6 +364,15 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         cv::Point bg_br(8 + tsz.width + 8, out_display.rows - 4);
         cv::rectangle(out_display, bg_tl, bg_br, cv::Scalar(20, 20, 180), cv::FILLED);
         cv::putText(out_display, dark_txt, cv::Point(12, out_display.rows - 8),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.40, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    } else if (inspection.dark_status.has_hotspot_conflict) {
+        const std::string glare_txt = "BACKLIGHT CONFLICT (Gain 2.5x Suppressed)";
+        int base = 0;
+        cv::Size tsz = cv::getTextSize(glare_txt, cv::FONT_HERSHEY_SIMPLEX, 0.40, 1, &base);
+        cv::Point bg_tl(8, out_display.rows - tsz.height - 12);
+        cv::Point bg_br(8 + tsz.width + 8, out_display.rows - 4);
+        cv::rectangle(out_display, bg_tl, bg_br, cv::Scalar(20, 140, 200), cv::FILLED);
+        cv::putText(out_display, glare_txt, cv::Point(12, out_display.rows - 8),
                     cv::FONT_HERSHEY_SIMPLEX, 0.40, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     }
 
