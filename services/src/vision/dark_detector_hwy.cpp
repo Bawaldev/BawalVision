@@ -1,5 +1,7 @@
 #include "bawal/vision/dark_detector_hwy.hpp"
 
+#if defined(BAWAL_HAVE_HWY) || __has_include(<hwy/highway.h>)
+
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "vision/dark_detector_hwy.cpp"
 #include <hwy/foreach_target.h>
@@ -94,4 +96,40 @@ void DispatchScanDarkRow(const uint8_t* row_ptr,
 }
 
 } // namespace bawal::vision::detail
+#endif
+
+#else // Fallback when Google Highway headers are unavailable
+
+namespace bawal::vision::detail {
+
+/**
+ * @brief Scalar fallback dispatcher for ScanDarkRow when Google Highway is not installed.
+ * 
+ * @param row_ptr Pointer to the beginning of the BGR row data (interleaved CV_8UC3).
+ * @param width Number of pixels in the row.
+ * @param dark_thresh Luminance intensity threshold below which a pixel is considered dark.
+ * @param out_sum Reference to the accumulated green-channel luminance sum.
+ * @param out_dark_count Reference to the accumulated count of underexposed pixels.
+ * @return void (Accumulates results directly into out_sum and out_dark_count).
+ */
+void DispatchScanDarkRow(const uint8_t* row_ptr, 
+                         size_t width, 
+                         uint8_t dark_thresh, 
+                         uint64_t& out_sum, 
+                         uint32_t& out_dark_count) {
+    uint64_t local_sum = 0;
+    uint32_t local_dark = 0;
+    for (size_t x = 0; x < width; ++x) {
+        const uint8_t g = row_ptr[x * 3 + 1];
+        local_sum += g;
+        if (g < dark_thresh) {
+            ++local_dark;
+        }
+    }
+    out_sum += local_sum;
+    out_dark_count += local_dark;
+}
+
+} // namespace bawal::vision::detail
+
 #endif

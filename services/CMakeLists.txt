@@ -87,7 +87,30 @@ find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui dnn)
 find_package(CURL REQUIRED)
-find_package(hwy REQUIRED)
+find_package(hwy QUIET)
+if(NOT TARGET hwy::hwy)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(HWY QUIET IMPORTED_TARGET libhwy)
+    endif()
+    if(NOT TARGET PkgConfig::HWY)
+        find_path(HWY_INCLUDE_DIR
+            NAMES hwy/highway.h
+            PATHS
+                /usr/local/include
+                /usr/include
+        )
+        find_library(HWY_LIB
+            NAMES hwy
+            PATHS
+                /usr/local/lib
+                /usr/lib
+                /usr/lib64
+                /usr/lib/x86_64-linux-gnu
+                /usr/lib/aarch64-linux-gnu
+        )
+    endif()
+endif()
 find_package(nlohmann_json QUIET)
 find_package(ncnn QUIET)
 
@@ -200,7 +223,17 @@ if(TARGET nlohmann_json::nlohmann_json)
 endif()
 
 if (TARGET hwy::hwy)
-    target_link_libraries(vision_service PRIVATE hwy::hwy )
+    target_link_libraries(vision_service PRIVATE hwy::hwy)
+    target_compile_definitions(vision_service PRIVATE BAWAL_HAVE_HWY=1)
+elseif (TARGET PkgConfig::HWY)
+    target_link_libraries(vision_service PRIVATE PkgConfig::HWY)
+    target_compile_definitions(vision_service PRIVATE BAWAL_HAVE_HWY=1)
+elseif (HWY_INCLUDE_DIR AND HWY_LIB)
+    target_include_directories(vision_service PRIVATE ${HWY_INCLUDE_DIR})
+    target_link_libraries(vision_service PRIVATE ${HWY_LIB})
+    target_compile_definitions(vision_service PRIVATE BAWAL_HAVE_HWY=1)
+else()
+    message(STATUS "Google Highway (hwy) not found via CMake/PkgConfig; using built-in AVX2 / scalar dark detector fallback.")
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")

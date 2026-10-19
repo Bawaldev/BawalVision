@@ -52,6 +52,7 @@ jobs:
             libopencv-dev \
             libomp-dev \
             libcurl4-openssl-dev \
+            libhwy-dev \
             nlohmann-json3-dev \
             curl \
             tar \
