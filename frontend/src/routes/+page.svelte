@@ -196,12 +196,13 @@
             // 4. Live Real-time Inspections & Dynamic Bounding Boxes
             const latestLive: any = await fetchLatestInspection(systemConfig.backendUrl);
             let hasLiveDetections = false;
-            if (latestLive && latestLive.detections && latestLive.detections.length > 0) {
+            const isLiveStreamActive = Boolean(latestLive?.is_live) || cam.active;
+            if (latestLive && latestLive.scene_optical) {
+                latestOptical = latestLive.scene_optical;
+            }
+            if (latestLive && Array.isArray(latestLive.detections) && latestLive.detections.length > 0) {
                 if (latestLive.is_live && (cam.active || (telemetry && telemetry.is_connected))) {
                     isOnline = true;
-                }
-                if (latestLive.scene_optical) {
-                    latestOptical = latestLive.scene_optical;
                 }
                 hasLiveDetections = true;
                 const activeThreshold = Math.min(0.98, Math.max(0.25, Number(systemConfig.minConfidenceThreshold) || 0.35));
@@ -223,10 +224,13 @@
                             box: det.box || []
                         };
                     });
+            } else if (isLiveStreamActive) {
+                // Live camera stream is active with 0 detected food items -> clear HUD panel immediately
+                detections = [];
             }
 
-            // 5. Inspections & Records from DB (Polled every 2.5s or fallback when no live detections)
-            if (shouldRunSlowPoll || !hasLiveDetections) {
+            // 5. Inspections & Records from DB (Polled every 2.5s for KPI counters; only populate detections fallback if offline)
+            if (shouldRunSlowPoll || (!hasLiveDetections && !isLiveStreamActive)) {
                 const allRecords = await fetchRecords(systemConfig.backendUrl);
                 if (allRecords && allRecords.length > 0) {
                     records = allRecords;
@@ -241,7 +245,7 @@
                     totalRejected = Math.max(totalRejected, spoiled);
                     totalAccepted = Math.max(totalAccepted, accepted);
 
-                    if (!hasLiveDetections) {
+                    if (!hasLiveDetections && !isLiveStreamActive) {
                         const latest = validRecords[0];
                         if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
                             detections = latest.inspection_foods.map(item => {
@@ -264,7 +268,7 @@
                             detections = [];
                         }
                     }
-                } else if (!hasLiveDetections) {
+                } else if (!hasLiveDetections && !isLiveStreamActive) {
                     detections = [];
                 }
             }
