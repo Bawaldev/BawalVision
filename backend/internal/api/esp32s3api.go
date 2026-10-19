@@ -268,7 +268,6 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 				record := inspection.InspectionRecord{
 					ID:                 recordID,
-					UserID:             req.UserID,
 					DeviceID:           req.DeviceID,
 					FirmwareVersion:    fwVer,
 					CreatedAt:          now,
