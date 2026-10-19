@@ -935,7 +935,7 @@
 
     <!-- Inspection Record Modal Details -->
     {#if selectedRecord}
-        {@const isMockAudit = selectedRecord.device_id === 'MOCK_VIDEO_CAM' || selectedRecord.device_id?.startsWith('MOCK_') || selectedRecord.source_type === 'mock_video' || selectedRecord.inspection_struct === 'MockInspectionRecord'}
+        {@const isMockAudit = selectedRecord.device_id === 'MOCK_VIDEO_CAM' || selectedRecord.device_id?.startsWith('MOCK_') || selectedRecord.source_type === 'mock_video' || selectedRecord.inspection_struct === 'MockInspectionRecord' || (selectedRecord.image_s3_uri && selectedRecord.image_s3_uri.includes('.mp4')) || Boolean(selectedRecord.video_source)}
         <div class="modal-backdrop" role="dialog" aria-modal="true">
             <button
                 type="button"
@@ -977,7 +977,8 @@
                             id: selectedRecord.id,
                             mock_id: selectedRecord.mock_id || selectedRecord.id,
                             video_uuid: selectedRecord.video_uuid || selectedRecord.id,
-                            video_source: selectedRecord.video_source || undefined,
+                            video_source: selectedRecord.video_source || (selectedRecord.image_s3_uri?.includes('.mp4') ? selectedRecord.image_s3_uri : undefined),
+                            image_s3_uri: selectedRecord.image_s3_uri || undefined,
                             device_id: selectedRecord.device_id,
                             source_type: 'mock_video',
                             inspection_struct: 'MockInspectionRecord',

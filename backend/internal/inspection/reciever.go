@@ -29,7 +29,7 @@ func NewInspectionStore() *InspectionStore {
 }
 
 func (s *InspectionStore) StoreTelemetry(payload TelemetryIngressPayload) {
-	if payload.DeviceID == "" {
+	if payload.DeviceID == "" || payload.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(payload.DeviceID, "MOCK_") {
 		return
 	}
 	nowUnix := time.Now().Unix()
@@ -214,7 +214,10 @@ func (s *InspectionStore) GetAnyLatestTelemetry() (TelemetryIngressPayload, bool
 	defer s.RUnlock()
 	var latest TelemetryIngressPayload
 	var maxTs int64 = -1
-	for _, reading := range s.readings {
+	for id, reading := range s.readings {
+		if id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_") {
+			continue
+		}
 		if reading.Timestamp >= maxTs {
 			maxTs = reading.Timestamp
 			latest = reading

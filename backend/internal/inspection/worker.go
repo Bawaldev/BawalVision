@@ -176,10 +176,16 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 		if task.Request.DeviceID == "" {
 			continue
 		}
+		devType := "ESP32-S3"
+		fw := task.FirmwareVersion
+		if task.Request.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(task.Request.DeviceID, "MOCK_") || strings.EqualFold(task.Request.SourceType, "mock_video") || strings.EqualFold(task.Request.SourceType, "MOCK_VIDEO") {
+			devType = "MOCK_VIDEO"
+			fw = ""
+		}
 		deviceMap[task.Request.DeviceID] = model.Device{
 			ID:              task.Request.DeviceID,
-			DeviceType:      "ESP32-S3",
-			FirmwareVersion: task.FirmwareVersion,
+			DeviceType:      devType,
+			FirmwareVersion: fw,
 			Status:          "ACTIVE",
 			LastSeenAt:      &task.CreatedAt,
 			UpdatedAt:       task.CreatedAt,
@@ -281,15 +287,27 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 				}
 			}
 
+			fw := task.FirmwareVersion
+			cpuT := task.CPUTemp
+			temp := task.Temperature
+			cpuL := task.CPULoad
+			isMock := task.Request.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(task.Request.DeviceID, "MOCK_") || strings.EqualFold(task.Request.SourceType, "mock_video") || strings.EqualFold(task.Request.SourceType, "MOCK_VIDEO") || (task.Request.ImageS3URI != nil && strings.Contains(*task.Request.ImageS3URI, ".mp4"))
+			if isMock {
+				fw = ""
+				cpuT = 0.0
+				temp = 0.0
+				cpuL = 0
+			}
+
 			records = append(records, InspectionRecord{
 				ID:                 task.RecordID,
 				DeviceID:           task.Request.DeviceID,
-				FirmwareVersion:    task.FirmwareVersion,
+				FirmwareVersion:    fw,
 				CreatedAt:          task.CreatedAt,
 				ImageS3URI:         task.Request.ImageS3URI,
-				CPUTemperature:     task.CPUTemp,
-				Temperature:        task.Temperature,
-				CPULoad:            task.CPULoad,
+				CPUTemperature:     cpuT,
+				Temperature:        temp,
+				CPULoad:            cpuL,
 				IsSpoiled:          task.IsSpoiled,
 				TSafeHours:         task.TSafeHours,
 				LuxLuminance:       lux,

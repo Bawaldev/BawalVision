@@ -409,3 +409,39 @@ func TestMockVideoUniqueUUIDNoDuplicateTraysOnReload(t *testing.T) {
 	}
 }
 
+func TestMockInspectionRecordHasNoESPHardwareMetrics(t *testing.T) {
+	mockRec := model.InspectionRecord{
+		ID:              "test-mock-uuid-9999",
+		DeviceID:        "MOCK_VIDEO_CAM",
+		FirmwareVersion: "1.0.0",
+		CPUTemperature:  42.5,
+		Temperature:     40.0,
+		CPULoad:         50,
+		IsSpoiled:       false,
+		TSafeHours:      4.5,
+	}
+
+	rawBytes, err := json.Marshal(mockRec)
+	if err != nil {
+		t.Fatalf("failed to marshal InspectionRecord: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(rawBytes, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+
+	for _, forbiddenKey := range []string{"firmware_version", "cpu_temperature", "temperature", "cpu_load"} {
+		if val, exists := parsed[forbiddenKey]; exists && val != nil && val != "" && val != float64(0) {
+			t.Errorf("expected %q to be omitted for mock inspection record, but found %v", forbiddenKey, val)
+		}
+	}
+
+	if parsed["inspection_struct"] != "MockInspectionRecord" {
+		t.Errorf("expected inspection_struct=MockInspectionRecord, got %v", parsed["inspection_struct"])
+	}
+	if parsed["source_type"] != "mock_video" {
+		t.Errorf("expected source_type=mock_video, got %v", parsed["source_type"])
+	}
+}
+
