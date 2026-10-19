@@ -25,7 +25,7 @@ MODEL_ARCH = "yolov8n.pt"  # Pretrained YOLOv8 Nano Object Detection backbone
 INPUT_RESOLUTION = 640     # Fixed 640x640 frame resolution (OpenCV DNN compatible)
 BATCH_SIZE = 8             # Calibrated for 4GB VRAM (NVIDIA RTX A2000 Laptop / GTX 1650)
 MAX_EPOCHS = 120
-EARLY_STOP_PATIENCE = 25   # Extended patience for optimal mAP convergence
+EARLY_STOP_PATIENCE = 35   # Extended patience for optimal mAP convergence
 ONNX_OPSET = 13            # Standard ONNX opset for OpenCV DNN & ONNX Runtime C++ engine
 NUM_CLASSES = 9            # banana, chicken, egg, orange, rice, spinach, tempeh, tofu, water_spinach
 
@@ -156,21 +156,21 @@ def main() -> None:
             warmup_epochs=3.0,
             amp=args.amp,
             box=7.5,
-            cls=0.5,       
+            cls=0.5,             # Seimbang: Menjaga confidence score tetap tinggi (80-90%+)
             dfl=1.5,
             hsv_h=0.015,
-            hsv_s=0.5,
-            degrees=10.0,
-            perspective=0.0,
-            shear=2.0,    
-            scale=0.5,    
+            hsv_s=0.5,           # Menjaga ciri warna asli sayuran & lauk
+            degrees=10.0,        # Rotasi ringan yang aman untuk piring/baki
+            perspective=0.0,     # Kamera menghadap lurus dari atas
+            shear=2.0,           # Menghindari bentuk objek makanan terdistorsi ekstrem
+            scale=0.5,           # Skala proporsional
             translate=0.15,
-            flipud=0.0,
+            flipud=0.0,          # Kamera selalu dari atas (jangan dibalik vertikal)
             fliplr=0.5,
-            mosaic=1.0,
-            mixup=0.1,
+            mosaic=1.0,          # Mosaik 4 gambar aktif di awal untuk belajar konteks
+            mixup=0.1,           # Sedikit percampuran fitur antar-kelas
             copy_paste=0.0,
-            close_mosaic=15,
+            close_mosaic=15,     # Matikan mosaik pada 15 epoch terakhir untuk pematangan kotak
             plots=True,
             save=True,
             val=True,
@@ -206,9 +206,9 @@ def main() -> None:
     exported_onnx = detection_engine.export(
         format="onnx",
         imgsz=INPUT_RESOLUTION,
-        dynamic=False,     # Static shape: Prevents Unsupported data type: BOOL error
-        opset=ONNX_OPSET,  # Opset 12
-        half=False,        # Pure FP32 precision
+        dynamic=False,     # Static shape: Menghindari error tipe data BOOL
+        opset=ONNX_OPSET,  # Opset 13 standar untuk QDQ
+        half=False,        # Presisi FP32 murni
         simplify=True,     # Constant folding
     )
 
@@ -218,7 +218,8 @@ def main() -> None:
         shutil.copy2(exported_onnx, SCRIPT_DIR / "model" / "ai1_vision.onnx")
         os.remove(exported_onnx)
         print(f"[✓] Static FP32 ONNX binary deployed to: {FINAL_ONNX_TARGET}")
-        # ==============================================================================
+
+    # ==============================================================================
     # 3. NUMERICAL SANITY CHECK (PyTorch vs ONNX Runtime Multi-Threaded CPU)
     # ==============================================================================
     print("\n=== Executing Parity Sanity Check ===")

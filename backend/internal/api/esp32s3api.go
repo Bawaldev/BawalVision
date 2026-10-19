@@ -344,10 +344,8 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		if mockReq.DeviceID == "" && mockReq.MockID != "" {
 			mockReq.DeviceID = mockReq.MockID
 		}
-		if mockReq.DeviceID == "" {
-			return c.Status(400).JSON(fiber.Map{
-				"error": "Missing device_id / mock_id in mock inspection request",
-			})
+		if camera_handler.GlobalCameraStore.GetStreamMode() == "mock" || mockReq.DeviceID == "" || (!strings.HasPrefix(mockReq.DeviceID, "MOCK_") && mockReq.DeviceID != "MOCK_VIDEO_CAM") {
+			mockReq.DeviceID = "MOCK_VIDEO_CAM"
 		}
 		mockReq.SourceType = "mock_video"
 		mockReq.InspectionStruct = "MockInspectionRequest"
@@ -537,11 +535,12 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 	// 2b. Live ESP32-S3 Vision + Hardware Telemetry Combined Inspection Ingress Handler
 	inspectionIngressHandler := func(c *fiber.Ctx) error {
-		// Automatically route to dedicated MockInspectionRequest handler if headers or payload indicate Mock Video
+		// Automatically route to dedicated MockInspectionRequest handler if headers or payload indicate Mock Video, OR if stream mode is mock
 		inspSourceHdr := strings.ToUpper(strings.TrimSpace(c.Get("X-Inspection-Source")))
 		streamSourceHdr := strings.ToUpper(strings.TrimSpace(c.Get("X-Stream-Source")))
 		inspStructHdr := strings.TrimSpace(c.Get("X-Inspection-Struct"))
-		if inspSourceHdr == "MOCK_VIDEO" || streamSourceHdr == "MOCK_VIDEO" || inspStructHdr == "MockInspectionRequest" {
+		isMockMode := camera_handler.GlobalCameraStore.GetStreamMode() == "mock"
+		if isMockMode || inspSourceHdr == "MOCK_VIDEO" || streamSourceHdr == "MOCK_VIDEO" || inspStructHdr == "MockInspectionRequest" {
 			return mockInspectionIngressHandler(c)
 		}
 

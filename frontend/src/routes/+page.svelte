@@ -429,8 +429,10 @@
         }
 
         try {
-            const targetDevice = systemConfig.deviceId || telemetry.device_id || 'ESP32S3';
-            await triggerManualInspection(targetDevice, detections, systemConfig.backendUrl);
+            const isMock = (telemetry && (telemetry as any).is_mock_active) || (typeof localStorage !== 'undefined' && localStorage.getItem('bawal_source_mode') === 'mock');
+            const targetDevice = isMock ? 'MOCK_VIDEO_CAM' : (systemConfig.deviceId || telemetry.device_id || 'ESP32S3');
+            const mockSrc = typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_mock_selected_video') || '' : '';
+            await triggerManualInspection(targetDevice, detections, systemConfig.backendUrl, isMock ? 'mock' : 'live', mockSrc);
             await pollBackendData();
         } catch (err) {
             console.warn('[MANUAL INSPECTION SYNC]', err);

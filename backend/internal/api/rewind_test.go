@@ -445,3 +445,63 @@ func TestMockInspectionRecordHasNoESPHardwareMetrics(t *testing.T) {
 	}
 }
 
+func TestMockStreamModeForcesMockRoutingAndPreventsESPCrossContamination(t *testing.T) {
+	app := fiber.New()
+	v1 := app.Group("/api/v1")
+	RegisterCameraRoutes(v1, nil)
+	RegisterDeviceRoutes(v1, nil)
+
+	// Switch stream mode to mock
+	camera_handler.GlobalCameraStore.SetStreamMode("mock")
+	camera_handler.GlobalCameraStore.SetActiveMockVideoMeta("banana/banana_sample_one.mp4", "uuid-mock-isolate-test-1234")
+
+	// Simulate an inspection arriving at /api/v1/inspections with physical ESP32 device_id while mock stream mode is active
+	strayPayload := model.IngressInspectionRequest{
+		DeviceID:   "ESP32S3_441BF6C95678",
+		SourceType: "live_esp32",
+		Detections: []model.FoodDetection{
+			{FoodName: "banana", SimilarityRate: 0.88, SpoilageScore: 5.0, Status: "PASS"},
+		},
+	}
+	body, _ := json.Marshal(strayPayload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/inspections", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 or 201 from mock routed handler, got %d", resp.StatusCode)
+	}
+
+	// Must be routed to MockInspectionRecord and MOCK_VIDEO
+	if resp.Header.Get("X-Inspection-Struct") != "MockInspectionRecord" {
+		t.Errorf("expected X-Inspection-Struct to be MockInspectionRecord, got %s", resp.Header.Get("X-Inspection-Struct"))
+	}
+	if resp.Header.Get("X-Stream-Source") != "MOCK_VIDEO" {
+		t.Errorf("expected X-Stream-Source to be MOCK_VIDEO, got %s", resp.Header.Get("X-Stream-Source"))
+	}
+
+	var resMap map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&resMap); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resMap["device_id"] != "MOCK_VIDEO_CAM" {
+		t.Errorf("expected device_id to be forced to MOCK_VIDEO_CAM in mock mode, got %v", resMap["device_id"])
+	}
+	if resMap["source_type"] != "mock_video" {
+		t.Errorf("expected source_type=mock_video, got %v", resMap["source_type"])
+	}
+	if resMap["inspection_struct"] != "MockInspectionRecord" {
+		t.Errorf("expected inspection_struct=MockInspectionRecord, got %v", resMap["inspection_struct"])
+	}
+
+	// Reset stream mode back to live
+	camera_handler.GlobalCameraStore.SetStreamMode("live")
+}
+
+

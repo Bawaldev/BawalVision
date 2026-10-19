@@ -424,11 +424,25 @@ int main(int argc, char** argv) {
                     if (device_changed) {
                         pipeline.resetTracker();
                         if (!prev_device_id.empty()) {
-                            const std::string clear_prev = fmt::format(R"({{"device_id":"{}","detections":[]}})", prev_device_id);
-                            (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_prev);
+                            const bool prev_is_mock = (prev_device_id == "MOCK_VIDEO_CAM" || prev_device_id.rfind("MOCK_", 0) == 0);
+                            const std::string clear_prev = prev_is_mock
+                                ? fmt::format(R"({{"mock_id":"{}","device_id":"{}","detections":[]}})", prev_device_id, prev_device_id)
+                                : fmt::format(R"({{"device_id":"{}","detections":[]}})", prev_device_id);
+                            if (prev_is_mock) {
+                                (void)bawal::server::postMockInspectionPayload(curl_post, backend_base_url, clear_prev);
+                            } else {
+                                (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_prev);
+                            }
                         }
-                        const std::string clear_new = fmt::format(R"({{"device_id":"{}","detections":[]}})", device_id);
-                        (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_new);
+                        const bool new_is_mock = (device_id == "MOCK_VIDEO_CAM" || device_id.rfind("MOCK_", 0) == 0);
+                        const std::string clear_new = new_is_mock
+                            ? fmt::format(R"({{"mock_id":"{}","device_id":"{}","detections":[]}})", device_id, device_id)
+                            : fmt::format(R"({{"device_id":"{}","detections":[]}})", device_id);
+                        if (new_is_mock) {
+                            (void)bawal::server::postMockInspectionPayload(curl_post, backend_base_url, clear_new);
+                        } else {
+                            (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_new);
+                        }
                     }
                     stream_url = fmt::format("{}/api/v1/camera/latest/{}/raw", backend_base_url, device_id);
                     video_source.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
