@@ -223,6 +223,9 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
     out_inspection.raw_image = dewarped;
 
+    // SIMD low-light & underexposure evaluation via Google Highway
+    out_inspection.dark_status = m_dark_detector.detect(dewarped);
+
     // ISP enhancement (IlluminationEnhancerAI)
     cv::Mat enhanced;
     if (m_video_source.enable_enchant) {
@@ -312,6 +315,9 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented.clone();
     out_inspection.raw_image = dewarped;
 
+    // SIMD low-light & underexposure evaluation via Google Highway
+    out_inspection.dark_status = m_dark_detector.detect(dewarped);
+
     // ISP enhancement
     cv::Mat enhanced;
     enhanceImage(dewarped, enhanced);
@@ -339,12 +345,27 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         return;
     }
 
-    if (inspection.detections.empty()) {
+    if (inspection.detections.empty() && !inspection.dark_status.is_dark) {
         out_display = inspection.dewarped_image;
         return;
     }
 
     out_display = inspection.dewarped_image.clone();
+
+    // Low-light underexposure banner if detected by Highway SIMD
+    if (inspection.dark_status.is_dark) {
+        std::ostringstream ss_dark;
+        ss_dark << "LOW LIGHT [Hwy SIMD] Gain: " << std::fixed << std::setprecision(1)
+                << inspection.dark_status.suggested_boost_gain << "x";
+        const std::string dark_txt = ss_dark.str();
+        int base = 0;
+        cv::Size tsz = cv::getTextSize(dark_txt, cv::FONT_HERSHEY_SIMPLEX, 0.40, 1, &base);
+        cv::Point bg_tl(8, out_display.rows - tsz.height - 12);
+        cv::Point bg_br(8 + tsz.width + 8, out_display.rows - 4);
+        cv::rectangle(out_display, bg_tl, bg_br, cv::Scalar(20, 20, 180), cv::FILLED);
+        cv::putText(out_display, dark_txt, cv::Point(12, out_display.rows - 8),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.40, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    }
 
     for (const auto& det : inspection.detections) {
         if (det.class_id < 0 || det.confidence < m_conf_threshold ||
