@@ -229,6 +229,33 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		})
 	})
 
+	camGroup.Post("/mode", func(c *fiber.Ctx) error {
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		_ = c.BodyParser(&req)
+		mode := strings.ToLower(strings.TrimSpace(req.Mode))
+		if mode != "mock" && mode != "live" {
+			mode = "live"
+		}
+		camera_handler.GlobalCameraStore.SetStreamMode(mode)
+		if mode == "mock" {
+			inspection.GlobalInspectionStore.DisconnectNonMock()
+		} else {
+			inspection.GlobalInspectionStore.DisconnectDevice("MOCK_VIDEO_CAM")
+		}
+		return c.JSON(fiber.Map{
+			"status": "success",
+			"mode":   mode,
+		})
+	})
+
+	camGroup.Get("/mode", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"mode": camera_handler.GlobalCameraStore.GetStreamMode(),
+		})
+	})
+
 	mjpegStreamHandler := func(c *fiber.Ctx) error {
 		deviceID := c.Params("device_id")
 		if deviceID == "" || deviceID == "latest" || deviceID == "raw" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*" {
