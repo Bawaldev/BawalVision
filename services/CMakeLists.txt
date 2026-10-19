@@ -153,6 +153,7 @@ add_executable(vision_service ${SERVICE_SOURCES})
 
 target_include_directories(vision_service PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${ML_INCLUDE_DIR}
     ${OpenCV_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
