@@ -55,3 +55,4 @@ struct LambdaInspectionResponse {
 };
 
 } // namespace bawal::lambda
+
