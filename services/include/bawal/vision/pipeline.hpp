@@ -12,6 +12,7 @@
 #include "bawal/vision/calibration.hpp"
 #include "bawal/vision/camera_receiver.hpp"
 #include "bawal/vision/classifier.hpp"
+#include "bawal/vision/dark_detector.hpp"
 #include "bawal/vision/dewarp.hpp"
 #include "bawal/vision/enchanter.hpp"
 #include "bawal/vision/types.hpp"
@@ -32,6 +33,7 @@ struct InspectionOutput {
     cv::Mat annotated_image;
     std::vector<DetectionResult> detections;
     SceneOpticalMetrics scene_optical;
+    DarkDetectionResult dark_status;
 
     InspectionOutput() {
         detections.reserve(16);
@@ -151,6 +153,7 @@ public:
     [[nodiscard]] DewarpEngine& getDewarper() noexcept { return m_dewarper; }
     [[nodiscard]] RealESRGANEngine& getEnhancer() noexcept { return m_enhancer; }
     [[nodiscard]] FoodClassifier& getClassifier() noexcept { return m_classifier; }
+    [[nodiscard]] const DarkDetector& getDarkDetector() const noexcept { return m_dark_detector; }
 
 private:
     VideoSource m_video_source;
@@ -158,6 +161,7 @@ private:
     DewarpEngine m_dewarper;
     RealESRGANEngine m_enhancer;
     FoodClassifier m_classifier;
+    DarkDetector m_dark_detector;
     cv::Ptr<cv::CLAHE> m_clahe;
     float m_conf_threshold{0.35f};
     int m_width{640};
