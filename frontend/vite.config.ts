@@ -14,12 +14,20 @@ export default defineConfig(({ mode }) => {
 				'/api': {
 					target: env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080',
 					changeOrigin: true
+				},
+				'/examples': {
+					target: env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080',
+					changeOrigin: true
 				}
 			}
 		},
 		preview: {
 			proxy: {
 				'/api': {
+					target: backendTarget,
+					changeOrigin: true
+				},
+				'/examples': {
 					target: backendTarget,
 					changeOrigin: true
 				}

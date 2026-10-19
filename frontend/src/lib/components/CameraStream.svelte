@@ -36,13 +36,11 @@
     let sourceMode = $state<SourceModeType>('live');
 
     let exampleVideos = $state<string[]>([
-        'sample_tray.mp4',
-        'sample_conveyor.mp4',
-        'fish_freshness_eval.mp4'
+        'banana/banana_sample_one.mp4'
     ]);
-    let selectedVideo = $state('sample_tray.mp4');
-    let mockVideoSrc = $state('/examples/sample_tray.mp4');
-    let mockFileName = $state('sample_tray.mp4');
+    let selectedVideo = $state('banana/banana_sample_one.mp4');
+    let mockVideoSrc = $state('/api/v1/examples/file/banana/banana_sample_one.mp4');
+    let mockFileName = $state('banana/banana_sample_one.mp4');
     let isCustomUpload = $state(false);
     let fileInputRef = $state<HTMLInputElement | null>(null);
 
@@ -57,6 +55,8 @@
     let isPushingFrame = false;
     let pushInterval: any = null;
     let mockFrameSeq = 0;
+    let isRewound = $state(false);
+    let lastVideoTime = 0;
 
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
@@ -67,20 +67,44 @@
         streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`
     );
 
-    // Fetch list of examples from backend /examples directory (lightweight & safe)
+    // Fetch list of modular examples from backend /examples directory
     $effect(() => {
         fetch('/api/v1/examples')
             .then(res => res.ok ? res.json() : null)
             .then(data => {
                 if (data && Array.isArray(data.videos) && data.videos.length > 0) {
-                    const merged = Array.from(new Set([...data.videos, ...exampleVideos]));
-                    exampleVideos = merged;
+                    exampleVideos = data.videos;
+                    if (!data.videos.includes(selectedVideo) && !isCustomUpload) {
+                        selectExample(data.videos[0]);
+                    }
                 }
             })
             .catch(() => {
                 // Fallback to presets if backend is unavailable
             });
     });
+
+    function formatExampleLabel(path: string): string {
+        const parts = path.split('/');
+        if (parts.length > 1) {
+            const category = parts[0];
+            const file = parts.slice(1).join('/');
+            const iconMap: Record<string, string> = {
+                banana: '🍌',
+                apple: '🍎',
+                orange: '🍊',
+                spinach: '🥬',
+                water_spinach: '🌱',
+                fish: '🐟',
+                meat: '🥩',
+                vegetable: '🥦',
+                fruit: '🍉'
+            };
+            const icon = iconMap[category.toLowerCase()] || '📁';
+            return `${icon} [${category}] ${file}`;
+        }
+        return `📹 ${path}`;
+    }
 
     function drawVideoPreservingAspect(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, cw: number, ch: number) {
         const vw = video.videoWidth || cw;
@@ -118,7 +142,9 @@
                     headers: {
                         'Content-Type': 'image/jpeg',
                         'X-Device-ID': 'MOCK_VIDEO_CAM',
-                        'X-Frame-ID': String(currentSeq)
+                        'X-Frame-ID': String(currentSeq),
+                        'X-Is-Rewind': isRewound ? '1' : '0',
+                        'X-Video-Rewind': isRewound ? '1' : '0'
                     },
                     body: blob
                 })
@@ -152,7 +178,9 @@
                     headers: {
                         'Content-Type': 'image/jpeg',
                         'X-Device-ID': 'MOCK_VIDEO_CAM',
-                        'X-Frame-ID': String(++mockFrameSeq)
+                        'X-Frame-ID': String(++mockFrameSeq),
+                        'X-Is-Rewind': isRewound ? '1' : '0',
+                        'X-Video-Rewind': isRewound ? '1' : '0'
                     },
                     body: blob
                 }).then(() => {
@@ -207,14 +235,24 @@
         }
     }
 
+    function resetRewindState() {
+        isRewound = false;
+        lastVideoTime = 0;
+        fetch('/api/v1/devices/mock/reset', { method: 'POST' }).catch(() => {});
+        pushCurrentFrameOnce();
+    }
+
     function selectExample(name: string) {
         selectedVideo = name;
         mockFileName = name;
         isCustomUpload = false;
+        isRewound = false;
+        lastVideoTime = 0;
+        fetch('/api/v1/devices/mock/reset', { method: 'POST' }).catch(() => {});
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);
         }
-        mockVideoSrc = `/examples/${name}`;
+        mockVideoSrc = `/api/v1/examples/file/${name}`;
         streamError = false;
         streamEpoch = Date.now();
         setTimeout(() => {
@@ -233,6 +271,9 @@
             mockFileName = file.name;
             selectedVideo = 'custom';
             isCustomUpload = true;
+            isRewound = false;
+            lastVideoTime = 0;
+            fetch('/api/v1/devices/mock/reset', { method: 'POST' }).catch(() => {});
             if (mockVideoSrc.startsWith('blob:')) {
                 URL.revokeObjectURL(mockVideoSrc);
             }
@@ -253,6 +294,7 @@
         if (mockVideoEl) {
             mockDuration = mockVideoEl.duration || 0;
             mockCurrentTime = mockVideoEl.currentTime || 0;
+            lastVideoTime = mockCurrentTime;
             if (sourceMode === 'mock') {
                 mockVideoEl.play().catch(() => {});
                 startMockPushing();
@@ -263,7 +305,13 @@
 
     function handleVideoTimeUpdate() {
         if (mockVideoEl) {
-            mockCurrentTime = mockVideoEl.currentTime;
+            const cur = mockVideoEl.currentTime;
+            // Video loop or backward rewind detection
+            if (cur < lastVideoTime - 0.3 || (lastVideoTime > 1.0 && cur < 0.5)) {
+                isRewound = true;
+            }
+            lastVideoTime = cur;
+            mockCurrentTime = cur;
         }
     }
 
@@ -282,8 +330,12 @@
     function handleSeek(e: Event) {
         const val = parseFloat((e.target as HTMLInputElement).value);
         if (mockVideoEl && !isNaN(val)) {
+            if (val < mockCurrentTime - 0.2) {
+                isRewound = true;
+            }
             mockVideoEl.currentTime = val;
             mockCurrentTime = val;
+            lastVideoTime = val;
             pushCurrentFrameOnce();
         }
     }
@@ -519,7 +571,7 @@
                             }}
                         >
                             {#each exampleVideos as ex}
-                                <option value={ex}>{ex}</option>
+                                <option value={ex}>{formatExampleLabel(ex)}</option>
                             {/each}
                             {#if isCustomUpload}
                                 <option value="custom">📎 {mockFileName} (Custom)</option>
@@ -546,8 +598,14 @@
                     </div>
 
                     <div class="ai-status-indicator">
-                        <span class="ai-dot-pulse"></span>
-                        <span>AI Pipeline: {mockIsPlaying ? 'Active Ingest' : 'Paused'} ({mockPushedFrames} frames)</span>
+                        <span class="ai-dot-pulse" class:rewind={isRewound}></span>
+                        <span>
+                            AI Pipeline: {mockIsPlaying ? 'Active Ingest' : 'Paused'} ({mockPushedFrames} frames)
+                            {#if isRewound}
+                                <span class="rewind-pill" title="Playback rewound or looped: Live bounding boxes active without duplicate database records or telemetry waste">🔁 Rewound (Data Preserved)</span>
+                                <button type="button" class="reinspect-btn" onclick={resetRewindState} title="Trigger a fresh single-pass inspection for this sample">↺ Re-inspect</button>
+                            {/if}
+                        </span>
                     </div>
                 </div>
             </div>
@@ -849,6 +907,44 @@
         background: #10b981;
         box-shadow: 0 0 6px #10b981;
         animation: pulse-dot 1.5s infinite;
+    }
+
+    .ai-dot-pulse.rewind {
+        background: #3b82f6;
+        box-shadow: 0 0 6px #3b82f6;
+    }
+
+    .rewind-pill {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 2px 7px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        background: rgba(59, 130, 246, 0.12);
+        color: #2563eb;
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        border-radius: 4px;
+        line-height: 1.2;
+    }
+
+    .reinspect-btn {
+        margin-left: 6px;
+        padding: 2px 7px;
+        font-size: 0.68rem;
+        font-weight: 600;
+        background: #ffffff;
+        color: #475569;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        cursor: pointer;
+        line-height: 1.2;
+        transition: all 0.15s ease;
+    }
+
+    .reinspect-btn:hover {
+        background: #f1f5f9;
+        color: #0f172a;
+        border-color: #94a3b8;
     }
 
     @keyframes pulse-dot {

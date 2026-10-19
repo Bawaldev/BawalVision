@@ -9,12 +9,18 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	fiber "github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+)
+
+var (
+	globalMockInspectMutex sync.Mutex
+	globalMockRecorded     = make(map[string]bool)
 )
 
 func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
@@ -137,6 +143,38 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
+		isMock := req.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(req.DeviceID, "MOCK_")
+		isRewind := req.IsRewind || c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
+		if !isRewind && isMock {
+			isRewind = camera_handler.GlobalCameraStore.IsDeviceInRewind(req.DeviceID)
+		}
+
+		// Rewind video does NOT add more telemetry or inspected trays (preserves database integrity)
+		if isRewind {
+			return c.Status(fiber.StatusOK).JSON(fiber.Map{
+				"status":    "success",
+				"message":   "Rewind active: live HUD updated without creating duplicate inspection record",
+				"is_rewind": true,
+			})
+		}
+
+		// Single-pass inspection gatekeeper for mock video runs to eliminate data pollution
+		if isMock {
+			globalMockInspectMutex.Lock()
+			alreadyRecorded := globalMockRecorded[req.DeviceID]
+			if !alreadyRecorded && len(req.Detections) > 0 {
+				globalMockRecorded[req.DeviceID] = true
+			} else if alreadyRecorded {
+				globalMockInspectMutex.Unlock()
+				return c.Status(fiber.StatusOK).JSON(fiber.Map{
+					"status":    "success",
+					"message":   "Mock sample tray already recorded: live HUD updated without duplicate database record",
+					"is_rewind": true,
+				})
+			}
+			globalMockInspectMutex.Unlock()
+		}
+
 		// Retrieve latest telemetry cache for this device as fallback for missing sensor values
 		latestTelemetry, hasCached := inspection.GlobalInspectionStore.GetLatestTelemetry(req.DeviceID)
 
@@ -233,7 +271,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		// Asynchronous non-blocking enqueue to Batch Worker
 		if inspection.GlobalBatchWorker != nil {
 			inspection.GlobalBatchWorker.Enqueue(task)
-		} else {
+		} else if db != nil {
 			// Fallback synchronous write if worker is not yet initialized
 			err := db.Transaction(func(tx *gorm.DB) error {
 				dev := device.Device{
@@ -885,9 +923,25 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		targetID := strings.TrimSpace(req.DeviceID)
 		inspection.GlobalInspectionStore.DisconnectDevice(targetID)
 		camera_handler.GlobalCameraStore.DisconnectDevice(targetID)
+		camera_handler.GlobalCameraStore.ResetDeviceRewind(targetID)
+		globalMockInspectMutex.Lock()
+		delete(globalMockRecorded, targetID)
+		globalMockInspectMutex.Unlock()
 		return c.JSON(fiber.Map{
 			"success": true,
 			"message": "Device disconnected",
+		})
+	})
+
+	// 9. POST Reset Mock Inspection State (Enables fresh single-pass test for mock video)
+	router.Post("/devices/mock/reset", func(c *fiber.Ctx) error {
+		globalMockInspectMutex.Lock()
+		globalMockRecorded = make(map[string]bool)
+		globalMockInspectMutex.Unlock()
+		camera_handler.GlobalCameraStore.ResetAllRewind()
+		return c.JSON(fiber.Map{
+			"success": true,
+			"message": "Mock inspection and rewind state cleared. Ready for fresh inspection run.",
 		})
 	})
 }

@@ -113,6 +113,11 @@ END $$;`).Error; err != nil {
 	api.RegisterFrontendRoutes(apiGroup, db)
 	api.RegisterCameraRoutes(apiGroup, db)
 
+	// Direct alias for /examples/* to /api/v1/examples/file/*
+	app.Get("/examples/*", func(c *fiber.Ctx) error {
+		return c.Redirect("/api/v1/examples/file/" + c.Params("*"))
+	})
+
 	// Graceful shutdown handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

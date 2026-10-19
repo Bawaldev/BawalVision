@@ -209,10 +209,17 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
         candidate_paths.emplace_back(model_path);
     }
 
-    // Single Final Model: ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx (Docker & local relative paths)
+    // Single Final Model: ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx (Docker & local relative paths across any working directory)
     candidate_paths.push_back("/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
     candidate_paths.push_back("ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
     candidate_paths.push_back("../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
+    candidate_paths.push_back("/app/weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../weights/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../../weights/ai1_vision_int8.onnx");
 
     for (const auto& path : candidate_paths) {
         std::ifstream f(path.c_str());
