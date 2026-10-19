@@ -87,11 +87,12 @@ find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui dnn)
 find_package(CURL REQUIRED)
+find_package(hwy REQUIRED)
 find_package(nlohmann_json QUIET)
 find_package(ncnn QUIET)
 
 if(NOT TARGET ncnn)
-    find_path(NCNN_INCLUDE_DIR
+    find_path(NCNN_INCLUDE_DIR  
         NAMES net.h gpu.h
         PATHS
             /opt/ncnn/include/ncnn
@@ -196,5 +197,18 @@ endif()
 if(TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(vision_service PRIVATE nlohmann_json::nlohmann_json)
 endif()
+
+if (TARGET hwy::hwy)
+    target_link_libraries(vision_service PRIVATE hwy::hwy )
+endif()
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
+    target_compile_definitions(vision_service PRIVATE BAWAL_USE_INTEL_ICPX=1)
+endif()
+
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_definitions(vision_service PRIVATE BAWAL_RELEASE_BUILD=1)
+endif()
+
 
 install(TARGETS vision_service DESTINATION bin)

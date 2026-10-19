@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopencv-dev \
     libcurl4-openssl-dev \
     nlohmann-json3-dev \
+    libhwy-dev \
     curl \
     tar \
     unzip \
@@ -59,6 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopencv-dnn406 \
     libcurl4 \
     ca-certificates \
+    libhwy-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Intel OpenMP Runtime (libiomp5) & compiler libraries
