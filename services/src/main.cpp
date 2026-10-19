@@ -11,8 +11,9 @@
 #include <atomic>
 #include <iomanip>
 #include <algorithm>
-#include <sstream>
 
+#include <httplib.h>
+#include <fmt/core.h>
 #include <curl/curl.h>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -29,10 +30,6 @@ int main(int argc, char** argv) {
 
     curl_global_init(CURL_GLOBAL_ALL);
     CURL* curl = curl_easy_init();
-    if (!curl) {
-        std::cerr << "[ERROR] Failed to initialize libcurl.\n";
-        return 1;
-    }
 
     bool headless = false;
     if (const char* env_headless = std::getenv("HEADLESS")) {
@@ -42,9 +39,9 @@ int main(int argc, char** argv) {
     }
 
     if (headless) {
-        std::cout << "[INFO] Running in HEADLESS mode.\n";
+        fmt::print("[INFO] Running in HEADLESS mode.\n");
     } else {
-        std::cout << "[INFO] Running in LOCAL GUI mode.\n";
+        fmt::print("[INFO] Running in LOCAL GUI mode.\n");
     }
 
     std::string backend_host = "localhost";
@@ -53,7 +50,7 @@ int main(int argc, char** argv) {
     if (const char* env_host = std::getenv("BACKEND_HOST")) backend_host = env_host;
     if (const char* env_port = std::getenv("BACKEND_PORT")) backend_port = env_port;
 
-    const std::string backend_base_url = "http://" + backend_host + ":" + backend_port;
+    const std::string backend_base_url = fmt::format("http://{}:{}", backend_host, backend_port);
     std::string device_id = "";
 
     auto sanitizeID = [](std::string id) -> std::string {
@@ -245,19 +242,18 @@ int main(int argc, char** argv) {
                 }
 
                 if (!valid_detections.empty()) {
-                    std::cout << "[AI INFERENCE] (" << std::fixed << std::setprecision(1) << infer_ms << " ms) | Detections: ";
+                    fmt::print("[AI INFERENCE] ({:.1f} ms) | Detections: ", infer_ms);
                     for (const auto& d : valid_detections) {
                         const float freshness = std::clamp(1.0f - d.spoilage.discoloration_ratio, 0.0f, 1.0f);
                         const char* status_str = d.spoilage.is_visually_spoiled ? "SPOILED" : "FRESH";
-                        std::cout << "[" << d.class_name << ": " << int(d.confidence * 100) << "% (" 
-                                  << status_str << " " << int(freshness * 100) << "%)] ";
+                        fmt::print("[{}: {}% ({} {}%)] ", d.class_name, int(d.confidence * 100), status_str, int(freshness * 100));
                     }
-                    std::cout << "\n";
+                    fmt::print("\n");
                 }
 
                 // State-Change Hysteresis & Selective Sync Gatekeeper:
                 // Only dispatch if the food detection state has changed (new item or status change)
-                // or if 15 seconds have passed (periodic heartbeat). Enforces a 1.0s minimum debounce.
+                // or if 15 seconds have passed (periodic heartbeat). Enforces a minimum debounce.
                 const auto current_time = std::chrono::steady_clock::now();
                 const auto elapsed_since_dispatch = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_dispatch_time).count();
 
@@ -267,10 +263,7 @@ int main(int argc, char** argv) {
                     const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f)
                                                    ? "REJECT"
                                                    : ((spoilage_pct >= 25.0f || vd.confidence < 0.60f) ? "REVIEW" : "PASS");
-                    current_state_sig += vd.class_name;
-                    current_state_sig += ":";
-                    current_state_sig += status;
-                    current_state_sig += ";";
+                    current_state_sig += fmt::format("{}:{};", vd.class_name, status);
                 }
 
                 const bool is_mock_source = (dev_id == "MOCK_VIDEO_CAM" || dev_id.rfind("MOCK_", 0) == 0 || use_video_source);
@@ -278,90 +271,109 @@ int main(int argc, char** argv) {
                 const bool heartbeat_sync = is_mock_source ? (elapsed_since_dispatch >= 2500) : (elapsed_since_dispatch >= 15000);
                 const bool debounce_ok = (elapsed_since_dispatch >= 800);
 
-                // Shared YOLO object detection + OpenCV optical/spoilage JSON serializer used identically by Live and Mock
-                auto serializeVisionDetectionsJson = [&](std::ostringstream& ss, const std::vector<DetectionResult>& dets) {
+                // Shared YOLO object detection + OpenCV optical/spoilage JSON serializer formatted with fmt::format
+                auto serializeVisionDetectionsJson = [&](std::string& out_body, const std::vector<DetectionResult>& dets) {
                     const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
-                    ss << "\"scene_optical\":{"
-                       << "\"avg_r\":" << std::fixed << std::setprecision(1) << optical.avg_r << ","
-                       << "\"avg_g\":" << optical.avg_g << ","
-                       << "\"avg_b\":" << optical.avg_b << ","
-                       << "\"lux_luminance\":" << optical.lux_luminance << ","
-                       << "\"color_temperature\":" << optical.color_temperature << ","
-                       << "\"white_balance_status\":\"" << optical.white_balance_status << "\""
-                       << "},"
-                       << "\"detections\":[";
+                    out_body += fmt::format(
+                        R"("scene_optical":{{"avg_r":{:.1f},"avg_g":{:.1f},"avg_b":{:.1f},"lux_luminance":{:.1f},"color_temperature":{},"white_balance_status":"{}"}},"detections":[)",
+                        optical.avg_r,
+                        optical.avg_g,
+                        optical.avg_b,
+                        optical.lux_luminance,
+                        optical.color_temperature,
+                        optical.white_balance_status
+                    );
                     for (size_t i = 0; i < dets.size(); ++i) {
                         const auto& vd = dets[i];
                         const float spoilage_pct = std::clamp(vd.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
                         const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f)
                                                        ? "REJECT"
                                                        : ((spoilage_pct >= 25.0f || vd.confidence < 0.60f) ? "REVIEW" : "PASS");
-
-                        if (i > 0) ss << ",";
-                        ss << "{"
-                           << "\"food_name\":\"" << vd.class_name << "\","
-                           << "\"similarity_rate\":" << std::fixed << std::setprecision(4) << vd.confidence << ","
-                           << "\"spoilage_score\":" << std::fixed << std::setprecision(2) << spoilage_pct << ","
-                           << "\"status\":\"" << status << "\","
-                           << "\"box\":[" << vd.bbox.x << "," << vd.bbox.y << "," << vd.bbox.width << "," << vd.bbox.height << "]"
-                           << "}";
+                        if (i > 0) {
+                            out_body.push_back(',');
+                        }
+                        out_body += fmt::format(
+                            R"({{"food_name":"{}","similarity_rate":{:.4f},"spoilage_score":{:.2f},"status":"{}","box":[{},{},{},{}]}})",
+                            vd.class_name,
+                            vd.confidence,
+                            spoilage_pct,
+                            status,
+                            vd.bbox.x,
+                            vd.bbox.y,
+                            vd.bbox.width,
+                            vd.bbox.height
+                        );
                     }
-                    ss << "]";
+                    out_body.push_back(']');
                     return optical;
                 };
 
-                if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty() && curl_db) {
-                    std::ostringstream json_ss;
-                    if (is_mock_source) {
-                        // MockInspectionRequest struct (no ESP32 hardware fields; identical YOLO/CV detections)
-                        json_ss << "{"
-                                << "\"mock_id\":\"" << dev_id << "\","
-                                << "\"device_id\":\"" << dev_id << "\","
-                                << "\"source_type\":\"mock_video\","
-                                << "\"inspection_struct\":\"MockInspectionRequest\","
-                                << "\"engine_pipeline\":\"YOLOv8n-INT8 + OpenCV HSV\","
-                                << "\"is_rewind\":" << (video_has_rewound.load() ? "true" : "false") << ",";
-                    } else {
-                        // Live IngressInspectionRequest struct
-                        json_ss << "{"
-                                << "\"device_id\":\"" << dev_id << "\","
-                                << "\"source_type\":\"live_esp32\","
-                                << "\"is_rewind\":" << (video_has_rewound.load() ? "true" : "false") << ",";
-                    }
-                    const auto optical = serializeVisionDetectionsJson(json_ss, valid_detections);
-                    json_ss << "}";
+                if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty()) {
+                    const bool is_rewound = video_has_rewound.load();
+                    std::string payload_json = is_mock_source
+                        ? fmt::format(
+                              R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest","engine_pipeline":"YOLOv8n-INT8 + OpenCV HSV","is_rewind":{},)",
+                              dev_id,
+                              dev_id,
+                              is_rewound ? "true" : "false"
+                          )
+                        : fmt::format(
+                              R"({{"device_id":"{}","source_type":"live_esp32","is_rewind":{},)",
+                              dev_id,
+                              is_rewound ? "true" : "false"
+                          );
 
-                    const std::string payload_json = json_ss.str();
+                    const auto optical = serializeVisionDetectionsJson(payload_json, valid_detections);
+                    payload_json.push_back('}');
+
+                    if (is_mock_source) {
+                        const std::string mock_telemetry_json = fmt::format(
+                            R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","telemetry_struct":"MockTelemetryPayload","connection_mode":"mock_simulation","engine_pipeline":"YOLOv8n-INT8 + OpenCV HSV","is_rewind":{},"scene_optical":{{"avg_r":{:.1f},"avg_g":{:.1f},"avg_b":{:.1f},"lux_luminance":{:.1f},"color_temperature":{},"white_balance_status":"{}"}}}})",
+                            dev_id,
+                            dev_id,
+                            is_rewound ? "true" : "false",
+                            optical.avg_r,
+                            optical.avg_g,
+                            optical.avg_b,
+                            optical.lux_luminance,
+                            optical.color_temperature,
+                            optical.white_balance_status
+                        );
+                        (void)bawal::server::postMockTelemetryPayload(backend_base_url, mock_telemetry_json);
+                    }
+
                     const bool dispatched = is_mock_source
                         ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, payload_json)
                         : bawal::server::postInspectionPayload(curl_db, backend_base_url, payload_json);
                     if (dispatched) {
                         last_dispatch_time = current_time;
                         last_state_signature = current_state_sig;
-                        std::cout << "[DISPATCH] " << (is_mock_source ? "MockInspectionRequest" : "Live IngressInspectionRequest")
-                                  << " saved to PostgreSQL (" << valid_detections.size() << " detected foods | "
-                                  << "Optical: " << int(optical.lux_luminance) << " lx, " << optical.white_balance_status << " | "
-                                  << (state_changed ? "STATE CHANGE" : "HEARTBEAT") << ")\n";
+                        fmt::print(
+                            "[DISPATCH] {} saved to PostgreSQL ({} detected foods | Optical: {} lx, {} | {})\n",
+                            is_mock_source ? "MockInspectionRequest" : "Live IngressInspectionRequest",
+                            valid_detections.size(),
+                            int(optical.lux_luminance),
+                            optical.white_balance_status,
+                            state_changed ? "STATE CHANGE" : "HEARTBEAT"
+                        );
                     }
-                } else if (should_clear_backend && !dev_id.empty() && curl_db) {
-                    std::ostringstream clear_ss;
-                    if (is_mock_source) {
-                        clear_ss << "{"
-                                 << "\"mock_id\":\"" << dev_id << "\","
-                                 << "\"device_id\":\"" << dev_id << "\","
-                                 << "\"source_type\":\"mock_video\","
-                                 << "\"inspection_struct\":\"MockInspectionRequest\",";
-                    } else {
-                        clear_ss << "{"
-                                 << "\"device_id\":\"" << dev_id << "\","
-                                 << "\"source_type\":\"live_esp32\",";
-                    }
+                } else if (should_clear_backend && !dev_id.empty()) {
+                    std::string clear_json = is_mock_source
+                        ? fmt::format(
+                              R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest",)",
+                              dev_id,
+                              dev_id
+                          )
+                        : fmt::format(
+                              R"({{"device_id":"{}","source_type":"live_esp32",)",
+                              dev_id
+                          );
                     const std::vector<DetectionResult> empty_dets;
-                    (void)serializeVisionDetectionsJson(clear_ss, empty_dets);
-                    clear_ss << "}";
+                    (void)serializeVisionDetectionsJson(clear_json, empty_dets);
+                    clear_json.push_back('}');
                     const bool cleared = is_mock_source
-                        ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, clear_ss.str())
-                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_ss.str());
+                        ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, clear_json)
+                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_json);
                     if (cleared) {
                         last_dispatch_time = current_time;
                         last_state_signature.clear();
@@ -392,7 +404,7 @@ int main(int argc, char** argv) {
             if (video_source.didRewind()) {
                 pipeline.resetTracker();
                 video_has_rewound.store(true);
-                std::cout << "[INFO] Video rewind detected: duplicate inspection writes suppressed.\n";
+                fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
             }
             inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
         } else {
@@ -411,22 +423,20 @@ int main(int argc, char** argv) {
                     }
                     if (device_changed) {
                         pipeline.resetTracker();
-                        if (!prev_device_id.empty() && curl_post) {
-                            const std::string clear_prev = "{\"device_id\":\"" + prev_device_id + "\",\"detections\":[]}";
+                        if (!prev_device_id.empty()) {
+                            const std::string clear_prev = fmt::format(R"({{"device_id":"{}","detections":[]}})", prev_device_id);
                             (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_prev);
                         }
-                        if (curl_post) {
-                            const std::string clear_new = "{\"device_id\":\"" + device_id + "\",\"detections\":[]}";
-                            (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_new);
-                        }
+                        const std::string clear_new = fmt::format(R"({{"device_id":"{}","detections":[]}})", device_id);
+                        (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_new);
                     }
-                    stream_url = backend_base_url + "/api/v1/camera/latest/" + device_id + "/raw";
-                    video_source.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
-                    std::cout << "[SUCCESS] Active camera stream connected: " << device_id << "\n";
-                    std::cout << "[INFO] Ingestion URL: " << stream_url << "\n";
+                    stream_url = fmt::format("{}/api/v1/camera/latest/{}/raw", backend_base_url, device_id);
+                    video_source.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
+                    fmt::print("[SUCCESS] Active camera stream connected: {}\n", device_id);
+                    fmt::print("[INFO] Ingestion URL: {}\n", stream_url);
                 } else if (discovered.empty() && idle_backoff_ms > 200 && !device_id.empty()) {
                     device_id = "";
-                    stream_url = backend_base_url + "/api/v1/camera/latest/raw";
+                    stream_url = fmt::format("{}/api/v1/camera/latest/raw", backend_base_url);
                     video_source.setStreamUrl(stream_url, stream_url);
                 }
             }
