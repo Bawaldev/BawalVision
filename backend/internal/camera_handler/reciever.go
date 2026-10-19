@@ -12,6 +12,7 @@ type CachedFrame struct {
 	ImageBytes  []byte
 	TimestampMS int64
 	ClientIP    string
+	IsRewind    bool
 }
 
 type subscriber struct {
@@ -37,10 +38,14 @@ var GlobalCameraStore = &CameraStore{
 }
 
 func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte) {
-	s.StoreRawFrameWithIP(deviceID, frameID, data, "")
+	s.StoreRawFrameWithMeta(deviceID, frameID, data, "", false)
 }
 
 func (s *CameraStore) StoreRawFrameWithIP(deviceID string, frameID uint32, data []byte, clientIP string) {
+	s.StoreRawFrameWithMeta(deviceID, frameID, data, clientIP, false)
+}
+
+func (s *CameraStore) StoreRawFrameWithMeta(deviceID string, frameID uint32, data []byte, clientIP string, isRewind bool) {
 	if deviceID == "" || deviceID == "\\" || deviceID == "/" || deviceID == "null" {
 		deviceID = "DEFAULT_CAMERA"
 	}
@@ -66,6 +71,7 @@ func (s *CameraStore) StoreRawFrameWithIP(deviceID string, frameID uint32, data 
 		ImageBytes:  data,
 		TimestampMS: now,
 		ClientIP:    clientIP,
+		IsRewind:    isRewind,
 	}
 
 	// Check if vision service is actively streaming annotated frames (< 2500ms)
@@ -211,6 +217,67 @@ func (s *CameraStore) GetRawFrame(deviceID string) ([]byte, bool) {
 		return nil, false
 	}
 	return frame.ImageBytes, true
+}
+
+func (s *CameraStore) GetRawFrameWithRewind(deviceID string) ([]byte, bool, bool) {
+	s.RLock()
+	defer s.RUnlock()
+
+	if deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "ESP32-S3-BENCH-01" {
+		var latestFrame *CachedFrame
+		for _, f := range s.rawFrames {
+			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+				curr := f
+				latestFrame = &curr
+			}
+		}
+		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
+			return latestFrame.ImageBytes, latestFrame.IsRewind, true
+		}
+	}
+
+	frame, exists := s.rawFrames[deviceID]
+	if !exists || len(frame.ImageBytes) == 0 {
+		var latestFrame *CachedFrame
+		for _, f := range s.rawFrames {
+			if latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS {
+				curr := f
+				latestFrame = &curr
+			}
+		}
+		if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
+			return latestFrame.ImageBytes, latestFrame.IsRewind, true
+		}
+		return nil, false, false
+	}
+	return frame.ImageBytes, frame.IsRewind, true
+}
+
+func (s *CameraStore) IsDeviceInRewind(deviceID string) bool {
+	s.RLock()
+	defer s.RUnlock()
+	if f, exists := s.rawFrames[deviceID]; exists {
+		return f.IsRewind
+	}
+	return false
+}
+
+func (s *CameraStore) ResetDeviceRewind(deviceID string) {
+	s.Lock()
+	defer s.Unlock()
+	if f, exists := s.rawFrames[deviceID]; exists {
+		f.IsRewind = false
+		s.rawFrames[deviceID] = f
+	}
+}
+
+func (s *CameraStore) ResetAllRewind() {
+	s.Lock()
+	defer s.Unlock()
+	for id, f := range s.rawFrames {
+		f.IsRewind = false
+		s.rawFrames[id] = f
+	}
 }
 
 func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {

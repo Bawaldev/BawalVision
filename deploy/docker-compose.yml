@@ -45,6 +45,7 @@ services:
       - /dev:/dev
       - /sys:/sys:ro
       - ../.cache_trash:/app/.cache_trash:ro
+      - ../examples:/app/examples:ro
     group_add:
       - dialout
     device_cgroup_rules:
@@ -80,6 +81,7 @@ services:
       - ../weights:/app/weights:rw
       - ../ml/AI1/model:/app/ml/AI1/model:ro
       - ../ml/AI1/runs:/app/ml/AI1/runs:ro
+      - ../examples:/app/examples:ro
     networks:
       - bawal-net
     depends_on:
