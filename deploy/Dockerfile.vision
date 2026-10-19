@@ -23,6 +23,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libcurl4-openssl-dev \
     libomp-dev \
     libhwy-dev \
+    libfmt-dev \
+    libcpp-httplib-dev \
     nlohmann-json3-dev \
     ca-certificates \
     curl \
@@ -91,6 +93,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libcurl4 \
     libgomp1 \
     libhwy-dev \
+    libfmt-dev \
     ca-certificates \
     && useradd -m -s /bin/bash -u 1001 visionuser \
     && apt-get clean \

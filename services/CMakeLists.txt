@@ -111,6 +111,8 @@ if(NOT TARGET hwy::hwy)
         )
     endif()
 endif()
+find_package(fmt QUIET)
+find_package(httplib QUIET)
 find_package(nlohmann_json QUIET)
 find_package(ncnn QUIET)
 
@@ -220,6 +222,16 @@ endif()
 
 if(TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(vision_service PRIVATE nlohmann_json::nlohmann_json)
+endif()
+
+if(TARGET fmt::fmt)
+    target_link_libraries(vision_service PRIVATE fmt::fmt)
+    target_compile_definitions(vision_service PRIVATE BAWAL_USE_SYSTEM_FMT=1)
+endif()
+
+if(TARGET httplib::httplib)
+    target_link_libraries(vision_service PRIVATE httplib::httplib)
+    target_compile_definitions(vision_service PRIVATE BAWAL_USE_SYSTEM_HTTPLIB=1)
 endif()
 
 if (TARGET hwy::hwy)

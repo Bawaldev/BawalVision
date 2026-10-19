@@ -1,58 +1,140 @@
 #include <bawal/server/http_utils.hpp>
-#include <curl/curl.h>
+#include <httplib.h>
+#include <fmt/core.h>
+
 #include <algorithm>
-#include <iostream>
+#include <chrono>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 namespace bawal::server {
 
-static size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
-    const size_t total_bytes = size * nmemb;
-    auto* output_buffer = static_cast<std::vector<uint8_t>*>(userp);
-    const auto* byte_data = static_cast<const uint8_t*>(contents);
+namespace {
 
-    output_buffer->insert(output_buffer->end(), byte_data, byte_data + total_bytes);
-    return total_bytes;
+/**
+ * @brief Splits a full HTTP URL into its scheme://host:port base and request path.
+ *
+ * @param full_url Complete URL string (e.g. "http://localhost:8080/api/v1/camera/active").
+ * @return std::pair<std::string, std::string> Pair of (base_url, path).
+ */
+std::pair<std::string, std::string> splitUrlBaseAndPath(std::string_view full_url) {
+    if (full_url.empty()) {
+        return {"http://localhost:8080", "/"};
+    }
+
+    size_t path_start = std::string_view::npos;
+    const size_t scheme_pos = full_url.find("://");
+    if (scheme_pos != std::string_view::npos) {
+        path_start = full_url.find('/', scheme_pos + 3);
+    } else if (full_url.front() == '/') {
+        return {"http://localhost:8080", std::string(full_url)};
+    } else {
+        path_start = full_url.find('/');
+    }
+
+    if (path_start == std::string_view::npos) {
+        return {std::string(full_url), "/"};
+    }
+
+    std::string base(full_url.substr(0, path_start));
+    std::string path(full_url.substr(path_start));
+    if (path.empty()) {
+        path = "/";
+    }
+    return {std::move(base), std::move(path)};
 }
 
-bool fetchLatestFrame(CURL* curl, std::string_view url, std::vector<uint8_t>& buffer) {
-    if (!curl || url.empty()) {
+} // anonymous namespace
+
+/**
+ * @brief Returns a thread-local persistent httplib::Client configured with Keep-Alive and TCP_NODELAY.
+ *
+ * Maintains one persistent socket per thread per backend origin to eliminate TCP 3-way handshake
+ * overhead and ephemeral port exhaustion during 30 FPS streaming and telemetry dispatch.
+ *
+ * @param backend_base_url Base URL of the backend service (e.g. "http://localhost:8080").
+ * @param conn_timeout_ms Connection timeout in milliseconds.
+ * @param rw_timeout_ms Read/Write socket timeout in milliseconds.
+ * @return httplib::Client& Reference to the thread-local persistent HTTP client.
+ */
+httplib::Client& getPersistentHttpClient(
+    std::string_view backend_base_url,
+    int conn_timeout_ms,
+    int rw_timeout_ms
+) {
+    thread_local std::unordered_map<std::string, std::unique_ptr<httplib::Client>> tls_clients;
+
+    const auto [base_key, _] = splitUrlBaseAndPath(backend_base_url);
+    auto it = tls_clients.find(base_key);
+    if (it == tls_clients.end() || !it->second) {
+        auto cli = std::make_unique<httplib::Client>(base_key);
+        cli->set_keep_alive(true);
+        cli->set_tcp_nodelay(true);
+        it = tls_clients.emplace(base_key, std::move(cli)).first;
+    }
+
+    httplib::Client& client = *(it->second);
+    client.set_connection_timeout(std::chrono::milliseconds(conn_timeout_ms > 0 ? conn_timeout_ms : 800));
+    client.set_read_timeout(std::chrono::milliseconds(rw_timeout_ms > 0 ? rw_timeout_ms : 1500));
+    client.set_write_timeout(std::chrono::milliseconds(rw_timeout_ms > 0 ? rw_timeout_ms : 1500));
+    return client;
+}
+
+/**
+ * @brief Synchronously fetches the latest frame byte payload from the specified endpoint URL via httplib::Client.
+ *
+ * @param curl Legacy handle pointer (unused; persistent httplib::Client is used for keep-alive connectivity).
+ * @param url Target endpoint URL.
+ * @param buffer Output buffer to receive raw image bytes.
+ * @return true if HTTP status 200 OK was received with non-empty payload.
+ */
+bool fetchLatestFrame([[maybe_unused]] CURL* curl, std::string_view url, std::vector<uint8_t>& buffer) {
+    if (url.empty()) {
         return false;
     }
 
-    const std::string url_str(url);
     buffer.clear();
-    curl_easy_setopt(curl, CURLOPT_URL, url_str.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1000L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    const auto [base_url, path] = splitUrlBaseAndPath(url);
+    auto& cli = getPersistentHttpClient(base_url, 800, 1500);
 
-    const CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK) {
+    const httplib::Headers headers = {
+        {"Accept", "image/jpeg, application/octet-stream, */*"},
+        {"Cache-Control", "no-cache"}
+    };
+
+    auto res = cli.Get(path, headers);
+    if (!res || res->status != 200 || res->body.empty()) {
         return false;
     }
 
-    long http_status_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
-    return (http_status_code == 200 && !buffer.empty());
+    buffer.assign(
+        reinterpret_cast<const uint8_t*>(res->body.data()),
+        reinterpret_cast<const uint8_t*>(res->body.data()) + res->body.size()
+    );
+    return !buffer.empty();
 }
 
-std::string discoverActiveDeviceID(CURL* curl, std::string_view backend_base_url) {
-    if (!curl || backend_base_url.empty()) {
+/**
+ * @brief Discovers the active ESP32 or Mock device identifier by querying /api/v1/camera/active via httplib.
+ *
+ * @param curl Legacy handle pointer.
+ * @param backend_base_url Base URL of the backend service (e.g. "http://localhost:8080").
+ * @return std::string Device ID string if discovered, empty string otherwise.
+ */
+std::string discoverActiveDeviceID([[maybe_unused]] CURL* curl, std::string_view backend_base_url) {
+    if (backend_base_url.empty()) {
         return "";
     }
 
-    const std::string discovery_url = std::string(backend_base_url) + "/api/v1/camera/active";
-    std::vector<uint8_t> response_buffer;
-
-    if (!fetchLatestFrame(curl, discovery_url, response_buffer)) {
+    auto& cli = getPersistentHttpClient(backend_base_url, 800, 1200);
+    auto res = cli.Get("/api/v1/camera/active");
+    if (!res || res->status != 200 || res->body.empty()) {
         return "";
     }
 
-    const std::string_view json_payload(reinterpret_cast<const char*>(response_buffer.data()), response_buffer.size());
-
+    const std::string_view json_payload(res->body);
     constexpr std::string_view key = "\"device_id\"";
     const size_t key_pos = json_payload.find(key);
     if (key_pos == std::string_view::npos) {
@@ -78,250 +160,253 @@ std::string discoverActiveDeviceID(CURL* curl, std::string_view backend_base_url
 }
 
 /**
- * @brief Sends a Live ESP32-S3 inspection JSON payload (IngressInspectionRequest) to the backend service.
- * 
- * @param curl Active libcurl easy handle.
+ * @brief Sends a Live ESP32-S3 telemetry JSON payload (TelemetryIngressPayload) to /api/v1/telemetry via httplib.
+ *
+ * @param backend_base_url Base URL of the backend service.
+ * @param json_payload JSON string formatted with fmt::format containing TelemetryIngressPayload.
+ * @return true if backend returned HTTP 2xx status.
+ */
+bool postTelemetryPayload(std::string_view backend_base_url, std::string_view json_payload) {
+    if (backend_base_url.empty() || json_payload.empty()) {
+        return false;
+    }
+
+    auto& cli = getPersistentHttpClient(backend_base_url, 800, 1200);
+    const httplib::Headers headers = {
+        {"X-Stream-Source", "LIVE_ESP32"},
+        {"X-Telemetry-Mode", "LIVE_HARDWARE"},
+        {"X-Telemetry-Struct", "TelemetryIngressPayload"}
+    };
+
+    auto res = cli.Post(
+        "/api/v1/telemetry",
+        headers,
+        json_payload.data(),
+        json_payload.size(),
+        "application/json"
+    );
+    return (res && res->status >= 200 && res->status < 300);
+}
+
+/**
+ * @brief Sends a Mock Video simulation telemetry JSON payload (MockTelemetryPayload) to /api/v1/telemetry/mock via httplib.
+ *
+ * @param backend_base_url Base URL of the backend service.
+ * @param json_payload JSON string formatted with fmt::format containing MockTelemetryPayload.
+ * @return true if backend returned HTTP 2xx status.
+ */
+bool postMockTelemetryPayload(std::string_view backend_base_url, std::string_view json_payload) {
+    if (backend_base_url.empty() || json_payload.empty()) {
+        return false;
+    }
+
+    auto& cli = getPersistentHttpClient(backend_base_url, 800, 1200);
+    const httplib::Headers headers = {
+        {"X-Stream-Source", "MOCK_VIDEO"},
+        {"X-Telemetry-Mode", "MOCK_SIMULATION"},
+        {"X-Telemetry-Struct", "MockTelemetryPayload"}
+    };
+
+    auto res = cli.Post(
+        "/api/v1/telemetry/mock",
+        headers,
+        json_payload.data(),
+        json_payload.size(),
+        "application/json"
+    );
+    return (res && res->status >= 200 && res->status < 300);
+}
+
+/**
+ * @brief Sends a Live ESP32-S3 inspection JSON payload (IngressInspectionRequest) to /api/v1/inspections via httplib.
+ *
+ * @param curl Legacy handle pointer.
  * @param backend_base_url Base URL of the backend service.
  * @param json_payload JSON string containing IngressInspectionRequest payload.
  * @return true if backend returned HTTP 2xx status.
  */
-bool postInspectionPayload(CURL* curl, std::string_view backend_base_url, std::string_view json_payload) {
-    if (!curl || backend_base_url.empty() || json_payload.empty()) {
+bool postInspectionPayload([[maybe_unused]] CURL* curl, std::string_view backend_base_url, std::string_view json_payload) {
+    if (backend_base_url.empty() || json_payload.empty()) {
         return false;
     }
 
-    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/inspections";
-    
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, "X-Stream-Source: LIVE_ESP32");
-    headers = curl_slist_append(headers, "X-Inspection-Source: LIVE_ESP32");
-    headers = curl_slist_append(headers, "X-Inspection-Struct: IngressInspectionRequest");
-    headers = curl_slist_append(headers, "X-Telemetry-Struct: TelemetryIngressPayload");
+    auto& cli = getPersistentHttpClient(backend_base_url, 800, 1500);
+    const httplib::Headers headers = {
+        {"X-Stream-Source", "LIVE_ESP32"},
+        {"X-Inspection-Source", "LIVE_ESP32"},
+        {"X-Inspection-Struct", "IngressInspectionRequest"},
+        {"X-Telemetry-Struct", "TelemetryIngressPayload"}
+    };
 
-    curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload.data());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(json_payload.length()));
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1000L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    std::vector<uint8_t> response_buffer;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
-
-    const CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
-    curl_easy_setopt(curl, CURLOPT_POST, 0L);
-
-    if (res != CURLE_OK) {
-        return false;
-    }
-
-    long http_status_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
-    return (http_status_code >= 200 && http_status_code < 300);
+    auto res = cli.Post(
+        "/api/v1/inspections",
+        headers,
+        json_payload.data(),
+        json_payload.size(),
+        "application/json"
+    );
+    return (res && res->status >= 200 && res->status < 300);
 }
 
 /**
- * @brief Sends a Mock Video inspection JSON payload (MockInspectionRequest) to the backend service.
- * 
- * @param curl Active libcurl easy handle.
+ * @brief Sends a Mock Video inspection JSON payload (MockInspectionRequest) to /api/v1/inspections/mock via httplib.
+ *
+ * @param curl Legacy handle pointer.
  * @param backend_base_url Base URL of the backend service.
  * @param json_payload JSON string containing MockInspectionRequest payload.
  * @return true if backend returned HTTP 2xx status.
  */
-bool postMockInspectionPayload(CURL* curl, std::string_view backend_base_url, std::string_view json_payload) {
-    if (!curl || backend_base_url.empty() || json_payload.empty()) {
+bool postMockInspectionPayload([[maybe_unused]] CURL* curl, std::string_view backend_base_url, std::string_view json_payload) {
+    if (backend_base_url.empty() || json_payload.empty()) {
         return false;
     }
 
-    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/inspections/mock";
-    
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, "X-Stream-Source: MOCK_VIDEO");
-    headers = curl_slist_append(headers, "X-Inspection-Source: MOCK_VIDEO");
-    headers = curl_slist_append(headers, "X-Inspection-Struct: MockInspectionRequest");
-    headers = curl_slist_append(headers, "X-Telemetry-Struct: MockTelemetryPayload");
+    auto& cli = getPersistentHttpClient(backend_base_url, 800, 1500);
+    const httplib::Headers headers = {
+        {"X-Stream-Source", "MOCK_VIDEO"},
+        {"X-Inspection-Source", "MOCK_VIDEO"},
+        {"X-Inspection-Struct", "MockInspectionRequest"},
+        {"X-Telemetry-Struct", "MockTelemetryPayload"}
+    };
 
-    curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload.data());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(json_payload.length()));
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1000L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    std::vector<uint8_t> response_buffer;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
-
-    const CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
-    curl_easy_setopt(curl, CURLOPT_POST, 0L);
-
-    if (res != CURLE_OK) {
-        return false;
-    }
-
-    long http_status_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
-    return (http_status_code >= 200 && http_status_code < 300);
+    auto res = cli.Post(
+        "/api/v1/inspections/mock",
+        headers,
+        json_payload.data(),
+        json_payload.size(),
+        "application/json"
+    );
+    return (res && res->status >= 200 && res->status < 300);
 }
 
-bool postAnnotatedFrame(CURL* curl, std::string_view backend_base_url, std::string_view device_id, uint32_t frame_id, const std::vector<uint8_t>& jpeg_bytes) {
-    if (!curl || backend_base_url.empty() || jpeg_bytes.empty()) {
+/**
+ * @brief Transmits an annotated JPEG frame with visual bounding boxes to /api/v1/camera/annotated via httplib.
+ *
+ * @param curl Legacy handle pointer.
+ * @param backend_base_url Base URL of the backend service.
+ * @param device_id Target device identifier.
+ * @param frame_id Monotonic frame sequence ID.
+ * @param jpeg_bytes JPEG encoded annotated image bytes.
+ * @return true if backend returned HTTP 2xx status.
+ */
+bool postAnnotatedFrame(
+    [[maybe_unused]] CURL* curl,
+    std::string_view backend_base_url,
+    std::string_view device_id,
+    uint32_t frame_id,
+    const std::vector<uint8_t>& jpeg_bytes
+) {
+    if (backend_base_url.empty() || jpeg_bytes.empty()) {
         return false;
     }
 
-    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/camera/annotated";
+    auto& cli = getPersistentHttpClient(backend_base_url, 500, 1000);
+    const httplib::Headers headers = {
+        {"X-Device-ID", device_id.empty() ? "DEFAULT_CAMERA" : std::string(device_id)},
+        {"X-Frame-ID", fmt::format("{}", frame_id)}
+    };
 
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: image/jpeg");
-    const std::string dev_header = "X-Device-ID: " + std::string(device_id.empty() ? "DEFAULT_CAMERA" : device_id);
-    const std::string frame_header = "X-Frame-ID: " + std::to_string(frame_id);
-    headers = curl_slist_append(headers, dev_header.c_str());
-    headers = curl_slist_append(headers, frame_header.c_str());
-
-    curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jpeg_bytes.data());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(jpeg_bytes.size()));
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1000L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 500L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    std::vector<uint8_t> response_buffer;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
-
-    const CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
-    curl_easy_setopt(curl, CURLOPT_POST, 0L);
-
-    if (res != CURLE_OK) {
-        return false;
-    }
-
-    long http_status_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
-    return (http_status_code >= 200 && http_status_code < 300);
+    auto res = cli.Post(
+        "/api/v1/camera/annotated",
+        headers,
+        reinterpret_cast<const char*>(jpeg_bytes.data()),
+        jpeg_bytes.size(),
+        "image/jpeg"
+    );
+    return (res && res->status >= 200 && res->status < 300);
 }
 
+/**
+ * @brief Transmits a recorded video container (MP4/H.264 binary) to /api/v1/video via httplib.
+ *
+ * @param curl Legacy handle pointer.
+ * @param backend_base_url Base URL of backend service.
+ * @param device_id Unique identifier of transmitting device.
+ * @param video_bytes Binary buffer containing full video file.
+ * @param content_type MIME type of the video.
+ * @param timeout_ms Upload transfer timeout in milliseconds.
+ * @return true if server responds with HTTP 2xx status.
+ */
 bool postVideoPayload(
-    CURL* curl,
+    [[maybe_unused]] CURL* curl,
     std::string_view backend_base_url,
     std::string_view device_id,
     const std::vector<uint8_t>& video_bytes,
     std::string_view content_type,
     long timeout_ms
 ) {
-    if (!curl || backend_base_url.empty() || video_bytes.empty()) {
+    if (backend_base_url.empty() || video_bytes.empty()) {
         return false;
     }
 
-    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/video";
+    auto& cli = getPersistentHttpClient(backend_base_url, 1500, static_cast<int>(timeout_ms > 0 ? timeout_ms : 5000));
+    const httplib::Headers headers = {
+        {"X-Device-ID", device_id.empty() ? "DEFAULT_CAMERA" : std::string(device_id)}
+    };
 
-    struct curl_slist* headers = nullptr;
-    const std::string ct_header = "Content-Type: " + std::string(content_type.empty() ? "video/mp4" : content_type);
-    const std::string dev_header = "X-Device-ID: " + std::string(device_id.empty() ? "DEFAULT_CAMERA" : device_id);
-    headers = curl_slist_append(headers, ct_header.c_str());
-    headers = curl_slist_append(headers, dev_header.c_str());
-
-    curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, video_bytes.data());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(video_bytes.size()));
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms > 0 ? timeout_ms : 5000L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    std::vector<uint8_t> response_buffer;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
-
-    const CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
-    curl_easy_setopt(curl, CURLOPT_POST, 0L);
-
-    if (res != CURLE_OK) {
-        return false;
-    }
-
-    long http_status_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
-    return (http_status_code >= 200 && http_status_code < 300);
+    auto res = cli.Post(
+        "/api/v1/video",
+        headers,
+        reinterpret_cast<const char*>(video_bytes.data()),
+        video_bytes.size(),
+        content_type.empty() ? "video/mp4" : std::string(content_type)
+    );
+    return (res && res->status >= 200 && res->status < 300);
 }
 
+/**
+ * @brief Sends video manifest metadata in JSON format to /api/v1/video via httplib.
+ *
+ * @param curl Legacy handle pointer.
+ * @param backend_base_url Base URL of backend service.
+ * @param json_payload JSON string containing video metadata information.
+ * @param timeout_ms Transmission timeout limit in milliseconds.
+ * @return true if server responds with HTTP 2xx status.
+ */
 bool postVideoMetadata(
-    CURL* curl,
+    [[maybe_unused]] CURL* curl,
     std::string_view backend_base_url,
     std::string_view json_payload,
     long timeout_ms
 ) {
-    if (!curl || backend_base_url.empty() || json_payload.empty()) {
+    if (backend_base_url.empty() || json_payload.empty()) {
         return false;
     }
 
-    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/video";
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-
-    curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload.data());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(json_payload.length()));
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms > 0 ? timeout_ms : 1500L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1000L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    std::vector<uint8_t> response_buffer;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
-
-    const CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
-    curl_easy_setopt(curl, CURLOPT_POST, 0L);
-
-    if (res != CURLE_OK) {
-        return false;
-    }
-
-    long http_status_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
-    return (http_status_code >= 200 && http_status_code < 300);
+    auto& cli = getPersistentHttpClient(backend_base_url, 1000, static_cast<int>(timeout_ms > 0 ? timeout_ms : 1500));
+    auto res = cli.Post(
+        "/api/v1/video",
+        json_payload.data(),
+        json_payload.size(),
+        "application/json"
+    );
+    return (res && res->status >= 200 && res->status < 300);
 }
 
+/**
+ * @brief Queries the backend for dynamic detection confidence threshold via httplib.
+ *
+ * @param curl Legacy handle pointer.
+ * @param backend_base_url Base URL of backend service.
+ * @param fallback_val Default fallback threshold.
+ * @return float Dynamic threshold value clamped between 0.25f and 0.98f.
+ */
 float fetchDynamicThreshold(
-    CURL* curl,
+    [[maybe_unused]] CURL* curl,
     std::string_view backend_base_url,
     float fallback_val
 ) {
-    if (!curl || backend_base_url.empty()) {
+    if (backend_base_url.empty()) {
         return fallback_val;
     }
 
-    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/system/threshold";
-    std::vector<uint8_t> response_buffer;
-
-    if (!fetchLatestFrame(curl, endpoint_url, response_buffer)) {
+    auto& cli = getPersistentHttpClient(backend_base_url, 800, 1200);
+    auto res = cli.Get("/api/v1/system/threshold");
+    if (!res || res->status != 200 || res->body.empty()) {
         return fallback_val;
     }
 
-    const std::string_view json(reinterpret_cast<const char*>(response_buffer.data()), response_buffer.size());
+    const std::string_view json(res->body);
     constexpr std::string_view key = "\"threshold\":";
     const size_t pos = json.find(key);
     if (pos == std::string_view::npos) {
