@@ -900,12 +900,19 @@
                                     {/if}
                                 </td>
 
-                                <!-- Temperature Column -->
+                                <!-- Temperature / Source Column -->
                                 <td class="col-temp">
-                                    <div class="temp-badge" class:hot={(rec.temperature || 25) > 38}>
-                                        <span class="temp-icon">🌡️</span>
-                                        <span class="temp-val">{(rec.temperature || 24.5).toFixed(1)}°C</span>
-                                    </div>
+                                    {#if rec.device_id === 'MOCK_VIDEO_CAM' || rec.device_id?.startsWith('MOCK_') || rec.source_type === 'mock_video' || rec.inspection_struct === 'MockInspectionRecord'}
+                                        <div class="temp-badge">
+                                            <span class="temp-icon">🎬</span>
+                                            <span class="temp-val">Mock Sim</span>
+                                        </div>
+                                    {:else}
+                                        <div class="temp-badge" class:hot={(rec.temperature || 25) > 38}>
+                                            <span class="temp-icon">🌡️</span>
+                                            <span class="temp-val">{(rec.temperature || 24.5).toFixed(1)}°C</span>
+                                        </div>
+                                    {/if}
                                 </td>
 
                                 <!-- Status Column -->
@@ -928,6 +935,7 @@
 
     <!-- Inspection Record Modal Details -->
     {#if selectedRecord}
+        {@const isMockAudit = selectedRecord.device_id === 'MOCK_VIDEO_CAM' || selectedRecord.device_id?.startsWith('MOCK_') || selectedRecord.source_type === 'mock_video' || selectedRecord.inspection_struct === 'MockInspectionRecord'}
         <div class="modal-backdrop" role="dialog" aria-modal="true">
             <button
                 type="button"
@@ -938,33 +946,74 @@
             <div class="modal-card">
                 <div class="modal-header">
                     <div class="modal-header-title">
-                        <h3>Inspection Audit #{selectedRecord.id.slice(0, 12)}</h3>
+                        <h3>{isMockAudit ? 'Mock Video Audit' : 'Inspection Audit'} #{selectedRecord.id.slice(0, 12)}</h3>
                         <span class="modal-time">{new Date(selectedRecord.created_at).toLocaleString()}</span>
                     </div>
                     <button type="button" class="modal-close-btn" onclick={() => (selectedRecord = null)}>✕</button>
                 </div>
                 <div class="modal-body">
-                    <div class="modal-details-grid">
-                        <div class="detail-item">
-                            <span class="label">Device Node:</span>
-                            <strong class="val">{selectedRecord.device_id}</strong>
+                    {#if isMockAudit}
+                        <div class="modal-details-grid">
+                            <div class="detail-item">
+                                <span class="label">Video UUID:</span>
+                                <strong class="val">{selectedRecord.video_uuid || selectedRecord.id}</strong>
+                            </div>
+                            <div class="detail-item">
+                                <span class="label">Inspection Struct:</span>
+                                <strong class="val">MockInspectionRecord</strong>
+                            </div>
+                            <div class="detail-item">
+                                <span class="label">Vision Pipeline:</span>
+                                <strong class="val">{selectedRecord.engine_pipeline || 'YOLOv8n-INT8 + OpenCV HSV'}</strong>
+                            </div>
+                            <div class="detail-item">
+                                <span class="label">Scene Optical:</span>
+                                <strong class="val">{(selectedRecord.lux_luminance ?? 120).toFixed(1)} lx ({selectedRecord.white_balance_status || 'BALANCED'})</strong>
+                            </div>
                         </div>
-                        <div class="detail-item">
-                            <span class="label">Firmware:</span>
-                            <strong class="val">{selectedRecord.firmware_version}</strong>
-                        </div>
-                        <div class="detail-item">
-                            <span class="label">ESP32-S3 Temp:</span>
-                            <strong class="val">{(selectedRecord.temperature || 36.5).toFixed(1)}°C</strong>
-                        </div>
-                        <div class="detail-item">
-                            <span class="label">CPU Temp:</span>
-                            <strong class="val">{selectedRecord.cpu_temperature != null ? `${selectedRecord.cpu_temperature.toFixed(1)}°C` : 'N/A (Disconnected)'}</strong>
-                        </div>
-                    </div>
 
-                    <h4 class="json-section-heading">Raw Ingress Payload</h4>
-                    <pre class="json-viewer">{JSON.stringify(selectedRecord, null, 2)}</pre>
+                        <h4 class="json-section-heading">Raw Mock Ingress Payload (MockInspectionRecord)</h4>
+                        <pre class="json-viewer">{JSON.stringify({
+                            id: selectedRecord.id,
+                            mock_id: selectedRecord.mock_id || selectedRecord.id,
+                            video_uuid: selectedRecord.video_uuid || selectedRecord.id,
+                            video_source: selectedRecord.video_source || undefined,
+                            device_id: selectedRecord.device_id,
+                            source_type: 'mock_video',
+                            inspection_struct: 'MockInspectionRecord',
+                            telemetry_struct: 'MockTelemetryPayload',
+                            engine_pipeline: selectedRecord.engine_pipeline || 'YOLOv8n-INT8 + OpenCV HSV',
+                            created_at: selectedRecord.created_at,
+                            is_spoiled: selectedRecord.is_spoiled,
+                            t_safe_hours: selectedRecord.t_safe_hours,
+                            lux_luminance: selectedRecord.lux_luminance,
+                            white_balance_status: selectedRecord.white_balance_status,
+                            color_temperature: selectedRecord.color_temperature,
+                            inspection_foods: selectedRecord.inspection_foods
+                        }, null, 2)}</pre>
+                    {:else}
+                        <div class="modal-details-grid">
+                            <div class="detail-item">
+                                <span class="label">Device Node:</span>
+                                <strong class="val">{selectedRecord.device_id}</strong>
+                            </div>
+                            <div class="detail-item">
+                                <span class="label">Firmware:</span>
+                                <strong class="val">{selectedRecord.firmware_version || '1.0.0'}</strong>
+                            </div>
+                            <div class="detail-item">
+                                <span class="label">ESP32-S3 Temp:</span>
+                                <strong class="val">{(selectedRecord.temperature || 36.5).toFixed(1)}°C</strong>
+                            </div>
+                            <div class="detail-item">
+                                <span class="label">CPU Temp:</span>
+                                <strong class="val">{selectedRecord.cpu_temperature != null ? `${selectedRecord.cpu_temperature.toFixed(1)}°C` : 'N/A (Disconnected)'}</strong>
+                            </div>
+                        </div>
+
+                        <h4 class="json-section-heading">Raw Ingress Payload (InspectionRecord)</h4>
+                        <pre class="json-viewer">{JSON.stringify(selectedRecord, null, 2)}</pre>
+                    {/if}
                 </div>
             </div>
         </div>

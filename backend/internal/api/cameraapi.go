@@ -16,8 +16,71 @@ import (
 	"gorm.io/gorm"
 )
 
+func isMockDeviceOrHeader(c *fiber.Ctx, deviceID string) bool {
+	if deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_") {
+		return true
+	}
+	if c != nil {
+		src := strings.ToUpper(strings.TrimSpace(c.Get("X-Stream-Source")))
+		mode := strings.ToUpper(strings.TrimSpace(c.Get("X-Telemetry-Mode")))
+		if src == "MOCK_VIDEO" || mode == "MOCK_SIMULATION" {
+			return true
+		}
+	}
+	return false
+}
+
+func syncMockTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint32) string {
+	videoSrc := strings.Clone(strings.TrimSpace(c.Get("X-Mock-Video-Source")))
+	hdrUUID := strings.Clone(strings.TrimSpace(c.Get("X-Mock-Video-UUID")))
+	if videoSrc == "" {
+		activeSrc, _ := camera_handler.GlobalCameraStore.GetActiveMockVideoMeta()
+		videoSrc = activeSrc
+	}
+	videoUUID := inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, deviceID)
+	camera_handler.GlobalCameraStore.SetActiveMockVideoMeta(videoSrc, videoUUID)
+
+	isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
+	if isRewind {
+		return videoUUID
+	}
+
+	nowUnix := time.Now().Unix()
+	existing, hasExisting := inspection.GlobalInspectionStore.GetLatestMockTelemetry(deviceID)
+	if hasExisting {
+		existing.Timestamp = nowUnix
+		existing.FrameID = frameID
+		existing.VideoUUID = videoUUID
+		existing.MockID = videoUUID
+		if videoSrc != "" {
+			existing.VideoSource = videoSrc
+		}
+		inspection.GlobalInspectionStore.StoreMockTelemetry(existing)
+		return videoUUID
+	}
+
+	inspection.GlobalInspectionStore.StoreMockTelemetry(inspection.MockTelemetryPayload{
+		MockID:          videoUUID,
+		VideoUUID:       videoUUID,
+		DeviceID:        deviceID,
+		SourceType:      "mock_video",
+		TelemetryStruct: "MockTelemetryPayload",
+		VideoSource:     videoSrc,
+		FrameID:         frameID,
+		Timestamp:       nowUnix,
+		IsRewind:        false,
+		ConnectionMode:  "mock_simulation",
+		EnginePipeline:  "YOLOv8n-INT8 + OpenCV HSV",
+	})
+	return videoUUID
+}
+
 func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint32) {
 	if deviceID == "" || deviceID == "DEFAULT_CAMERA" || deviceID == "UNKNOWN_DEVICE" {
+		return
+	}
+	if isMockDeviceOrHeader(c, deviceID) {
+		_ = syncMockTelemetryFromCameraIngress(c, deviceID, frameID)
 		return
 	}
 	// Rewind video does NOT add more telemetry or flood session history
@@ -88,11 +151,6 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		camModel = strings.Clone(hdrModel)
 	}
 
-	connMode := "wifi_lan"
-	if deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_") {
-		connMode = "mock_video"
-	}
-
 	inspection.GlobalInspectionStore.StoreTelemetry(inspection.TelemetryIngressPayload{
 		DeviceID:        deviceID,
 		FirmwareVersion: fwVer,
@@ -102,7 +160,7 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		CPUTemperature:  cpuTemp,
 		CurrentCPULoad:  cpuLoad,
 		IPAddress:       clientIP,
-		ConnectionMode:  connMode,
+		ConnectionMode:  "wifi_lan",
 		CameraModel:     camModel,
 	})
 }
@@ -129,17 +187,44 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 						imageBytes = decoded
 					}
 				}
+				devID := strings.Clone(payload.DeviceID)
+				isMock := isMockDeviceOrHeader(c, devID)
+				videoSrc := strings.Clone(strings.TrimSpace(c.Get("X-Mock-Video-Source")))
+				hdrUUID := strings.Clone(strings.TrimSpace(c.Get("X-Mock-Video-UUID")))
+				videoUUID := ""
+				if isMock {
+					videoUUID = inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, devID)
+				}
 				if len(imageBytes) > 0 {
-					devID := strings.Clone(payload.DeviceID)
 					ipStr := strings.Clone(c.IP())
 					isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
-					camera_handler.GlobalCameraStore.StoreRawFrameWithMeta(devID, payload.FrameID, imageBytes, ipStr, isRewind)
+					camera_handler.GlobalCameraStore.StoreRawFrameWithMockMeta(devID, payload.FrameID, imageBytes, ipStr, isRewind, videoSrc, videoUUID)
 					syncTelemetryFromCameraIngress(c, devID, payload.FrameID)
 				}
+				if isMock {
+					c.Set("X-Stream-Source", "MOCK_VIDEO")
+					c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+					c.Set("X-Mock-Video-UUID", videoUUID)
+					return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+						"status":           "mock_frame_accepted",
+						"source_type":      "mock_video",
+						"telemetry_struct": "MockTelemetryPayload",
+						"device_id":        payload.DeviceID,
+						"video_source":     videoSrc,
+						"video_uuid":       videoUUID,
+						"frame_id":         payload.FrameID,
+						"message":          "Mock video frame ingested into shared YOLO CV pipeline",
+					})
+				}
+				c.Set("X-Stream-Source", "LIVE_ESP32")
+				c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
 				return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-					"status":    "success",
-					"device_id": payload.DeviceID,
-					"frame_id":  payload.FrameID,
+					"status":           "success",
+					"source_type":      "live_esp32",
+					"telemetry_struct": "TelemetryIngressPayload",
+					"device_id":        payload.DeviceID,
+					"frame_id":         payload.FrameID,
+					"message":          "Live ESP32-S3 camera frame and hardware telemetry ingested",
 				})
 			}
 		}
@@ -157,9 +242,24 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 
 		ipStr := strings.Clone(c.IP())
 		isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
-		camera_handler.GlobalCameraStore.StoreRawFrameWithMeta(deviceID, uint32(frameID), imageBytes, ipStr, isRewind)
+		isMock := isMockDeviceOrHeader(c, deviceID)
+		videoSrc := strings.Clone(strings.TrimSpace(c.Get("X-Mock-Video-Source")))
+		hdrUUID := strings.Clone(strings.TrimSpace(c.Get("X-Mock-Video-UUID")))
+		videoUUID := ""
+		if isMock {
+			videoUUID = inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, deviceID)
+		}
+		camera_handler.GlobalCameraStore.StoreRawFrameWithMockMeta(deviceID, uint32(frameID), imageBytes, ipStr, isRewind, videoSrc, videoUUID)
 		syncTelemetryFromCameraIngress(c, deviceID, uint32(frameID))
 
+		if isMock {
+			c.Set("X-Stream-Source", "MOCK_VIDEO")
+			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+			c.Set("X-Mock-Video-UUID", videoUUID)
+		} else {
+			c.Set("X-Stream-Source", "LIVE_ESP32")
+			c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
+		}
 		return c.SendStatus(fiber.StatusOK)
 	}
 
@@ -217,21 +317,53 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 		fps := camera_handler.GlobalCameraStore.GetActiveFPS()
+		if isMockDeviceOrHeader(nil, activeID) {
+			c.Set("X-Stream-Source", "MOCK_VIDEO")
+			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+			videoSrc, videoUUID := camera_handler.GlobalCameraStore.GetActiveMockVideoMeta()
+			if mockTel, ok := inspection.GlobalInspectionStore.GetLatestMockTelemetry(activeID); ok {
+				if videoSrc == "" {
+					videoSrc = mockTel.VideoSource
+				}
+				if videoUUID == "" {
+					videoUUID = mockTel.VideoUUID
+				}
+			}
+			videoUUID = inspection.ResolveMockVideoUUID(videoSrc, videoUUID, activeID)
+			c.Set("X-Mock-Video-UUID", videoUUID)
+			return c.JSON(fiber.Map{
+				"active":           true,
+				"device_id":        activeID,
+				"source_type":      "mock_video",
+				"telemetry_struct": "MockTelemetryPayload",
+				"fps":              fps,
+				"video_source":     videoSrc,
+				"video_uuid":       videoUUID,
+				"message":          "Mock video simulation stream active",
+			})
+		}
+		c.Set("X-Stream-Source", "LIVE_ESP32")
+		c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
 		camModel := "OV5640"
 		if live, ok := inspection.GlobalInspectionStore.GetLatestTelemetry(activeID); ok && live.CameraModel != "" {
 			camModel = live.CameraModel
 		}
 		return c.JSON(fiber.Map{
-			"active":       true,
-			"device_id":    activeID,
-			"fps":          fps,
-			"camera_model": camModel,
+			"active":           true,
+			"device_id":        activeID,
+			"source_type":      "live_esp32",
+			"telemetry_struct": "TelemetryIngressPayload",
+			"fps":              fps,
+			"camera_model":     camModel,
+			"message":          "Live ESP32-S3 camera stream active",
 		})
 	})
 
 	camGroup.Post("/mode", func(c *fiber.Ctx) error {
 		var req struct {
-			Mode string `json:"mode"`
+			Mode        string `json:"mode"`
+			VideoSource string `json:"video_source"`
+			VideoUUID   string `json:"video_uuid"`
 		}
 		_ = c.BodyParser(&req)
 		mode := strings.ToLower(strings.TrimSpace(req.Mode))
@@ -241,18 +373,48 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		camera_handler.GlobalCameraStore.SetStreamMode(mode)
 		if mode == "mock" {
 			inspection.GlobalInspectionStore.DisconnectNonMock()
-		} else {
-			inspection.GlobalInspectionStore.DisconnectDevice("MOCK_VIDEO_CAM")
+			if req.VideoSource != "" || req.VideoUUID != "" {
+				uid := inspection.ResolveMockVideoUUID(req.VideoSource, req.VideoUUID, "MOCK_VIDEO_CAM")
+				camera_handler.GlobalCameraStore.SetActiveMockVideoMeta(req.VideoSource, uid)
+			}
+			_, activeUUID := camera_handler.GlobalCameraStore.GetActiveMockVideoMeta()
+			c.Set("X-Stream-Source", "MOCK_VIDEO")
+			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+			if activeUUID != "" {
+				c.Set("X-Mock-Video-UUID", activeUUID)
+			}
+			return c.JSON(fiber.Map{
+				"status":            "success",
+				"mode":              "mock",
+				"video_uuid":        activeUUID,
+				"telemetry_struct":  "MockTelemetryPayload",
+				"inspection_struct": "MockInspectionRecord",
+				"message":           "Switched to Mock Video mode: all live ESP32-S3 streams turned off",
+			})
 		}
+		inspection.GlobalInspectionStore.DisconnectDevice("MOCK_VIDEO_CAM")
+		c.Set("X-Stream-Source", "LIVE_ESP32")
+		c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
 		return c.JSON(fiber.Map{
-			"status": "success",
-			"mode":   mode,
+			"status":            "success",
+			"mode":              "live",
+			"telemetry_struct":  "TelemetryIngressPayload",
+			"inspection_struct": "InspectionRecord",
+			"message":           "Switched to Live ESP32-S3 mode: live hardware streams enabled",
 		})
 	})
 
 	camGroup.Get("/mode", func(c *fiber.Ctx) error {
+		mode := camera_handler.GlobalCameraStore.GetStreamMode()
+		if mode == "mock" {
+			c.Set("X-Stream-Source", "MOCK_VIDEO")
+			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+		} else {
+			c.Set("X-Stream-Source", "LIVE_ESP32")
+			c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
+		}
 		return c.JSON(fiber.Map{
-			"mode": camera_handler.GlobalCameraStore.GetStreamMode(),
+			"mode": mode,
 		})
 	})
 

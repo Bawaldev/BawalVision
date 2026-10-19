@@ -45,16 +45,31 @@ static_assert(sizeof(CameraConfig) == 72, "CameraConfig must have 72 bytes in 64
 [[nodiscard]] std::string discoverActiveDeviceID(CURL* curl, std::string_view backend_base_url);
 
 /**
- * @brief Sends an inspection JSON payload with food detections to the backend service.
+ * @brief Sends a Live ESP32-S3 inspection JSON payload with food detections to the backend service.
  * 
  * Target endpoint: POST {backend_base_url}/api/v1/inspections
+ * Headers: X-Inspection-Source: LIVE_ESP32, X-Inspection-Struct: IngressInspectionRequest
  * 
  * @param curl Active libcurl easy handle.
  * @param backend_base_url Base URL of the backend service (e.g. http://localhost:8080).
- * @param json_payload JSON string containing device_id and detections array.
+ * @param json_payload JSON string containing IngressInspectionRequest payload.
  * @return true if backend returned HTTP 201 Created or HTTP 200 OK.
  */
 [[nodiscard]] bool postInspectionPayload(CURL* curl, std::string_view backend_base_url, std::string_view json_payload);
+
+/**
+ * @brief Sends a Mock Video inspection JSON payload (MockInspectionRequest) to the backend service.
+ * 
+ * Target endpoint: POST {backend_base_url}/api/v1/inspections/mock
+ * Headers: X-Inspection-Source: MOCK_VIDEO, X-Inspection-Struct: MockInspectionRequest, X-Telemetry-Struct: MockTelemetryPayload
+ * 
+ * @param curl Active libcurl easy handle.
+ * @param backend_base_url Base URL of the backend service (e.g. http://localhost:8080).
+ * @param json_payload JSON string containing MockInspectionRequest payload.
+ * @return true if backend returned HTTP 201 Created or HTTP 200 OK.
+ */
+[[nodiscard]] bool postMockInspectionPayload(CURL* curl, std::string_view backend_base_url, std::string_view json_payload);
+
 
 /**
  * @brief Transmits an annotated JPEG frame with visual bounding boxes to the backend.
