@@ -410,6 +410,44 @@
 
         return () => clearTimeout(timer);
     });
+
+    // Detection Filter Tabs State & Boundary-Safe Status Helper
+    type DetectionTabFilter = 'ALL' | 'PASS' | 'REVIEW' | 'REJECT';
+    let detectionFilter = $state<DetectionTabFilter>('ALL');
+
+    function getItemStatus(det: FoodDetection | null | undefined): 'PASS' | 'REVIEW' | 'REJECT' {
+        if (!det) return 'PASS';
+        
+        // Priority 1: Explicit server or ML model status tag
+        if (det.status === 'PASS' || det.status === 'REVIEW' || det.status === 'REJECT') {
+            return det.status;
+        }
+
+        // Boundary-safe score parsing with clamped values [0..100]
+        const rawSpoilage = Number(det.spoilage_score);
+        const spoilage = Number.isFinite(rawSpoilage) ? Math.max(0, Math.min(100, rawSpoilage)) : 0;
+
+        // Boundary-safe similarity rate parsing: handles 0..1 scale as well as 0..100% scale
+        let rawSim = Number(det.similarity_rate);
+        let sim = Number.isFinite(rawSim) ? rawSim : 1.0;
+        if (sim > 1.0) sim = sim / 100.0;
+        sim = Math.max(0, Math.min(1.0, sim));
+
+        // Quality inspection decision boundaries
+        if (spoilage >= 50 || sim < 0.35) return 'REJECT';
+        if (spoilage >= 25 || sim < 0.60) return 'REVIEW';
+        return 'PASS';
+    }
+
+    let validDetections = $derived(Array.isArray(detections) ? detections.filter((d): d is FoodDetection => Boolean(d)) : []);
+    let passCount = $derived(validDetections.filter(d => getItemStatus(d) === 'PASS').length);
+    let reviewCount = $derived(validDetections.filter(d => getItemStatus(d) === 'REVIEW').length);
+    let rejectCount = $derived(validDetections.filter(d => getItemStatus(d) === 'REJECT').length);
+
+    let filteredDetections = $derived.by(() => {
+        if (detectionFilter === 'ALL') return validDetections;
+        return validDetections.filter(d => getItemStatus(d) === detectionFilter);
+    });
 </script>
 
 <div class="camera-stream-wrapper">
@@ -553,59 +591,61 @@
 
                 <!-- Source Selection Bar -->
                 <div class="mock-control-bar">
-                    <div class="mock-select-group">
-                        <label for="example-select-input" class="mock-label">
-                            📁 <strong>examples/</strong>
-                        </label>
-                        <select
-                            id="example-select-input"
-                            class="example-select"
-                            value={selectedVideo}
-                            onchange={(e) => {
-                                const val = (e.target as HTMLSelectElement).value;
-                                if (val === 'custom') {
-                                    fileInputRef?.click();
-                                } else {
-                                    selectExample(val);
-                                }
-                            }}
-                        >
-                            {#each exampleVideos as ex}
-                                <option value={ex}>{formatExampleLabel(ex)}</option>
-                            {/each}
-                            {#if isCustomUpload}
-                                <option value="custom">📎 {mockFileName} (Custom)</option>
-                            {/if}
-                        </select>
-                    </div>
+                    <div class="mock-left-cluster">
+                        <div class="mock-select-group">
+                            <label for="example-select-input" class="mock-label">
+                                📁 <strong>examples/</strong>
+                            </label>
+                            <select
+                                id="example-select-input"
+                                class="example-select"
+                                value={selectedVideo}
+                                onchange={(e) => {
+                                    const val = (e.target as HTMLSelectElement).value;
+                                    if (val === 'custom') {
+                                        fileInputRef?.click();
+                                    } else {
+                                        selectExample(val);
+                                    }
+                                }}
+                            >
+                                {#each exampleVideos as ex}
+                                    <option value={ex}>{formatExampleLabel(ex)}</option>
+                                {/each}
+                                {#if isCustomUpload}
+                                    <option value="custom">📎 {mockFileName} (Custom)</option>
+                                {/if}
+                            </select>
+                        </div>
 
-                    <div class="mock-actions">
-                        <input
-                            type="file"
-                            accept="video/mp4,video/webm"
-                            class="hidden-file-input"
-                            bind:this={fileInputRef}
-                            onchange={handleFileUpload}
-                        />
-                        <button
-                            type="button"
-                            class="upload-btn"
-                            onclick={() => fileInputRef?.click()}
-                            title="Upload custom MP4/WebM file from disk"
-                        >
-                            + Upload Custom Video
-                        </button>
+                        <div class="mock-actions">
+                            <input
+                                type="file"
+                                accept="video/mp4,video/webm"
+                                class="hidden-file-input"
+                                bind:this={fileInputRef}
+                                onchange={handleFileUpload}
+                            />
+                            <button
+                                type="button"
+                                class="upload-btn"
+                                onclick={() => fileInputRef?.click()}
+                                title="Upload custom MP4/WebM file from disk"
+                            >
+                                + Upload Custom Video
+                            </button>
+                        </div>
                     </div>
 
                     <div class="ai-status-indicator">
                         <span class="ai-dot-pulse" class:rewind={isRewound}></span>
-                        <span>
+                        <span class="ai-pipeline-text">
                             AI Pipeline: {mockIsPlaying ? 'Active Ingest' : 'Paused'} ({mockPushedFrames} frames)
-                            {#if isRewound}
-                                <span class="rewind-pill" title="Playback rewound or looped: Live bounding boxes active without duplicate database records or telemetry waste">🔁 Rewound (Data Preserved)</span>
-                                <button type="button" class="reinspect-btn" onclick={resetRewindState} title="Trigger a fresh single-pass inspection for this sample">↺ Re-inspect</button>
-                            {/if}
                         </span>
+                        {#if isRewound}
+                            <span class="rewind-pill" title="Playback rewound or looped: Live bounding boxes active without duplicate database records or telemetry waste">🔁 Rewound (Data Preserved)</span>
+                            <button type="button" class="reinspect-btn" onclick={resetRewindState} title="Trigger a fresh single-pass inspection for this sample">↺ Re-inspect</button>
+                        {/if}
                     </div>
                 </div>
             </div>
@@ -613,20 +653,22 @@
 
         <div class="viewport-footer">
             <div class="footer-left">
-                <span>📷 Device: {sourceMode === 'mock' ? 'MOCK_VIDEO_CAM' : (deviceId || 'ESP32S3_CAM')}</span>
+                <span class="device-label">📷 Device: {sourceMode === 'mock' ? 'MOCK_VIDEO_CAM' : (deviceId || 'ESP32S3_CAM')}</span>
                 {#if sceneOptical && sceneOptical.lux_luminance != null}
                     <span class="optical-badge" title="SIMD AVX2 Optical Scene Analysis: Lux, White Balance & Correlated Color Temp">
                         💡 {Math.round(sceneOptical.lux_luminance)} lx • WB: {sceneOptical.white_balance_status} ({sceneOptical.color_temperature}K)
                     </span>
                 {/if}
             </div>
-            <span>
-                {#if sourceMode === 'live'}
-                    ⚡ Ingestion: MJPEG Push (/api/v1/camera/stream)
-                {:else}
-                    ⚡ Ingestion: MP4 Frame Ingestion -> ONNX YOLOv8 & Super-Resolution ({mockFileName})
-                {/if}
-            </span>
+            <div class="footer-right">
+                <span class="ingest-label">
+                    {#if sourceMode === 'live'}
+                        ⚡ Ingestion: MJPEG Push (/api/v1/camera/stream)
+                    {:else}
+                        ⚡ Ingestion: MP4 Frame Ingestion &rarr; ONNX YOLOv8 &amp; Real-ESRGAN <span class="ingest-file">({mockFileName})</span>
+                    {/if}
+                </span>
+            </div>
         </div>
     </div>
 
@@ -637,23 +679,80 @@
                 <span class="entity-group-icon">🍱</span>
                 <h3>Detected Items</h3>
             </div>
-            <span class="active-count" class:has-items={detections.length > 0}>
-                {detections.length} {detections.length === 1 ? 'Item' : 'Items'} Active
+            <span class="active-count" class:has-items={validDetections.length > 0}>
+                {validDetections.length} {validDetections.length === 1 ? 'Item' : 'Items'} Active
             </span>
         </div>
 
+        <!-- Filter Tabs: All, Pass Detection, Review, Reject -->
+        <div class="detection-tabs-row" role="tablist" aria-label="Detection Filter Tabs">
+            <button
+                type="button"
+                role="tab"
+                class="detection-tab-btn"
+                class:active={detectionFilter === 'ALL'}
+                onclick={() => (detectionFilter = 'ALL')}
+            >
+                <span>All</span>
+                <span class="tab-badge">{validDetections.length}</span>
+            </button>
+            <button
+                type="button"
+                role="tab"
+                class="detection-tab-btn tab-pass"
+                class:active={detectionFilter === 'PASS'}
+                onclick={() => (detectionFilter = 'PASS')}
+                title="Filter Pass (Compliant) detections"
+            >
+                <span class="tab-dot dot-pass"></span>
+                <span>Pass</span>
+                <span class="tab-badge badge-pass">{passCount}</span>
+            </button>
+            <button
+                type="button"
+                role="tab"
+                class="detection-tab-btn tab-review"
+                class:active={detectionFilter === 'REVIEW'}
+                onclick={() => (detectionFilter = 'REVIEW')}
+                title="Filter Review warnings"
+            >
+                <span class="tab-dot dot-review"></span>
+                <span>Review</span>
+                <span class="tab-badge badge-review">{reviewCount}</span>
+            </button>
+            <button
+                type="button"
+                role="tab"
+                class="detection-tab-btn tab-reject"
+                class:active={detectionFilter === 'REJECT'}
+                onclick={() => (detectionFilter = 'REJECT')}
+                title="Filter Rejected detections"
+            >
+                <span class="tab-dot dot-reject"></span>
+                <span>Reject</span>
+                <span class="tab-badge badge-reject">{rejectCount}</span>
+            </button>
+        </div>
+
         <div class="entity-chips-grid">
-            {#if detections.length === 0}
+            {#if validDetections.length === 0}
                 <div class="empty-tray-state">
                     <span class="empty-icon">🍽️</span>
                     <strong>Awaiting Food Tray</strong>
                     <p>Place meal tray in camera view for real-time AI food detection & quality inspection.</p>
                 </div>
+            {:else if filteredDetections.length === 0}
+                <div class="empty-tray-state">
+                    <span class="empty-icon">🔍</span>
+                    <strong>No {detectionFilter === 'PASS' ? 'Passing' : (detectionFilter === 'REVIEW' ? 'Review' : 'Rejected')} Items</strong>
+                    <p>No active detections match the "{detectionFilter}" filter.</p>
+                    <button type="button" class="reset-filter-btn" onclick={() => (detectionFilter = 'ALL')}>Show All Items</button>
+                </div>
             {:else}
-                {#each detections as det, idx}
+                {#each filteredDetections as det, idx}
                     {@const spoilage = Number(det.spoilage_score) || 0}
                     {@const freshness = Math.max(0, Math.min(100, Math.round(100 - spoilage)))}
-                    {@const status = (det.status as 'PASS' | 'REVIEW' | 'REJECT') || (spoilage >= 50 ? 'REJECT' : (spoilage >= 25 ? 'REVIEW' : 'PASS'))}
+                    {@const status = getItemStatus(det)}
                     
                     <div class="entity-item on" class:pass={status === 'PASS'} class:review={status === 'REVIEW'} class:reject={status === 'REJECT'}>
                         <div class="entity-icon-circle">
@@ -701,7 +800,7 @@
 <style>
     .camera-stream-wrapper {
         display: grid;
-        grid-template-columns: 1fr 260px;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
         gap: 16px;
     }
 
@@ -892,11 +991,16 @@
     .ai-status-indicator {
         display: flex;
         align-items: center;
-        gap: 6px;
-        font-size: 0.7rem;
+        gap: 8px;
+        font-size: 0.72rem;
         font-weight: 600;
         color: #059669;
         margin-left: auto;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+    }
+
+    .ai-pipeline-text {
         white-space: nowrap;
     }
 
@@ -907,6 +1011,7 @@
         background: #10b981;
         box-shadow: 0 0 6px #10b981;
         animation: pulse-dot 1.5s infinite;
+        flex-shrink: 0;
     }
 
     .ai-dot-pulse.rewind {
@@ -915,9 +1020,9 @@
     }
 
     .rewind-pill {
-        display: inline-block;
-        margin-left: 6px;
-        padding: 2px 7px;
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
         font-size: 0.68rem;
         font-weight: 700;
         background: rgba(59, 130, 246, 0.12);
@@ -925,11 +1030,13 @@
         border: 1px solid rgba(59, 130, 246, 0.3);
         border-radius: 4px;
         line-height: 1.2;
+        white-space: nowrap;
     }
 
     .reinspect-btn {
-        margin-left: 6px;
-        padding: 2px 7px;
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
         font-size: 0.68rem;
         font-weight: 600;
         background: #ffffff;
@@ -938,6 +1045,7 @@
         border-radius: 4px;
         cursor: pointer;
         line-height: 1.2;
+        white-space: nowrap;
         transition: all 0.15s ease;
     }
 
@@ -957,19 +1065,31 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        flex-wrap: wrap;
         padding: 8px 16px;
         background: #f8fafc;
         border-top: 1px solid var(--border-subtle);
         font-size: 0.75rem;
+        gap: 8px 16px;
+        min-height: 44px;
+    }
+
+    .mock-left-cluster {
+        display: flex;
+        align-items: center;
         gap: 12px;
+        flex-wrap: wrap;
+        flex: 1 1 auto;
+        min-width: 0;
     }
 
     .mock-select-group {
         display: flex;
         align-items: center;
         gap: 8px;
-        flex: 1;
-        min-width: 0;
+        flex: 1 1 auto;
+        min-width: 240px;
+        max-width: 440px;
     }
 
     .mock-label {
@@ -977,6 +1097,7 @@
         white-space: nowrap;
         font-size: 0.72rem;
         font-weight: 600;
+        flex-shrink: 0;
     }
 
     .example-select {
@@ -984,12 +1105,13 @@
         color: var(--text-primary);
         border: 1px solid var(--border-card);
         border-radius: var(--radius-sm);
-        padding: 4px 10px;
+        padding: 5px 12px;
         font-size: 0.75rem;
         font-weight: 600;
         outline: none;
         cursor: pointer;
-        max-width: 260px;
+        width: 100%;
+        min-width: 180px;
         transition: border-color 0.15s ease;
     }
 
@@ -1014,10 +1136,11 @@
         color: #3679a8;
         border: 1px solid #cbd5e1;
         border-radius: var(--radius-sm);
-        padding: 4px 12px;
+        padding: 5px 12px;
         font-size: 0.72rem;
         font-weight: 600;
         cursor: pointer;
+        white-space: nowrap;
         transition: all 0.15s ease;
     }
 
@@ -1106,12 +1229,14 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 10px 16px;
+        flex-wrap: wrap;
+        padding: 8px 16px;
         font-size: 0.72rem;
         color: var(--text-muted);
         background: var(--bg-card);
         border-top: 1px solid var(--border-subtle);
-        gap: 8px;
+        gap: 8px 16px;
+        min-height: 40px;
     }
 
     .footer-left {
@@ -1121,16 +1246,43 @@
         flex-wrap: wrap;
     }
 
+    .device-label {
+        font-weight: 600;
+        color: var(--text-secondary);
+        display: inline-flex;
+        align-items: center;
+    }
+
     .optical-badge {
         display: inline-flex;
         align-items: center;
         background: #f1f5f9;
         border: 1px solid #cbd5e1;
         border-radius: var(--radius-sm);
-        padding: 1px 7px;
+        padding: 2px 8px;
         font-size: 0.68rem;
         font-weight: 600;
         color: #334155;
+        white-space: nowrap;
+    }
+
+    .footer-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        text-align: right;
+        margin-left: auto;
+    }
+
+    .ingest-label {
+        color: var(--text-secondary);
+        font-size: 0.72rem;
+        font-weight: 500;
+    }
+
+    .ingest-file {
+        font-weight: 600;
+        color: #3679a8;
     }
 
     .entities-panel {
@@ -1142,6 +1294,8 @@
         flex-direction: column;
         gap: 12px;
         box-shadow: var(--shadow-card);
+        min-width: 0;
+        overflow: hidden;
     }
 
     .panel-header {
@@ -1176,6 +1330,130 @@
         color: var(--accent-blue);
         padding: 2px 8px;
         border-radius: var(--radius-pill);
+    }
+
+    .detection-tabs-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        background: #f1f5f9;
+        padding: 3px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-subtle);
+        gap: 2px;
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .detection-tab-btn {
+        min-width: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        padding: 4px 2px;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--text-secondary);
+        border: none;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+
+    .detection-tab-btn span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .detection-tab-btn:hover {
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--text-primary);
+    }
+
+    .detection-tab-btn.active {
+        background: #ffffff;
+        color: var(--text-primary);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        font-weight: 700;
+    }
+
+    .detection-tab-btn.tab-pass.active {
+        color: #059669;
+    }
+
+    .detection-tab-btn.tab-review.active {
+        color: #d97706;
+    }
+
+    .detection-tab-btn.tab-reject.active {
+        color: #dc2626;
+    }
+
+    .tab-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+    }
+
+    .dot-pass {
+        background: #10b981;
+    }
+
+    .dot-review {
+        background: #f59e0b;
+    }
+
+    .dot-reject {
+        background: #ef4444;
+    }
+
+    .tab-badge {
+        font-size: 0.60rem;
+        padding: 1px 3px;
+        border-radius: 10px;
+        background: rgba(148, 163, 184, 0.2);
+        color: #475569;
+        line-height: 1.1;
+        flex-shrink: 0;
+    }
+
+    .badge-pass {
+        background: rgba(16, 185, 129, 0.15);
+        color: #059669;
+    }
+
+    .badge-review {
+        background: rgba(245, 158, 11, 0.15);
+        color: #d97706;
+    }
+
+    .badge-reject {
+        background: rgba(239, 68, 68, 0.15);
+        color: #dc2626;
+    }
+
+    .reset-filter-btn {
+        margin-top: 8px;
+        padding: 4px 10px;
+        font-size: 0.68rem;
+        font-weight: 600;
+        background: #ffffff;
+        color: #3679a8;
+        border: 1px solid #cbd5e1;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .reset-filter-btn:hover {
+        background: #3679a8;
+        color: #ffffff;
     }
 
     .entity-chips-grid {
