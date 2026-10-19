@@ -168,7 +168,7 @@ def main() -> None:
             flipud=0.0,
             fliplr=0.5,
             mosaic=1.0,
-            mixup=0.0,
+            mixup=0.1,
             copy_paste=0.0,
             close_mosaic=15,
             plots=True,
