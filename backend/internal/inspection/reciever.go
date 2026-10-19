@@ -144,22 +144,15 @@ func (s *InspectionStore) GetLatestInspection(deviceID string) (IngressInspectio
 	s.RLock()
 	defer s.RUnlock()
 	if deviceID == "" || deviceID == "latest" || deviceID == "*" {
-		for _, insp := range s.latestInspections {
+		for id, insp := range s.latestInspections {
+			if id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_") {
+				continue
+			}
 			if len(insp.Detections) > 0 {
 				return insp, true
 			}
 		}
-		for _, mockInsp := range s.latestMockInspections {
-			if len(mockInsp.Detections) > 0 {
-				return IngressInspectionRequest{
-					DeviceID:     mockInsp.DeviceID,
-					SourceType:   mockInsp.SourceType,
-					SceneOptical: mockInsp.SceneOptical,
-					Detections:   mockInsp.Detections,
-					IsRewind:     mockInsp.IsRewind,
-				}, true
-			}
-		}
+		return IngressInspectionRequest{}, false
 	}
 	if insp, exists := s.latestInspections[deviceID]; exists {
 		return insp, true
@@ -258,6 +251,14 @@ func (s *InspectionStore) DisconnectNonMock() {
 			delete(s.latestInspections, id)
 		}
 	}
+}
+
+// ClearAllDetections flushes all active bounding boxes and detections across both live and mock streams
+func (s *InspectionStore) ClearAllDetections() {
+	s.Lock()
+	defer s.Unlock()
+	s.latestInspections = make(map[string]IngressInspectionRequest)
+	s.latestMockInspections = make(map[string]MockInspectionRequest)
 }
 
 

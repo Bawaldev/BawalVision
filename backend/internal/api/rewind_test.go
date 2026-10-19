@@ -504,4 +504,104 @@ func TestMockStreamModeForcesMockRoutingAndPreventsESPCrossContamination(t *test
 	camera_handler.GlobalCameraStore.SetStreamMode("live")
 }
 
+func TestReinspectUpdatesSameUIDDynamically(t *testing.T) {
+	app := fiber.New()
+	v1 := app.Group("/api/v1")
+	RegisterCameraRoutes(v1, nil)
+	RegisterDeviceRoutes(v1, nil)
+
+	testUUID := "uuid-dynamic-reinspect-test-1234"
+	videoSrc := "banana/banana_sample_reinspect.mp4"
+
+	// Reset mock state
+	resetReq := httptest.NewRequest(http.MethodPost, "/api/v1/devices/mock/reset", nil)
+	resetResp, err := app.Test(resetReq)
+	if err != nil {
+		t.Fatalf("reset failed: %v", err)
+	}
+	defer resetResp.Body.Close()
+
+	// 1. Initial Inspection pass (PASS, Fresh Banana)
+	initialPayload := model.MockInspectionRequest{
+		MockID:           testUUID,
+		VideoUUID:        testUUID,
+		DeviceID:         "MOCK_VIDEO_CAM",
+		SourceType:       "mock_video",
+		InspectionStruct: "MockInspectionRequest",
+		VideoSource:      videoSrc,
+		Detections: []model.FoodDetection{
+			{FoodName: "banana", SimilarityRate: 0.94, SpoilageScore: 5.0, Status: "PASS"},
+		},
+	}
+	body1, _ := json.Marshal(initialPayload)
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/inspections/mock", bytes.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+	resp1, err := app.Test(req1)
+	if err != nil {
+		t.Fatalf("first inspection failed: %v", err)
+	}
+	defer resp1.Body.Close()
+	if resp1.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 Created on first pass, got %d", resp1.StatusCode)
+	}
+
+	var res1 map[string]interface{}
+	if err := json.NewDecoder(resp1.Body).Decode(&res1); err != nil {
+		t.Fatalf("failed to decode pass 1 response: %v", err)
+	}
+
+	// 2. Normal playback loop on same video without reinspect flag -> suppressed as rewind/duplicate
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/inspections/mock", bytes.NewReader(body1))
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := app.Test(req2)
+	if err != nil {
+		t.Fatalf("second pass failed: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK on duplicate frame loop, got %d", resp2.StatusCode)
+	}
+
+	// 3. User triggers Re-inspect ("↺ Re-inspect" / "Inspect Tray" with X-Reinspect header)
+	// The new inspection detects increased spoilage on the same tray
+	reinspectPayload := model.MockInspectionRequest{
+		MockID:           testUUID,
+		VideoUUID:        testUUID,
+		DeviceID:         "MOCK_VIDEO_CAM",
+		SourceType:       "mock_video",
+		InspectionStruct: "MockInspectionRequest",
+		VideoSource:      videoSrc,
+		Detections: []model.FoodDetection{
+			{FoodName: "banana", SimilarityRate: 0.85, SpoilageScore: 55.0, Status: "REJECT"},
+		},
+	}
+	body3, _ := json.Marshal(reinspectPayload)
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/inspections/mock", bytes.NewReader(body3))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Reinspect", "1") // Explicit Re-inspection trigger
+
+	resp3, err := app.Test(req3)
+	if err != nil {
+		t.Fatalf("reinspect request failed: %v", err)
+	}
+	defer resp3.Body.Close()
+
+	if resp3.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 Created on dynamic reinspect, got %d", resp3.StatusCode)
+	}
+
+	var res3 map[string]interface{}
+	if err := json.NewDecoder(resp3.Body).Decode(&res3); err != nil {
+		t.Fatalf("failed to decode reinspect response: %v", err)
+	}
+
+	// Verify the exact same UID was updated dynamically with the new verdict
+	if res3["id"] != res1["id"] {
+		t.Errorf("expected same UID to be dynamically updated: initial=%v vs reinspect=%v", res1["id"], res3["id"])
+	}
+	if res3["is_spoiled"] != true {
+		t.Errorf("expected is_spoiled to be dynamically updated to true, got %v", res3["is_spoiled"])
+	}
+}
+
 
