@@ -92,6 +92,8 @@ func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
 	paths := []string{"./examples", "../examples", "../../examples", "../../../examples", "./frontend/static/examples", "../frontend/static/examples", "/app/examples"}
 	foundMap := make(map[string]bool)
 	videoFiles := make([]string, 0)
+	videoUUIDs := make(map[string]string)
+	videoItems := make([]fiber.Map, 0)
 
 	for _, basePath := range paths {
 		if _, err := os.Stat(basePath); err != nil {
@@ -108,7 +110,13 @@ func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
 					rel = filepath.ToSlash(rel)
 					if !foundMap[rel] {
 						foundMap[rel] = true
+						uid := inspection.DeterministicMockVideoUUID(rel)
 						videoFiles = append(videoFiles, rel)
+						videoUUIDs[rel] = uid
+						videoItems = append(videoItems, fiber.Map{
+							"path":       rel,
+							"video_uuid": uid,
+						})
 					}
 				}
 			}
@@ -117,8 +125,10 @@ func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"status": "success",
-		"videos": videoFiles,
+		"status":      "success",
+		"videos":      videoFiles,
+		"video_uuids": videoUUIDs,
+		"video_items": videoItems,
 	})
 }
 
@@ -170,7 +180,30 @@ func (h *Handler) GetRecords(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(records)
+	out := make([]interface{}, 0, len(records))
+	seenMockUUIDs := make(map[string]bool)
+	for _, r := range records {
+		if r.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(r.DeviceID, "MOCK_") {
+			mockRec := r.ToMockInspectionRecord("")
+			dedupKey := mockRec.VideoUUID
+			if mockRec.VideoSource != "" {
+				dedupKey = inspection.DeterministicMockVideoUUID(mockRec.VideoSource)
+				mockRec.VideoUUID = dedupKey
+			} else if r.DeviceID == "MOCK_VIDEO_CAM" && (r.ImageS3URI == nil || *r.ImageS3URI == "") {
+				// Collapse legacy pre-UUID MOCK_VIDEO_CAM duplicate rows into a single tray entry
+				dedupKey = "legacy_mock_video_cam"
+			}
+			if seenMockUUIDs[dedupKey] {
+				continue
+			}
+			seenMockUUIDs[dedupKey] = true
+			out = append(out, mockRec)
+		} else {
+			out = append(out, r)
+		}
+	}
+
+	return c.JSON(out)
 }
 
 func (h *Handler) GetEngineStatus(c *fiber.Ctx) error {
@@ -236,5 +269,14 @@ func (h *Handler) GetRecordByID(c *fiber.Ctx) error {
 		})
 	}
 
+	if record.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(record.DeviceID, "MOCK_") {
+		c.Set("X-Stream-Source", "MOCK_VIDEO")
+		c.Set("X-Inspection-Struct", "MockInspectionRecord")
+		return c.JSON(record.ToMockInspectionRecord(""))
+	}
+
+	c.Set("X-Stream-Source", "LIVE_ESP32")
+	c.Set("X-Inspection-Struct", "InspectionRecord")
 	return c.JSON(record)
 }
+

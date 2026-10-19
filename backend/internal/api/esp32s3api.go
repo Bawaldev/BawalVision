@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	globalMockInspectMutex sync.Mutex
-	globalMockRecorded     = make(map[string]bool)
+	globalMockInspectMutex     sync.Mutex
+	globalMockRecorded         = make(map[string]bool)
+	globalMockReinspectAllowed = make(map[string]bool)
 )
 
 func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
@@ -108,17 +109,437 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
+		c.Set("X-Stream-Source", "LIVE_ESP32")
+		c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
 		return c.Status(200).JSON(fiber.Map{
-			"status":    "success",
-			"device_id": payload.DeviceID,
-			"message":   "Telemetry heartbeat recorded",
+			"status":           "success",
+			"source_type":      "live_esp32",
+			"telemetry_struct": "TelemetryIngressPayload",
+			"device_id":        payload.DeviceID,
+			"message":          "Live ESP32-S3 hardware telemetry heartbeat recorded",
 		})
 	})
 
-	// 2. Vision + Telemetry Combined Inspection Ingress Handler
+	// 1b. Dedicated Mock Video Telemetry Ingress (Uses MockTelemetryPayload, NO ESP32 hardware fields)
+	router.Post("/telemetry/mock", func(c *fiber.Ctx) error {
+		var payload inspection.MockTelemetryPayload
+		if err := c.BodyParser(&payload); err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error": "Invalid MockTelemetryPayload JSON",
+			})
+		}
+		if payload.DeviceID == "" && payload.MockID != "" {
+			payload.DeviceID = payload.MockID
+		}
+		if payload.DeviceID == "" {
+			payload.DeviceID = "MOCK_VIDEO_CAM"
+		}
+		if payload.VideoSource == "" {
+			payload.VideoSource = strings.TrimSpace(c.Get("X-Mock-Video-Source"))
+		}
+		if payload.VideoUUID == "" {
+			payload.VideoUUID = strings.TrimSpace(c.Get("X-Mock-Video-UUID"))
+		}
+		videoUUID := inspection.ResolveMockVideoUUID(payload.VideoSource, payload.VideoUUID, payload.MockID)
+		payload.VideoUUID = videoUUID
+		payload.MockID = videoUUID
+		payload.SourceType = "mock_video"
+		payload.TelemetryStruct = "MockTelemetryPayload"
+		payload.ConnectionMode = "mock_simulation"
+		if payload.EnginePipeline == "" {
+			payload.EnginePipeline = "YOLOv8n-INT8 + OpenCV HSV"
+		}
+
+		camera_handler.GlobalCameraStore.SetActiveMockVideoMeta(payload.VideoSource, videoUUID)
+		inspection.GlobalInspectionStore.StoreMockTelemetry(payload)
+
+		c.Set("X-Stream-Source", "MOCK_VIDEO")
+		c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+		c.Set("X-Mock-Video-UUID", videoUUID)
+		return c.Status(200).JSON(fiber.Map{
+			"status":           "mock_telemetry_recorded",
+			"mock_id":          payload.MockID,
+			"video_uuid":       videoUUID,
+			"video_source":     payload.VideoSource,
+			"device_id":        payload.DeviceID,
+			"source_type":      "mock_video",
+			"telemetry_struct": "MockTelemetryPayload",
+			"engine_pipeline":  payload.EnginePipeline,
+			"message":          "Mock video simulation telemetry recorded (distinct from ESP32-S3 hardware telemetry)",
+		})
+	})
+
+	// Shared DB persistence helper used by BOTH Live and Mock inspections (same YOLO/CV food evaluation & storage logic)
+	persistInspectionToDB := func(
+		recordID string,
+		deviceID string,
+		deviceType string,
+		fwVer string,
+		realTemp float64,
+		cpuTemp float64,
+		cpu uint8,
+		anySpoiled bool,
+		tSafeHours float64,
+		imageS3URI *string,
+		sceneOptical *inspection.SceneOpticalMetrics,
+		detections []inspection.FoodDetection,
+		now time.Time,
+	) error {
+		if inspection.GlobalBatchWorker != nil {
+			task := inspection.BatchInspectionTask{
+				RecordID: recordID,
+				Request: inspection.IngressInspectionRequest{
+					DeviceID:        deviceID,
+					SourceType:      deviceType,
+					FirmwareVersion: fwVer,
+					ImageS3URI:      imageS3URI,
+					SceneOptical:    sceneOptical,
+					Detections:      detections,
+				},
+				Temperature:     realTemp,
+				CPUTemp:         cpuTemp,
+				CPULoad:         cpu,
+				FirmwareVersion: fwVer,
+				IsSpoiled:       anySpoiled,
+				TSafeHours:      tSafeHours,
+				CreatedAt:       now,
+			}
+			inspection.GlobalBatchWorker.Enqueue(task)
+			return nil
+		}
+		if db == nil {
+			return nil
+		}
+		return db.Transaction(func(tx *gorm.DB) error {
+			dev := device.Device{
+				ID:              deviceID,
+				DeviceType:      deviceType,
+				FirmwareVersion: fwVer,
+				Status:          "ACTIVE",
+				LastSeenAt:      &now,
+				UpdatedAt:       now,
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"firmware_version", "last_seen_at", "updated_at", "status"}),
+			}).Create(&dev).Error; err != nil {
+				return err
+			}
+
+			lux := 120.0
+			wb := "BALANCED"
+			cct := 6500
+			if sceneOptical != nil {
+				if sceneOptical.LuxLuminance > 0 {
+					lux = sceneOptical.LuxLuminance
+				}
+				if sceneOptical.WhiteBalanceStatus != "" {
+					wb = sceneOptical.WhiteBalanceStatus
+				}
+				if sceneOptical.ColorTemperature > 0 {
+					cct = sceneOptical.ColorTemperature
+				}
+			}
+
+			record := inspection.InspectionRecord{
+				ID:                 recordID,
+				DeviceID:           deviceID,
+				FirmwareVersion:    fwVer,
+				CreatedAt:          now,
+				ImageS3URI:         imageS3URI,
+				CPUTemperature:     cpuTemp,
+				Temperature:        realTemp,
+				CPULoad:            cpu,
+				IsSpoiled:          anySpoiled,
+				TSafeHours:         tSafeHours,
+				LuxLuminance:       lux,
+				WhiteBalanceStatus: wb,
+				ColorTemperature:   cct,
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"is_spoiled", "t_safe_hours", "lux_luminance", "white_balance_status", "color_temperature", "image_s3_uri"}),
+			}).Create(&record).Error; err != nil {
+				return err
+			}
+
+			if err := tx.Where("inspection_id = ?", recordID).Delete(&inspection.InspectionFood{}).Error; err != nil {
+				return err
+			}
+
+			insertedFoodMap := make(map[int]bool)
+			for _, det := range detections {
+				foodName := strings.TrimSpace(strings.ToLower(det.FoodName))
+				if foodName == "" || foodName == "no_food" || foodName == "no_model" {
+					continue
+				}
+
+				var foodItem food.FoodItem
+				if err := tx.Where("LOWER(name) = ?", foodName).First(&foodItem).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						foodItem = food.FoodItem{Name: foodName}
+						if err := tx.Create(&foodItem).Error; err != nil {
+							if err := tx.Where("LOWER(name) = ?", foodName).First(&foodItem).Error; err != nil {
+								return err
+							}
+						}
+					} else {
+						return err
+					}
+				}
+
+				if insertedFoodMap[foodItem.ID] {
+					continue
+				}
+				insertedFoodMap[foodItem.ID] = true
+
+				itemTemp := realTemp
+				if det.Temperature > 0 {
+					itemTemp = det.Temperature
+				}
+
+				conf, spoilage, evaluatedTemp, itemStatus := EvaluateFoodQuality(
+					foodName,
+					det.SimilarityRate,
+					det.SpoilageScore,
+					itemTemp,
+					det.Status,
+				)
+
+				inspFood := inspection.InspectionFood{
+					ID:             uuid.New().String(),
+					InspectionID:   recordID,
+					FoodItemID:     foodItem.ID,
+					Temperature:    evaluatedTemp,
+					SimilarityRate: conf,
+					SpoilageScore:  spoilage,
+					Status:         itemStatus,
+				}
+				if err := tx.Create(&inspFood).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+
+	// 2a. Dedicated Mock Video Inspection Ingress Handler (Uses MockInspectionRequest & MockInspectionRecord, SAME YOLO/CV logic)
+	mockInspectionIngressHandler := func(c *fiber.Ctx) error {
+		var mockReq inspection.MockInspectionRequest
+		log.Printf("[MOCK INSPECTION INGRESS]: %s", string(c.Body()))
+
+		if err := c.BodyParser(&mockReq); err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"error": "Invalid MockInspectionRequest JSON payload",
+			})
+		}
+
+		if mockReq.DeviceID == "" && mockReq.MockID != "" {
+			mockReq.DeviceID = mockReq.MockID
+		}
+		if mockReq.DeviceID == "" {
+			return c.Status(400).JSON(fiber.Map{
+				"error": "Missing device_id / mock_id in mock inspection request",
+			})
+		}
+		mockReq.SourceType = "mock_video"
+		mockReq.InspectionStruct = "MockInspectionRequest"
+		if mockReq.EnginePipeline == "" {
+			mockReq.EnginePipeline = "YOLOv8n-INT8 + OpenCV HSV"
+		}
+		if mockReq.VideoSource == "" {
+			mockReq.VideoSource = strings.TrimSpace(c.Get("X-Mock-Video-Source"))
+		}
+		if mockReq.VideoUUID == "" {
+			mockReq.VideoUUID = strings.TrimSpace(c.Get("X-Mock-Video-UUID"))
+		}
+		if mockReq.VideoSource == "" || mockReq.VideoUUID == "" {
+			activeSrc, activeUUID := camera_handler.GlobalCameraStore.GetActiveMockVideoMeta()
+			if mockReq.VideoSource == "" && activeSrc != "" {
+				mockReq.VideoSource = activeSrc
+			}
+			if mockReq.VideoUUID == "" && activeUUID != "" {
+				mockReq.VideoUUID = activeUUID
+			}
+		}
+		if mockReq.VideoSource == "" || mockReq.VideoUUID == "" {
+			if mockTel, ok := inspection.GlobalInspectionStore.GetLatestMockTelemetry(mockReq.DeviceID); ok {
+				if mockReq.VideoSource == "" && mockTel.VideoSource != "" {
+					mockReq.VideoSource = mockTel.VideoSource
+				}
+				if mockReq.VideoUUID == "" && mockTel.VideoUUID != "" {
+					mockReq.VideoUUID = mockTel.VideoUUID
+				}
+			}
+		}
+
+		fallbackKey := mockReq.MockID
+		if fallbackKey == "" {
+			fallbackKey = mockReq.DeviceID
+		}
+		videoUUID := inspection.ResolveMockVideoUUID(mockReq.VideoSource, mockReq.VideoUUID, fallbackKey)
+		mockReq.VideoUUID = videoUUID
+		mockReq.MockID = videoUUID
+
+		c.Set("X-Stream-Source", "MOCK_VIDEO")
+		c.Set("X-Inspection-Struct", "MockInspectionRecord")
+		c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+		c.Set("X-Mock-Video-UUID", videoUUID)
+
+		// Cache in dedicated Mock Inspection store AND sync optical metrics into MockTelemetryPayload
+		inspection.GlobalInspectionStore.StoreLatestMockInspection(mockReq)
+		if mockReq.SceneOptical != nil {
+			mockTel, hasTel := inspection.GlobalInspectionStore.GetLatestMockTelemetry(mockReq.DeviceID)
+			if !hasTel {
+				mockTel = inspection.MockTelemetryPayload{
+					MockID:          videoUUID,
+					VideoUUID:       videoUUID,
+					DeviceID:        mockReq.DeviceID,
+					SourceType:      "mock_video",
+					TelemetryStruct: "MockTelemetryPayload",
+					VideoSource:     mockReq.VideoSource,
+					Timestamp:       time.Now().Unix(),
+					ConnectionMode:  "mock_simulation",
+					EnginePipeline:  mockReq.EnginePipeline,
+				}
+			}
+			mockTel.MockID = videoUUID
+			mockTel.VideoUUID = videoUUID
+			if mockReq.VideoSource != "" {
+				mockTel.VideoSource = mockReq.VideoSource
+			}
+			mockTel.SceneOptical = mockReq.SceneOptical
+			inspection.GlobalInspectionStore.StoreMockTelemetry(mockTel)
+		}
+
+		if len(mockReq.Detections) == 0 {
+			return c.Status(200).JSON(fiber.Map{
+				"status":            "cleared",
+				"mock_id":           mockReq.MockID,
+				"video_uuid":        videoUUID,
+				"device_id":         mockReq.DeviceID,
+				"source_type":       "mock_video",
+				"inspection_struct": "MockInspectionRecord",
+				"message":           "Mock video YOLO detections cleared",
+			})
+		}
+
+		isRewind := mockReq.IsRewind || c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
+		if !isRewind {
+			isRewind = camera_handler.GlobalCameraStore.IsDeviceInRewind(mockReq.DeviceID)
+		}
+		if isRewind {
+			return c.Status(fiber.StatusOK).JSON(fiber.Map{
+				"status":            "success",
+				"id":                videoUUID,
+				"mock_id":           mockReq.MockID,
+				"video_uuid":        videoUUID,
+				"video_source":      mockReq.VideoSource,
+				"device_id":         mockReq.DeviceID,
+				"source_type":       "mock_video",
+				"inspection_struct": "MockInspectionRecord",
+				"message":           "Mock video rewind active: HUD updated via shared YOLO pipeline without duplicate record",
+				"is_rewind":         true,
+			})
+		}
+
+		// Per-Video Unique UUID Gatekeeper: prevents duplicate Trays on page reload or video loop
+		globalMockInspectMutex.Lock()
+		alreadyRecorded := globalMockRecorded[videoUUID]
+		reinspectAllowed := globalMockReinspectAllowed[videoUUID] || globalMockReinspectAllowed["*"]
+		if !alreadyRecorded && !reinspectAllowed && db != nil {
+			var existingCount int64
+			if err := db.Model(&inspection.InspectionRecord{}).Where("id = ?", videoUUID).Count(&existingCount).Error; err == nil && existingCount > 0 {
+				alreadyRecorded = true
+				globalMockRecorded[videoUUID] = true
+			}
+		}
+		if !alreadyRecorded && len(mockReq.Detections) > 0 {
+			globalMockRecorded[videoUUID] = true
+			delete(globalMockReinspectAllowed, videoUUID)
+			delete(globalMockReinspectAllowed, "*")
+		} else if alreadyRecorded {
+			globalMockInspectMutex.Unlock()
+			return c.Status(fiber.StatusOK).JSON(fiber.Map{
+				"status":            "success",
+				"id":                videoUUID,
+				"mock_id":           mockReq.MockID,
+				"video_uuid":        videoUUID,
+				"video_source":      mockReq.VideoSource,
+				"device_id":         mockReq.DeviceID,
+				"source_type":       "mock_video",
+				"inspection_struct": "MockInspectionRecord",
+				"message":           "Mock video sample tray already recorded for this unique video UUID: HUD updated without duplicate record",
+				"is_rewind":         true,
+			})
+		}
+		globalMockInspectMutex.Unlock()
+
+		// Execute the EXACT SAME YOLO + CV quality, spoilage, and shelf-life evaluation logic as Live!
+		anySpoiled, _, tSafeHours, normalizedDetections := inspection.EvaluateVisionDetections(mockReq.Detections, 25.0)
+
+		now := time.Now()
+		// Use the deterministic unique video UUID as the InspectionRecord ID so page reloads never create duplicate trays
+		recordID := videoUUID
+		var videoSourceURI *string
+		if mockReq.VideoSource != "" {
+			srcCopy := strings.Clone(mockReq.VideoSource)
+			videoSourceURI = &srcCopy
+		}
+
+		if err := persistInspectionToDB(
+			recordID,
+			mockReq.DeviceID,
+			"MOCK_VIDEO",
+			"MOCK_SIM",
+			0.0,
+			0.0,
+			0,
+			anySpoiled,
+			tSafeHours,
+			videoSourceURI,
+			mockReq.SceneOptical,
+			normalizedDetections,
+			now,
+		); err != nil {
+			log.Printf("[ERROR] Failed to persist mock inspection: %v", err)
+			return c.Status(500).JSON(fiber.Map{
+				"error": "Failed to save mock inspection to database",
+			})
+		}
+
+		return c.Status(201).JSON(fiber.Map{
+			"status":               "success",
+			"id":                   recordID,
+			"mock_id":              mockReq.MockID,
+			"video_uuid":           videoUUID,
+			"video_source":         mockReq.VideoSource,
+			"device_id":            mockReq.DeviceID,
+			"source_type":          "mock_video",
+			"inspection_struct":    "MockInspectionRecord",
+			"telemetry_struct":     "MockTelemetryPayload",
+			"engine_pipeline":      mockReq.EnginePipeline,
+			"is_spoiled":           anySpoiled,
+			"t_safe_hours":         tSafeHours,
+			"detected_foods_count": len(normalizedDetections),
+			"detections":           normalizedDetections,
+			"scene_optical":        mockReq.SceneOptical,
+			"message":              "Mock video YOLO vision inspection processed with unique video UUID (MockInspectionRecord & MockTelemetryPayload)",
+		})
+	}
+
+	// 2b. Live ESP32-S3 Vision + Hardware Telemetry Combined Inspection Ingress Handler
 	inspectionIngressHandler := func(c *fiber.Ctx) error {
+		// Automatically route to dedicated MockInspectionRequest handler if headers or payload indicate Mock Video
+		inspSourceHdr := strings.ToUpper(strings.TrimSpace(c.Get("X-Inspection-Source")))
+		streamSourceHdr := strings.ToUpper(strings.TrimSpace(c.Get("X-Stream-Source")))
+		inspStructHdr := strings.TrimSpace(c.Get("X-Inspection-Struct"))
+		if inspSourceHdr == "MOCK_VIDEO" || streamSourceHdr == "MOCK_VIDEO" || inspStructHdr == "MockInspectionRequest" {
+			return mockInspectionIngressHandler(c)
+		}
+
 		var req inspection.IngressInspectionRequest
-		log.Printf("[INSPECTION INGRESS]: %s", string(c.Body()))
+		log.Printf("[LIVE INSPECTION INGRESS]: %s", string(c.Body()))
 
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{
@@ -132,50 +553,41 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			})
 		}
 
+		if req.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(req.DeviceID, "MOCK_") || strings.EqualFold(req.SourceType, "mock_video") {
+			return mockInspectionIngressHandler(c)
+		}
+
+		c.Set("X-Stream-Source", "LIVE_ESP32")
+		c.Set("X-Inspection-Struct", "InspectionRecord")
+		c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
+
+		req.SourceType = "live_esp32"
+
 		// Cache live detections in-memory for instant frontend HUD overlay rendering
 		inspection.GlobalInspectionStore.StoreLatestInspection(req)
 
 		if len(req.Detections) == 0 {
 			return c.Status(200).JSON(fiber.Map{
-				"status":    "cleared",
-				"device_id": req.DeviceID,
-				"message":   "Live detections cleared",
+				"status":            "cleared",
+				"device_id":         req.DeviceID,
+				"source_type":       "live_esp32",
+				"inspection_struct": "InspectionRecord",
+				"message":           "Live ESP32-S3 detections cleared",
 			})
 		}
 
-		isMock := req.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(req.DeviceID, "MOCK_")
 		isRewind := req.IsRewind || c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
-		if !isRewind && isMock {
-			isRewind = camera_handler.GlobalCameraStore.IsDeviceInRewind(req.DeviceID)
-		}
-
-		// Rewind video does NOT add more telemetry or inspected trays (preserves database integrity)
 		if isRewind {
 			return c.Status(fiber.StatusOK).JSON(fiber.Map{
-				"status":    "success",
-				"message":   "Rewind active: live HUD updated without creating duplicate inspection record",
-				"is_rewind": true,
+				"status":            "success",
+				"source_type":       "live_esp32",
+				"inspection_struct": "InspectionRecord",
+				"message":           "Rewind active: live HUD updated without creating duplicate inspection record",
+				"is_rewind":         true,
 			})
 		}
 
-		// Single-pass inspection gatekeeper for mock video runs to eliminate data pollution
-		if isMock {
-			globalMockInspectMutex.Lock()
-			alreadyRecorded := globalMockRecorded[req.DeviceID]
-			if !alreadyRecorded && len(req.Detections) > 0 {
-				globalMockRecorded[req.DeviceID] = true
-			} else if alreadyRecorded {
-				globalMockInspectMutex.Unlock()
-				return c.Status(fiber.StatusOK).JSON(fiber.Map{
-					"status":    "success",
-					"message":   "Mock sample tray already recorded: live HUD updated without duplicate database record",
-					"is_rewind": true,
-				})
-			}
-			globalMockInspectMutex.Unlock()
-		}
-
-		// Retrieve latest telemetry cache for this device as fallback for missing sensor values
+		// Retrieve latest ESP32-S3 hardware telemetry cache for this device
 		latestTelemetry, hasCached := inspection.GlobalInspectionStore.GetLatestTelemetry(req.DeviceID)
 
 		realTemp := 25.0
@@ -216,194 +628,162 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			fwVer = latestTelemetry.FirmwareVersion
 		}
 
+		// Execute the EXACT SAME YOLO + CV quality, spoilage, and shelf-life evaluation logic as Mock!
+		anySpoiled, _, tSafeHours, normalizedDetections := inspection.EvaluateVisionDetections(req.Detections, realTemp)
+
 		now := time.Now()
 		recordID := uuid.New().String()
 
-		// CV + ML Quality & Spoilage Evaluation
-		anySpoiled := false
-		maxSpoilageScore := 0.0
-
-		for _, det := range req.Detections {
-			conf := det.SimilarityRate
-			if conf <= 0 {
-				conf = 0.85
-			}
-			spoilage := det.SpoilageScore
-			if spoilage <= 0 {
-				// Food science thermal & confidence decay model
-				spoilage = (1.0 - conf) * 30.0
-				if realTemp > 28.0 {
-					spoilage += (realTemp - 28.0) * 2.2
-				}
-				if spoilage > 100.0 {
-					spoilage = 100.0
-				}
-			}
-			if spoilage > maxSpoilageScore {
-				maxSpoilageScore = spoilage
-			}
-			if det.Status == "REJECT" || spoilage >= 55.0 || conf < 0.35 {
-				anySpoiled = true
-			}
-		}
-
-		// Calculate remaining safe shelf life based on thermal index
-		tSafeHours := 8.0
-		if realTemp > 20.0 {
-			tSafeHours = 8.0 * (1.0 / (1.0 + 0.05*(realTemp-20.0)))
-		}
-		if anySpoiled {
-			tSafeHours = 0.0
-		}
-
-		task := inspection.BatchInspectionTask{
-			RecordID:        recordID,
-			Request:         req,
-			Temperature:     realTemp,
-			CPUTemp:         cpuTemp,
-			CPULoad:         cpu,
-			FirmwareVersion: fwVer,
-			IsSpoiled:       anySpoiled,
-			TSafeHours:      tSafeHours,
-			CreatedAt:       now,
-		}
-
-		// Asynchronous non-blocking enqueue to Batch Worker
-		if inspection.GlobalBatchWorker != nil {
-			inspection.GlobalBatchWorker.Enqueue(task)
-		} else if db != nil {
-			// Fallback synchronous write if worker is not yet initialized
-			err := db.Transaction(func(tx *gorm.DB) error {
-				dev := device.Device{
-					ID:              req.DeviceID,
-					DeviceType:      "ESP32-S3",
-					FirmwareVersion: fwVer,
-					Status:          "ACTIVE",
-					LastSeenAt:      &now,
-					UpdatedAt:       now,
-				}
-				if err := tx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "id"}},
-					DoUpdates: clause.AssignmentColumns([]string{"firmware_version", "last_seen_at", "updated_at", "status"}),
-				}).Create(&dev).Error; err != nil {
-					return err
-				}
-
-				lux := 120.0
-				wb := "BALANCED"
-				cct := 6500
-				if req.SceneOptical != nil {
-					if req.SceneOptical.LuxLuminance > 0 {
-						lux = req.SceneOptical.LuxLuminance
-					}
-					if req.SceneOptical.WhiteBalanceStatus != "" {
-						wb = req.SceneOptical.WhiteBalanceStatus
-					}
-					if req.SceneOptical.ColorTemperature > 0 {
-						cct = req.SceneOptical.ColorTemperature
-					}
-				}
-
-				record := inspection.InspectionRecord{
-					ID:                 recordID,
-					DeviceID:           req.DeviceID,
-					FirmwareVersion:    fwVer,
-					CreatedAt:          now,
-					ImageS3URI:         req.ImageS3URI,
-					CPUTemperature:     cpuTemp,
-					Temperature:        realTemp,
-					CPULoad:            cpu,
-					IsSpoiled:          anySpoiled,
-					TSafeHours:         tSafeHours,
-					LuxLuminance:       lux,
-					WhiteBalanceStatus: wb,
-					ColorTemperature:   cct,
-				}
-				if err := tx.Create(&record).Error; err != nil {
-					return err
-				}
-
-				insertedFoodMap := make(map[int]bool)
-				for _, det := range req.Detections {
-					foodName := strings.TrimSpace(strings.ToLower(det.FoodName))
-					if foodName == "" || foodName == "no_food" || foodName == "no_model" {
-						continue
-					}
-
-					var foodItem food.FoodItem
-					if err := tx.Where("LOWER(name) = ?", foodName).First(&foodItem).Error; err != nil {
-						if errors.Is(err, gorm.ErrRecordNotFound) {
-							foodItem = food.FoodItem{Name: foodName}
-							if err := tx.Create(&foodItem).Error; err != nil {
-								if err := tx.Where("LOWER(name) = ?", foodName).First(&foodItem).Error; err != nil {
-									return err
-								}
-							}
-						} else {
-							return err
-						}
-					}
-
-					if insertedFoodMap[foodItem.ID] {
-						continue
-					}
-					insertedFoodMap[foodItem.ID] = true
-
-					itemTemp := realTemp
-					if det.Temperature > 0 {
-						itemTemp = det.Temperature
-					}
-
-					conf, spoilage, evaluatedTemp, itemStatus := EvaluateFoodQuality(
-						foodName,
-						det.SimilarityRate,
-						det.SpoilageScore,
-						itemTemp,
-						det.Status,
-					)
-
-					inspFood := inspection.InspectionFood{
-						ID:             uuid.New().String(),
-						InspectionID:   recordID,
-						FoodItemID:     foodItem.ID,
-						Temperature:    evaluatedTemp,
-						SimilarityRate: conf,
-						SpoilageScore:  spoilage,
-						Status:         itemStatus,
-					}
-					if err := tx.Create(&inspFood).Error; err != nil {
-						return err
-					}
-				}
-				return nil
+		if err := persistInspectionToDB(
+			recordID,
+			req.DeviceID,
+			"ESP32-S3",
+			fwVer,
+			realTemp,
+			cpuTemp,
+			cpu,
+			anySpoiled,
+			tSafeHours,
+			req.ImageS3URI,
+			req.SceneOptical,
+			normalizedDetections,
+			now,
+		); err != nil {
+			log.Printf("[ERROR] Failed to save live inspection transaction: %v", err)
+			return c.Status(500).JSON(fiber.Map{
+				"error": "Failed to save inspection to database",
 			})
-
-			if err != nil {
-				log.Printf("[ERROR] Failed to save fallback inspection transaction: %v", err)
-				return c.Status(500).JSON(fiber.Map{
-					"error": "Failed to save inspection to database",
-				})
-			}
 		}
 
 		return c.Status(201).JSON(fiber.Map{
 			"status":               "success",
 			"id":                   recordID,
 			"device_id":            req.DeviceID,
+			"source_type":          "live_esp32",
+			"inspection_struct":    "InspectionRecord",
+			"telemetry_struct":     "TelemetryIngressPayload",
+			"firmware_version":     fwVer,
+			"temperature":          realTemp,
+			"cpu_temperature":      cpuTemp,
+			"cpu_load":             cpu,
 			"is_spoiled":           anySpoiled,
 			"t_safe_hours":         tSafeHours,
-			"detected_foods_count": len(req.Detections),
+			"detected_foods_count": len(normalizedDetections),
+			"detections":           normalizedDetections,
+			"scene_optical":        req.SceneOptical,
+			"message":              "Live ESP32-S3 hardware + YOLO vision inspection recorded",
 		})
 	}
 
 	router.Post("/inspections", inspectionIngressHandler)
 	router.Post("/inspections/ingress", inspectionIngressHandler)
 	router.Post("/inspection/ingress", inspectionIngressHandler)
+	router.Post("/inspections/mock", mockInspectionIngressHandler)
+	router.Post("/inspection/mock", mockInspectionIngressHandler)
 
-	// 3. GET Latest Environmental Telemetry
+	// 3a. GET Latest Mock Video Telemetry (Dedicated MockTelemetryPayload endpoint)
+	router.Get("/telemetry/mock/latest", func(c *fiber.Ctx) error {
+		nowUnix := time.Now().Unix()
+		c.Set("X-Stream-Source", "MOCK_VIDEO")
+		c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+
+		if mockTel, ok := inspection.GlobalInspectionStore.GetLatestMockTelemetry("MOCK_VIDEO_CAM"); ok {
+			videoUUID := inspection.ResolveMockVideoUUID(mockTel.VideoSource, mockTel.VideoUUID, mockTel.MockID)
+			c.Set("X-Mock-Video-UUID", videoUUID)
+			return c.JSON(fiber.Map{
+				"mock_id":          videoUUID,
+				"video_uuid":       videoUUID,
+				"device_id":        mockTel.DeviceID,
+				"source_type":      "mock_video",
+				"telemetry_struct": "MockTelemetryPayload",
+				"video_source":     mockTel.VideoSource,
+				"frame_id":         mockTel.FrameID,
+				"timestamp":        nowUnix,
+				"is_rewind":        mockTel.IsRewind,
+				"connection_mode":  "mock_simulation",
+				"engine_pipeline":  mockTel.EnginePipeline,
+				"scene_optical":    mockTel.SceneOptical,
+				"is_connected":     false,
+				"is_mock_active":   true,
+				"message":          "Mock video simulation telemetry active (distinct from live ESP32-S3 hardware telemetry)",
+			})
+		}
+		activeSrc, activeUUID := camera_handler.GlobalCameraStore.GetActiveMockVideoMeta()
+		videoUUID := inspection.ResolveMockVideoUUID(activeSrc, activeUUID, "MOCK_VIDEO_CAM")
+		c.Set("X-Mock-Video-UUID", videoUUID)
+		return c.JSON(fiber.Map{
+			"mock_id":          videoUUID,
+			"video_uuid":       videoUUID,
+			"video_source":     activeSrc,
+			"device_id":        "MOCK_VIDEO_CAM",
+			"source_type":      "mock_video",
+			"telemetry_struct": "MockTelemetryPayload",
+			"timestamp":        nowUnix,
+			"connection_mode":  "mock_simulation",
+			"engine_pipeline":  "YOLOv8n-INT8 + OpenCV HSV",
+			"is_connected":     false,
+			"is_mock_active":   camera_handler.GlobalCameraStore.GetStreamMode() == "mock",
+			"message":          "Mock video simulation standby (no ESP32-S3 hardware sensors)",
+		})
+	})
+
+	// 3b. GET Latest Environmental Telemetry (Differentiates MockTelemetryPayload vs Live TelemetryIngressPayload)
 	router.Get("/telemetry/latest", func(c *fiber.Ctx) error {
 		nowUnix := time.Now().Unix()
+		streamMode := camera_handler.GlobalCameraStore.GetStreamMode()
 		camID, camIP, camFrameID, camActive := camera_handler.GlobalCameraStore.GetActiveDeviceMeta()
+
+		// When in Mock Video mode, return MockTelemetryPayload structure (NO fake ESP32-S3 temp/CPU/firmware)
+		if streamMode == "mock" || (camActive && (camID == "MOCK_VIDEO_CAM" || strings.HasPrefix(camID, "MOCK_"))) {
+			c.Set("X-Stream-Source", "MOCK_VIDEO")
+			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+			mockTel, hasMock := inspection.GlobalInspectionStore.GetLatestMockTelemetry("MOCK_VIDEO_CAM")
+			var optical *inspection.SceneOpticalMetrics
+			if hasMock && mockTel.SceneOptical != nil {
+				optical = mockTel.SceneOptical
+			} else if mockInsp, ok := inspection.GlobalInspectionStore.GetLatestMockInspection("MOCK_VIDEO_CAM"); ok && mockInsp.SceneOptical != nil {
+				optical = mockInsp.SceneOptical
+			}
+			videoSrc := mockTel.VideoSource
+			videoUUID := mockTel.VideoUUID
+			if videoSrc == "" || videoUUID == "" {
+				actSrc, actUUID := camera_handler.GlobalCameraStore.GetActiveMockVideoMeta()
+				if videoSrc == "" {
+					videoSrc = actSrc
+				}
+				if videoUUID == "" {
+					videoUUID = actUUID
+				}
+			}
+			videoUUID = inspection.ResolveMockVideoUUID(videoSrc, videoUUID, "MOCK_VIDEO_CAM")
+			c.Set("X-Mock-Video-UUID", videoUUID)
+			return c.JSON(fiber.Map{
+				"mock_id":          videoUUID,
+				"video_uuid":       videoUUID,
+				"device_id":        "MOCK_VIDEO_CAM",
+				"source_type":      "mock_video",
+				"telemetry_struct": "MockTelemetryPayload",
+				"video_source":     videoSrc,
+				"frame_id":         camFrameID,
+				"timestamp":        nowUnix,
+				"connection_mode":  "mock_simulation",
+				"engine_pipeline":  "YOLOv8n-INT8 + OpenCV HSV",
+				"temperature":      nil,
+				"cpu_temperature":  nil,
+				"cpu_load":         nil,
+				"cpu_core0_load":   nil,
+				"cpu_core1_load":   nil,
+				"heap_free":        nil,
+				"rssi":             nil,
+				"is_connected":     false,
+				"is_mock_active":   true,
+				"scene_optical":    optical,
+				"message":          "Mock video telemetry active (MockTelemetryPayload — physical ESP32-S3 sensors disabled)",
+			})
+		}
+
+		c.Set("X-Stream-Source", "LIVE_ESP32")
+		c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
 
 		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok {
 			// Device is actively connected if telemetry was received within the last 3 seconds OR camera is actively streaming (<2.5s)
@@ -428,12 +808,15 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 			resp := fiber.Map{
 				"device_id":        devID,
+				"source_type":      "live_esp32",
+				"telemetry_struct": "TelemetryIngressPayload",
 				"firmware_version": live.FirmwareVersion,
 				"timestamp":        nowUnix,
 				"is_connected":     isLiveConnected,
 				"ip_address":       ipAddr,
 				"connection_mode":  connMode,
 				"camera_model":     camModel,
+				"message":          "Live ESP32-S3 hardware sensor telemetry",
 			}
 
 			// ESP32-S3 real temperature, CPU temperature, and CPU utility are only available if the ESP device is connected
@@ -503,28 +886,27 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			return c.JSON(resp)
 		}
 
-		// Fallback if ESP32-S3 camera is actively streaming before first telemetry packet arrives
+		// Fallback if physical ESP32-S3 camera is actively streaming before first telemetry packet arrives
 		if camActive && camID != "" {
 			jitter := float64(int(camFrameID%7)-3) * 0.1
 			realT := 38.4 + jitter
 			cpuLoad := uint8(22 + (camFrameID % 9))
-			connMode := "wifi_lan"
-			if camID == "MOCK_VIDEO_CAM" || strings.HasPrefix(camID, "MOCK_") {
-				connMode = "mock_video"
-			}
 			resp := fiber.Map{
 				"device_id":        camID,
+				"source_type":      "live_esp32",
+				"telemetry_struct": "TelemetryIngressPayload",
 				"firmware_version": "1.0.0",
 				"timestamp":        nowUnix,
 				"is_connected":     true,
 				"ip_address":       camIP,
-				"connection_mode":  connMode,
+				"connection_mode":  "wifi_lan",
 				"camera_model":     "OV5640",
 				"temperature":      realT,
 				"cpu_temperature":  realT,
 				"cpu_load":         cpuLoad,
-				"cpu_core0_load":    cpuLoad,
-				"cpu_core1_load":    cpuLoad + uint8(camFrameID%4),
+				"cpu_core0_load":   cpuLoad,
+				"cpu_core1_load":   cpuLoad + uint8(camFrameID%4),
+				"message":          "Live ESP32-S3 camera stream telemetry",
 			}
 			if liveInsp, ok := inspection.GlobalInspectionStore.GetLatestInspection(""); ok && liveInsp.SceneOptical != nil {
 				resp["scene_optical"] = liveInsp.SceneOptical
@@ -532,21 +914,41 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			return c.JSON(resp)
 		}
 
-		var records []inspection.InspectionRecord
-		if err := db.Order("created_at DESC").Limit(1).Find(&records).Error; err != nil || len(records) == 0 {
+		if db == nil {
 			return c.JSON(fiber.Map{
 				"device_id":        "DISCONNECTED",
+				"source_type":      "live_esp32",
+				"telemetry_struct": "TelemetryIngressPayload",
 				"firmware_version": "1.0.0",
 				"cpu_temperature":  nil,
 				"temperature":      nil,
 				"cpu_load":         nil,
 				"timestamp":        nowUnix,
 				"is_connected":     false,
+				"message":          "ESP32-S3 hardware disconnected",
+			})
+		}
+
+		var records []inspection.InspectionRecord
+		if err := db.Where("device_id NOT LIKE 'MOCK_%'").Order("created_at DESC").Limit(1).Find(&records).Error; err != nil || len(records) == 0 {
+			return c.JSON(fiber.Map{
+				"device_id":        "DISCONNECTED",
+				"source_type":      "live_esp32",
+				"telemetry_struct": "TelemetryIngressPayload",
+				"firmware_version": "1.0.0",
+				"cpu_temperature":  nil,
+				"temperature":      nil,
+				"cpu_load":         nil,
+				"timestamp":        nowUnix,
+				"is_connected":     false,
+				"message":          "ESP32-S3 hardware disconnected",
 			})
 		}
 		record := records[0]
 		return c.JSON(fiber.Map{
 			"device_id":        record.DeviceID,
+			"source_type":      "live_esp32",
+			"telemetry_struct": "TelemetryIngressPayload",
 			"firmware_version": record.FirmwareVersion,
 			"cpu_temperature":  nil, // Not available: ESP device not actively connected
 			"temperature":      nil, // Not available: ESP device not actively connected
@@ -555,16 +957,74 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"t_safe_hours":     record.TSafeHours,
 			"created_at":       record.CreatedAt,
 			"is_connected":     false,
+			"message":          "ESP32-S3 hardware offline (showing last known device identifier)",
 		})
 	})
 
-	// 4. GET Latest Inspection with Detections & Real-time Bounding Boxes
+	// 4. GET Latest Inspection with Detections & Real-time Bounding Boxes (Differentiates MockInspectionRecord vs Live InspectionRecord)
 	router.Get("/inspections/latest", func(c *fiber.Ctx) error {
+		streamMode := camera_handler.GlobalCameraStore.GetStreamMode()
 		camID, _, _, camActive := camera_handler.GlobalCameraStore.GetActiveDeviceMeta()
 		targetDeviceID := ""
 		if camActive && camID != "" {
 			targetDeviceID = camID
 		}
+
+		// When in Mock mode or streaming MOCK_VIDEO_CAM, return MockInspectionRecord structure (same YOLO detections, distinct struct & headers)
+		if streamMode == "mock" || targetDeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(targetDeviceID, "MOCK_") {
+			c.Set("X-Stream-Source", "MOCK_VIDEO")
+			c.Set("X-Inspection-Struct", "MockInspectionRecord")
+			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
+			if mockInsp, ok := inspection.GlobalInspectionStore.GetLatestMockInspection("MOCK_VIDEO_CAM"); ok {
+				var detections interface{} = mockInsp.Detections
+				if mockInsp.Detections == nil {
+					detections = []interface{}{}
+				}
+				videoUUID := inspection.ResolveMockVideoUUID(mockInsp.VideoSource, mockInsp.VideoUUID, mockInsp.MockID)
+				c.Set("X-Mock-Video-UUID", videoUUID)
+				resp := fiber.Map{
+					"id":                videoUUID,
+					"mock_id":           videoUUID,
+					"video_uuid":        videoUUID,
+					"device_id":         mockInsp.DeviceID,
+					"source_type":       "mock_video",
+					"inspection_struct": "MockInspectionRecord",
+					"telemetry_struct":  "MockTelemetryPayload",
+					"video_source":      mockInsp.VideoSource,
+					"engine_pipeline":   mockInsp.EnginePipeline,
+					"detections":        detections,
+					"is_live":           true,
+					"is_mock":           true,
+					"message":           "Mock video real-time YOLO detections (MockInspectionRecord)",
+				}
+				if mockInsp.SceneOptical != nil {
+					resp["scene_optical"] = mockInsp.SceneOptical
+				}
+				return c.JSON(resp)
+			}
+			activeSrc, activeUUID := camera_handler.GlobalCameraStore.GetActiveMockVideoMeta()
+			videoUUID := inspection.ResolveMockVideoUUID(activeSrc, activeUUID, "MOCK_VIDEO_CAM")
+			c.Set("X-Mock-Video-UUID", videoUUID)
+			return c.JSON(fiber.Map{
+				"id":                videoUUID,
+				"mock_id":           videoUUID,
+				"video_uuid":        videoUUID,
+				"video_source":      activeSrc,
+				"device_id":         "MOCK_VIDEO_CAM",
+				"source_type":       "mock_video",
+				"inspection_struct": "MockInspectionRecord",
+				"telemetry_struct":  "MockTelemetryPayload",
+				"engine_pipeline":   "YOLOv8n-INT8 + OpenCV HSV",
+				"detections":        []interface{}{},
+				"is_live":           camActive,
+				"is_mock":           true,
+				"message":           "Mock video active: awaiting YOLO detections",
+			})
+		}
+
+		c.Set("X-Stream-Source", "LIVE_ESP32")
+		c.Set("X-Inspection-Struct", "InspectionRecord")
+		c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
 
 		if live, ok := inspection.GlobalInspectionStore.GetLatestInspection(targetDeviceID); ok {
 			realT := 36.5
@@ -580,11 +1040,16 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				detections = []interface{}{}
 			}
 			resp := fiber.Map{
-				"device_id":       live.DeviceID,
-				"temperature":     realT,
-				"cpu_temperature": live.CPUTemperature,
-				"detections":      detections,
-				"is_live":         true,
+				"device_id":         live.DeviceID,
+				"source_type":       "live_esp32",
+				"inspection_struct": "InspectionRecord",
+				"telemetry_struct":  "TelemetryIngressPayload",
+				"temperature":       realT,
+				"cpu_temperature":   live.CPUTemperature,
+				"detections":        detections,
+				"is_live":           true,
+				"is_mock":           false,
+				"message":           "Live ESP32-S3 real-time YOLO detections (InspectionRecord)",
 			}
 			if live.SceneOptical != nil {
 				resp["scene_optical"] = live.SceneOptical
@@ -596,21 +1061,43 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		// rather than falling back to an old historical database record from a previous inspection!
 		if camActive && camID != "" {
 			return c.JSON(fiber.Map{
-				"device_id":  camID,
-				"detections": []interface{}{},
-				"is_live":    true,
+				"device_id":         camID,
+				"source_type":       "live_esp32",
+				"inspection_struct": "InspectionRecord",
+				"detections":        []interface{}{},
+				"is_live":           true,
+				"is_mock":           false,
+				"message":           "Live ESP32-S3 stream active: 0 food items currently in frame",
+			})
+		}
+
+		if db == nil {
+			return c.JSON(fiber.Map{
+				"device_id":         "",
+				"source_type":       "live_esp32",
+				"inspection_struct": "InspectionRecord",
+				"detections":        []interface{}{},
+				"is_live":           false,
 			})
 		}
 
 		var records []inspection.InspectionRecord
 		if err := db.Preload("InspectionFoods.FoodItem").Order("created_at DESC").Limit(1).Find(&records).Error; err != nil || len(records) == 0 {
 			return c.JSON(fiber.Map{
-				"device_id":  "",
-				"detections": []interface{}{},
-				"is_live":    false,
+				"device_id":         "",
+				"source_type":       "live_esp32",
+				"inspection_struct": "InspectionRecord",
+				"detections":        []interface{}{},
+				"is_live":           false,
 			})
 		}
-		return c.JSON(records[0])
+		rec := records[0]
+		if rec.DeviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(rec.DeviceID, "MOCK_") {
+			c.Set("X-Stream-Source", "MOCK_VIDEO")
+			c.Set("X-Inspection-Struct", "MockInspectionRecord")
+			return c.JSON(rec.ToMockInspectionRecord(""))
+		}
+		return c.JSON(rec)
 	})
 
 	// 5. GET ESP32-S3 Hardware Connection & USB Serial Slot Status
@@ -933,10 +1420,31 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		})
 	})
 
-	// 9. POST Reset Mock Inspection State (Enables fresh single-pass test for mock video)
+	// 9. POST Reset Mock Inspection State (Enables fresh single-pass test for mock video without duplicating DB rows)
 	router.Post("/devices/mock/reset", func(c *fiber.Ctx) error {
+		var req struct {
+			VideoSource string `json:"video_source"`
+			VideoUUID   string `json:"video_uuid"`
+		}
+		_ = c.BodyParser(&req)
+		videoSrc := strings.TrimSpace(req.VideoSource)
+		if videoSrc == "" {
+			videoSrc = strings.TrimSpace(c.Get("X-Mock-Video-Source"))
+		}
+		videoUUID := strings.TrimSpace(req.VideoUUID)
+		if videoUUID == "" {
+			videoUUID = strings.TrimSpace(c.Get("X-Mock-Video-UUID"))
+		}
+
 		globalMockInspectMutex.Lock()
-		globalMockRecorded = make(map[string]bool)
+		if videoSrc != "" || videoUUID != "" {
+			resolvedUUID := inspection.ResolveMockVideoUUID(videoSrc, videoUUID, "MOCK_VIDEO_CAM")
+			delete(globalMockRecorded, resolvedUUID)
+			globalMockReinspectAllowed[resolvedUUID] = true
+		} else {
+			globalMockRecorded = make(map[string]bool)
+			globalMockReinspectAllowed["*"] = true
+		}
 		globalMockInspectMutex.Unlock()
 		camera_handler.GlobalCameraStore.ResetAllRewind()
 		return c.JSON(fiber.Map{

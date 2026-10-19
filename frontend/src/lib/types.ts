@@ -16,37 +16,69 @@ export interface SceneOpticalMetrics {
     white_balance_status: 'BALANCED' | 'WARM' | 'COOL' | 'UNDEREXPOSED' | 'OVEREXPOSED' | string;
 }
 
+export interface InspectionFoodEntry {
+    id: string;
+    inspection_id: string;
+    food_item_id: number;
+    similarity_rate: number;
+    spoilage_score: number;
+    status: 'PASS' | 'REVIEW' | 'REJECT';
+    food_item?: {
+        id: number;
+        name: string;
+    };
+}
+
 export interface InspectionRecord {
     id: string;
+    mock_id?: string;
+    video_uuid?: string;
     device_id: string;
-    firmware_version: string;
+    source_type?: 'live_esp32' | 'mock_video' | string;
+    inspection_struct?: 'InspectionRecord' | 'MockInspectionRecord' | string;
+    video_source?: string;
+    engine_pipeline?: string;
+    firmware_version?: string;
     created_at: string;
     image_s3_uri?: string;
     cpu_temperature?: number;
-    temperature: number;
-    cpu_load: number;
+    temperature?: number;
+    cpu_load?: number;
     is_spoiled: boolean;
     t_safe_hours: number;
     lux_luminance?: number;
     white_balance_status?: string;
     color_temperature?: number;
     scene_optical?: SceneOpticalMetrics;
-    inspection_foods?: Array<{
-        id: string;
-        inspection_id: string;
-        food_item_id: number;
-        similarity_rate: number;
-        spoilage_score: number;
-        status: 'PASS' | 'REVIEW' | 'REJECT';
-        food_item?: {
-            id: number;
-            name: string;
-        };
-    }>;
+    inspection_foods?: InspectionFoodEntry[];
+}
+
+export interface MockInspectionRecord {
+    id: string;
+    mock_id: string;
+    video_uuid: string;
+    device_id: string;
+    source_type: 'mock_video';
+    inspection_struct: 'MockInspectionRecord';
+    video_source?: string;
+    engine_pipeline: string;
+    created_at: string;
+    is_spoiled: boolean;
+    t_safe_hours: number;
+    lux_luminance?: number;
+    white_balance_status?: string;
+    color_temperature?: number;
+    scene_optical?: SceneOpticalMetrics;
+    detections?: FoodDetection[];
+    inspection_foods?: InspectionFoodEntry[];
 }
 
 export interface TelemetryPayload {
     device_id: string;
+    mock_id?: string;
+    video_uuid?: string;
+    source_type?: 'live_esp32' | 'mock_video' | string;
+    telemetry_struct?: 'TelemetryIngressPayload' | 'MockTelemetryPayload' | string;
     device_name?: string;
     firmware_version: string;
     device_core: number;
@@ -60,8 +92,26 @@ export interface TelemetryPayload {
     rssi?: number | null;
     server_memory_mb?: number | null;
     camera_model?: string | null;
+    video_source?: string | null;
+    engine_pipeline?: string | null;
+    is_mock_active?: boolean;
     timestamp: number;
     is_connected?: boolean;
+    scene_optical?: SceneOpticalMetrics;
+}
+
+export interface MockTelemetryPayload {
+    mock_id: string;
+    video_uuid: string;
+    device_id: string;
+    source_type: 'mock_video';
+    telemetry_struct: 'MockTelemetryPayload';
+    video_source?: string;
+    frame_id: number;
+    timestamp: number;
+    is_rewind: boolean;
+    connection_mode: 'mock_simulation';
+    engine_pipeline: string;
     scene_optical?: SceneOpticalMetrics;
 }
 

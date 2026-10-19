@@ -13,14 +13,18 @@ var GlobalInspectionStore = NewInspectionStore()
 
 type InspectionStore struct {
 	sync.RWMutex
-	readings          map[string]TelemetryIngressPayload
-	latestInspections map[string]IngressInspectionRequest
+	readings              map[string]TelemetryIngressPayload
+	mockReadings          map[string]MockTelemetryPayload
+	latestInspections     map[string]IngressInspectionRequest
+	latestMockInspections map[string]MockInspectionRequest
 }
 
 func NewInspectionStore() *InspectionStore {
 	return &InspectionStore{
-		readings:          make(map[string]TelemetryIngressPayload),
-		latestInspections: make(map[string]IngressInspectionRequest),
+		readings:              make(map[string]TelemetryIngressPayload),
+		mockReadings:          make(map[string]MockTelemetryPayload),
+		latestInspections:     make(map[string]IngressInspectionRequest),
+		latestMockInspections: make(map[string]MockInspectionRequest),
 	}
 }
 
@@ -38,13 +42,102 @@ func (s *InspectionStore) StoreTelemetry(payload TelemetryIngressPayload) {
 	s.Unlock()
 }
 
+func (s *InspectionStore) StoreMockTelemetry(payload MockTelemetryPayload) {
+	devID := payload.DeviceID
+	if devID == "" {
+		devID = payload.MockID
+	}
+	if devID == "" {
+		return
+	}
+	payload.DeviceID = devID
+	if payload.MockID == "" {
+		payload.MockID = devID
+	}
+	if payload.SourceType == "" {
+		payload.SourceType = "mock_video"
+	}
+	if payload.TelemetryStruct == "" {
+		payload.TelemetryStruct = "MockTelemetryPayload"
+	}
+	if payload.ConnectionMode == "" {
+		payload.ConnectionMode = "mock_simulation"
+	}
+	if payload.EnginePipeline == "" {
+		payload.EnginePipeline = "YOLOv8n-INT8 + OpenCV HSV"
+	}
+	nowUnix := time.Now().Unix()
+	if payload.Timestamp <= 0 || payload.Timestamp < 1700000000 || (nowUnix-payload.Timestamp) > 30 {
+		payload.Timestamp = nowUnix
+	}
+
+	s.Lock()
+	s.mockReadings[devID] = payload
+	s.Unlock()
+}
+
+func (s *InspectionStore) GetLatestMockTelemetry(deviceID string) (MockTelemetryPayload, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	if deviceID == "" || deviceID == "*" || deviceID == "latest" {
+		for _, m := range s.mockReadings {
+			return m, true
+		}
+	}
+	data, exists := s.mockReadings[deviceID]
+	return data, exists
+}
+
 func (s *InspectionStore) StoreLatestInspection(req IngressInspectionRequest) {
 	if req.DeviceID == "" {
 		return
 	}
+	if req.SourceType == "" {
+		req.SourceType = "live_esp32"
+	}
 	s.Lock()
 	s.latestInspections[req.DeviceID] = req
 	s.Unlock()
+}
+
+func (s *InspectionStore) StoreLatestMockInspection(req MockInspectionRequest) {
+	devID := req.DeviceID
+	if devID == "" {
+		devID = req.MockID
+	}
+	if devID == "" {
+		return
+	}
+	req.DeviceID = devID
+	if req.MockID == "" {
+		req.MockID = devID
+	}
+	if req.SourceType == "" {
+		req.SourceType = "mock_video"
+	}
+	if req.InspectionStruct == "" {
+		req.InspectionStruct = "MockInspectionRequest"
+	}
+	if req.EnginePipeline == "" {
+		req.EnginePipeline = "YOLOv8n-INT8 + OpenCV HSV"
+	}
+	s.Lock()
+	s.latestMockInspections[devID] = req
+	s.Unlock()
+}
+
+func (s *InspectionStore) GetLatestMockInspection(deviceID string) (MockInspectionRequest, bool) {
+	s.RLock()
+	defer s.RUnlock()
+	if deviceID == "" || deviceID == "latest" || deviceID == "*" {
+		for _, insp := range s.latestMockInspections {
+			if len(insp.Detections) > 0 {
+				return insp, true
+			}
+		}
+	}
+	insp, exists := s.latestMockInspections[deviceID]
+	return insp, exists
 }
 
 func (s *InspectionStore) GetLatestInspection(deviceID string) (IngressInspectionRequest, bool) {
@@ -56,9 +149,31 @@ func (s *InspectionStore) GetLatestInspection(deviceID string) (IngressInspectio
 				return insp, true
 			}
 		}
+		for _, mockInsp := range s.latestMockInspections {
+			if len(mockInsp.Detections) > 0 {
+				return IngressInspectionRequest{
+					DeviceID:     mockInsp.DeviceID,
+					SourceType:   mockInsp.SourceType,
+					SceneOptical: mockInsp.SceneOptical,
+					Detections:   mockInsp.Detections,
+					IsRewind:     mockInsp.IsRewind,
+				}, true
+			}
+		}
 	}
-	insp, exists := s.latestInspections[deviceID]
-	return insp, exists
+	if insp, exists := s.latestInspections[deviceID]; exists {
+		return insp, true
+	}
+	if mockInsp, exists := s.latestMockInspections[deviceID]; exists {
+		return IngressInspectionRequest{
+			DeviceID:     mockInsp.DeviceID,
+			SourceType:   mockInsp.SourceType,
+			SceneOptical: mockInsp.SceneOptical,
+			Detections:   mockInsp.Detections,
+			IsRewind:     mockInsp.IsRewind,
+		}, true
+	}
+	return IngressInspectionRequest{}, false
 }
 
 func (s *InspectionStore) ProcessTelemetry(r io.Reader) (*TelemetryIngressPayload, error) {
@@ -80,8 +195,18 @@ func (s *InspectionStore) ProcessTelemetry(r io.Reader) (*TelemetryIngressPayloa
 func (s *InspectionStore) GetLatestTelemetry(deviceID string) (TelemetryIngressPayload, bool) {
 	s.RLock()
 	defer s.RUnlock()
-	data, exists := s.readings[deviceID]
-	return data, exists
+	if data, exists := s.readings[deviceID]; exists {
+		return data, true
+	}
+	if mockData, exists := s.mockReadings[deviceID]; exists {
+		return TelemetryIngressPayload{
+			DeviceID:       mockData.DeviceID,
+			Timestamp:      mockData.Timestamp,
+			ConnectionMode: mockData.ConnectionMode,
+			SceneOptical:   mockData.SceneOptical,
+		}, true
+	}
+	return TelemetryIngressPayload{}, false
 }
 
 func (s *InspectionStore) GetAnyLatestTelemetry() (TelemetryIngressPayload, bool) {
@@ -106,11 +231,15 @@ func (s *InspectionStore) DisconnectDevice(deviceID string) {
 	defer s.Unlock()
 	if deviceID == "" || deviceID == "*" {
 		s.readings = make(map[string]TelemetryIngressPayload)
+		s.mockReadings = make(map[string]MockTelemetryPayload)
 		s.latestInspections = make(map[string]IngressInspectionRequest)
+		s.latestMockInspections = make(map[string]MockInspectionRequest)
 		return
 	}
 	delete(s.readings, deviceID)
+	delete(s.mockReadings, deviceID)
 	delete(s.latestInspections, deviceID)
+	delete(s.latestMockInspections, deviceID)
 }
 
 func (s *InspectionStore) DisconnectNonMock() {
@@ -127,4 +256,5 @@ func (s *InspectionStore) DisconnectNonMock() {
 		}
 	}
 }
+
 

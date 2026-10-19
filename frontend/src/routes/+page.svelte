@@ -232,18 +232,24 @@
             // 5. Inspections & Records from DB (Polled every 2.5s for KPI counters; only populate detections fallback if offline)
             if (shouldRunSlowPoll || (!hasLiveDetections && !isLiveStreamActive)) {
                 const allRecords = await fetchRecords(systemConfig.backendUrl);
-                if (allRecords && allRecords.length > 0) {
-                    records = allRecords;
+                const seenKeys = new Set<string>();
+                const dedupedRecords = (allRecords || []).filter(r => {
+                    if (!r.inspection_foods || r.inspection_foods.length === 0) return false;
+                    const key = r.video_uuid || r.id;
+                    if (seenKeys.has(key)) return false;
+                    seenKeys.add(key);
+                    return true;
+                });
+                if (dedupedRecords.length > 0) {
+                    records = dedupedRecords;
                 }
-                const validRecords = (allRecords || []).filter(
-                    r => r.inspection_foods && r.inspection_foods.length > 0
-                );
+                const validRecords = dedupedRecords;
 
                 if (validRecords.length > 0) {
                     const spoiled = validRecords.filter(r => r.is_spoiled || (r.inspection_foods && r.inspection_foods.some(f => f.status === 'REJECT'))).length;
                     const accepted = validRecords.length - spoiled;
-                    totalRejected = Math.max(totalRejected, spoiled);
-                    totalAccepted = Math.max(totalAccepted, accepted);
+                    totalRejected = spoiled;
+                    totalAccepted = accepted;
 
                     if (!hasLiveDetections && !isLiveStreamActive) {
                         const latest = validRecords[0];
