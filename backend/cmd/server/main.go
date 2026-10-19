@@ -87,6 +87,11 @@ func main() {
 			WHERE device_id = 'MOCK_VIDEO_CAM' OR device_id LIKE 'MOCK_%'
 		) sub WHERE sub.rn > 1
 	)`)
+	// Ensure mock video records never store ESP32 hardware values in the database
+	_ = db.Exec(`UPDATE inspections SET firmware_version = '', temperature = 0.0, cpu_temperature = 0.0, cpu_load = 0
+		WHERE device_id = 'MOCK_VIDEO_CAM' OR device_id LIKE 'MOCK_%' OR COALESCE(image_s3_uri, '') LIKE '%.mp4'`)
+	_ = db.Exec(`UPDATE devices SET firmware_version = '', device_type = 'MOCK_VIDEO'
+		WHERE id = 'MOCK_VIDEO_CAM' OR id LIKE 'MOCK_%'`)
 	if err := db.Exec(`DO $$
 BEGIN
     IF EXISTS (

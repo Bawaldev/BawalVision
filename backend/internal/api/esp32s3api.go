@@ -185,6 +185,13 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		detections []inspection.FoodDetection,
 		now time.Time,
 	) error {
+		if deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_") || strings.EqualFold(deviceType, "MOCK_VIDEO") || strings.EqualFold(deviceType, "mock_video") || (imageS3URI != nil && strings.Contains(*imageS3URI, ".mp4")) {
+			deviceType = "MOCK_VIDEO"
+			fwVer = ""
+			realTemp = 0.0
+			cpuTemp = 0.0
+			cpu = 0
+		}
 		if inspection.GlobalBatchWorker != nil {
 			task := inspection.BatchInspectionTask{
 				RecordID: recordID,
@@ -491,7 +498,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			recordID,
 			mockReq.DeviceID,
 			"MOCK_VIDEO",
-			"MOCK_SIM",
+			"",
 			0.0,
 			0.0,
 			0,
