@@ -28,8 +28,12 @@ func TestVideoRewindDoesNotAddTelemetry(t *testing.T) {
 	req1.Header.Set("X-Frame-ID", "1")
 	req1.Header.Set("X-Is-Rewind", "0")
 	resp1, err := app.Test(req1)
-	if err != nil || resp1.StatusCode != http.StatusOK {
-		t.Fatalf("expected forward frame to succeed, err=%v, code=%d", err, resp1.StatusCode)
+	if err != nil {
+		t.Fatalf("expected forward frame to succeed, err=%v", err)
+	}
+	defer resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("expected forward frame status 200 OK, got %d", resp1.StatusCode)
 	}
 
 	tel1, ok := inspection.GlobalInspectionStore.GetLatestTelemetry("MOCK_VIDEO_CAM")
@@ -44,8 +48,12 @@ func TestVideoRewindDoesNotAddTelemetry(t *testing.T) {
 	req2.Header.Set("X-Frame-ID", "2")
 	req2.Header.Set("X-Is-Rewind", "1")
 	resp2, err := app.Test(req2)
-	if err != nil || resp2.StatusCode != http.StatusOK {
-		t.Fatalf("expected rewind frame to succeed, err=%v, code=%d", err, resp2.StatusCode)
+	if err != nil {
+		t.Fatalf("expected rewind frame to succeed, err=%v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected rewind frame status 200 OK, got %d", resp2.StatusCode)
 	}
 
 	// 3. Verify camera store knows device is in rewind
@@ -66,7 +74,11 @@ func TestVideoRewindDoesNotAddInspectedTrays(t *testing.T) {
 
 	// Reset mock inspection state
 	resetReq := httptest.NewRequest(http.MethodPost, "/api/v1/devices/mock/reset", nil)
-	app.Test(resetReq)
+	resetResp, err := app.Test(resetReq)
+	if err != nil {
+		t.Fatalf("reset mock state failed: %v", err)
+	}
+	defer resetResp.Body.Close()
 
 	// Mark MOCK_VIDEO_CAM as in rewind state
 	camera_handler.GlobalCameraStore.StoreRawFrameWithMeta("MOCK_VIDEO_CAM", 100, []byte("fake_jpg"), "127.0.0.1", true)
@@ -93,6 +105,7 @@ func TestVideoRewindDoesNotAddInspectedTrays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /inspections failed: %v", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
 	}
@@ -110,7 +123,11 @@ func TestMockSinglePassInspectionDedup(t *testing.T) {
 
 	// Reset mock inspection state
 	resetReq := httptest.NewRequest(http.MethodPost, "/api/v1/devices/mock/reset", nil)
-	app.Test(resetReq)
+	resetResp, err := app.Test(resetReq)
+	if err != nil {
+		t.Fatalf("reset mock state failed: %v", err)
+	}
+	defer resetResp.Body.Close()
 
 	camera_handler.GlobalCameraStore.StoreRawFrameWithMeta("MOCK_VIDEO_CAM", 1, []byte("fake_jpg"), "127.0.0.1", false)
 
@@ -131,7 +148,11 @@ func TestMockSinglePassInspectionDedup(t *testing.T) {
 	// First pass -> allowed
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/inspections", bytes.NewReader(body))
 	req1.Header.Set("Content-Type", "application/json")
-	resp1, _ := app.Test(req1)
+	resp1, err := app.Test(req1)
+	if err != nil {
+		t.Fatalf("first pass request failed: %v", err)
+	}
+	defer resp1.Body.Close()
 	if resp1.StatusCode != http.StatusOK && resp1.StatusCode != http.StatusCreated {
 		t.Fatalf("expected first pass to succeed, got %d", resp1.StatusCode)
 	}
@@ -139,13 +160,19 @@ func TestMockSinglePassInspectionDedup(t *testing.T) {
 	// Second pass (e.g. video loop without explicit reset) -> suppressed to prevent duplicate trays
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/inspections", bytes.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
-	resp2, _ := app.Test(req2)
+	resp2, err := app.Test(req2)
+	if err != nil {
+		t.Fatalf("second pass request failed: %v", err)
+	}
+	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("expected suppressed duplicate to return 200 OK, got %d", resp2.StatusCode)
 	}
 
 	var resMap map[string]interface{}
-	json.NewDecoder(resp2.Body).Decode(&resMap)
+	if err := json.NewDecoder(resp2.Body).Decode(&resMap); err != nil {
+		t.Fatalf("failed to decode response JSON: %v", err)
+	}
 	if resMap["is_rewind"] != true {
 		t.Errorf("expected is_rewind suppression flag on duplicate mock video pass")
 	}

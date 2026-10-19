@@ -7,6 +7,38 @@
 
     let { detections = [] }: Props = $props();
 
+    type TableFilterMode = 'ALL' | 'PASS' | 'REVIEW' | 'REJECT';
+    let filterMode = $state<TableFilterMode>('ALL');
+
+    function getItemDecision(det: FoodDetection | null | undefined): 'PASS' | 'REVIEW' | 'REJECT' {
+        if (!det) return 'PASS';
+        if (det.status === 'PASS' || det.status === 'REVIEW' || det.status === 'REJECT') {
+            return det.status;
+        }
+
+        const rawSpoilage = Number(det.spoilage_score);
+        const spoilage = Number.isFinite(rawSpoilage) ? Math.max(0, Math.min(100, rawSpoilage)) : 0;
+
+        let rawSim = Number(det.similarity_rate);
+        let sim = Number.isFinite(rawSim) ? rawSim : 1.0;
+        if (sim > 1.0) sim = sim / 100.0;
+        sim = Math.max(0, Math.min(1.0, sim));
+
+        if (spoilage >= 50 || sim < 0.35) return 'REJECT';
+        if (spoilage >= 25 || sim < 0.60) return 'REVIEW';
+        return 'PASS';
+    }
+
+    let validDetections = $derived(Array.isArray(detections) ? detections.filter((d): d is FoodDetection => Boolean(d)) : []);
+    let passCount = $derived(validDetections.filter(d => getItemDecision(d) === 'PASS').length);
+    let reviewCount = $derived(validDetections.filter(d => getItemDecision(d) === 'REVIEW').length);
+    let rejectCount = $derived(validDetections.filter(d => getItemDecision(d) === 'REJECT').length);
+
+    let displayedDetections = $derived.by(() => {
+        if (filterMode === 'ALL') return validDetections;
+        return validDetections.filter(d => getItemDecision(d) === filterMode);
+    });
+
     function getFoodIcon(name: string): string {
         const lower = (name || '').toLowerCase();
         if (lower.includes('rice') || lower.includes('nasi')) return '🍚';
@@ -31,9 +63,53 @@
                 <p class="sub-label">Dynamic YOLO Object Detection & Freshness Analysis</p>
             </div>
         </div>
-        <div class="header-stats">
-            <span class="stat-pill">{detections.length} Detected</span>
-            <span class="stat-pill">CV Threshold: &ge;40%</span>
+        <div class="header-filter-tabs" role="tablist" aria-label="Detection Filter Tabs">
+            <button
+                type="button"
+                role="tab"
+                class="filter-pill-btn"
+                class:active={filterMode === 'ALL'}
+                onclick={() => (filterMode = 'ALL')}
+            >
+                <span>All</span>
+                <span class="count-badge">{validDetections.length}</span>
+            </button>
+            <button
+                type="button"
+                role="tab"
+                class="filter-pill-btn tab-pass"
+                class:active={filterMode === 'PASS'}
+                onclick={() => (filterMode = 'PASS')}
+                title="Filter Pass (Compliant) detections"
+            >
+                <span class="status-dot dot-pass"></span>
+                <span>Pass Detection</span>
+                <span class="count-badge badge-pass">{passCount}</span>
+            </button>
+            <button
+                type="button"
+                role="tab"
+                class="filter-pill-btn tab-review"
+                class:active={filterMode === 'REVIEW'}
+                onclick={() => (filterMode = 'REVIEW')}
+                title="Filter Review warnings"
+            >
+                <span class="status-dot dot-review"></span>
+                <span>Review</span>
+                <span class="count-badge badge-review">{reviewCount}</span>
+            </button>
+            <button
+                type="button"
+                role="tab"
+                class="filter-pill-btn tab-reject"
+                class:active={filterMode === 'REJECT'}
+                onclick={() => (filterMode = 'REJECT')}
+                title="Filter Rejected detections"
+            >
+                <span class="status-dot dot-reject"></span>
+                <span>Reject</span>
+                <span class="count-badge badge-reject">{rejectCount}</span>
+            </button>
         </div>
     </div>
 
@@ -55,8 +131,16 @@
                             <span class="empty-msg">No food items detected in camera view.</span>
                         </td>
                     </tr>
+                {:else if displayedDetections.length === 0}
+                    <tr>
+                        <td colspan="5" class="empty-row">
+                            <span class="empty-msg">No items matching "{filterMode}" found.</span>
+                            <button type="button" class="reset-table-filter-btn" onclick={() => (filterMode = 'ALL')}>Show All Items</button>
+                        </td>
+                    </tr>
                 {:else}
-                    {#each detections as det, idx}
+                    {#each displayedDetections as det, idx}
+                        {@const decision = getItemDecision(det)}
                         <tr class="has-item">
                             <td class="slot-cell">
                                 <span class="slot-tag">#{idx + 1}</span>
@@ -84,9 +168,9 @@
                                 </span>
                             </td>
                             <td class="status-cell">
-                                {#if det.status === 'REJECT' || (det.spoilage_score || 0) >= 55 || det.similarity_rate < 0.35}
+                                {#if decision === 'REJECT'}
                                     <span class="badge reject">Reject</span>
-                                {:else if det.status === 'REVIEW' || (det.spoilage_score || 0) >= 35 || det.similarity_rate < 0.60}
+                                {:else if decision === 'REVIEW'}
                                     <span class="badge hold">Review</span>
                                 {:else}
                                     <span class="badge pass">Pass</span>
@@ -144,21 +228,115 @@
         color: var(--text-muted);
     }
 
-    .header-stats {
+    .header-filter-tabs {
         display: flex;
-        align-items: center;
-        gap: 8px;
+        background: #f1f5f9;
+        padding: 3px;
+        border-radius: var(--radius-sm);
+        border: 1px solid #e2e8f0;
+        gap: 4px;
         flex-wrap: wrap;
     }
 
-    .stat-pill {
-        font-size: 0.68rem;
+    .filter-pill-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 10px;
+        border-radius: var(--radius-sm);
+        font-size: 0.72rem;
         font-weight: 600;
-        background: #f1f5f9;
+        color: #64748b;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+    }
+
+    .filter-pill-btn:hover {
+        background: rgba(255, 255, 255, 0.7);
+        color: #1e293b;
+    }
+
+    .filter-pill-btn.active {
+        background: #ffffff;
+        color: #0f172a;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        font-weight: 700;
+    }
+
+    .filter-pill-btn.tab-pass.active {
+        color: #16a34a;
+    }
+
+    .filter-pill-btn.tab-review.active {
+        color: #d97706;
+    }
+
+    .filter-pill-btn.tab-reject.active {
+        color: #dc2626;
+    }
+
+    .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        display: inline-block;
+    }
+
+    .dot-pass {
+        background: #16a34a;
+    }
+
+    .dot-review {
+        background: #f59e0b;
+    }
+
+    .dot-reject {
+        background: #ef4444;
+    }
+
+    .count-badge {
+        font-size: 0.65rem;
+        padding: 1px 5px;
+        border-radius: 10px;
+        background: rgba(148, 163, 184, 0.2);
         color: #475569;
+        line-height: 1.1;
+    }
+
+    .badge-pass {
+        background: rgba(22, 163, 74, 0.15);
+        color: #16a34a;
+    }
+
+    .badge-review {
+        background: rgba(245, 158, 11, 0.15);
+        color: #d97706;
+    }
+
+    .badge-reject {
+        background: rgba(239, 68, 68, 0.15);
+        color: #dc2626;
+    }
+
+    .reset-table-filter-btn {
+        margin-left: 10px;
         padding: 3px 8px;
-        border-radius: var(--radius-pill);
-        border: 1px solid #e2e8f0;
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: #ffffff;
+        color: #3679a8;
+        border: 1px solid #cbd5e1;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .reset-table-filter-btn:hover {
+        background: #3679a8;
+        color: #ffffff;
     }
 
     .table-container {
