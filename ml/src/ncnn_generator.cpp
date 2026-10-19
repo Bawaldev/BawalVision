@@ -139,11 +139,19 @@ std::vector<fs::path> NCNNGenerator::syncWeights(
     std::vector<fs::path> synced;
     for (const auto& dir : sync_dirs) {
         try {
+            if (dir.string() == "/app/weights" && !fs::exists("/app")) {
+                continue;
+            }
             fs::create_directories(dir);
             const auto dest_param = dir / param_path.filename();
             const auto dest_bin   = dir / bin_path.filename();
-            fs::copy_file(param_path, dest_param, fs::copy_options::overwrite_existing);
-            fs::copy_file(bin_path, dest_bin, fs::copy_options::overwrite_existing);
+            std::error_code ec;
+            if (!fs::equivalent(param_path, dest_param, ec)) {
+                fs::copy_file(param_path, dest_param, fs::copy_options::overwrite_existing);
+            }
+            if (!fs::equivalent(bin_path, dest_bin, ec)) {
+                fs::copy_file(bin_path, dest_bin, fs::copy_options::overwrite_existing);
+            }
             synced.push_back(dest_param);
             synced.push_back(dest_bin);
         } catch (const std::exception& e) {

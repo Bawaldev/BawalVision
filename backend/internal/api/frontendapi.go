@@ -49,7 +49,9 @@ func RegisterFrontendRoutes(router fiber.Router, db *gorm.DB) {
 	router.Post("/system/threshold", h.SetThreshold)
 	router.Get("/examples", h.GetExampleVideos)
 	router.Get("/examples/videos", h.GetExampleVideos)
+	router.Get("/examples/file/*", h.ServeExampleVideo)
 	router.Get("/examples/file/:filename", h.ServeExampleVideo)
+	router.Get("/examples/*", h.ServeExampleVideo)
 }
 
 func (h *Handler) GetThreshold(c *fiber.Ctx) error {
@@ -87,26 +89,31 @@ func (h *Handler) SetThreshold(c *fiber.Ctx) error {
 }
 
 func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
-	paths := []string{"./examples", "../examples", "./frontend/static/examples", "../frontend/static/examples"}
+	paths := []string{"./examples", "../examples", "../../examples", "../../../examples", "./frontend/static/examples", "../frontend/static/examples", "/app/examples"}
 	foundMap := make(map[string]bool)
 	videoFiles := make([]string, 0)
 
-	for _, p := range paths {
-		entries, err := os.ReadDir(p)
-		if err != nil {
+	for _, basePath := range paths {
+		if _, err := os.Stat(basePath); err != nil {
 			continue
 		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
+		_ = filepath.WalkDir(basePath, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
 			}
-			name := entry.Name()
-			lower := strings.ToLower(name)
-			if (strings.HasSuffix(lower, ".mp4") || strings.HasSuffix(lower, ".webm")) && !foundMap[name] {
-				foundMap[name] = true
-				videoFiles = append(videoFiles, name)
+			lower := strings.ToLower(d.Name())
+			if strings.HasSuffix(lower, ".mp4") || strings.HasSuffix(lower, ".webm") {
+				rel, err := filepath.Rel(basePath, path)
+				if err == nil {
+					rel = filepath.ToSlash(rel)
+					if !foundMap[rel] {
+						foundMap[rel] = true
+						videoFiles = append(videoFiles, rel)
+					}
+				}
 			}
-		}
+			return nil
+		})
 	}
 
 	return c.JSON(fiber.Map{
@@ -116,16 +123,27 @@ func (h *Handler) GetExampleVideos(c *fiber.Ctx) error {
 }
 
 func (h *Handler) ServeExampleVideo(c *fiber.Ctx) error {
-	filename := c.Params("filename")
+	filename := c.Params("*")
+	if filename == "" {
+		filename = c.Params("filename")
+	}
 	if filename == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Filename required"})
 	}
 
+	cleaned := filepath.Clean(filename)
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid file path"})
+	}
+
 	paths := []string{
-		filepath.Join("./examples", filename),
-		filepath.Join("../examples", filename),
-		filepath.Join("./frontend/static/examples", filename),
-		filepath.Join("../frontend/static/examples", filename),
+		filepath.Join("./examples", cleaned),
+		filepath.Join("../examples", cleaned),
+		filepath.Join("../../examples", cleaned),
+		filepath.Join("../../../examples", cleaned),
+		filepath.Join("./frontend/static/examples", cleaned),
+		filepath.Join("../frontend/static/examples", cleaned),
+		filepath.Join("/app/examples", cleaned),
 	}
 
 	for _, p := range paths {

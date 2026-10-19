@@ -20,6 +20,12 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 	if deviceID == "" || deviceID == "DEFAULT_CAMERA" || deviceID == "UNKNOWN_DEVICE" {
 		return
 	}
+	// Rewind video does NOT add more telemetry or flood session history
+	isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
+	if isRewind {
+		return
+	}
+
 	nowUnix := time.Now().Unix()
 	clientIP := c.IP()
 
@@ -126,7 +132,8 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 				if len(imageBytes) > 0 {
 					devID := strings.Clone(payload.DeviceID)
 					ipStr := strings.Clone(c.IP())
-					camera_handler.GlobalCameraStore.StoreRawFrameWithIP(devID, payload.FrameID, imageBytes, ipStr)
+					isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
+					camera_handler.GlobalCameraStore.StoreRawFrameWithMeta(devID, payload.FrameID, imageBytes, ipStr, isRewind)
 					syncTelemetryFromCameraIngress(c, devID, payload.FrameID)
 				}
 				return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -149,7 +156,8 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		copy(imageBytes, body)
 
 		ipStr := strings.Clone(c.IP())
-		camera_handler.GlobalCameraStore.StoreRawFrameWithIP(deviceID, uint32(frameID), imageBytes, ipStr)
+		isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
+		camera_handler.GlobalCameraStore.StoreRawFrameWithMeta(deviceID, uint32(frameID), imageBytes, ipStr, isRewind)
 		syncTelemetryFromCameraIngress(c, deviceID, uint32(frameID))
 
 		return c.SendStatus(fiber.StatusOK)
@@ -278,11 +286,16 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			deviceID = ""
 		}
 
-		rawBytes, exists := camera_handler.GlobalCameraStore.GetRawFrame(deviceID)
+		rawBytes, isRewind, exists := camera_handler.GlobalCameraStore.GetRawFrameWithRewind(deviceID)
 		if !exists || len(rawBytes) == 0 {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"error": "No raw image available for device",
 			})
+		}
+
+		if isRewind {
+			c.Set("X-Is-Rewind", "1")
+			c.Set("X-Video-Rewind", "1")
 		}
 
 		c.Set("Content-Type", "image/jpeg")

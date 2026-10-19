@@ -107,9 +107,24 @@ int main(int argc, char** argv) {
             model_path = env_model;
         }
     } else {
-        std::ifstream docker_check(model_path);
-        if (!docker_check.good()) {
-            model_path = "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx";
+        const std::vector<std::string> candidate_model_paths = {
+            "/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "../../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "../../../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "/app/weights/ai1_vision_int8.onnx",
+            "weights/ai1_vision_int8.onnx",
+            "../weights/ai1_vision_int8.onnx",
+            "../../weights/ai1_vision_int8.onnx",
+            "../../../weights/ai1_vision_int8.onnx"
+        };
+        for (const auto& p : candidate_model_paths) {
+            std::ifstream check(p.c_str());
+            if (check.good()) {
+                model_path = p;
+                break;
+            }
         }
     }
 
@@ -159,6 +174,7 @@ int main(int argc, char** argv) {
     bool new_ai_frame_available = false;
     std::atomic<bool> ai_worker_running{true};
     std::atomic<bool> ai_detections_updated{false};
+    std::atomic<bool> video_has_rewound{false};
     std::vector<DetectionResult> shared_detections;
     std::string current_device_id = device_id;
 
@@ -257,8 +273,9 @@ int main(int argc, char** argv) {
                     current_state_sig += ";";
                 }
 
+                const bool is_mock_source = (dev_id == "MOCK_VIDEO_CAM" || use_video_source);
                 const bool state_changed = (current_state_sig != last_state_signature);
-                const bool heartbeat_sync = (elapsed_since_dispatch >= 15000);
+                const bool heartbeat_sync = (!is_mock_source && elapsed_since_dispatch >= 15000);
                 const bool debounce_ok = (elapsed_since_dispatch >= 800);
 
                 if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty() && curl_db) {
@@ -266,6 +283,7 @@ int main(int argc, char** argv) {
                     std::ostringstream json_ss;
                     json_ss << "{"
                             << "\"device_id\":\"" << dev_id << "\","
+                            << "\"is_rewind\":" << (video_has_rewound.load() ? "true" : "false") << ","
                             << "\"scene_optical\":{"
                             << "\"avg_r\":" << std::fixed << std::setprecision(1) << optical.avg_r << ","
                             << "\"avg_g\":" << optical.avg_g << ","
@@ -345,6 +363,8 @@ int main(int argc, char** argv) {
             }
             if (video_source.didRewind()) {
                 pipeline.resetTracker();
+                video_has_rewound.store(true);
+                std::cout << "[INFO] Video rewind detected: duplicate inspection writes suppressed.\n";
             }
             inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
         } else {

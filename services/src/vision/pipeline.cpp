@@ -54,11 +54,26 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     m_video_source.target_width = m_width;
     m_video_source.target_height = m_height;
 
-    // Locate weight directory
-    const std::filesystem::path default_weight_dir = "/app/weights";
-    const std::filesystem::path local_weight_dir = "weights";
-    const std::filesystem::path weight_dir =
-        std::filesystem::exists(default_weight_dir) ? default_weight_dir : local_weight_dir;
+    // Locate weight directory across Docker container and any local working directory
+    const std::vector<std::filesystem::path> weight_candidates = {
+        "/app/weights",
+        "weights",
+        "../weights",
+        "../../weights",
+        "../../../weights",
+        "services/weights",
+        "../services/weights"
+    };
+    std::filesystem::path weight_dir = "weights";
+    for (const auto& cand : weight_candidates) {
+        if (std::filesystem::exists(cand) && std::filesystem::is_directory(cand)) {
+            if (std::filesystem::exists(cand / "realesr-animevideov3-x2.param") ||
+                std::filesystem::exists(cand / "ai1_vision_int8.onnx")) {
+                weight_dir = cand;
+                break;
+            }
+        }
+    }
 
     // Model selection: use the genuine pre-trained realesr-animevideov3-x2 (2x) NCNN model
     // by default for fast, artifact-free CPU super-resolution. Override via REALESRGAN_MODEL.

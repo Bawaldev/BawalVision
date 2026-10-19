@@ -90,5 +90,6 @@ type IngressInspectionRequest struct {
 	ImageS3URI      *string               `json:"image_s3_uri,omitempty"`
 	SceneOptical    *SceneOpticalMetrics  `json:"scene_optical,omitempty"`
 	Detections      []FoodDetection       `json:"detections"`
+	IsRewind        bool                  `json:"is_rewind,omitempty"`
 }
 
