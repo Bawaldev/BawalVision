@@ -72,6 +72,21 @@ func main() {
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS spoilage_score NUMERIC(5, 2) NOT NULL DEFAULT 0.00")
 	_ = db.Exec("ALTER TABLE inspection_foods ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'PASS'")
 	_ = db.Exec("DELETE FROM inspections WHERE id NOT IN (SELECT DISTINCT inspection_id FROM inspection_foods)")
+	// Deduplicate legacy MOCK_VIDEO_CAM rows created before per-video deterministic UUID assignment
+	_ = db.Exec(`DELETE FROM inspection_foods WHERE inspection_id IN (
+		SELECT id FROM (
+			SELECT id, ROW_NUMBER() OVER (PARTITION BY device_id, COALESCE(image_s3_uri, '') ORDER BY created_at DESC) AS rn
+			FROM inspections
+			WHERE device_id = 'MOCK_VIDEO_CAM' OR device_id LIKE 'MOCK_%'
+		) sub WHERE sub.rn > 1
+	)`)
+	_ = db.Exec(`DELETE FROM inspections WHERE id IN (
+		SELECT id FROM (
+			SELECT id, ROW_NUMBER() OVER (PARTITION BY device_id, COALESCE(image_s3_uri, '') ORDER BY created_at DESC) AS rn
+			FROM inspections
+			WHERE device_id = 'MOCK_VIDEO_CAM' OR device_id LIKE 'MOCK_%'
+		) sub WHERE sub.rn > 1
+	)`)
 	if err := db.Exec(`DO $$
 BEGIN
     IF EXISTS (

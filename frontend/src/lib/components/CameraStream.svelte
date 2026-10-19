@@ -35,14 +35,66 @@
     type SourceModeType = 'live' | 'mock';
     let sourceMode = $state<SourceModeType>('live');
 
+    // Deterministic RFC-4122 UUID v5 generator matching backend inspection.DeterministicMockVideoUUID byte-for-byte
+    function computeMockVideoUUID(videoKey: string): string {
+        let cleaned = (videoKey || '').trim().toLowerCase();
+        if (cleaned.startsWith('/api/v1/examples/file/')) {
+            cleaned = cleaned.slice('/api/v1/examples/file/'.length);
+        }
+        if (cleaned.startsWith('examples/')) {
+            cleaned = cleaned.slice('examples/'.length);
+        }
+        if (!cleaned) {
+            cleaned = 'default_mock_video';
+        }
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleaned)) {
+            return cleaned.toLowerCase();
+        }
+        const input = 'bawalvision:mock-video:' + cleaned;
+        const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+        const b = new Uint8Array(16);
+        for (let sIdx = 0; sIdx < 4; sIdx++) {
+            let h = seeds[sIdx] >>> 0;
+            for (let i = 0; i < input.length; i++) {
+                h = (h ^ input.charCodeAt(i)) >>> 0;
+                h = Math.imul(h, 0x01000193) >>> 0;
+            }
+            h = (h ^ Math.imul(sIdx, 0x27d4eb2d)) >>> 0;
+            h = (h ^ (h >>> 16)) >>> 0;
+            h = Math.imul(h, 0x85ebca6b) >>> 0;
+            h = (h ^ (h >>> 13)) >>> 0;
+            h = Math.imul(h, 0xc2b2ae35) >>> 0;
+            h = (h ^ (h >>> 16)) >>> 0;
+
+            const offset = sIdx * 4;
+            b[offset] = (h >>> 24) & 0xff;
+            b[offset + 1] = (h >>> 16) & 0xff;
+            b[offset + 2] = (h >>> 8) & 0xff;
+            b[offset + 3] = h & 0xff;
+        }
+        b[6] = (b[6] & 0x0f) | 0x50;
+        b[8] = (b[8] & 0x3f) | 0x80;
+
+        const hex = Array.from(b, (byte) => byte.toString(16).padStart(2, '0')).join('');
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+    }
+
     let exampleVideos = $state<string[]>([
         'banana/banana_sample_one.mp4'
     ]);
+    let videoUUIDMap = $state<Record<string, string>>({});
     let selectedVideo = $state('banana/banana_sample_one.mp4');
     let mockVideoSrc = $state('/api/v1/examples/file/banana/banana_sample_one.mp4');
     let mockFileName = $state('banana/banana_sample_one.mp4');
+    let customFileKey = $state('');
     let isCustomUpload = $state(false);
     let fileInputRef = $state<HTMLInputElement | null>(null);
+
+    let mockVideoUUID = $derived(
+        isCustomUpload
+            ? computeMockVideoUUID(customFileKey || `custom:${mockFileName}`)
+            : (videoUUIDMap[mockFileName] || computeMockVideoUUID(mockFileName))
+    );
 
     // Mock Video AI Frame Ingestion Pipeline State & Hardware Handlers
     let mockVideoEl = $state<HTMLVideoElement | null>(null);
@@ -67,17 +119,37 @@
         streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`
     );
 
-    // Initial mount: restore persisted source mode and fetch examples list
+    // Initial mount: restore persisted source mode, selected video, and fetch examples list with unique UUIDs
     onMount(() => {
         if (typeof localStorage !== 'undefined') {
+            const savedVideo = localStorage.getItem('bawal_mock_selected_video');
+            if (savedVideo && savedVideo !== 'custom') {
+                selectedVideo = savedVideo;
+                mockFileName = savedVideo;
+                mockVideoSrc = `/api/v1/examples/file/${savedVideo}`;
+            }
             const saved = localStorage.getItem('bawal_source_mode');
             if (saved === 'mock' || saved === 'live') {
                 sourceMode = saved;
+                if (saved === 'mock') {
+                    fetch('/api/v1/camera/mode', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            mode: 'mock',
+                            video_source: mockFileName,
+                            video_uuid: computeMockVideoUUID(mockFileName)
+                        })
+                    }).catch(() => {});
+                }
             }
         }
         fetch('/api/v1/examples')
             .then(res => res.ok ? res.json() : null)
             .then(data => {
+                if (data && data.video_uuids && typeof data.video_uuids === 'object') {
+                    videoUUIDMap = data.video_uuids;
+                }
                 if (data && Array.isArray(data.videos) && data.videos.length > 0) {
                     exampleVideos = data.videos;
                     if (!data.videos.includes(selectedVideo) && !isCustomUpload) {
@@ -148,6 +220,11 @@
                     headers: {
                         'Content-Type': 'image/jpeg',
                         'X-Device-ID': 'MOCK_VIDEO_CAM',
+                        'X-Stream-Source': 'MOCK_VIDEO',
+                        'X-Telemetry-Mode': 'MOCK_SIMULATION',
+                        'X-Telemetry-Struct': 'MockTelemetryPayload',
+                        'X-Mock-Video-Source': mockFileName,
+                        'X-Mock-Video-UUID': mockVideoUUID,
                         'X-Frame-ID': String(currentSeq),
                         'X-Is-Rewind': isRewound ? '1' : '0',
                         'X-Video-Rewind': isRewound ? '1' : '0'
@@ -184,6 +261,11 @@
                     headers: {
                         'Content-Type': 'image/jpeg',
                         'X-Device-ID': 'MOCK_VIDEO_CAM',
+                        'X-Stream-Source': 'MOCK_VIDEO',
+                        'X-Telemetry-Mode': 'MOCK_SIMULATION',
+                        'X-Telemetry-Struct': 'MockTelemetryPayload',
+                        'X-Mock-Video-Source': mockFileName,
+                        'X-Mock-Video-UUID': mockVideoUUID,
                         'X-Frame-ID': String(++mockFrameSeq),
                         'X-Is-Rewind': isRewound ? '1' : '0',
                         'X-Video-Rewind': isRewound ? '1' : '0'
@@ -226,7 +308,11 @@
             fetch('/api/v1/camera/mode', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mode: 'mock' })
+                body: JSON.stringify({
+                    mode: 'mock',
+                    video_source: mockFileName,
+                    video_uuid: mockVideoUUID
+                })
             }).catch(() => {});
             setTimeout(() => {
                 if (mockVideoEl) {
@@ -245,7 +331,6 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: 'live' })
             }).catch(() => {});
-            fetch('/api/v1/devices/mock/reset', { method: 'POST' }).catch(() => {});
             streamEpoch = Date.now();
         }
     }
@@ -253,7 +338,18 @@
     function resetRewindState() {
         isRewound = false;
         lastVideoTime = 0;
-        fetch('/api/v1/devices/mock/reset', { method: 'POST' }).catch(() => {});
+        fetch('/api/v1/devices/mock/reset', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Mock-Video-Source': mockFileName,
+                'X-Mock-Video-UUID': mockVideoUUID
+            },
+            body: JSON.stringify({
+                video_source: mockFileName,
+                video_uuid: mockVideoUUID
+            })
+        }).catch(() => {});
         pushCurrentFrameOnce();
     }
 
@@ -263,7 +359,19 @@
         isCustomUpload = false;
         isRewound = false;
         lastVideoTime = 0;
-        fetch('/api/v1/devices/mock/reset', { method: 'POST' }).catch(() => {});
+        if (typeof localStorage !== 'undefined') {
+            try { localStorage.setItem('bawal_mock_selected_video', name); } catch {}
+        }
+        const nextUUID = videoUUIDMap[name] || computeMockVideoUUID(name);
+        fetch('/api/v1/camera/mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mode: 'mock',
+                video_source: name,
+                video_uuid: nextUUID
+            })
+        }).catch(() => {});
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);
         }
@@ -284,11 +392,21 @@
         if (input.files && input.files[0]) {
             const file = input.files[0];
             mockFileName = file.name;
+            customFileKey = `custom:${file.name}:${file.size}`;
             selectedVideo = 'custom';
             isCustomUpload = true;
             isRewound = false;
             lastVideoTime = 0;
-            fetch('/api/v1/devices/mock/reset', { method: 'POST' }).catch(() => {});
+            const nextUUID = computeMockVideoUUID(customFileKey);
+            fetch('/api/v1/camera/mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: 'mock',
+                    video_source: file.name,
+                    video_uuid: nextUUID
+                })
+            }).catch(() => {});
             if (mockVideoSrc.startsWith('blob:')) {
                 URL.revokeObjectURL(mockVideoSrc);
             }
@@ -714,7 +832,7 @@
 
         <div class="viewport-footer">
             <div class="footer-left">
-                <span class="device-label">📷 Device: {sourceMode === 'mock' ? 'MOCK_VIDEO_CAM' : (deviceId || 'ESP32S3_CAM')}</span>
+                <span class="device-label">📷 Device: {sourceMode === 'mock' ? `MOCK_VIDEO_CAM (UUID: ${mockVideoUUID.slice(0, 8)})` : (deviceId || 'ESP32S3_CAM')}</span>
                 {#if sceneOptical && sceneOptical.lux_luminance != null}
                     <span class="optical-badge" title="SIMD AVX2 Optical Scene Analysis: Lux, White Balance & Correlated Color Temp">
                         💡 {Math.round(sceneOptical.lux_luminance)} lx • WB: {sceneOptical.white_balance_status} ({sceneOptical.color_temperature}K)

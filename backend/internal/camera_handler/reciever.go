@@ -14,6 +14,8 @@ type CachedFrame struct {
 	TimestampMS int64
 	ClientIP    string
 	IsRewind    bool
+	VideoSource string
+	VideoUUID   string
 }
 
 type subscriber struct {
@@ -31,6 +33,8 @@ type CameraStore struct {
 	frameCount      uint64
 	fps             float64
 	streamMode      string // "live" (default) or "mock"
+	activeVideoSrc  string
+	activeVideoUUID string
 }
 
 var GlobalCameraStore = &CameraStore{
@@ -77,6 +81,34 @@ func (s *CameraStore) SetStreamMode(mode string) {
 	}
 }
 
+func (s *CameraStore) SetActiveMockVideoMeta(videoSource, videoUUID string) {
+	s.Lock()
+	defer s.Unlock()
+	if strings.TrimSpace(videoSource) != "" {
+		s.activeVideoSrc = strings.TrimSpace(videoSource)
+	}
+	if strings.TrimSpace(videoUUID) != "" {
+		s.activeVideoUUID = strings.TrimSpace(videoUUID)
+	}
+}
+
+func (s *CameraStore) GetActiveMockVideoMeta() (videoSource string, videoUUID string) {
+	s.RLock()
+	defer s.RUnlock()
+	if f, ok := s.rawFrames["MOCK_VIDEO_CAM"]; ok {
+		src := f.VideoSource
+		uid := f.VideoUUID
+		if src == "" {
+			src = s.activeVideoSrc
+		}
+		if uid == "" {
+			uid = s.activeVideoUUID
+		}
+		return src, uid
+	}
+	return s.activeVideoSrc, s.activeVideoUUID
+}
+
 func (s *CameraStore) GetStreamMode() string {
 	s.RLock()
 	defer s.RUnlock()
@@ -87,14 +119,18 @@ func (s *CameraStore) GetStreamMode() string {
 }
 
 func (s *CameraStore) StoreRawFrame(deviceID string, frameID uint32, data []byte) {
-	s.StoreRawFrameWithMeta(deviceID, frameID, data, "", false)
+	s.StoreRawFrameWithMockMeta(deviceID, frameID, data, "", false, "", "")
 }
 
 func (s *CameraStore) StoreRawFrameWithIP(deviceID string, frameID uint32, data []byte, clientIP string) {
-	s.StoreRawFrameWithMeta(deviceID, frameID, data, clientIP, false)
+	s.StoreRawFrameWithMockMeta(deviceID, frameID, data, clientIP, false, "", "")
 }
 
 func (s *CameraStore) StoreRawFrameWithMeta(deviceID string, frameID uint32, data []byte, clientIP string, isRewind bool) {
+	s.StoreRawFrameWithMockMeta(deviceID, frameID, data, clientIP, isRewind, "", "")
+}
+
+func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32, data []byte, clientIP string, isRewind bool, videoSource string, videoUUID string) {
 	if deviceID == "" || deviceID == "\\" || deviceID == "/" || deviceID == "null" {
 		deviceID = "DEFAULT_CAMERA"
 	}
@@ -126,6 +162,19 @@ func (s *CameraStore) StoreRawFrameWithMeta(deviceID string, frameID uint32, dat
 	s.lastFrameTimeMS = now
 	s.frameCount++
 
+	if isMockDevice {
+		if strings.TrimSpace(videoSource) != "" {
+			s.activeVideoSrc = strings.TrimSpace(videoSource)
+		} else {
+			videoSource = s.activeVideoSrc
+		}
+		if strings.TrimSpace(videoUUID) != "" {
+			s.activeVideoUUID = strings.TrimSpace(videoUUID)
+		} else {
+			videoUUID = s.activeVideoUUID
+		}
+	}
+
 	s.rawFrames[deviceID] = CachedFrame{
 		DeviceID:    deviceID,
 		FrameID:     frameID,
@@ -133,6 +182,8 @@ func (s *CameraStore) StoreRawFrameWithMeta(deviceID string, frameID uint32, dat
 		TimestampMS: now,
 		ClientIP:    clientIP,
 		IsRewind:    isRewind,
+		VideoSource: videoSource,
+		VideoUUID:   videoUUID,
 	}
 
 	// Check if vision service is actively streaming annotated frames (< 2500ms)

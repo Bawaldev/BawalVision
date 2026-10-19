@@ -77,6 +77,14 @@ std::string discoverActiveDeviceID(CURL* curl, std::string_view backend_base_url
     return std::string(json_payload.substr(start_quote + 1, end_quote - start_quote - 1));
 }
 
+/**
+ * @brief Sends a Live ESP32-S3 inspection JSON payload (IngressInspectionRequest) to the backend service.
+ * 
+ * @param curl Active libcurl easy handle.
+ * @param backend_base_url Base URL of the backend service.
+ * @param json_payload JSON string containing IngressInspectionRequest payload.
+ * @return true if backend returned HTTP 2xx status.
+ */
 bool postInspectionPayload(CURL* curl, std::string_view backend_base_url, std::string_view json_payload) {
     if (!curl || backend_base_url.empty() || json_payload.empty()) {
         return false;
@@ -86,6 +94,59 @@ bool postInspectionPayload(CURL* curl, std::string_view backend_base_url, std::s
     
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "X-Stream-Source: LIVE_ESP32");
+    headers = curl_slist_append(headers, "X-Inspection-Source: LIVE_ESP32");
+    headers = curl_slist_append(headers, "X-Inspection-Struct: IngressInspectionRequest");
+    headers = curl_slist_append(headers, "X-Telemetry-Struct: TelemetryIngressPayload");
+
+    curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload.data());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(json_payload.length()));
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1000L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+    std::vector<uint8_t> response_buffer;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
+
+    const CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
+    curl_easy_setopt(curl, CURLOPT_POST, 0L);
+
+    if (res != CURLE_OK) {
+        return false;
+    }
+
+    long http_status_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
+    return (http_status_code >= 200 && http_status_code < 300);
+}
+
+/**
+ * @brief Sends a Mock Video inspection JSON payload (MockInspectionRequest) to the backend service.
+ * 
+ * @param curl Active libcurl easy handle.
+ * @param backend_base_url Base URL of the backend service.
+ * @param json_payload JSON string containing MockInspectionRequest payload.
+ * @return true if backend returned HTTP 2xx status.
+ */
+bool postMockInspectionPayload(CURL* curl, std::string_view backend_base_url, std::string_view json_payload) {
+    if (!curl || backend_base_url.empty() || json_payload.empty()) {
+        return false;
+    }
+
+    const std::string endpoint_url = std::string(backend_base_url) + "/api/v1/inspections/mock";
+    
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "X-Stream-Source: MOCK_VIDEO");
+    headers = curl_slist_append(headers, "X-Inspection-Source: MOCK_VIDEO");
+    headers = curl_slist_append(headers, "X-Inspection-Struct: MockInspectionRequest");
+    headers = curl_slist_append(headers, "X-Telemetry-Struct: MockTelemetryPayload");
 
     curl_easy_setopt(curl, CURLOPT_URL, endpoint_url.c_str());
     curl_easy_setopt(curl, CURLOPT_POST, 1L);

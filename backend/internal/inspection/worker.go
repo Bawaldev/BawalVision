@@ -253,11 +253,19 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 			}
 		}
 
-		// C. Prepare records and inspection foods
+		// C. Prepare records and inspection foods (deduplicated by RecordID)
 		records := make([]InspectionRecord, 0, len(batch))
+		recordIDs := make([]string, 0, len(batch))
+		seenRecordIDs := make(map[string]bool, len(batch))
 		inspectionFoods := make([]InspectionFood, 0, len(batch)*3)
 
 		for _, task := range batch {
+			if task.RecordID == "" || seenRecordIDs[task.RecordID] {
+				continue
+			}
+			seenRecordIDs[task.RecordID] = true
+			recordIDs = append(recordIDs, task.RecordID)
+
 			lux := 120.0
 			wb := "BALANCED"
 			cct := 6500
@@ -323,14 +331,22 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 			}
 		}
 
-		// D. Batch insert inspection records
+		// D. Batch upsert inspection records (prevents duplicate rows for deterministic Mock Video UUIDs)
 		if len(records) > 0 {
-			if err := tx.CreateInBatches(records, 50).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"is_spoiled", "t_safe_hours", "lux_luminance", "white_balance_status", "color_temperature", "image_s3_uri"}),
+			}).CreateInBatches(records, 50).Error; err != nil {
 				return err
 			}
 		}
 
-		// E. Batch insert inspection foods
+		// E. Replace and batch insert inspection foods
+		if len(recordIDs) > 0 {
+			if err := tx.Where("inspection_id IN ?", recordIDs).Delete(&InspectionFood{}).Error; err != nil {
+				return err
+			}
+		}
 		if len(inspectionFoods) > 0 {
 			if err := tx.CreateInBatches(inspectionFoods, 100).Error; err != nil {
 				return err

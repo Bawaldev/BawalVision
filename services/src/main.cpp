@@ -273,68 +273,96 @@ int main(int argc, char** argv) {
                     current_state_sig += ";";
                 }
 
-                const bool is_mock_source = (dev_id == "MOCK_VIDEO_CAM" || use_video_source);
+                const bool is_mock_source = (dev_id == "MOCK_VIDEO_CAM" || dev_id.rfind("MOCK_", 0) == 0 || use_video_source);
                 const bool state_changed = (current_state_sig != last_state_signature);
-                const bool heartbeat_sync = (!is_mock_source && elapsed_since_dispatch >= 15000);
+                const bool heartbeat_sync = is_mock_source ? (elapsed_since_dispatch >= 2500) : (elapsed_since_dispatch >= 15000);
                 const bool debounce_ok = (elapsed_since_dispatch >= 800);
 
-                if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty() && curl_db) {
+                // Shared YOLO object detection + OpenCV optical/spoilage JSON serializer used identically by Live and Mock
+                auto serializeVisionDetectionsJson = [&](std::ostringstream& ss, const std::vector<DetectionResult>& dets) {
                     const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
-                    std::ostringstream json_ss;
-                    json_ss << "{"
-                            << "\"device_id\":\"" << dev_id << "\","
-                            << "\"is_rewind\":" << (video_has_rewound.load() ? "true" : "false") << ","
-                            << "\"scene_optical\":{"
-                            << "\"avg_r\":" << std::fixed << std::setprecision(1) << optical.avg_r << ","
-                            << "\"avg_g\":" << optical.avg_g << ","
-                            << "\"avg_b\":" << optical.avg_b << ","
-                            << "\"lux_luminance\":" << optical.lux_luminance << ","
-                            << "\"color_temperature\":" << optical.color_temperature << ","
-                            << "\"white_balance_status\":\"" << optical.white_balance_status << "\""
-                            << "},"
-                            << "\"detections\":[";
-                    for (size_t i = 0; i < valid_detections.size(); ++i) {
-                        const auto& vd = valid_detections[i];
+                    ss << "\"scene_optical\":{"
+                       << "\"avg_r\":" << std::fixed << std::setprecision(1) << optical.avg_r << ","
+                       << "\"avg_g\":" << optical.avg_g << ","
+                       << "\"avg_b\":" << optical.avg_b << ","
+                       << "\"lux_luminance\":" << optical.lux_luminance << ","
+                       << "\"color_temperature\":" << optical.color_temperature << ","
+                       << "\"white_balance_status\":\"" << optical.white_balance_status << "\""
+                       << "},"
+                       << "\"detections\":[";
+                    for (size_t i = 0; i < dets.size(); ++i) {
+                        const auto& vd = dets[i];
                         const float spoilage_pct = std::clamp(vd.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
                         const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f)
                                                        ? "REJECT"
                                                        : ((spoilage_pct >= 25.0f || vd.confidence < 0.60f) ? "REVIEW" : "PASS");
 
-                        if (i > 0) json_ss << ",";
-                        json_ss << "{"
-                                << "\"food_name\":\"" << vd.class_name << "\","
-                                << "\"similarity_rate\":" << std::fixed << std::setprecision(4) << vd.confidence << ","
-                                << "\"spoilage_score\":" << std::fixed << std::setprecision(2) << spoilage_pct << ","
-                                << "\"status\":\"" << status << "\","
-                                << "\"box\":[" << vd.bbox.x << "," << vd.bbox.y << "," << vd.bbox.width << "," << vd.bbox.height << "]"
-                                << "}";
+                        if (i > 0) ss << ",";
+                        ss << "{"
+                           << "\"food_name\":\"" << vd.class_name << "\","
+                           << "\"similarity_rate\":" << std::fixed << std::setprecision(4) << vd.confidence << ","
+                           << "\"spoilage_score\":" << std::fixed << std::setprecision(2) << spoilage_pct << ","
+                           << "\"status\":\"" << status << "\","
+                           << "\"box\":[" << vd.bbox.x << "," << vd.bbox.y << "," << vd.bbox.width << "," << vd.bbox.height << "]"
+                           << "}";
                     }
-                    json_ss << "]}";
+                    ss << "]";
+                    return optical;
+                };
+
+                if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty() && curl_db) {
+                    std::ostringstream json_ss;
+                    if (is_mock_source) {
+                        // MockInspectionRequest struct (no ESP32 hardware fields; identical YOLO/CV detections)
+                        json_ss << "{"
+                                << "\"mock_id\":\"" << dev_id << "\","
+                                << "\"device_id\":\"" << dev_id << "\","
+                                << "\"source_type\":\"mock_video\","
+                                << "\"inspection_struct\":\"MockInspectionRequest\","
+                                << "\"engine_pipeline\":\"YOLOv8n-INT8 + OpenCV HSV\","
+                                << "\"is_rewind\":" << (video_has_rewound.load() ? "true" : "false") << ",";
+                    } else {
+                        // Live IngressInspectionRequest struct
+                        json_ss << "{"
+                                << "\"device_id\":\"" << dev_id << "\","
+                                << "\"source_type\":\"live_esp32\","
+                                << "\"is_rewind\":" << (video_has_rewound.load() ? "true" : "false") << ",";
+                    }
+                    const auto optical = serializeVisionDetectionsJson(json_ss, valid_detections);
+                    json_ss << "}";
 
                     const std::string payload_json = json_ss.str();
-                    if (bawal::server::postInspectionPayload(curl_db, backend_base_url, payload_json)) {
+                    const bool dispatched = is_mock_source
+                        ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, payload_json)
+                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, payload_json);
+                    if (dispatched) {
                         last_dispatch_time = current_time;
                         last_state_signature = current_state_sig;
-                        std::cout << "[DISPATCH] Inspection payload saved to PostgreSQL (" 
-                                  << valid_detections.size() << " detected foods | "
+                        std::cout << "[DISPATCH] " << (is_mock_source ? "MockInspectionRequest" : "Live IngressInspectionRequest")
+                                  << " saved to PostgreSQL (" << valid_detections.size() << " detected foods | "
                                   << "Optical: " << int(optical.lux_luminance) << " lx, " << optical.white_balance_status << " | "
                                   << (state_changed ? "STATE CHANGE" : "HEARTBEAT") << ")\n";
                     }
                 } else if (should_clear_backend && !dev_id.empty() && curl_db) {
-                    const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
                     std::ostringstream clear_ss;
-                    clear_ss << "{"
-                             << "\"device_id\":\"" << dev_id << "\","
-                             << "\"scene_optical\":{"
-                             << "\"avg_r\":" << std::fixed << std::setprecision(1) << optical.avg_r << ","
-                             << "\"avg_g\":" << optical.avg_g << ","
-                             << "\"avg_b\":" << optical.avg_b << ","
-                             << "\"lux_luminance\":" << optical.lux_luminance << ","
-                             << "\"color_temperature\":" << optical.color_temperature << ","
-                             << "\"white_balance_status\":\"" << optical.white_balance_status << "\""
-                             << "},"
-                             << "\"detections\":[]}";
-                    if (bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_ss.str())) {
+                    if (is_mock_source) {
+                        clear_ss << "{"
+                                 << "\"mock_id\":\"" << dev_id << "\","
+                                 << "\"device_id\":\"" << dev_id << "\","
+                                 << "\"source_type\":\"mock_video\","
+                                 << "\"inspection_struct\":\"MockInspectionRequest\",";
+                    } else {
+                        clear_ss << "{"
+                                 << "\"device_id\":\"" << dev_id << "\","
+                                 << "\"source_type\":\"live_esp32\",";
+                    }
+                    const std::vector<DetectionResult> empty_dets;
+                    (void)serializeVisionDetectionsJson(clear_ss, empty_dets);
+                    clear_ss << "}";
+                    const bool cleared = is_mock_source
+                        ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, clear_ss.str())
+                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_ss.str());
+                    if (cleared) {
                         last_dispatch_time = current_time;
                         last_state_signature.clear();
                     }
