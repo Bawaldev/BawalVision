@@ -147,6 +147,14 @@ public:
         return m_conf_threshold;
     }
 
+    /**
+     * @brief Gets the active model architecture string from the classifier.
+     * @return Architecture name (e.g. YOLOv8s-INT8, YOLOv8s, YOLOv8n-INT8).
+     */
+    [[nodiscard]] std::string_view getModelArchitecture() const noexcept {
+        return m_classifier.getModelArchitecture();
+    }
+
     // Component accessors
     [[nodiscard]] VideoSource& getVideoSource() noexcept { return m_video_source; }
     [[nodiscard]] CameraReceiver& getReceiver() noexcept { return m_receiver; }

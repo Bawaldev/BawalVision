@@ -1,3 +1,4 @@
+import argparse
 import gc
 import os
 import glob
@@ -67,10 +68,16 @@ class YoloCalibrationDataReader(CalibrationDataReader):
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-INPUT_ONNX = SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision.onnx"
-PREPROC_ONNX = SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision_preproc.onnx"
-OUTPUT_DIR = SCRIPT_DIR / "model" / "yolov8n_int8"
-OUTPUT_ONNX = OUTPUT_DIR / "ai1_vision_int8.onnx"
+
+# Priority: Discover YOLOv8s FP32 models first, fallback to YOLOv8n
+CANDIDATE_INPUTS = [
+    SCRIPT_DIR / "model" / "yolov8s" / "ai1_vision.onnx",
+    SCRIPT_DIR / "model" / "yolov8s" / "yolov8s.onnx",
+    SCRIPT_DIR.parent.parent / "weights" / "yolov8s.onnx",
+    SCRIPT_DIR.parent.parent / "weights" / "yolo8s.onnx",
+    SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision.onnx",
+    SCRIPT_DIR / "model" / "ai1_vision.onnx",
+]
 CALIB_DIR = SCRIPT_DIR / "yolo_dataset" / "images" / "train"
 
 
@@ -105,35 +112,69 @@ def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
     return list(exclude_set)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Static PTQ INT8 Quantization for YOLOv8 (AVX2 VPMADDUBSW Optimized)")
+    parser.add_argument("--input", type=str, default=None, help="Path to input FP32 ONNX model")
+    parser.add_argument("--output", type=str, default=None, help="Path to output INT8 ONNX model")
+    parser.add_argument("--samples", type=int, default=50, help="Number of calibration samples (default: 50)")
+    return parser.parse_args()
+
+
 def main():
-    if not INPUT_ONNX.exists():
-        raise FileNotFoundError(f"Source FP32 model not found at: {INPUT_ONNX}")
+    args = parse_args()
+    if args.input:
+        input_onnx = Path(args.input).resolve()
+    else:
+        input_onnx = next((p for p in CANDIDATE_INPUTS if p.exists()), SCRIPT_DIR / "model" / "yolov8s" / "ai1_vision.onnx")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if not input_onnx.exists():
+        raise FileNotFoundError(f"Source FP32 model not found at: {input_onnx}")
 
-    print("[+] Memeriksa & meng-upgrade ONNX Opset (>= 13) + pre-processing...")
-    UPGRADED_ONNX = SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision_opset13_tmp.onnx"
+    # Determine if model is YOLOv8s or YOLOv8n (by path string or file size > 20 MB)
+    is_yolo8s = (
+        "yolov8s" in str(input_onnx).lower()
+        or "yolo8s" in str(input_onnx).lower()
+        or input_onnx.stat().st_size > 20 * 1024 * 1024
+    )
+    model_flavor = "yolov8s" if is_yolo8s else "yolov8n"
+
+    output_dir = SCRIPT_DIR / "model" / f"{model_flavor}_int8"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.output:
+        output_onnx = Path(args.output).resolve()
+        output_onnx.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        output_onnx = output_dir / "ai1_vision_int8.onnx"
+
+    preproc_onnx = SCRIPT_DIR / "model" / model_flavor / "ai1_vision_preproc.onnx"
+    preproc_onnx.parent.mkdir(parents=True, exist_ok=True)
+    upgraded_onnx = SCRIPT_DIR / "model" / model_flavor / "ai1_vision_opset13_tmp.onnx"
+    upgraded_onnx.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[+] Target Architecture: {model_flavor.upper()} (Source: {input_onnx})")
+    print(f"[+] Memeriksa & meng-upgrade ONNX Opset (>= 13) + pre-processing...")
     try:
-        orig_model = onnx.load(str(INPUT_ONNX))
+        orig_model = onnx.load(str(input_onnx))
         current_opset = orig_model.opset_import[0].version if orig_model.opset_import else 12
         if current_opset < 13:
             print(f" -> Mengonversi ONNX Opset {current_opset} -> Opset 13 untuk dukungan Per-Channel QDQ...")
             orig_model = onnx.version_converter.convert_version(orig_model, 13)
-        onnx.save(orig_model, str(UPGRADED_ONNX))
+        onnx.save(orig_model, str(upgraded_onnx))
         del orig_model
         gc.collect()
 
         quant_pre_process(
-            input_model_path=str(UPGRADED_ONNX),
-            output_model_path=str(PREPROC_ONNX),
+            input_model_path=str(upgraded_onnx),
+            output_model_path=str(preproc_onnx),
             skip_symbolic_shape=False,
         )
-        quant_source = PREPROC_ONNX
+        quant_source = preproc_onnx
     except Exception as e:
         print(f"[!] Pre-process dilewati ({e}), menggunakan model Opset 13 langsung.")
-        quant_source = UPGRADED_ONNX if UPGRADED_ONNX.exists() else INPUT_ONNX
+        quant_source = upgraded_onnx if upgraded_onnx.exists() else input_onnx
 
-    sess_fp32 = ort.InferenceSession(str(INPUT_ONNX), providers=["CPUExecutionProvider"])
+    sess_fp32 = ort.InferenceSession(str(input_onnx), providers=["CPUExecutionProvider"])
     input_name = sess_fp32.get_inputs()[0].name
     del sess_fp32
     gc.collect()
@@ -141,13 +182,14 @@ def main():
     nodes_to_exclude = get_head_nodes_to_exclude(quant_source)
     print(f"[+] Mengecualikan {len(nodes_to_exclude)} node sensitif/head agar presisi bbox & confidence tetap FP32.")
 
-    # Gunakan 50 sampel acak (cukup untuk MinMax & hemat RAM 50%)
-    reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=50)
+    # Gunakan sampel acak untuk kalibrasi MinMax
+    calib_samples = max(10, args.samples)
+    reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=calib_samples)
 
-    print(f"\n=== Starting Static PTQ INT8 ({INPUT_ONNX.name}) ===")
+    print(f"\n=== Starting Static PTQ INT8 ({input_onnx.name} -> {output_onnx.name}) ===")
     quantize_static(
         model_input=str(quant_source),
-        model_output=str(OUTPUT_ONNX),
+        model_output=str(output_onnx),
         calibration_data_reader=reader,
         quant_format=QuantFormat.QDQ,
         per_channel=True,                          # Presisi tinggi per filter untuk AVX2
@@ -169,33 +211,48 @@ def main():
     repo_root = SCRIPT_DIR.parent.parent
     deploy_targets = [
         SCRIPT_DIR / "model" / "ai1_vision_int8.onnx",
-        SCRIPT_DIR / "model" / "yolov8n" / "ai1_vision_int8.onnx",
-        repo_root / "weights" / "yolo8n_int8.onnx",
+        SCRIPT_DIR / "model" / f"{model_flavor}_int8" / "ai1_vision_int8.onnx",
+        repo_root / "weights" / f"{model_flavor}_int8.onnx",
         repo_root / "weights" / "ai1_vision_int8.onnx",
         repo_root / "services" / "build" / "weights" / "ai1_vision_int8.onnx",
         repo_root / "services" / "build" / "bin" / "weights" / "ai1_vision_int8.onnx",
     ]
+    if is_yolo8s:
+        deploy_targets.append(repo_root / "weights" / "yolov8s_int8.onnx")
+        deploy_targets.append(repo_root / "weights" / "yolo8s_int8.onnx")
+    else:
+        deploy_targets.append(repo_root / "weights" / "yolo8n_int8.onnx")
+
+    output_resolved = output_onnx.resolve()
     for target in deploy_targets:
+        try:
+            if target.resolve() == output_resolved:
+                continue
+        except Exception:
+            if target == output_onnx:
+                continue
         if target.parent.exists():
-            shutil.copy2(OUTPUT_ONNX, target)
+            shutil.copy2(output_onnx, target)
             print(f"[✓] Synced INT8 model to: {target}")
 
-    if PREPROC_ONNX.exists():
-        PREPROC_ONNX.unlink()
-    if UPGRADED_ONNX.exists():
-        UPGRADED_ONNX.unlink()
+    for tmp_file in (preproc_onnx, upgraded_onnx):
+        try:
+            if tmp_file.exists():
+                tmp_file.unlink()
+        except Exception:
+            pass
 
-    print(f"[✓] Quantization successful: {OUTPUT_ONNX}")
+    print(f"[✓] Quantization successful: {output_onnx}")
 
-    fp32_size_mb = os.path.getsize(INPUT_ONNX) / (1024 * 1024)
-    int8_size_mb = os.path.getsize(OUTPUT_ONNX) / (1024 * 1024)
+    fp32_size_mb = os.path.getsize(input_onnx) / (1024 * 1024)
+    int8_size_mb = os.path.getsize(output_onnx) / (1024 * 1024)
     reduction_pct = ((fp32_size_mb - int8_size_mb) / fp32_size_mb) * 100
     print(f" -> FP32 Model Size : {fp32_size_mb:.2f} MB")
     print(f" -> INT8 Model Size : {int8_size_mb:.2f} MB ({reduction_pct:.1f}% reduction)")
 
     print("\n=== Verifikasi Akurasi Deteksi (FP32 vs INT8) ===")
-    sess_fp32 = ort.InferenceSession(str(INPUT_ONNX), providers=["CPUExecutionProvider"])
-    sess_int8 = ort.InferenceSession(str(OUTPUT_ONNX), providers=["CPUExecutionProvider"])
+    sess_fp32 = ort.InferenceSession(str(input_onnx), providers=["CPUExecutionProvider"])
+    sess_int8 = ort.InferenceSession(str(output_onnx), providers=["CPUExecutionProvider"])
 
     sample_reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=5)
     sample_batch = sample_reader.get_next()

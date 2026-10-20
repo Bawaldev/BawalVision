@@ -163,6 +163,18 @@ public:
     [[nodiscard]] bool isReady() const noexcept { return m_is_ready; }
 
     /**
+     * @brief Gets the active model architecture string (e.g. YOLOv8s-INT8, YOLOv8s, YOLOv8n-INT8).
+     * @return String view describing the detected and loaded neural network architecture.
+     */
+    [[nodiscard]] std::string_view getModelArchitecture() const noexcept { return m_model_arch; }
+
+    /**
+     * @brief Gets the filesystem path of the currently loaded model.
+     * @return Path string of the active ONNX model binary.
+     */
+    [[nodiscard]] std::string_view getActiveModelPath() const noexcept { return m_active_model_path; }
+
+    /**
      * @brief Reset temporal object tracks (e.g. on video rewind or scene cut).
      */
     void resetTracker() noexcept {
@@ -176,6 +188,8 @@ private:
     std::vector<std::string_view> m_class_names;
     std::mutex m_infer_mutex;
     bool m_is_ready{false};
+    std::string m_model_arch{"YOLOv8s-INT8"};
+    std::string m_active_model_path{};
     SceneOpticalMetrics m_last_optical;
 
     // ONNX Runtime Native Resources
