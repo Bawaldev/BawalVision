@@ -70,7 +70,7 @@ services:
       - QT_QPA_PLATFORM=offscreen
       - BACKEND_HOST=backend
       - BACKEND_PORT=8080
-      - MODEL_PATH=${MODEL_PATH:-/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx}
+      - MODEL_PATH=${MODEL_PATH:-/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx}
       - OMP_WAIT_POLICY=PASSIVE
       - OMP_NUM_THREADS=2
       - OMP_SCHEDULE=static

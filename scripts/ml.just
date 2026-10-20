@@ -265,4 +265,14 @@ mlflow-ui:
 
 # Run INT8 Post-Training Quantization for YOLOv8
 quantize-ai1:
-    python ml/AI1/quantize_int8.py
+    #!/usr/bin/env bash
+    cd {{ justfile_directory() }}
+    if [ -f .venv/bin/python ]; then
+        .venv/bin/python ml/AI1/quantize_int8.py
+    elif [ -f .venv/bin/python3 ]; then
+        .venv/bin/python3 ml/AI1/quantize_int8.py
+    elif [ -f .venv/Scripts/python.exe ]; then
+        .venv/Scripts/python.exe ml/AI1/quantize_int8.py
+    else
+        python3 ml/AI1/quantize_int8.py || python ml/AI1/quantize_int8.py
+    fi

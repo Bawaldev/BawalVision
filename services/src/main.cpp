@@ -97,14 +97,41 @@ int main(int argc, char** argv) {
         : (backend_base_url + "/api/v1/camera/latest/raw");
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
-    // 4. Initialize Inspection Pipeline Orchestrator (Single Final Model: ai1_vision_int8.onnx)
-    std::string model_path = "/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx";
+    // 4. Initialize Inspection Pipeline Orchestrator (Prioritizing YOLOv8s over YOLOv8n)
+    std::string model_path = "/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx";
     if (const char* env_model = std::getenv("MODEL_PATH")) {
         if (std::string(env_model).length() > 0) {
             model_path = env_model;
         }
     } else {
         const std::vector<std::string> candidate_model_paths = {
+            // Priority 1: YOLOv8s INT8
+            "/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
+            "ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
+            "../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
+            "../../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
+            "../../../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
+            "/app/weights/yolov8s_int8.onnx",
+            "/app/weights/yolo8s_int8.onnx",
+            "weights/yolov8s_int8.onnx",
+            "weights/yolo8s_int8.onnx",
+            "../weights/yolov8s_int8.onnx",
+            "../../weights/yolov8s_int8.onnx",
+
+            // Priority 2: YOLOv8s FP32
+            "/app/ml/AI1/model/yolov8s/ai1_vision.onnx",
+            "/app/ml/AI1/model/yolov8s/yolov8s.onnx",
+            "ml/AI1/model/yolov8s/ai1_vision.onnx",
+            "ml/AI1/model/yolov8s/yolov8s.onnx",
+            "../ml/AI1/model/yolov8s/ai1_vision.onnx",
+            "../../ml/AI1/model/yolov8s/ai1_vision.onnx",
+            "../../../ml/AI1/model/yolov8s/ai1_vision.onnx",
+            "/app/weights/yolov8s.onnx",
+            "weights/yolov8s.onnx",
+            "../weights/yolov8s.onnx",
+            "../../weights/yolov8s.onnx",
+
+            // Priority 3: Fallback to YOLOv8n INT8 / Generic
             "/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
             "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
             "../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
@@ -114,7 +141,13 @@ int main(int argc, char** argv) {
             "weights/ai1_vision_int8.onnx",
             "../weights/ai1_vision_int8.onnx",
             "../../weights/ai1_vision_int8.onnx",
-            "../../../weights/ai1_vision_int8.onnx"
+            "../../../weights/ai1_vision_int8.onnx",
+
+            // Priority 4: Fallback to YOLOv8n FP32
+            "/app/ml/AI1/model/yolov8n/ai1_vision.onnx",
+            "ml/AI1/model/yolov8n/ai1_vision.onnx",
+            "../ml/AI1/model/yolov8n/ai1_vision.onnx",
+            "../../ml/AI1/model/yolov8n/ai1_vision.onnx"
         };
         for (const auto& p : candidate_model_paths) {
             std::ifstream check(p.c_str());
@@ -310,11 +343,13 @@ int main(int argc, char** argv) {
 
                 if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty()) {
                     const bool is_rewound = video_has_rewound.load();
+                    const std::string engine_pipeline = fmt::format("{} + OpenCV HSV", pipeline.getModelArchitecture());
                     std::string payload_json = is_mock_source
                         ? fmt::format(
-                              R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest","engine_pipeline":"YOLOv8n-INT8 + OpenCV HSV","is_rewind":{},)",
+                              R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest","engine_pipeline":"{}","is_rewind":{},)",
                               dev_id,
                               dev_id,
+                              engine_pipeline,
                               is_rewound ? "true" : "false"
                           )
                         : fmt::format(
@@ -328,9 +363,10 @@ int main(int argc, char** argv) {
 
                     if (is_mock_source) {
                         const std::string mock_telemetry_json = fmt::format(
-                            R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","telemetry_struct":"MockTelemetryPayload","connection_mode":"mock_simulation","engine_pipeline":"YOLOv8n-INT8 + OpenCV HSV","is_rewind":{},"scene_optical":{{"avg_r":{:.1f},"avg_g":{:.1f},"avg_b":{:.1f},"lux_luminance":{:.1f},"color_temperature":{},"white_balance_status":"{}"}}}})",
+                            R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","telemetry_struct":"MockTelemetryPayload","connection_mode":"mock_simulation","engine_pipeline":"{}","is_rewind":{},"scene_optical":{{"avg_r":{:.1f},"avg_g":{:.1f},"avg_b":{:.1f},"lux_luminance":{:.1f},"color_temperature":{},"white_balance_status":"{}"}}}})",
                             dev_id,
                             dev_id,
+                            engine_pipeline,
                             is_rewound ? "true" : "false",
                             optical.avg_r,
                             optical.avg_g,

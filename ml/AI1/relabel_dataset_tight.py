@@ -14,7 +14,7 @@ YOLO_DIR = SCRIPT_DIR / "yolo_dataset"
 IMAGES_DIR = YOLO_DIR / "images"
 LABELS_DIR = YOLO_DIR / "labels"
 
-# Disjoint, class-specific prompts without generic "food" or "vegetable dish" overlap
+# Disjoint, class-specific prompts with Indonesian culinary synonyms for YOLO-World v2
 CLASS_TAXONOMY = {
     0: {
         "name": "banana",
@@ -24,35 +24,51 @@ CLASS_TAXONOMY = {
             "banana fruit",
             "sliced banana",
             "bunch of bananas",
+            "banana",
+            "pisang",
         ],
     },
     1: {
         "name": "chicken",
         "prompts": [
-            "fried chicken piece",
-            "cooked chicken drumstick",
-            "grilled chicken meat",
-            "roast chicken breast",
+            "fried chicken",
+            "cooked chicken",
+            "chicken meat",
             "crispy fried chicken",
+            "chicken drumstick",
+            "ayam goreng",
+            "ayam",
+            "poultry",
+            "roasted chicken",
+            "food",
         ],
     },
     2: {
         "name": "egg",
         "prompts": [
             "boiled egg",
-            "fried sunny side up egg",
-            "hard boiled egg half",
-            "cooked egg",
-            "omelet egg",
+            "fried egg",
+            "hard boiled egg",
+            "sunny side up egg",
+            "egg",
+            "omelet",
+            "telur",
+            "telur rebus",
+            "telur ceplok",
+            "food",
         ],
     },
     3: {
         "name": "orange",
         "prompts": [
-            "orange citrus fruit",
+            "orange fruit",
             "peeled orange segments",
             "sliced orange",
             "mandarin orange",
+            "citrus",
+            "orange",
+            "jeruk",
+            "fruit",
         ],
     },
     4: {
@@ -61,43 +77,69 @@ CLASS_TAXONOMY = {
             "cooked white rice",
             "steamed white rice",
             "mound of white rice",
-            "white rice portion",
+            "white rice",
+            "rice",
+            "nasi",
+            "nasi putih",
+            "bowl of rice",
+            "food",
         ],
     },
     5: {
         "name": "spinach",
         "prompts": [
+            "cooked spinach",
             "boiled spinach leaves",
             "cooked dark green spinach",
             "spinach leaf bundle",
-            "bayam spinach",
+            "spinach",
+            "bayam",
+            "sayur bayam",
+            "leafy greens",
+            "vegetable",
         ],
     },
     6: {
         "name": "tempeh",
         "prompts": [
+            "fried tempeh",
             "fried tempeh slice",
             "fermented soybean cake tempeh",
             "textured brown tempeh block",
             "tempeh",
+            "tempe",
+            "tempe goreng",
+            "soybean cake",
+            "food",
         ],
     },
     7: {
         "name": "tofu",
         "prompts": [
+            "fried tofu",
             "fried tofu cube",
             "white tofu block",
             "smooth soybean curd tofu",
             "golden puff tofu",
+            "tofu",
+            "tahu",
+            "tahu goreng",
+            "bean curd",
+            "soybean curd",
+            "food",
         ],
     },
     8: {
         "name": "water_spinach",
         "prompts": [
+            "water spinach",
             "stir fried water spinach",
             "hollow stem kangkung",
             "water spinach stems and leaves",
+            "kangkung",
             "tumis kangkung",
+            "green vegetable",
+            "vegetable",
         ],
     },
 }
@@ -174,14 +216,14 @@ def extract_salient_contour_boxes(img_path: Path, max_boxes: int = 3) -> list[tu
 
         for c in contours:
             area = cv2.contourArea(c)
-            if (img_area * 0.03) <= area <= (img_area * 0.86):
+            if (img_area * 0.015) <= area <= (img_area * 0.90):
                 rx, ry, rw, rh = cv2.boundingRect(c)
                 wn = rw / float(w)
                 hn = rh / float(h)
                 cxn = (rx + rw / 2.0) / float(w)
                 cyn = (ry + rh / 2.0) / float(h)
                 # Reject degenerate strips or full-frame border boxes
-                if 0.08 <= wn <= 0.90 and 0.08 <= hn <= 0.90 and (0.2 <= (wn / hn) <= 5.0):
+                if 0.05 <= wn <= 0.94 and 0.05 <= hn <= 0.94 and (0.18 <= (wn / hn) <= 5.5):
                     # Avoid exact 0.55x0.55 artifact
                     if abs(wn - 0.55) < 0.005 and abs(hn - 0.55) < 0.005:
                         wn = min(0.90, wn + 0.012)
@@ -207,7 +249,7 @@ def extract_salient_contour_boxes(img_path: Path, max_boxes: int = 3) -> list[tu
         return []
 
 
-def relabel_split(split: str, annotator: YOLOWorld, device_id):
+def relabel_split(split: str, annotator: YOLOWorld, device_id, conf_thresh: float = 0.04):
     split_img_dir = IMAGES_DIR / split
     split_lbl_dir = LABELS_DIR / split
     if not split_img_dir.exists():
@@ -243,7 +285,7 @@ def relabel_split(split: str, annotator: YOLOWorld, device_id):
             preds = annotator.predict(
                 batch_paths,
                 batch=len(batch_paths),
-                conf=0.05,
+                conf=conf_thresh,
                 iou=0.45,
                 verbose=False,
                 device=device_id,
@@ -259,8 +301,8 @@ def relabel_split(split: str, annotator: YOLOWorld, device_id):
                         xywhn = b.xywhn[0].tolist()
                         conf = float(b.conf[0])
                         bw, bh = xywhn[2], xywhn[3]
-                        # Discard tiny noise (<6%) or whole-frame plate boxes (>92%)
-                        if 0.06 <= bw <= 0.92 and 0.06 <= bh <= 0.92:
+                        # Discard tiny noise (<5%) or whole-frame plate boxes (>95%)
+                        if 0.05 <= bw <= 0.95 and 0.05 <= bh <= 0.95:
                             valid.append((xywhn, conf, bw * bh))
 
                     if valid:
@@ -270,7 +312,7 @@ def relabel_split(split: str, annotator: YOLOWorld, device_id):
                             if len(chosen_boxes) >= MAX_BOXES_PER_IMAGE:
                                 break
                             # Keep secondary instances if confidence is strong and non-overlapping
-                            if chosen_boxes and conf < max(0.08, top_conf * 0.45):
+                            if chosen_boxes and conf < max(0.04, top_conf * 0.40):
                                 continue
                             if all(compute_iou_xywhn(xywhn, prev) < 0.45 for prev in chosen_boxes):
                                 chosen_boxes.append(xywhn)
@@ -278,16 +320,15 @@ def relabel_split(split: str, annotator: YOLOWorld, device_id):
                         if chosen_boxes:
                             yolo_box_images += 1
 
-                # Fallback 1: LAB Color Saliency Contour(s) (tight real object boundary)
+                # Fallback: LAB Color Saliency Contour(s) (tight real object boundary)
                 if not chosen_boxes:
                     contour_boxes = extract_salient_contour_boxes(img_p, max_boxes=MAX_BOXES_PER_IMAGE)
                     if contour_boxes:
                         chosen_boxes = contour_boxes
                         contour_box_images += 1
 
-                # NEVER write a blind 0.55x0.55 dummy box!
                 # If neither YOLO-World nor LAB Saliency found a valid food boundary,
-                # write an empty label file so Ultralytics treats it cleanly without poisoning box/cls loss.
+                # write an empty label file (represents a clean background image)
                 if not chosen_boxes:
                     lbl_file.write_text("")
                     skipped_unlabeled += 1
@@ -308,17 +349,23 @@ def relabel_split(split: str, annotator: YOLOWorld, device_id):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Zero-Dummy High-Recall Dataset Relabeler")
+    parser.add_argument("--splits", nargs="+", default=["train", "val"], help="Splits to relabel (default: train val)")
+    parser.add_argument("--conf", type=float, default=0.04, help="YOLO-World confidence threshold (default: 0.04)")
+    args = parser.parse_args()
+
     device_id = 0 if torch.cuda.is_available() else "cpu"
-    print(f"[+] Initializing YOLO-World Annotator on {device_id}...")
+    print(f"[+] Initializing YOLO-World Annotator on {device_id} (conf={args.conf})...")
     annotator = YOLOWorld(str(SCRIPT_DIR / "yolov8s-worldv2.pt"))
 
-    for split in ["train", "val"]:
-        relabel_split(split, annotator, device_id)
+    for split in args.splits:
+        relabel_split(split, annotator, device_id, conf_thresh=args.conf)
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    print("\n[🎉] Dataset relabeling finished with zero static fallback boxes!")
+    print("\n[🎉] Dataset relabeling finished with high recall and zero static dummy boxes!")
 
 
 if __name__ == "__main__":

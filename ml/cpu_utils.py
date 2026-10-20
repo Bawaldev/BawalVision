@@ -3,16 +3,20 @@ import os
 from pathlib import Path
 
 
-def get_optimal_workers(reserve_cores: int = 0) -> int:
+def get_optimal_workers(reserve_cores: int = 0, max_ratio: float = 0.75) -> int:
     """
-    Detects maximum available CPU threads/cores safely across:
+    Detects available CPU threads/cores safely across:
     - Host Laptops / Desktops (x86_64, ARM64 Apple Silicon)
     - AWS Cloud EC2 (Intel Xeon, AMD EPYC, AWS Graviton ARM)
     - Docker Containers / Kubernetes / AWS ECS (cgroups v1 & cgroups v2 quotas)
     - Windows (cmd/PowerShell), Linux, macOS
 
+    Applies the 75% thermal headroom rule (max_ratio=0.75) by default to prevent
+    severe thermal throttling, fan noise, and OS starvation on multi-core workstations.
+
     Args:
-        reserve_cores (int): Number of CPU cores to leave free for OS/system (default: 0).
+        reserve_cores (int): Explicit number of CPU cores to leave free for OS/system.
+        max_ratio (float): Maximum fraction of total threads to allocate (default: 0.75 = 75%).
 
     Returns:
         int: Number of optimal parallel worker processes/threads (minimum: 1).
@@ -64,7 +68,12 @@ def get_optimal_workers(reserve_cores: int = 0) -> int:
     if cores is None or cores <= 0:
         cores = os.cpu_count() or 4
 
-    return max(1, cores - reserve_cores)
+    # Apply 75% ratio ceiling to prevent thermal throttling on 6C/12T and 8C/16T laptops
+    bounded_cores = max(1, int(round(cores * max_ratio)))
+    if reserve_cores > 0:
+        bounded_cores = max(1, bounded_cores - reserve_cores)
+
+    return bounded_cores
 
 
 if __name__ == "__main__":
