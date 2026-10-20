@@ -80,14 +80,17 @@ ENV/
 htmlcov/
 .ipynb_checkpoints/
 
-# Model checkpoints & intermediate exports (only final INT8 model is tracked)
+# Model checkpoints & intermediate exports (only active final INT8 model is tracked)
 *.onnx
+!ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx
 !ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx
 ml/model/*.pt
 ml/AI1/model/ai1_vision.onnx
 ml/AI1/model/ai1_vision_int8.onnx
 ml/AI1/model/yolov8n/*.onnx
 ml/AI1/model/yolov8n/*.pt
+ml/AI1/model/yolov8s/*.onnx
+ml/AI1/model/yolov8s/*.pt
 weights/
 ml/model/*.pths
 ml/model/*.engine

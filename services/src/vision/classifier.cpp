@@ -209,7 +209,33 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
         candidate_paths.emplace_back(model_path);
     }
 
-    // Single Final Model: ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx (Docker & local relative paths across any working directory)
+    // PRIORITY 1: YOLOv8s INT8 (Quantized for AVX2 VPMADDUBSW / oneDNN)
+    candidate_paths.push_back("/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx");
+    candidate_paths.push_back("ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx");
+    candidate_paths.push_back("../../../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx");
+    candidate_paths.push_back("/app/weights/yolov8s_int8.onnx");
+    candidate_paths.push_back("/app/weights/yolo8s_int8.onnx");
+    candidate_paths.push_back("weights/yolov8s_int8.onnx");
+    candidate_paths.push_back("weights/yolo8s_int8.onnx");
+    candidate_paths.push_back("../weights/yolov8s_int8.onnx");
+    candidate_paths.push_back("../../weights/yolov8s_int8.onnx");
+
+    // PRIORITY 2: YOLOv8s FP32 (Full Precision Small Model)
+    candidate_paths.push_back("/app/ml/AI1/model/yolov8s/ai1_vision.onnx");
+    candidate_paths.push_back("/app/ml/AI1/model/yolov8s/yolov8s.onnx");
+    candidate_paths.push_back("ml/AI1/model/yolov8s/ai1_vision.onnx");
+    candidate_paths.push_back("ml/AI1/model/yolov8s/yolov8s.onnx");
+    candidate_paths.push_back("../ml/AI1/model/yolov8s/ai1_vision.onnx");
+    candidate_paths.push_back("../../ml/AI1/model/yolov8s/ai1_vision.onnx");
+    candidate_paths.push_back("../../../ml/AI1/model/yolov8s/ai1_vision.onnx");
+    candidate_paths.push_back("/app/weights/yolov8s.onnx");
+    candidate_paths.push_back("weights/yolov8s.onnx");
+    candidate_paths.push_back("../weights/yolov8s.onnx");
+    candidate_paths.push_back("../../weights/yolov8s.onnx");
+
+    // PRIORITY 3: Fallback to YOLOv8n INT8 / Generic ai1_vision_int8.onnx
     candidate_paths.push_back("/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
     candidate_paths.push_back("ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
     candidate_paths.push_back("../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx");
@@ -220,6 +246,12 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     candidate_paths.push_back("../weights/ai1_vision_int8.onnx");
     candidate_paths.push_back("../../weights/ai1_vision_int8.onnx");
     candidate_paths.push_back("../../../weights/ai1_vision_int8.onnx");
+
+    // PRIORITY 4: Fallback to YOLOv8n FP32
+    candidate_paths.push_back("/app/ml/AI1/model/yolov8n/ai1_vision.onnx");
+    candidate_paths.push_back("ml/AI1/model/yolov8n/ai1_vision.onnx");
+    candidate_paths.push_back("../ml/AI1/model/yolov8n/ai1_vision.onnx");
+    candidate_paths.push_back("../../ml/AI1/model/yolov8n/ai1_vision.onnx");
 
     for (const auto& path : candidate_paths) {
         std::ifstream f(path.c_str());
@@ -251,7 +283,28 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
             m_tracked_items.clear();
             m_tracked_items.reserve(32);
             m_is_ready = true;
-            std::cout << "[FoodClassifier] ONNX Runtime loaded final model: " << path << "\n";
+            m_active_model_path = path;
+
+            // Detect architecture from model filename
+            std::string lower_path = path;
+            for (char& c : lower_path) {
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            const bool is_yolo8s = (lower_path.find("yolov8s") != std::string::npos || lower_path.find("yolo8s") != std::string::npos);
+            const bool is_int8 = (lower_path.find("int8") != std::string::npos);
+
+            if (is_yolo8s && is_int8) {
+                m_model_arch = "YOLOv8s-INT8";
+            } else if (is_yolo8s) {
+                m_model_arch = "YOLOv8s";
+            } else if (is_int8) {
+                m_model_arch = "YOLOv8n-INT8";
+            } else {
+                m_model_arch = "YOLOv8n";
+            }
+
+            std::cout << "[FoodClassifier] ONNX Runtime loaded model: " << path 
+                      << " [Architecture: " << m_model_arch << "]\n";
             return true;
         } catch (const Ort::Exception& e) {
             std::cerr << "[FoodClassifier] Error loading model (" << path << "): " << e.what() << "\n";
@@ -262,7 +315,7 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
         }
     }
 
-    std::cerr << "[FoodClassifier] Error: Final ONNX model (ai1_vision_int8.onnx) could not be initialized.\n";
+    std::cerr << "[FoodClassifier] Error: No suitable ONNX model (YOLOv8s or YOLOv8n) could be initialized.\n";
     return false;
 }
 
@@ -300,12 +353,11 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         cv::Mat scaled_frame;
         cv::resize(frame, scaled_frame, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR);
 
-        if (m_resized_buffer.empty() || m_resized_buffer.cols != target_w || m_resized_buffer.rows != target_h) {
-            m_resized_buffer = cv::Mat(target_h, target_w, CV_8UC3, cv::Scalar(114, 114, 114));
-        } else {
-            m_resized_buffer.setTo(cv::Scalar(114, 114, 114));
-        }
-        scaled_frame.copyTo(m_resized_buffer(cv::Rect(pad_x, pad_y, new_w, new_h)));
+        // Optimal zero-redundancy border padding (only writes pad borders, avoiding 1.2MB full setTo clear)
+        const int pad_bottom = target_h - new_h - pad_y;
+        const int pad_right  = target_w - new_w - pad_x;
+        cv::copyMakeBorder(scaled_frame, m_resized_buffer, pad_y, pad_bottom, pad_x, pad_right,
+                           cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
 
         // 2. Parallel Preprocessing into Persistent Buffer (HWC BGR -> CHW RGB, Standard [0.0, 1.0] Normalization)
         // Passes pure, unshifted RGB tensor to neural network matching Ultralytics training pipeline
@@ -396,41 +448,33 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         confidences.reserve(64);
         class_ids.reserve(64);
 
+        // Vectorized candidate box parsing with early score threshold rejection (bypassing coordinate decode for >95% anchors)
         for (int a = 0; a < num_anchors; ++a) {
-            float cx, cy, w, h;
             int best_class_id = 0;
             float max_score = -1.0f;
 
             if (!is_transposed) {
-                cx = raw_output[0 * num_anchors + a];
-                cy = raw_output[1 * num_anchors + a];
-                w  = raw_output[2 * num_anchors + a];
-                h  = raw_output[3 * num_anchors + a];
-
-                for (int c = 0; c < num_classes; ++c) {
-                    float score = raw_output[(4 + c) * num_anchors + a];
+                // Find maximum class score first across channels
+                max_score = raw_output[4 * num_anchors + a];
+                best_class_id = 0;
+                for (int c = 1; c < num_classes; ++c) {
+                    const float score = raw_output[(4 + c) * num_anchors + a];
                     if (score > max_score) {
                         max_score = score;
                         best_class_id = c;
                     }
                 }
-            } else {
-                const float* anchor_ptr = raw_output + (a * channels);
-                cx = anchor_ptr[0];
-                cy = anchor_ptr[1];
-                w  = anchor_ptr[2];
-                h  = anchor_ptr[3];
 
-                for (int c = 0; c < num_classes; ++c) {
-                    float score = anchor_ptr[4 + c];
-                    if (score > max_score) {
-                        max_score = score;
-                        best_class_id = c;
-                    }
+                // Early rejection: avoid reading cx, cy, w, h and performing geometric calculations
+                if (max_score < conf_threshold) {
+                    continue;
                 }
-            }
 
-            if (max_score >= conf_threshold) {
+                const float cx = raw_output[0 * num_anchors + a];
+                const float cy = raw_output[1 * num_anchors + a];
+                const float w  = raw_output[2 * num_anchors + a];
+                const float h  = raw_output[3 * num_anchors + a];
+
                 const float unpad_cx = cx - static_cast<float>(pad_x);
                 const float unpad_cy = cy - static_cast<float>(pad_y);
                 const float orig_left = (unpad_cx - 0.5f * w) / scale;
@@ -438,10 +482,51 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 const float orig_w    = w / scale;
                 const float orig_h    = h / scale;
 
-                int left   = static_cast<int>(std::round(orig_left));
-                int top    = static_cast<int>(std::round(orig_top));
-                int width  = static_cast<int>(std::round(orig_w));
-                int height = static_cast<int>(std::round(orig_h));
+                const int left   = static_cast<int>(std::round(orig_left));
+                const int top    = static_cast<int>(std::round(orig_top));
+                const int width  = static_cast<int>(std::round(orig_w));
+                const int height = static_cast<int>(std::round(orig_h));
+
+                cv::Rect box(left, top, width, height);
+                box &= cv::Rect(0, 0, frame.cols, frame.rows);
+
+                if (box.width > 16 && box.height > 16) {
+                    boxes.push_back(box);
+                    confidences.push_back(max_score);
+                    class_ids.push_back(best_class_id);
+                }
+            } else {
+                const float* anchor_ptr = raw_output + (a * channels);
+                max_score = anchor_ptr[4];
+                best_class_id = 0;
+                for (int c = 1; c < num_classes; ++c) {
+                    const float score = anchor_ptr[4 + c];
+                    if (score > max_score) {
+                        max_score = score;
+                        best_class_id = c;
+                    }
+                }
+
+                if (max_score < conf_threshold) {
+                    continue;
+                }
+
+                const float cx = anchor_ptr[0];
+                const float cy = anchor_ptr[1];
+                const float w  = anchor_ptr[2];
+                const float h  = anchor_ptr[3];
+
+                const float unpad_cx = cx - static_cast<float>(pad_x);
+                const float unpad_cy = cy - static_cast<float>(pad_y);
+                const float orig_left = (unpad_cx - 0.5f * w) / scale;
+                const float orig_top  = (unpad_cy - 0.5f * h) / scale;
+                const float orig_w    = w / scale;
+                const float orig_h    = h / scale;
+
+                const int left   = static_cast<int>(std::round(orig_left));
+                const int top    = static_cast<int>(std::round(orig_top));
+                const int width  = static_cast<int>(std::round(orig_w));
+                const int height = static_cast<int>(std::round(orig_h));
 
                 cv::Rect box(left, top, width, height);
                 box &= cv::Rect(0, 0, frame.cols, frame.rows);

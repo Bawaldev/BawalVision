@@ -14,14 +14,20 @@ from ultralytics import YOLO
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 DEFAULT_YAML_CONFIG = SCRIPT_DIR / "yolo_dataset" / "dataset.yaml"
-MODEL_DIR = SCRIPT_DIR / "model" / "yolov8n"
+MODEL_DIR = SCRIPT_DIR / "model" / "yolov8s"
 
 FINAL_PT_TARGET = MODEL_DIR / "best.pt"
 FINAL_ONNX_TARGET = MODEL_DIR / "ai1_vision.onnx"
-FINAL_YOLO8N_TARGET = MODEL_DIR / "yolo8n.onnx"
+FINAL_YOLO8S_TARGET = MODEL_DIR / "yolov8s.onnx"
 
 # Ultralytics training hyperparameters (Optimized for MBG 9 Food Categories)
-MODEL_ARCH = "yolov8n.pt"  # Pretrained YOLOv8 Nano Object Detection backbone
+# Pretrained YOLOv8 Small Object Detection backbone (Local check first to prevent network download delay)
+_LOCAL_CANDIDATE_PTS = [
+    SCRIPT_DIR / "yolov8s.pt",
+    SCRIPT_DIR.parent.parent / "yolov8s.pt",
+    SCRIPT_DIR.parent.parent / "weights" / "yolov8s.pt",
+]
+MODEL_ARCH = next((str(p) for p in _LOCAL_CANDIDATE_PTS if p.exists()), "yolov8s.pt")
 INPUT_RESOLUTION = 640     # Fixed 640x640 frame resolution (OpenCV DNN compatible)
 BATCH_SIZE = 8             # Calibrated for 4GB VRAM (NVIDIA RTX A2000 Laptop / GTX 1650)
 MAX_EPOCHS = 120
@@ -41,10 +47,20 @@ def main() -> None:
                 return max(1, (hasattr(os, "sched_getaffinity") and len(os.sched_getaffinity(0))) or os.cpu_count() or 4)
 
     system_cores = get_optimal_workers()
-    default_dataloader_workers = min(8, max(2, system_cores))
+    is_cuda = torch.cuda.is_available()
+
+    # Thermally calibrated workers & threads:
+    # On CUDA: GPU executes tensor math. Keep CPU at 2-4 workers & threads to prevent shared-heatpipe thermal throttling.
+    # On CPU: Apply the 75% rule (up to 6-8 threads) to leave 25% headroom for the OS and avoid SMT execution port contention.
+    if is_cuda:
+        default_dataloader_workers = min(4, max(2, system_cores // 2))
+        optimal_torch_threads = min(4, max(2, system_cores // 2))
+    else:
+        default_dataloader_workers = min(6, max(2, int(system_cores * 0.75)))
+        optimal_torch_threads = max(2, int(system_cores * 0.75))
 
     parser = argparse.ArgumentParser(
-        description="BawalVision Optimized YOLOv8n Local Training & Static FP32 ONNX Export"
+        description="BawalVision Optimized YOLOv8s Local Training & Static FP32 ONNX Export"
     )
     parser.add_argument(
         "--epochs", "-e",
@@ -87,13 +103,13 @@ def main() -> None:
 
     yaml_config = Path(args.data).resolve()
 
-    # Configure PyTorch CPU parallel execution threads
-    torch.set_num_threads(system_cores)
+    # Configure PyTorch CPU execution threads with thermal headroom
+    torch.set_num_threads(optimal_torch_threads)
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
     print("\n=======================================================")
-    print("   BawalVision Local Training Pipeline (YOLOv8n)       ")
+    print("   BawalVision Local Training Pipeline (YOLOv8s)       ")
     print("=======================================================")
     print(f"[+] Architecture       : {MODEL_ARCH}")
     print(f"[+] Epochs             : {args.epochs}")
@@ -102,10 +118,11 @@ def main() -> None:
     print(f"[+] Patience           : {EARLY_STOP_PATIENCE} epochs")
     print(f"[+] ONNX Opset         : {ONNX_OPSET}")
     print(f"[+] Target Classes     : {NUM_CLASSES}")
-    print(f"[+] CPU Workers        : {args.workers}")
+    print(f"[+] DataLoader Workers : {args.workers} (Thermal Guard)")
+    print(f"[+] PyTorch Threads    : {optimal_torch_threads} (Thermal Headroom 75% rule)")
     print(f"[+] Dataset YAML       : {yaml_config}")
     print(f"[+] AMP (FP16)         : {args.amp}")
-    print(f"[+] Compute Hardware   : {'CUDA (' + torch.cuda.get_device_name(0) + ')' if torch.cuda.is_available() else 'Host CPU'}")
+    print(f"[+] Compute Hardware   : {'CUDA (' + torch.cuda.get_device_name(0) + ')' if is_cuda else 'Host CPU'}")
     print("=======================================================\n")
 
     # ==============================================================================
@@ -134,60 +151,79 @@ def main() -> None:
         print(f"[+] Loading Pretrained Weights: {MODEL_ARCH}...")
         model = YOLO(MODEL_ARCH)
 
-        print("\n=== Commencing YOLOv8n Object Detection Local Training ===")
+        print("\n=== Commencing YOLOv8s Object Detection Local Training ===")
         start_timestamp = time.time()
 
-        train_job = model.train(
-            data=str(yaml_config),
-            epochs=args.epochs,
-            patience=EARLY_STOP_PATIENCE,
-            batch=args.batch_size,
-            imgsz=INPUT_RESOLUTION,
-            device=device_id,
-            workers=args.workers,
-            project=str(SCRIPT_DIR / "runs"),
-            name="ai1_yolov8n_det",
-            exist_ok=True,
-            verbose=True,
-            optimizer="AdamW",
-            lr0=0.001,
-            lrf=0.01,
-            cos_lr=True,
-            warmup_epochs=3.0,
-            amp=args.amp,
-            box=7.5,
-            cls=0.5,             # Seimbang: Menjaga confidence score tetap tinggi (80-90%+)
-            dfl=1.5,
-            hsv_h=0.015,
-            hsv_s=0.5,           # Menjaga ciri warna asli sayuran & lauk
-            degrees=10.0,        # Rotasi ringan yang aman untuk piring/baki
-            perspective=0.0,     # Kamera menghadap lurus dari atas
-            shear=2.0,           # Menghindari bentuk objek makanan terdistorsi ekstrem
-            scale=0.5,           # Skala proporsional
-            translate=0.15,
-            flipud=0.0,          # Kamera selalu dari atas (jangan dibalik vertikal)
-            fliplr=0.5,
-            mosaic=1.0,          # Mosaik 4 gambar aktif di awal untuk belajar konteks
-            mixup=0.1,           # Sedikit percampuran fitur antar-kelas
-            copy_paste=0.0,
-            close_mosaic=15,     # Matikan mosaik pada 15 epoch terakhir untuk pematangan kotak
-            plots=True,
-            save=True,
-            val=True,
-        )
+        train_job = None
+        try:
+            train_job = model.train(
+                data=str(yaml_config),
+                epochs=args.epochs,
+                patience=EARLY_STOP_PATIENCE,
+                batch=args.batch_size,
+                imgsz=INPUT_RESOLUTION,
+                device=device_id,
+                workers=args.workers,
+                project=str(SCRIPT_DIR / "runs"),
+                name="ai1_yolov8s_det",
+                exist_ok=True,
+                verbose=True,
+                optimizer="AdamW",
+                lr0=0.001,
+                lrf=0.01,
+                cos_lr=True,
+                warmup_epochs=3.0,
+                amp=args.amp,
+                box=5.5,
+                cls=0.8,             # Balance: maintain high confidence (80-90%+)
+                dfl=1.5,
+                hsv_h=0.015,
+                hsv_s=0.5,           # Preserve natural food colors
+                degrees=10.0,        # Gentle tray rotations
+                perspective=0.0,     # Flat top-down camera
+                shear=2.0,           # Prevent extreme object shearing
+                scale=0.5,           # Proportional scaling
+                translate=0.15,
+                flipud=0.0,          # Top-down camera (no vertical flips)
+                fliplr=0.5,
+                mosaic=1.0,          # 4-image mosaic early on
+                mixup=0.1,           # Feature mixing
+                copy_paste=0.0,
+                close_mosaic=15,     # Turn off mosaic last 15 epochs
+                plots=True,
+                save=True,
+                val=True,
+            )
+        except KeyboardInterrupt:
+            print("\n[!] Training halted by user (Ctrl+C). Searching for existing checkpoints...")
 
         elapsed_seconds = time.time() - start_timestamp
         print(f"\n[⏱️] Total Training Runtime: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
-        print(f"[📊] Training plots & visual evaluation metrics saved to: {train_job.save_dir}")
 
-        checkpoint_best = Path(train_job.save_dir) / "weights" / "best.pt"
-        if checkpoint_best.exists():
+        checkpoint_best = None
+        if train_job is not None and hasattr(train_job, "save_dir"):
+            print(f"[📊] Training plots & visual evaluation metrics saved to: {train_job.save_dir}")
+            cb = Path(train_job.save_dir) / "weights" / "best.pt"
+            if cb.exists():
+                checkpoint_best = cb
+            else:
+                cl = Path(train_job.save_dir) / "weights" / "last.pt"
+                if cl.exists():
+                    checkpoint_best = cl
+
+        if checkpoint_best is None:
+            # Fallback search across runs directory
+            candidates = list((SCRIPT_DIR / "runs").glob("**/weights/best.pt")) + list((SCRIPT_DIR / "runs").glob("**/weights/last.pt"))
+            if candidates:
+                checkpoint_best = max(candidates, key=lambda p: p.stat().st_mtime)
+
+        if checkpoint_best and checkpoint_best.exists():
             shutil.copy2(checkpoint_best, FINAL_PT_TARGET)
             print(f"[✓] Optimal PyTorch weights saved to: {FINAL_PT_TARGET}")
         else:
-            raise FileNotFoundError(f"Missing checkpoint at: {checkpoint_best}")
+            print(f"[!] Warning: No best.pt found yet. Proceeding with export phase if previous weights exist.")
     else:
-        print("[+] Flag --export-only aktif: Melewati proses training.")
+        print("[+] Flag --export-only active: Skipping training phase.")
 
     # ==============================================================================
     # 2. STATIC FP32 ONNX EXPORT (OPENCV DNN COMPLIANT)
@@ -206,16 +242,26 @@ def main() -> None:
     exported_onnx = detection_engine.export(
         format="onnx",
         imgsz=INPUT_RESOLUTION,
-        dynamic=False,     # Static shape: Menghindari error tipe data BOOL
-        opset=ONNX_OPSET,  # Opset 13 standar untuk QDQ
-        half=False,        # Presisi FP32 murni
+        dynamic=False,     # Static shape: avoid BOOL datatype issues in OpenCV DNN
+        opset=ONNX_OPSET,  # Opset 13 standard for QDQ
+        half=False,        # Pure FP32 precision
         simplify=True,     # Constant folding
     )
 
     if os.path.exists(exported_onnx):
+        FINAL_ONNX_TARGET.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(exported_onnx, FINAL_ONNX_TARGET)
-        shutil.copy2(exported_onnx, FINAL_YOLO8N_TARGET)
+        shutil.copy2(exported_onnx, FINAL_YOLO8S_TARGET)
         shutil.copy2(exported_onnx, SCRIPT_DIR / "model" / "ai1_vision.onnx")
+
+        # Sync to repo-level weights directory for immediate availability
+        repo_weights = SCRIPT_DIR.parent.parent / "weights"
+        if repo_weights.exists():
+            shutil.copy2(exported_onnx, repo_weights / "yolov8s.onnx")
+            shutil.copy2(exported_onnx, repo_weights / "yolo8s.onnx")
+            shutil.copy2(exported_onnx, repo_weights / "ai1_vision.onnx")
+            print(f"[✓] Synced exported ONNX to: {repo_weights / 'yolov8s.onnx'}")
+
         os.remove(exported_onnx)
         print(f"[✓] Static FP32 ONNX binary deployed to: {FINAL_ONNX_TARGET}")
 
