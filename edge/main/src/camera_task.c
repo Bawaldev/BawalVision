@@ -18,7 +18,7 @@
 
 static const char *TAG = "CAMERA_OV5640";
 
-#define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY /* 64 KB atau 128 KB tetap */
+#define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY /* 64 KB or 128 KB */
 
 typedef struct {
   camera_frame_header_t header;
@@ -117,28 +117,51 @@ esp_err_t camera_task_init(void) {
       snprintf(s_detected_camera_model, sizeof(s_detected_camera_model), "SENSOR_0x%04X", (unsigned int)s->id.PID);
     }
     ESP_LOGI(TAG, "Camera sensor scanned successfully: %s (PID: 0x%04x)", s_detected_camera_model, (unsigned int)s->id.PID);
-    s->set_vflip(s, 0);
-    s->set_hmirror(s, 0);
-    s->set_framesize(s, FRAMESIZE_VGA);
-    s->set_quality(s, 16);
 
-    s->set_whitebal(s, 1);
-    s->set_awb_gain(s, 1);
-    s->set_wb_mode(s, 0);
-    s->set_exposure_ctrl(s, 1);
-    s->set_aec2(s, 1);
-    s->set_ae_level(s, -1);
-    s->set_gain_ctrl(s, 1);
-    s->set_gainceiling(s, (gainceiling_t)2);
-    s->set_bpc(s, 0);
-    s->set_wpc(s, 1);
-    s->set_raw_gma(s, 1);
-    s->set_lenc(s, 1);
-    s->set_dcw(s, 0);
-    s->set_brightness(s, 0);
-    s->set_contrast(s, 1);
-    s->set_saturation(s, 1);
-    s->set_sharpness(s, 1);
+    // =========================================================================
+    // 1. FRAME GEOMETRY & JPEG COMPRESSION
+    // =========================================================================
+    s->set_vflip(s, 0);                 // Set vertical flip (0 = disabled, 1 = inverted)
+    s->set_hmirror(s, 0);               // Set horizontal mirror (0 = disabled, 1 = mirrored)
+    s->set_framesize(s, FRAMESIZE_VGA); // 640x480 resolution (native aspect ratio for YOLO & SIMD)
+    s->set_quality(s, 16);              // JPEG quality factor (10 = highest quality/larger buffer, 63 = lowest)
+
+    // =========================================================================
+    // 2. AUTOMATIC WHITE BALANCE (AWB) ENGINE
+    // =========================================================================
+    s->set_whitebal(s, 1);              // Enable hardware Auto White Balance (0 = disable, 1 = enable)
+    s->set_awb_gain(s, 1);              // Enable AWB gain multipliers across R, G, and B color channels
+    s->set_wb_mode(s, 0);               // AWB operating mode: 0 = Auto / Neutral ambient tracking
+
+    // =========================================================================
+    // 3. EXPOSURE & ANALOG GAIN CONTROL (ANTI-HOTSPOT & ANTI-BLACKOUT)
+    // =========================================================================
+    s->set_exposure_ctrl(s, 1);         // Enable hardware Automatic Exposure Control (AEC)
+    s->set_aec2(s, 0);                  // Disable secondary DSP AEC algorithm.
+                                        // AEC2 is overly aggressive toward localized bright spots;
+                                        // disabling it prevents full-frame blackout when a white bowl or glare appears.
+    s->set_ae_level(s, 0);              // Target exposure compensation level: 0 = Standard/Balanced.
+                                        // (Negative values like -1 crush shadows into pure black RGB [0,0,0]).
+    s->set_gain_ctrl(s, 1);             // Enable Automatic Gain Control (AGC) circuit
+    s->set_gainceiling(s, (gainceiling_t)4); // Set hardware analog gain ceiling to 8x (GAINCEILING_8X).
+                                        // Prevents digital clipping while lifting weak sensor signals in dim lighting.
+
+    // =========================================================================
+    // 4. HARDWARE OPTICAL & LENS CALIBRATION
+    // =========================================================================
+    s->set_bpc(s, 0);                   // Black Pixel Correction (0 = disabled to preserve low-light shadow detail)
+    s->set_wpc(s, 1);                   // White Pixel Correction (1 = enabled to filter out hot/stuck pixels from thermal drift)
+    s->set_raw_gma(s, 1);               // Enable sensor raw Gamma correction curve to preserve midtone dynamic range
+    s->set_lenc(s, 1);                  // Enable Lens Vignetting Correction (equalizes illumination across optical corners)
+    s->set_dcw(s, 0);                   // Downsize / Crop Windowing disabled (preserves standard optical FOV)
+
+    // =========================================================================
+    // 5. COLOR & SPATIAL TUNING (NEUTRAL BASELINE FOR OPENCV / YOLO)
+    // =========================================================================
+    s->set_brightness(s, 0);            // Sensor baseline brightness: 0 = Neutral calibrated level
+    s->set_contrast(s, 0);              // Sensor contrast: 0 = Neutral (prevents white plates from blowing out highlight details)
+    s->set_saturation(s, 0);            // Sensor saturation: 0 = Neutral (avoids artificial purple/green color banding around lights)
+    s->set_sharpness(s, 0);             // Sensor edge sharpness: 0 = Neutral (prevents edge halos and amplified sensor noise floor)
   }
 
   s_is_initialized = true;
