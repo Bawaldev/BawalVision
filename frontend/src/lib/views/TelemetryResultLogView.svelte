@@ -76,8 +76,15 @@
         return { cpu1: c0, cpu2: c1 };
     }
 
+    let isMockMode = $derived(
+        Boolean(currentTelemetry?.is_mock_active) ||
+        currentTelemetry?.source_type === 'mock_video' ||
+        currentTelemetry?.device_id === 'MOCK_VIDEO_CAM' ||
+        Boolean(currentTelemetry?.device_id?.startsWith('MOCK_'))
+    );
+
     let isDeviceConnected = $derived(
-        Boolean(currentTelemetry?.is_connected) && currentTelemetry?.temperature != null
+        (Boolean(currentTelemetry?.is_connected) && currentTelemetry?.temperature != null) || isMockMode
     );
 
     // Only display live telemetry timeline when ESP32-S3 is actively connected
@@ -89,8 +96,8 @@
             return history.filter(pt => pt.temperature != null);
         }
 
-        const baseTemp = currentTelemetry?.temperature ?? 36.5;
-        const baseMcu = currentTelemetry?.cpu_temperature ?? baseTemp;
+        const baseTemp = currentTelemetry?.temperature ?? (isMockMode ? 37.2 : 36.5);
+        const baseMcu = currentTelemetry?.cpu_temperature ?? (isMockMode ? 42.5 : baseTemp);
         const now = Math.floor(Date.now() / 1000);
         const points: TelemetryPayload[] = [];
 
@@ -98,12 +105,12 @@
             const shiftTime = now - i * 60;
             const coreLoads = getCoreLoads(currentTelemetry);
             points.push({
-                device_id: currentTelemetry?.device_id || 'ESP32S3',
-                firmware_version: currentTelemetry?.firmware_version || '1.0.0',
+                device_id: currentTelemetry?.device_id || (isMockMode ? 'MOCK_VIDEO_CAM' : 'ESP32S3'),
+                firmware_version: currentTelemetry?.firmware_version || (isMockMode ? 'sim-v2.1' : '1.0.0'),
                 device_core: 2,
                 cpu_temperature: baseMcu,
                 temperature: baseTemp,
-                cpu_load: currentTelemetry?.cpu_load ?? 18,
+                cpu_load: currentTelemetry?.cpu_load ?? (isMockMode ? 18 : 18),
                 cpu_core0_load: coreLoads.cpu1,
                 cpu_core1_load: coreLoads.cpu2,
                 timestamp: shiftTime,
@@ -311,7 +318,7 @@
                                 <div class="plot-canvas-area mini">
                                     {#if !isDeviceConnected}
                                         <div class="offline-chart-overlay mini">
-                                            <span>📡 ESP32-S3 Offline</span>
+                                            <span>📡 {isMockMode ? 'Mock Simulation Standby' : 'ESP32-S3 Offline'}</span>
                                         </div>
                                     {:else if hoveredPoint}
                                         {@const hc = getCoreLoads(hoveredPoint)}
@@ -401,7 +408,7 @@
                                 <div class="plot-canvas-area mini">
                                     {#if !isDeviceConnected}
                                         <div class="offline-chart-overlay mini">
-                                            <span>📡 ESP32-S3 Offline</span>
+                                            <span>📡 {isMockMode ? 'Mock Simulation Standby' : 'ESP32-S3 Offline'}</span>
                                         </div>
                                     {/if}
 
@@ -680,7 +687,7 @@
             <!-- Upper Card: Avg. ESP32 Temp & CPU -->
             <div class="card metric-mini-card">
                 <div class="metric-row">
-                    <span class="metric-label">Avg. ESP32 Temp</span>
+                    <span class="metric-label">{isMockMode ? 'Avg. Node Temp' : 'Avg. ESP32 Temp'}</span>
                     <div class="value-box">
                         {#if isDeviceConnected && avgTemp != null}
                             <span class="value-text">{avgTemp} °C</span>
@@ -856,7 +863,7 @@
                     class="log-search-input"
                 />
 
-                <button type="button" class="action-btn" onclick={loadRecords} title="Refresh Database">
+                <button type="button" class="action-btn" onclick={() => loadRecords(true)} title="Refresh Database">
                     ↻ Refresh
                 </button>
             </div>

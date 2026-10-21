@@ -9,6 +9,7 @@
         fps?: number;
         latencyMs?: number;
         isOnline?: boolean;
+        isMock?: boolean;
         memoryUsage?: string | null;
         memoryMB?: number | null;
         parallelCores?: number;
@@ -26,6 +27,7 @@
         fps = 0.0,
         latencyMs = 0.0,
         isOnline = false,
+        isMock = false,
         memoryUsage = null,
         memoryMB = null,
         parallelCores = 0,
@@ -62,9 +64,9 @@
                 <h1>{currentTitle}</h1>
             {/key}
         </div>
-        <div class="status-chip" class:offline={!isOnline}>
-            <span class="pulse-dot" class:online={isOnline}></span>
-            <span>{isOnline ? 'Live Ingress' : 'Offline'}</span>
+        <div class="status-chip" class:offline={!isOnline} class:mock={isOnline && isMock}>
+            <span class="pulse-dot" class:online={isOnline && !isMock} class:mock={isOnline && isMock}></span>
+            <span>{!isOnline ? 'Offline' : (isMock ? 'Mock Simulation' : 'Live Ingress')}</span>
         </div>
     </div>
 
@@ -211,6 +213,12 @@
         color: #64748b;
     }
 
+    .status-chip.mock {
+        color: #d97706;
+        background: #fffbeb;
+        border-color: #fde68a;
+    }
+
     .pulse-dot {
         width: 6px;
         height: 6px;
@@ -221,6 +229,11 @@
     .pulse-dot.online {
         background: #16a34a;
         box-shadow: 0 0 6px rgba(22, 163, 74, 0.6);
+    }
+
+    .pulse-dot.mock {
+        background: #d97706;
+        box-shadow: 0 0 6px rgba(217, 119, 6, 0.6);
     }
 
     .engine-selectors {

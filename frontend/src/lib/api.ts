@@ -1,4 +1,4 @@
-import type { InspectionRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult, DeviceHardwareStatus } from './types';
+import type { InspectionRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult, DeviceHardwareStatus, WiFiNetworkInfo } from './types';
 
 const BASE_URL = '/api/v1';
 
