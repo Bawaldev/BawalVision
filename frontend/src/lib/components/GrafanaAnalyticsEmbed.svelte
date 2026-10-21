@@ -22,14 +22,14 @@
     let embedUrl = $derived.by(() => {
         const base = grafanaHost.replace(/\/+$/, '');
         const themeParam = `theme=${theme}`;
-        const kioskParam = kiosk ? '&kiosk=tv' : '';
+        const kioskParam = kiosk ? '&kiosk' : '';
 
         if (panelId !== null && panelId !== undefined) {
             // Embed single panel
-            return `${base}/d-solo/bawalvision_analytics/bawalvision-telemetry-quality-analytics?orgId=1&panelId=${panelId}&${themeParam}${kioskParam}`;
+            return `${base}/d-solo/bawalvision_analytics/_?orgId=1&panelId=${panelId}&${themeParam}${kioskParam}`;
         }
         // Embed complete dashboard
-        return `${base}/d/bawalvision_analytics/bawalvision-telemetry-quality-analytics?orgId=1&${themeParam}${kioskParam}`;
+        return `${base}/d/bawalvision_analytics/_?orgId=1&${themeParam}${kioskParam}`;
     });
 
     function handleIframeLoad() {
@@ -38,7 +38,7 @@
     }
 
     function openFullGrafana() {
-        window.open(`${grafanaHost}/d/bawalvision_analytics/bawalvision-telemetry-quality-analytics`, '_blank');
+        window.open(`${grafanaHost}/d/bawalvision_analytics/_`, '_blank');
     }
 </script>
 
@@ -49,16 +49,16 @@
                 <svg viewBox="0 0 24 24" fill="currentColor" class="grafana-icon">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
                 </svg>
-                <span>Grafana Engine</span>
+                <span>AI Model Real-Time Monitor</span>
             </div>
-            <span class="live-pill">Direct PostgreSQL</span>
+            <span class="live-pill">YOLOv8 & CV Engine</span>
         </div>
         <div class="header-right">
             <button class="action-btn" onclick={openFullGrafana} title="Buka Dashboard Grafana di Tab Baru">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
                 </svg>
-                <span>Buka di Grafana (:3002)</span>
+                <span>Buka Fullscreen (:3002)</span>
             </button>
         </div>
     </div>
@@ -66,7 +66,7 @@
     <div class="embed-canvas" style="height: {height};">
         <iframe
             src={embedUrl}
-            title="BawalVision Grafana Telemetry Dashboard"
+            title="BawalVision Real-Time AI Model Monitoring"
             width="100%"
             height="100%"
             frameborder="0"
@@ -77,7 +77,7 @@
         {#if !isIframeLoaded}
             <div class="loading-overlay">
                 <div class="spinner"></div>
-                <p>Memuat telemetri dari Grafana (:3002)...</p>
+                <p>Memuat telemetri model AI dari Grafana (:3002)...</p>
                 <span class="sub-hint">Pastikan container Grafana sudah aktif via <code>just compose-up grafana</code></span>
             </div>
         {/if}
@@ -92,7 +92,7 @@
         overflow: hidden;
         display: flex;
         flex-direction: column;
-        margin-top: 1rem;
+        margin-top: 0.5rem;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
     }
 
@@ -100,7 +100,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 0.75rem 1rem;
+        padding: 0.6rem 1rem;
         background: #1F2937;
         border-bottom: 1px solid #374151;
     }
@@ -117,12 +117,13 @@
         gap: 0.4rem;
         font-size: 0.82rem;
         font-weight: 600;
-        color: #F59E0B;
+        color: #10B981;
     }
 
     .grafana-icon {
         width: 18px;
         height: 18px;
+        color: #F59E0B;
     }
 
     .live-pill {
@@ -190,8 +191,8 @@
     .spinner {
         width: 28px;
         height: 28px;
-        border: 3px solid rgba(245, 158, 11, 0.2);
-        border-top-color: #F59E0B;
+        border: 3px solid rgba(16, 185, 129, 0.2);
+        border-top-color: #10B981;
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
     }
@@ -203,7 +204,7 @@
 
     .sub-hint code {
         background: #1F2937;
-        color: #F59E0B;
+        color: #10B981;
         padding: 0.1rem 0.3rem;
         border-radius: 4px;
     }
@@ -212,4 +213,3 @@
         to { transform: rotate(360deg); }
     }
 </style>
-
