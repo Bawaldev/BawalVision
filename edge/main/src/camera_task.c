@@ -90,7 +90,7 @@ esp_err_t camera_task_init(void) {
 
       .pixel_format = PIXFORMAT_JPEG,
       .frame_size = FRAMESIZE_VGA, // 640x480
-      .jpeg_quality = 16,
+      .jpeg_quality = 28,
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -124,7 +124,7 @@ esp_err_t camera_task_init(void) {
     s->set_vflip(s, 0);                 // Set vertical flip (0 = disabled, 1 = inverted)
     s->set_hmirror(s, 0);               // Set horizontal mirror (0 = disabled, 1 = mirrored)
     s->set_framesize(s, FRAMESIZE_VGA); // 640x480 resolution (native aspect ratio for YOLO & SIMD)
-    s->set_quality(s, 16);              // JPEG quality factor (10 = highest quality/larger buffer, 63 = lowest)
+    s->set_quality(s, 28);              // Quality factor 28 for balanced ~8-10 KB frames
 
     // =========================================================================
     // 2. AUTOMATIC WHITE BALANCE (AWB) ENGINE
@@ -137,14 +137,10 @@ esp_err_t camera_task_init(void) {
     // 3. EXPOSURE & ANALOG GAIN CONTROL (ANTI-HOTSPOT & ANTI-BLACKOUT)
     // =========================================================================
     s->set_exposure_ctrl(s, 1);         // Enable hardware Automatic Exposure Control (AEC)
-    s->set_aec2(s, 0);                  // Disable secondary DSP AEC algorithm.
-                                        // AEC2 is overly aggressive toward localized bright spots;
-                                        // disabling it prevents full-frame blackout when a white bowl or glare appears.
-    s->set_ae_level(s, 0);              // Target exposure compensation level: 0 = Standard/Balanced.
-                                        // (Negative values like -1 crush shadows into pure black RGB [0,0,0]).
+    s->set_aec2(s, 1);                  // Enable DSP AEC2 algorithm for proper ambient indoor lighting
+    s->set_ae_level(s, 0);              // Target exposure compensation level: 0 = Standard/Balanced
     s->set_gain_ctrl(s, 1);             // Enable Automatic Gain Control (AGC) circuit
-    s->set_gainceiling(s, (gainceiling_t)4); // Set hardware analog gain ceiling to 8x (GAINCEILING_8X).
-                                        // Prevents digital clipping while lifting weak sensor signals in dim lighting.
+    s->set_gainceiling(s, (gainceiling_t)4); // Set hardware analog gain ceiling to 8x (GAINCEILING_8X)
 
     // =========================================================================
     // 4. HARDWARE OPTICAL & LENS CALIBRATION

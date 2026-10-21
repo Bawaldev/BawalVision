@@ -159,7 +159,9 @@ This project uses [just](https://github.com/casey/just) as a centralized, cross-
 | `just compose-down` | Stop and remove running containers |
 | `just compose-build [service]` | Build container images via Docker Compose |
 | `just compose-logs [service]` | View live aggregated container logs |
-| `just allow-firewall [port]` | Configure firewall rules for gateway port (UFW / Windows) |
+| `just edge-proxy` | Host TCP bridge `:8080 -> 127.0.0.1:18080` for ESP32-S3 on Docker Desktop |
+| `just edge-stack` | Postgres in compose + backend on the host (alternative for ESP32-S3 LAN tests) |
+| `just allow-firewall [port]` | Configure firewall rules for gateway port (firewalld / UFW / Windows) |
 | `just deny-firewall [port]` | Remove firewall rule for gateway port |
 
 ---

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"gorm.io/driver/postgres"
@@ -116,6 +117,12 @@ END $$;`).Error; err != nil {
 	})
 
 	app.Use(recover.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:  "*",
+		AllowMethods:  "GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS",
+		AllowHeaders:  "Origin,Content-Type,Accept,Authorization,X-Device-IP,X-Device-ID,X-Frame-ID,X-ESP-Temp,X-ESP-CPU-Load,X-Camera-Model,X-Firmware-Version,X-Stream-Source,X-Telemetry-Mode,X-Telemetry-Struct,X-Mock-Video-Source,X-Mock-Video-UUID,X-Is-Rewind,X-Video-Rewind",
+		ExposeHeaders: "X-Stream-Source,X-Telemetry-Struct,X-Mock-Video-UUID",
+	}))
 	app.Use(logger.New(logger.Config{
 		Next: func(c *fiber.Ctx) bool {
 			path := c.Path()
@@ -132,6 +139,10 @@ END $$;`).Error; err != nil {
 	api.RegisterDeviceRoutes(apiGroup, db)
 	api.RegisterFrontendRoutes(apiGroup, db)
 	api.RegisterCameraRoutes(apiGroup, db)
+
+	// Allow ESP32-S3 nodes to rediscover this backend over UDP broadcast when
+	// their provisioned BACKEND_IP becomes stale after a DHCP/Wi-Fi change.
+	device.StartBackendDiscovery(version)
 
 	// Direct alias for /examples/* to /api/v1/examples/file/*
 	app.Get("/examples/*", func(c *fiber.Ctx) error {
@@ -153,7 +164,7 @@ END $$;`).Error; err != nil {
 	}()
 
 	log.Printf("Server running on http://0.0.0.0:8080 (version: %s)...", version)
-	if err := app.Listen(":8080"); err != nil {
+	if err := app.Listen("0.0.0.0:8080"); err != nil {
 		log.Printf("[SERVER] Server stopped: %v", err)
 	}
 }

@@ -69,6 +69,8 @@
     let isWebSerialConnecting = $state(false);
     let webSerialMsg = $state('');
     let webSerialStatus = $state<'idle' | 'success' | 'error'>('idle');
+    let pairingPort = $state('');
+    let pairingGraceUntil = 0;
 
     $effect(() => {
         if (config) {
@@ -113,7 +115,8 @@
             espUsbStatus = hw.esp_usb_status;
         }
 
-        if (hw.connected) {
+        const inPairingGrace = Date.now() < pairingGraceUntil;
+        if (hw.connected && !inPairingGrace) {
             connectionStatus = 'connected';
             lastConnDetails = {
                 success: true,
@@ -126,7 +129,7 @@
                     ? `Connected via USB Serial (${hw.ip_address}) — Server Wi-Fi Synced`
                     : `Connected on shared Wi-Fi network (${hw.ip_address || 'LAN'})`
             };
-        } else if (connectionStatus === 'connected') {
+        } else if (!hw.connected && connectionStatus === 'connected' && !inPairingGrace) {
             connectionStatus = 'disconnected';
         }
     }
@@ -162,7 +165,11 @@
 
     onMount(() => {
         refreshHardwareStatus();
-        const timer = setInterval(refreshHardwareStatus, 1500);
+        const timer = setInterval(() => {
+            if (!isWebSerialConnecting) {
+                refreshHardwareStatus();
+            }
+        }, 1500);
         return () => clearInterval(timer);
     });
 
@@ -262,6 +269,110 @@
         }
     }
 
+    function applyProvisionedResult(res: EspConnectionResult, port: string, ssid: string) {
+        connectionStatus = 'connected';
+        lastConnDetails = res;
+        pairingGraceUntil = Date.now() + 12000;
+        webSerialStatus = 'success';
+        webSerialMsg = res.wifiConnected === false
+            ? `✓ Credentials stored on ${port}. ESP32-S3 is associating with ${ssid}...`
+            : `✓ ${port} paired to ${ssid}. ESP32-S3 is in sync.`;
+        onDeviceConnectionChange?.(true, res.deviceId);
+    }
+
+    async function readBawalAck(port: any, timeoutMs = 4000): Promise<any | null> {
+        let reader: any = null;
+        let timer: any = null;
+        try {
+            if (!port?.readable) return null;
+            reader = port.readable.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            timer = setTimeout(() => {
+                reader?.cancel().catch(() => {});
+            }, timeoutMs);
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (value) {
+                    buffer += decoder.decode(value, { stream: true });
+                }
+                const ackIndex = buffer.indexOf('BAWAL_ACK:');
+                if (ackIndex >= 0) {
+                    const lineEnd = buffer.indexOf('\n', ackIndex);
+                    if (lineEnd >= 0) {
+                        const jsonText = buffer.slice(ackIndex + 'BAWAL_ACK:'.length, lineEnd).trim();
+                        try {
+                            return JSON.parse(jsonText);
+                        } catch {
+                            return null;
+                        }
+                    }
+                }
+                if (buffer.length > 8192) {
+                    buffer = buffer.slice(-4096);
+                }
+            }
+        } catch {
+            return null;
+        } finally {
+            if (timer) clearTimeout(timer);
+            try {
+                reader?.releaseLock();
+            } catch {}
+        }
+        return null;
+    }
+
+    async function handlePairUsbDevice(portOverride?: string) {
+        if (isWebSerialConnecting) return;
+
+        const targetPort = portOverride || selectedUsbPort || detectedUsbPorts[0]?.port || '/dev/ttyACM0';
+        isWebSerialConnecting = true;
+        pairingPort = targetPort;
+        webSerialStatus = 'idle';
+        webSerialMsg = `Reading active host Wi-Fi and provisioning ${targetPort}...`;
+
+        try {
+            const hw = await fetchDeviceStatus(formState.backendUrl);
+            if (hw?.server_wifi) {
+                if (hw.server_wifi.ssid) serverWifiSsid = hw.server_wifi.ssid;
+                if (hw.server_wifi.backend_ip) serverBackendIp = hw.server_wifi.backend_ip;
+            }
+
+            const ssid = hw?.server_wifi?.ssid || serverWifiSsid;
+            const backendIp = hw?.server_wifi?.backend_ip || serverBackendIp;
+            const res = await provisionEspViaUsb(
+                targetPort,
+                ssid,
+                serverWifiPassword,
+                formState.backendUrl,
+                backendIp
+            );
+
+            if (res.success) {
+                applyProvisionedResult(res, targetPort, res.provisionedSsid || ssid || 'host Wi-Fi');
+                await refreshHardwareStatus();
+                return;
+            }
+
+            webSerialStatus = 'error';
+            webSerialMsg = res.message || `Failed to provision ${targetPort}.`;
+
+            if (typeof navigator !== 'undefined' && 'serial' in navigator && ssid) {
+                isWebSerialConnecting = false;
+                await handleDirectWebSerialConnect();
+            }
+        } catch (err: any) {
+            webSerialStatus = 'error';
+            webSerialMsg = err?.message || 'USB pairing failed.';
+        } finally {
+            isWebSerialConnecting = false;
+            pairingPort = '';
+        }
+    }
+
     async function handleDirectWebSerialConnect() {
         if (typeof navigator === 'undefined' || !('serial' in navigator)) {
             webSerialStatus = 'error';
@@ -272,9 +383,21 @@
         isWebSerialConnecting = true;
         webSerialStatus = 'idle';
         webSerialMsg = 'Requesting serial port authorization (/dev/ttyACM0 or /dev/ttyUSB0)...';
+        let port: any = null;
 
         try {
-            const port = await (navigator as any).serial.requestPort({
+            if (!serverWifiSsid || !serverBackendIp) {
+                const hw = await fetchDeviceStatus(formState.backendUrl);
+                if (hw?.server_wifi) {
+                    if (hw.server_wifi.ssid) serverWifiSsid = hw.server_wifi.ssid;
+                    if (hw.server_wifi.backend_ip) serverBackendIp = hw.server_wifi.backend_ip;
+                }
+            }
+            if (!serverWifiSsid) {
+                throw new Error('Active host Wi-Fi SSID is unavailable. Use backend USB provisioning.');
+            }
+
+            port = await (navigator as any).serial.requestPort({
                 filters: [
                     { usbVendorId: 0x303a } // Espressif Systems
                 ]
@@ -282,38 +405,64 @@
 
             await port.open({ baudRate: 115200 });
 
-            // Send provision command
             const encoder = new TextEncoder();
             const writer = port.writable.getWriter();
+            const knownPassword = selectedNetwork && selectedNetwork.ssid === serverWifiSsid
+                ? connectPassword
+                : serverWifiPassword;
             const payload = JSON.stringify({
-                cmd: 'provision_wifi',
-                ssid: selectedNetwork?.ssid || serverWifiSsid || 'Apsari',
-                pass: connectPassword || serverWifiPassword || '',
-                backend_ip: serverBackendIp || '192.168.100.165',
+                cmd: 'set_wifi',
+                ssid: serverWifiSsid,
+                pass: knownPassword || '',
+                backend_ip: serverBackendIp || (typeof window !== 'undefined' ? window.location.hostname : ''),
                 backend_port: '8080'
             }) + '\n';
 
             await writer.write(encoder.encode(payload));
             writer.releaseLock();
 
-            webSerialStatus = 'success';
-            webSerialMsg = `✓ Direct USB serial command dispatched to ESP32-S3. Syncing hardware link...`;
+            webSerialMsg = 'Waiting for BAWAL_ACK from ESP32-S3...';
+            const ack = await readBawalAck(port, 7000);
 
-            setTimeout(async () => {
+            if (ack && (ack.status === 'wifi_provisioned' || ack.status === 'ok')) {
+                const ssid = ack.ssid || serverWifiSsid;
+                const result: EspConnectionResult = {
+                    success: true,
+                    status: ack.status,
+                    deviceId: ack.device_id || espUsbStatus?.device_id || formState.deviceId || 'ESP32S3_USB',
+                    firmwareVersion: ack.firmware_version || '1.0.0',
+                    latencyMs: 4,
+                    ipAddress: serverBackendIp || ack.backend_ip || 'USB Serial',
+                    usbPort: '/dev/ttyACM0',
+                    provisionedSsid: ssid,
+                    wifiConnected: !!ack.wifi_connected,
+                    connectionMode: 'usb_serial',
+                    message: `Provisioned ${ssid} via Web Serial`
+                };
+                applyProvisionedResult(result, '/dev/ttyACM0', ssid);
                 await refreshHardwareStatus();
-                await handleConnectEsp();
-                try {
-                    await port.close();
-                } catch {}
-            }, 1200);
+            } else {
+                webSerialStatus = 'error';
+                webSerialMsg = ack
+                    ? `ESP32-S3 returned status '${ack.status || 'unknown'}'.`
+                    : 'No BAWAL_ACK received from ESP32-S3. Check USB permissions and that idf.py monitor is closed.';
+            }
         } catch (err: any) {
             if (err.name !== 'NotFoundError') {
                 webSerialStatus = 'error';
                 webSerialMsg = err?.message || 'Failed to open serial port.';
             } else {
-                webSerialMsg = '';
+                webSerialStatus = 'error';
+                if (!webSerialMsg) {
+                    webSerialMsg = 'Serial port selection canceled.';
+                }
             }
         } finally {
+            if (port) {
+                try {
+                    await port.close();
+                } catch {}
+            }
             isWebSerialConnecting = false;
         }
     }
@@ -378,6 +527,7 @@
             await disconnectEspDevice(targetId, formState.backendUrl);
         } catch {}
         connectionStatus = 'disconnected';
+        pairingGraceUntil = 0;
         errorMessage = '';
         onDeviceConnectionChange?.(false, '');
     }
@@ -501,9 +651,13 @@
                             class="fedora-accent-pill-btn"
                             onclick={handleDirectWebSerialConnect}
                             disabled={isWebSerialConnecting}
-                            title="Direct Web Serial connection to /dev/ttyACM0 from browser"
+                            title="Pair ESP32-S3 via Web Serial using the active host Wi-Fi"
                         >
-                            <span class="lightning-icon">⚡</span> Direct Browser Connect
+                            {#if isWebSerialConnecting}
+                                <span class="btn-spinner"></span> Pairing...
+                            {:else}
+                                <span class="lightning-icon">⚡</span> Direct Browser Connect
+                            {/if}
                         </button>
                     </div>
                 </div>
@@ -554,9 +708,22 @@
                                 <div class="row-trailing">
                                     <button
                                         type="button"
+                                        class="fedora-accent-pill-btn"
+                                        onclick={() => handlePairUsbDevice(portInfo.port)}
+                                        disabled={isWebSerialConnecting}
+                                        title="Auto-provision the active host Wi-Fi to this ESP32-S3"
+                                    >
+                                        {#if pairingPort === portInfo.port}
+                                            <span class="btn-spinner"></span> Pairing...
+                                        {:else}
+                                            ⚡ Pair
+                                        {/if}
+                                    </button>
+                                    <button
+                                        type="button"
                                         class="fedora-row-action-btn"
                                         onclick={() => handleProbeUsbPort(portInfo.port)}
-                                        disabled={isProbingUsb}
+                                        disabled={isProbingUsb || isWebSerialConnecting}
                                         title="Probe ESP32 serial status"
                                     >
                                         {#if isProbingUsb}
@@ -574,12 +741,21 @@
                                 <span class="empty-icon">ℹ️</span>
                                 <div>
                                     <span class="empty-title">Direct Host Hardware Mode: <code>/dev/ttyACM0</code></span>
-                                    <p class="port-detail-text">Plugged into Fedora host. Click <strong>Direct Browser Connect</strong> to pair with <code>/dev/ttyACM0</code> directly via Web Serial, or use Wi-Fi below.</p>
+                                    <p class="port-detail-text">Plugged into the host. Click <strong>Pair /dev/ttyACM0</strong> to auto-provision the active host Wi-Fi, with Web Serial as fallback, or use Wi-Fi below.</p>
                                 </div>
                             </div>
                             <div class="row-trailing">
-                                <button type="button" class="fedora-accent-pill-btn" onclick={handleDirectWebSerialConnect}>
-                                    ⚡ Pair /dev/ttyACM0
+                                <button
+                                    type="button"
+                                    class="fedora-accent-pill-btn"
+                                    onclick={() => handlePairUsbDevice('/dev/ttyACM0')}
+                                    disabled={isWebSerialConnecting}
+                                >
+                                    {#if pairingPort === '/dev/ttyACM0'}
+                                        <span class="btn-spinner"></span> Pairing...
+                                    {:else}
+                                        ⚡ Pair /dev/ttyACM0
+                                    {/if}
                                 </button>
                             </div>
                         </div>
@@ -712,7 +888,7 @@
                                 </h3>
                                 <p class="dialog-subtitle">
                                     {#if selectedNetwork.is_server}
-                                        Connect ESP32-S3 node to local server Wi-Fi <strong>{selectedNetwork.ssid}</strong> (Gateway: {serverBackendIp || '192.168.100.165'})
+                                        Connect ESP32-S3 node to local server Wi-Fi <strong>{selectedNetwork.ssid}</strong> (Gateway: {serverBackendIp || 'auto-detected'})
                                     {:else}
                                         Authentication required to connect ESP32-S3 to <strong>{selectedNetwork.ssid}</strong>
                                     {/if}
@@ -787,7 +963,7 @@
                                 </div>
                                 <div class="dialog-field half">
                                     <label for="wifi-dialog-backend">Gateway Host IP</label>
-                                    <input id="wifi-dialog-backend" type="text" class="fedora-input disabled" value={serverBackendIp || '192.168.100.165'} readonly />
+                                    <input id="wifi-dialog-backend" type="text" class="fedora-input disabled" value={serverBackendIp || ''} readonly />
                                 </div>
                             </div>
 

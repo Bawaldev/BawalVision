@@ -1,9 +1,10 @@
 package device
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -611,6 +612,9 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 	if err != nil {
 		return nil, err
 	}
+	if cleanSSID == "" {
+		return nil, fmt.Errorf("no active Wi-Fi SSID detected on server; set WIFI_SSID or pass ssid explicitly")
+	}
 
 	f, err := os.OpenFile(validPort, syscall.O_RDWR|syscall.O_NOCTTY|syscall.O_NONBLOCK, 0600)
 	if err != nil {
@@ -619,16 +623,16 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 	defer func() { _ = f.Close() }()
 
 	_ = configureSerial115200(f.Fd())
+	drainSerialInput(f, 150*time.Millisecond)
 
 	// Build JSON command for ESP32-S3 usb_serial_provisioning_task
 	cmdPayload := map[string]string{
-		"cmd":          "status",
+		"cmd":          "set_wifi",
+		"ssid":         cleanSSID,
 		"backend_ip":   cleanIP,
 		"backend_port": cleanPort,
 	}
-	if cleanSSID != "" {
-		cmdPayload["cmd"] = "provision_wifi"
-		cmdPayload["ssid"] = cleanSSID
+	if cleanPass != "" {
 		cmdPayload["pass"] = cleanPass
 	}
 
@@ -638,42 +642,19 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 		return nil, fmt.Errorf("failed to write Wi-Fi provisioning command to %s: %w", validPort, err)
 	}
 
-	deadline := time.Now().Add(2200 * time.Millisecond)
-	var parsedAck *ESPSerialAck
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024), 4096)
-	for time.Now().Before(deadline) {
-		if scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if ack := parseSerialLine(line, validPort); ack != nil {
-				parsedAck = ack
-				lastUSBAck = ack
-				break
-			}
-		} else {
-			time.Sleep(60 * time.Millisecond)
-			scanner = bufio.NewScanner(f)
-			scanner.Buffer(make([]byte, 1024), 4096)
-		}
+	deadline := time.Now().Add(7 * time.Second)
+	parsedAck := readSerialAck(f, deadline, validPort, func(ack *ESPSerialAck) bool {
+		return ack.Status == "wifi_provisioned" || ack.Status == "error"
+	})
+	if parsedAck == nil {
+		return nil, fmt.Errorf("no BAWAL_ACK received from ESP32-S3 on %s", validPort)
+	}
+	lastUSBAck = parsedAck
+	if parsedAck.Status != "wifi_provisioned" {
+		return nil, fmt.Errorf("ESP32-S3 provisioning failed with status %q", parsedAck.Status)
 	}
 
 	provisionedPorts[validPort] = time.Now()
-
-	if parsedAck == nil {
-		parsedAck = &ESPSerialAck{
-			Status:          "usb_command_sent",
-			DeviceID:        fmt.Sprintf("ESP32S3_USB_%s", strings.ToUpper(filepath.Base(validPort))),
-			FirmwareVersion: "1.0.0",
-			SSID:            cleanSSID,
-			BackendIP:       cleanIP,
-			Temperature:     36.5,
-			CPUTemperature:  36.5,
-			CPULoad:         12,
-			USBPort:         validPort,
-		}
-		lastUSBAck = parsedAck
-	}
-
 	return parsedAck, nil
 }
 
@@ -695,6 +676,7 @@ func ProbeESP32ViaUSB(portPath string) (*ESPSerialAck, error) {
 	defer func() { _ = f.Close() }()
 
 	_ = configureSerial115200(f.Fd())
+	drainSerialInput(f, 100*time.Millisecond)
 
 	// Send status query to ESP32-S3
 	cmdLine := []byte("{\"cmd\":\"status\"}\n")
@@ -703,29 +685,56 @@ func ProbeESP32ViaUSB(portPath string) (*ESPSerialAck, error) {
 	}
 
 	deadline := time.Now().Add(800 * time.Millisecond)
-	var parsedAck *ESPSerialAck
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024), 4096)
-	for time.Now().Before(deadline) {
-		if scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if ack := parseSerialLine(line, validPort); ack != nil {
-				parsedAck = ack
-				lastUSBAck = ack
-				break
-			}
-		} else {
-			time.Sleep(30 * time.Millisecond)
-			scanner = bufio.NewScanner(f)
-			scanner.Buffer(make([]byte, 1024), 4096)
-		}
-	}
-
+	parsedAck := readSerialAck(f, deadline, validPort, nil)
 	if parsedAck == nil {
 		return nil, fmt.Errorf("no response from ESP32 on %s", validPort)
 	}
+	lastUSBAck = parsedAck
 
 	return parsedAck, nil
+}
+
+func drainSerialInput(f *os.File, duration time.Duration) {
+	deadline := time.Now().Add(duration)
+	buf := make([]byte, 256)
+	for time.Now().Before(deadline) {
+		n, err := f.Read(buf)
+		if n == 0 || err != nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func readSerialAck(f *os.File, deadline time.Time, portPath string, accept func(*ESPSerialAck) bool) *ESPSerialAck {
+	var pending []byte
+	buf := make([]byte, 512)
+
+	for time.Now().Before(deadline) {
+		n, err := f.Read(buf)
+		if n > 0 {
+			pending = append(pending, buf[:n]...)
+			for {
+				lineEnd := bytes.IndexByte(pending, '\n')
+				if lineEnd < 0 {
+					break
+				}
+				line := strings.TrimSpace(string(pending[:lineEnd]))
+				pending = pending[lineEnd+1:]
+				if ack := parseSerialLine(line, portPath); ack != nil {
+					if accept == nil || accept(ack) {
+						return ack
+					}
+				}
+			}
+			if len(pending) > 4096 {
+				pending = pending[len(pending)-2048:]
+			}
+		}
+		if n == 0 || err != nil {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	return nil
 }
 
 func parseSerialLine(line, portPath string) *ESPSerialAck {
@@ -752,9 +761,31 @@ func parseSerialLine(line, portPath string) *ESPSerialAck {
 	return &ack
 }
 
+func usbAutoProvisionEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("USB_AUTO_PROVISION"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func USBAutoProvisionEnabled() bool {
+	return usbAutoProvisionEnabled()
+}
+
 // StartUSBAutoProvisioner monitors /dev/ttyACM* and /dev/ttyUSB* in the background.
 // It actively probes detected ESP32 devices to detect their current Wi-Fi SSID and status without overwriting user Wi-Fi.
+//
+// Auto-probing is opt-in because it opens /dev/ttyACM* every 4 seconds, which
+// conflicts with `just run-edge`/idf.py monitor and can reset the board.
+// Set USB_AUTO_PROVISION=1 when the backend owns the serial port.
 func StartUSBAutoProvisioner(onTelemetry func(ack *ESPSerialAck)) {
+	if !usbAutoProvisionEnabled() {
+		log.Printf("[USB] Auto-provisioner idle (set USB_AUTO_PROVISION=1 to enable background probing)")
+		return
+	}
+
 	go func() {
 		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()
@@ -794,4 +825,3 @@ func StartUSBAutoProvisioner(onTelemetry func(ack *ESPSerialAck)) {
 		}
 	}()
 }
-

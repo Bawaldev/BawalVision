@@ -5,6 +5,7 @@ import (
 	"bawal_vision_backend/internal/device"
 	"bawal_vision_backend/internal/food"
 	"bawal_vision_backend/internal/inspection"
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -25,45 +26,75 @@ var (
 	globalMockReinspectAllowed = make(map[string]bool)
 )
 
+// ESP32-S3 nodes send a telemetry heartbeat every 5 s. Allow two missed
+// heartbeats before flipping the dashboard to "disconnected".
+const liveDeviceWindowSeconds int64 = 10
+
+func persistTelemetryDevice(db *gorm.DB, payload inspection.TelemetryIngressPayload, now time.Time) {
+	if db == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	dev := device.Device{
+		ID:              payload.DeviceID,
+		DeviceType:      "ESP32-S3",
+		DeviceCore:      payload.DeviceCore,
+		FirmwareVersion: payload.FirmwareVersion,
+		Status:          "ACTIVE",
+		LastSeenAt:      &now,
+		UpdatedAt:       now,
+	}
+	if err := db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"firmware_version", "device_core", "last_seen_at", "updated_at", "status"}),
+	}).Create(&dev).Error; err != nil {
+		log.Printf("[ERROR] Failed to upsert device %s: %v", payload.DeviceID, err)
+	}
+}
+
 func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
-	// Start background USB hotplug monitor (/dev/ttyACM* and /dev/ttyUSB*) to auto-provision server Wi-Fi
-	device.StartUSBAutoProvisioner(func(ack *device.ESPSerialAck) {
-		if ack == nil || ack.DeviceID == "" {
-			return
-		}
-		now := time.Now()
-		inspection.GlobalInspectionStore.StoreTelemetry(inspection.TelemetryIngressPayload{
-			DeviceID:        ack.DeviceID,
-			FirmwareVersion: ack.FirmwareVersion,
-			DeviceCore:      2,
-			Timestamp:       now.Unix(),
-			Temperature:     ack.Temperature,
-			CPUTemperature:  ack.CPUTemperature,
-			CurrentCPULoad:  ack.CPULoad,
-			IPAddress:       ack.USBPort,
-			ConnectionMode:  "usb_serial",
-		})
-		if db != nil {
-			dev := device.Device{
-				ID:              ack.DeviceID,
-				DeviceType:      "ESP32-S3",
-				DeviceCore:      2,
-				FirmwareVersion: ack.FirmwareVersion,
-				Status:          "ACTIVE",
-				LastSeenAt:      &now,
-				UpdatedAt:       now,
+	if device.USBAutoProvisionEnabled() {
+		device.StartUSBAutoProvisioner(func(ack *device.ESPSerialAck) {
+			if ack == nil || ack.DeviceID == "" {
+				return
 			}
-			_ = db.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "id"}},
-				DoUpdates: clause.AssignmentColumns([]string{"firmware_version", "device_core", "last_seen_at", "updated_at", "status"}),
-			}).Create(&dev).Error
-		}
-	})
+			now := time.Now()
+			inspection.GlobalInspectionStore.StoreTelemetry(inspection.TelemetryIngressPayload{
+				DeviceID:        ack.DeviceID,
+				FirmwareVersion: ack.FirmwareVersion,
+				DeviceCore:      2,
+				Timestamp:       now.Unix(),
+				Temperature:     ack.Temperature,
+				CPUTemperature:  ack.CPUTemperature,
+				CurrentCPULoad:  ack.CPULoad,
+				IPAddress:       ack.USBPort,
+				ConnectionMode:  "usb_serial",
+			})
+			if db != nil {
+				dev := device.Device{
+					ID:              ack.DeviceID,
+					DeviceType:      "ESP32-S3",
+					DeviceCore:      2,
+					FirmwareVersion: ack.FirmwareVersion,
+					Status:          "ACTIVE",
+					LastSeenAt:      &now,
+					UpdatedAt:       now,
+				}
+				_ = db.Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "id"}},
+					DoUpdates: clause.AssignmentColumns([]string{"firmware_version", "device_core", "last_seen_at", "updated_at", "status"}),
+				}).Create(&dev).Error
+			}
+		})
+	} else {
+		log.Printf("[USB] Background auto-provision disabled (USB_AUTO_PROVISION=0)")
+	}
 
 	// 1. ESP32-S3 Environmental Sensor Telemetry Ingress
 	router.Post("/telemetry", func(c *fiber.Ctx) error {
 		var payload inspection.TelemetryIngressPayload
-		log.Printf("[TELEMETRY INGRESS]: %s", string(c.Body()))
 
 		if err := c.BodyParser(&payload); err != nil {
 			return c.Status(400).JSON(fiber.Map{
@@ -78,36 +109,15 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		}
 
 		if payload.IPAddress == "" {
-			payload.IPAddress = c.IP()
+			payload.IPAddress = requestClientIP(c)
 		}
-		if payload.ConnectionMode == "" {
-			payload.ConnectionMode = "wifi_lan"
-		}
+		payload.ConnectionMode = "wifi_lan"
 
-		// Cache in-memory for immediate fusion with vision pipeline detections
 		inspection.GlobalInspectionStore.StoreTelemetry(payload)
+		log.Printf("[TELEMETRY INGRESS] device=%s mode=%s", payload.DeviceID, payload.ConnectionMode)
 
-		now := time.Now()
-
-		// Auto-provision or update device telemetry heartbeat & status
-		dev := device.Device{
-			ID:              payload.DeviceID,
-			DeviceType:      "ESP32-S3",
-			DeviceCore:      payload.DeviceCore,
-			FirmwareVersion: payload.FirmwareVersion,
-			Status:          "ACTIVE",
-			LastSeenAt:      &now,
-			UpdatedAt:       now,
-		}
-
-		if err := db.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"firmware_version", "device_core", "last_seen_at", "updated_at", "status"}),
-		}).Create(&dev).Error; err != nil {
-			log.Printf("[ERROR] Failed to upsert device: %v", err)
-			return c.Status(500).JSON(fiber.Map{
-				"error": "Failed to register or update device state",
-			})
+		if db != nil {
+			go persistTelemetryDevice(db, payload, time.Now())
 		}
 
 		c.Set("X-Stream-Source", "LIVE_ESP32")
@@ -809,7 +819,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 		// Check if a real physical ESP32-S3 is actively streaming telemetry
 		live, hasLive := inspection.GlobalInspectionStore.GetAnyLatestTelemetry()
-		isLiveConnected := hasLive && ((nowUnix-live.Timestamp) <= 3 || (camActive && camID != "MOCK_VIDEO_CAM" && !strings.HasPrefix(camID, "MOCK_")))
+		isLiveConnected := hasLive && ((nowUnix-live.Timestamp) <= liveDeviceWindowSeconds || (camActive && camID != "MOCK_VIDEO_CAM" && !strings.HasPrefix(camID, "MOCK_")))
 
 		// Prefer Mock Video mode when:
 		// 1. streamMode is explicitly "mock", OR
@@ -882,8 +892,8 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
 
 		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok {
-			// Device is actively connected if telemetry was received within the last 3 seconds OR camera is actively streaming (<2.5s)
-			isLiveConnected := (nowUnix-live.Timestamp) <= 3 || camActive
+			// Device is actively connected if telemetry was received within the live window OR camera is actively streaming (<2.5s)
+			isLiveConnected := (nowUnix-live.Timestamp) <= liveDeviceWindowSeconds || camActive
 
 			devID := live.DeviceID
 			if devID == "" && camID != "" {
@@ -1208,7 +1218,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		fwVer := ""
 		ipAddr := ""
 
-		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= 3 {
+		if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= liveDeviceWindowSeconds {
 			connected = true
 			devID = live.DeviceID
 			fwVer = live.FirmwareVersion
@@ -1317,7 +1327,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		if strings.TrimSpace(req.SSID) == "" && strings.TrimSpace(req.USBPort) == "" {
 			// Step A: Check if ESP32-S3 is already connected on the same Wi-Fi LAN and sending live telemetry
 			if requestedID != "" {
-				if live, ok := inspection.GlobalInspectionStore.GetLatestTelemetry(requestedID); ok && (nowUnix-live.Timestamp) <= 3 {
+				if live, ok := inspection.GlobalInspectionStore.GetLatestTelemetry(requestedID); ok && (nowUnix-live.Timestamp) <= liveDeviceWindowSeconds {
 					mode := live.ConnectionMode
 					if mode == "" {
 						mode = "wifi_lan"
@@ -1333,7 +1343,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					})
 				}
 			}
-			if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= 3 {
+			if live, ok := inspection.GlobalInspectionStore.GetAnyLatestTelemetry(); ok && (nowUnix-live.Timestamp) <= liveDeviceWindowSeconds {
 				mode := live.ConnectionMode
 				if mode == "" {
 					mode = "wifi_lan"
@@ -1418,11 +1428,13 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 			return c.JSON(fiber.Map{
 				"success":          true,
+				"status":           ack.Status,
 				"device_id":        resolvedID,
 				"firmware_version": ack.FirmwareVersion,
 				"ip_address":       targetPort,
 				"usb_port":         targetPort,
 				"provisioned_ssid": ssid,
+				"wifi_connected":   ack.WiFiConnected,
 				"connection_mode":  "usb_serial",
 				"latency_ms":       4,
 				"message":          msg,
@@ -1485,15 +1497,25 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			ConnectionMode:  "usb_serial",
 		})
 
+		provisionedSSID := ack.SSID
+		if provisionedSSID == "" {
+			provisionedSSID = ssid
+		}
+		state := "Credentials stored; ESP32-S3 is associating with Wi-Fi"
+		if ack.WiFiConnected {
+			state = "ESP32-S3 is connected and in sync on the new Wi-Fi network"
+		}
 		return c.JSON(fiber.Map{
 			"success":          true,
+			"status":           ack.Status,
 			"device_id":        ack.DeviceID,
 			"firmware_version": ack.FirmwareVersion,
 			"usb_port":         ack.USBPort,
-			"provisioned_ssid": ssid,
+			"provisioned_ssid": provisionedSSID,
 			"backend_ip":       backendIP,
+			"wifi_connected":   ack.WiFiConnected,
 			"connection_mode":  "usb_serial",
-			"message":          fmt.Sprintf("Provisioned server Wi-Fi '%s' (Backend %s) to ESP32-S3 via %s", ssid, backendIP, ack.USBPort),
+			"message":          fmt.Sprintf("%s (%s, Backend %s)", state, ack.USBPort, backendIP),
 		})
 	})
 

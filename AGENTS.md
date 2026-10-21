@@ -49,8 +49,9 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
 ## Gotchas (things you would likely get wrong)
 
 - **Backend exits at startup if Postgres is unreachable.** Defaults are
-  `DB_HOST=postgres` (Docker DNS), `DB_PORT=5432`. For a local run set
-  `DB_HOST=localhost` or start `just compose-up postgres` first.
+  `DB_HOST=postgres` (Docker DNS), `DB_PORT=5432`. For a local run use
+  `just edge-stack` (compose Postgres + host gateway) or set
+  `DB_HOST=localhost DB_PORT=5433`.
 - **Migrations are inline**: GORM `AutoMigrate` + ad-hoc `ALTER TABLE`/`DO $$` blocks
   in `backend/cmd/server/main.go` run on every boot. `backend/internal/data/templates/shema.sql`
   (misspelled on purpose) is only the compose initdb seed — editing it alone changes nothing
@@ -64,15 +65,25 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
   (`/api/v1/camera/latest/...`) and POSTs results back. Without a backend, run with
   `VIDEO_PATH=/path/file.mp4` (device id becomes `MOCK_VIDEO_CAM`). It opens an OpenCV
   GUI window unless `HEADLESS=1`.
+- **Docker Desktop for Linux cannot serve LAN TCP payloads through published ports**
+  (TCP connect succeeds, HTTP requests never reach the container; UDP discovery on
+  8765 does work). The compose backend is published on `127.0.0.1:${BACKEND_HOST_PORT:-18080}`;
+  run `just edge-proxy` to bridge `:8080 -> 18080` for ESP32-S3, or use
+  `just edge-stack` (Postgres in compose, backend on the host).
+- **Host-side USB auto-provisioning is opt-in** (`USB_AUTO_PROVISION=1`). It otherwise
+  opens `/dev/ttyACM*` every 4 s and conflicts with `just run-edge`/`idf.py monitor`,
+  and can reset the board. USB status/provision HTTP endpoints still work on demand.
+- **Postgres host port is `${POSTGRES_PORT:-5433} -> 5432`** (not 5433 -> 5433);
+  the in-container port is always 5432.
 - **Model selection**: `MODEL_PATH`, else a search list in `services/src/main.cpp`
   (`ml/AI1/model/yolov8s_int8/...` first, then `weights/`). `weights/` and `*.pt` are
   gitignored — a fresh clone has no trained weights.
 - **Ports**: backend `:8080` (hardcoded `app.Listen(":8080")`; `BACKEND_PORT` is only
-  read for firewall/URLs), frontend Vite dev `:5173` (proxies `/api` →
+  read for firewall/URLs), compose publishes the backend on
+  `127.0.0.1:${BACKEND_HOST_PORT:-18080}`, frontend Vite dev `:5173` (proxies `/api` →
   `BACKEND_URL` or `127.0.0.1:8080`), compose maps frontend `3001→3000`,
-  vision `8081→8080`, postgres `${POSTGRES_PORT:-5433}` → container `5433` while
-  Postgres listens on `5432` (in-network `DB_PORT=5432` works; verify before relying
-  on host-side DB access).
+  vision `8081→8080`, postgres `${POSTGRES_PORT:-5433}` → container `5432`
+  (in-network `DB_PORT=5432` works; host-side `DB_PORT=5433`).
 - **`.env` is loaded by `just`** (`set dotenv-load := true`) **and baked into the edge
   firmware** as compile definitions at CMake configure time
   (`edge/main/CMakeLists.txt`, `WIFI_SSID`/`WIFI_PASS`/`BACKEND_IP`/`BACKEND_PORT`).
