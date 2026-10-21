@@ -431,171 +431,31 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
     const float avg_lum = total_weight > 0 ? static_cast<float>(sum_lum_weighted) / total_weight : 128.0f;
     const float dark_ratio = total_samples > 0 ? static_cast<float>(dark_pixels) / total_samples : 0.0f;
     const float bright_ratio = total_samples > 0 ? static_cast<float>(bright_pixels) / total_samples : 0.0f;
-    const bool is_backlit = (dark_ratio > 0.20f && bright_ratio > 0.10f);
+    const bool is_backlit = (dark_ratio > 0.25f && bright_ratio > 0.15f);
+    const bool needs_illumination_boost = (avg_lum < 75.0f || is_backlit);
 
-    // Stronger spatial pre-denoising on OV5640 low-light frames to strip 5MP Bayer mosquito noise before tone mapping
-    cv::Mat denoised_src;
-    const double spatial_sigma = (avg_lum < 95.0f || is_backlit) ? 1.05 : 0.65;
-    cv::GaussianBlur(src, denoised_src, cv::Size(3, 3), spatial_sigma);
-
-    // S-curve with black-level pedestal toe: prevents amplifying deep sensor read noise (x < 10/255)
-    // while smoothly lifting midtones and rolling off highlights.
-    const float shadow_gamma = is_backlit ? 0.68f : std::clamp(std::pow(avg_lum / 135.0f, 0.35f), 0.72f, 0.94f);
-    uint8_t tone_lut[256];
-    for (int i = 0; i < 256; ++i) {
-        const float x = static_cast<float>(i) * (1.0f / 255.0f);
-        // Smooth toe protection below i=24 so black shadows stay clean and ink-black instead of turning milky gray
-        const float toe_mask = std::clamp((static_cast<float>(i) - 6.0f) * (1.0f / 22.0f), 0.0f, 1.0f);
-        const float lifted = std::pow(x, shadow_gamma);
-        float y = x * (1.0f - toe_mask) + lifted * toe_mask;
-        if (y > 0.74f) {
-            const float excess = y - 0.74f;
-            y = 0.74f + (0.26f * excess) / (excess + 0.22f);
-        }
-        tone_lut[i] = cv::saturate_cast<uint8_t>(y * 255.0f);
+    // Case 1: Well-lit balanced scene -> Zero-loss pristine passthrough (Preserves 100% native camera sensor sharpness & true colors)
+    if (!needs_illumination_boost) {
+        dst = src.clone();
+        return;
     }
 
-    float gain_b = 1.0f, gain_g = 1.0f, gain_r = 1.0f;
-    if (mid_count > 32) {
-        const double avg_b = sum_b / mid_count;
-        const double avg_g = sum_g / mid_count;
-        const double avg_r = sum_r / mid_count;
-        const double gray_target = (avg_b + avg_g + avg_r) / 3.0;
-
-        // Tighter green channel clamp (0.94..1.04) to prevent OV5640 green cast on neutral walls
-        gain_b = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_b)), 0.90f, 1.15f);
-        gain_g = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_g)), 0.94f, 1.04f);
-        gain_r = std::clamp(static_cast<float>(gray_target / std::max(1.0, avg_r)), 0.90f, 1.15f);
-
-        const float g_norm = (gain_b + gain_g + gain_r) * (1.0f / 3.0f);
-        gain_b /= g_norm; gain_g /= g_norm; gain_r /= g_norm;
-    }
-
-    thread_local cv::Mat tl_tone_mapped, tl_lab, tl_sharpened, tl_blurred_bgr;
+    // Case 2: Dark / underexposed scene -> Gentle L-channel contrast lift without chroma degradation or blurring
+    thread_local cv::Mat tl_lab;
     thread_local std::vector<cv::Mat> tl_planes(3);
 
-    tl_tone_mapped.create(denoised_src.size(), CV_8UC3);
-
-    const int tone_rows = denoised_src.rows;
-    const int tone_cols = denoised_src.cols;
-    const size_t src_step = denoised_src.step;
-    const size_t dst_step = tl_tone_mapped.step;
-    const uint8_t* src_base = denoised_src.data;
-    uint8_t* dst_base = tl_tone_mapped.data;
-
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < tone_rows; ++y) {
-        const auto* __restrict s = reinterpret_cast<const cv::Vec3b*>(src_base + y * src_step);
-        auto* __restrict d = reinterpret_cast<cv::Vec3b*>(dst_base + y * dst_step);
-        #pragma omp simd
-        for (int x = 0; x < tone_cols; ++x) {
-            const int max_c = std::max({s[x][0], s[x][1], s[x][2]});
-            const int min_c = std::min({s[x][0], s[x][1], s[x][2]});
-            const float hl_protect = std::clamp((static_cast<float>(max_c) - 175.0f) * (1.0f / 65.0f), 0.0f, 1.0f);
-            // Attenuate color gains in deep shadows (min_c < 28) so dark areas don't get tinted green/purple
-            const float sh_protect = std::clamp((static_cast<float>(min_c) - 10.0f) * (1.0f / 24.0f), 0.0f, 1.0f);
-            const float wb_weight = (1.0f - hl_protect) * sh_protect;
-            const float gb = gain_b * wb_weight + (1.0f - wb_weight);
-            const float gg = gain_g * wb_weight + (1.0f - wb_weight);
-            const float gr = gain_r * wb_weight + (1.0f - wb_weight);
-
-            d[x][0] = cv::saturate_cast<uint8_t>(static_cast<float>(tone_lut[s[x][0]]) * gb);
-            d[x][1] = cv::saturate_cast<uint8_t>(static_cast<float>(tone_lut[s[x][1]]) * gg);
-            d[x][2] = cv::saturate_cast<uint8_t>(static_cast<float>(tone_lut[s[x][2]]) * gr);
-        }
-    }
-
-    cv::cvtColor(tl_tone_mapped, tl_lab, cv::COLOR_BGR2Lab);
+    cv::cvtColor(src, tl_lab, cv::COLOR_BGR2Lab);
     cv::split(tl_lab, tl_planes);
 
-    // Gentle CLAHE clip limit: high clip limits (> 1.35) on 5MP CMOS sensors amplify JPEG macroblocks on walls
-    const double dynamic_clip = is_backlit ? 1.35 : ((avg_lum < 75.0f) ? 0.85 : 1.15);
     if (persistent_clahe && !tl_planes.empty()) {
+        const double dynamic_clip = is_backlit ? 1.25 : 1.10;
         persistent_clahe->setClipLimit(dynamic_clip);
-        persistent_clahe->apply(tl_planes[0], tl_planes[0]); // In-place! Tanpa cv::Mat clahe_l baru
+        persistent_clahe->apply(tl_planes[0], tl_planes[0]); // Lift shadow contrast on L channel only
     }
 
-    if (tl_planes.size() >= 3) {
-        // Stronger chroma denoising (7x7 sigma=1.8) eliminates 5MP OV5640 color blotches without softening luma edges
-        cv::GaussianBlur(tl_planes[1], tl_planes[1], cv::Size(7, 7), 1.8); // In-place!
-        cv::GaussianBlur(tl_planes[2], tl_planes[2], cv::Size(7, 7), 1.8); // In-place!
-
-        const size_t l_step = tl_planes[0].step;
-        const size_t a_step = tl_planes[1].step;
-        const size_t b_step = tl_planes[2].step;
-        const uint8_t* l_base = tl_planes[0].data;
-        uint8_t* a_base = tl_planes[1].data;
-        uint8_t* b_base = tl_planes[2].data;
-        const int lab_rows = tl_lab.rows;
-        const int lab_cols = tl_lab.cols;
-        constexpr float vibrancy = 1.10f;
-
-        #pragma omp parallel for schedule(static)
-        for (int y = 0; y < lab_rows; ++y) {
-            const auto* __restrict l_row = l_base + y * l_step;
-            auto* __restrict a_row = a_base + y * a_step;
-            auto* __restrict b_row = b_base + y * b_step;
-            #pragma omp simd
-            for (int x = 0; x < lab_cols; ++x) {
-                const float l_val = static_cast<float>(l_row[x]);
-                float da = static_cast<float>(a_row[x]) - 128.0f;
-                float db = static_cast<float>(b_row[x]) - 128.0f;
-
-                // Neutral chroma coring: suppress low-amplitude green/magenta cast on gray/white walls (chroma_sq < 49)
-                const float chroma_sq = da * da + db * db;
-                if (chroma_sq < 49.0f) {
-                    const float factor = chroma_sq * (1.0f / 49.0f);
-                    da *= factor;
-                    db *= factor;
-                }
-
-                const float shadow_scale = std::clamp((l_val - 22.0f) * (1.0f / 42.0f), 0.0f, 1.0f);
-                a_row[x] = cv::saturate_cast<uint8_t>(128.0f + da * shadow_scale * vibrancy);
-                b_row[x] = cv::saturate_cast<uint8_t>(128.0f + db * shadow_scale * vibrancy);
-            }
-        }
-
-        cv::merge(tl_planes, tl_lab);
-        cv::cvtColor(tl_lab, tl_sharpened, cv::COLOR_Lab2BGR);
-    } else {
-        tl_sharpened = tl_tone_mapped;
-    }
-
-    // Luminance-Gated Contrast-Adaptive Unsharp Masking (CAS):
-    // Sharpens genuine mid/high-luminance food textures while applying 0% sharpening in dark shadows
-    // and ignoring tiny 1..3 level sensor noise fluctuations (coring threshold).
-    cv::GaussianBlur(tl_sharpened, tl_blurred_bgr, cv::Size(3, 3), 0.9);
-    dst.create(tl_sharpened.size(), CV_8UC3);
-
-    const int out_rows = tl_sharpened.rows;
-    const int out_cols = tl_sharpened.cols;
-    const size_t sharp_step = tl_sharpened.step;
-    const size_t blur_step = tl_blurred_bgr.step;
-    const size_t out_step = dst.step;
-    const uint8_t* sharp_base = tl_sharpened.data;
-    const uint8_t* blur_base = tl_blurred_bgr.data;
-    uint8_t* out_base = dst.data;
-    const float base_amount = (avg_lum < 70.0f) ? 0.35f : 0.65f;
-
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < out_rows; ++y) {
-        const auto* __restrict sp = reinterpret_cast<const cv::Vec3b*>(sharp_base + y * sharp_step);
-        const auto* __restrict bp = reinterpret_cast<const cv::Vec3b*>(blur_base + y * blur_step);
-        auto* __restrict dp = reinterpret_cast<cv::Vec3b*>(out_base + y * out_step);
-        #pragma omp simd
-        for (int x = 0; x < out_cols; ++x) {
-            const int lum = (29 * sp[x][0] + 150 * sp[x][1] + 77 * sp[x][2]) >> 8;
-            const float lum_gate = std::clamp((static_cast<float>(lum) - 32.0f) * (1.0f / 55.0f), 0.0f, 1.0f);
-            const float amount = base_amount * lum_gate;
-
-            for (int c = 0; c < 3; ++c) {
-                const int diff = static_cast<int>(sp[x][c]) - static_cast<int>(bp[x][c]);
-                // Noise coring: ignore micro-noise differences <= 3 levels
-                const int cored_diff = (std::abs(diff) <= 3) ? 0 : diff;
-                dp[x][c] = cv::saturate_cast<uint8_t>(static_cast<float>(sp[x][c]) + cored_diff * amount);
-            }
-        }
-    }
+    // A and B color channels remain 100% pure & unblurred to prevent color bleeding on food
+    cv::merge(tl_planes, tl_lab);
+    cv::cvtColor(tl_lab, dst, cv::COLOR_Lab2BGR);
 }
 
 } // namespace bawal::vision

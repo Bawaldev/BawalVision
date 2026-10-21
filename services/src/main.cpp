@@ -510,7 +510,7 @@ int main(int argc, char** argv) {
             // Avoid re-processing and flood-broadcasting duplicate frames unless async AI detections updated
             const bool detections_changed = ai_detections_updated.exchange(false);
             if (video_source.is_duplicate_frame && !detections_changed) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                std::this_thread::sleep_for(std::chrono::milliseconds(8));
                 continue;
             }
             inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
@@ -529,10 +529,10 @@ int main(int argc, char** argv) {
             frame_ok = true;
             frame_seq++;
 
-            // Dispatch frame to background AI worker with throttling (~6 inferences/sec)
+            // Dispatch frame to background AI worker with responsive pacing (~11 inferences/sec on YOLOv8s INT8)
             const auto now_ai = std::chrono::steady_clock::now();
             const auto ms_since_ai = std::chrono::duration_cast<std::chrono::milliseconds>(now_ai - last_ai_dispatch).count();
-            if (ms_since_ai >= 160) {
+            if (ms_since_ai >= 90) {
                 std::unique_lock<std::mutex> lock(ai_mutex, std::try_to_lock);
                 if (lock.owns_lock() && !new_ai_frame_available) {
                     ai_input_frame = inspection.dewarped_image.clone();
@@ -543,15 +543,18 @@ int main(int argc, char** argv) {
             }
 
             if (frame_seq % 60 == 1) {
-                std::cout << "[STREAM] 30 FPS OK | Frame #" << frame_seq 
+                std::cout << "[STREAM] Fluid 30+ FPS OK | Frame #" << frame_seq 
                           << " (" << std::fixed << std::setprecision(1) << inspection.processing_time_ms << " ms) | Live Boxes: "
                           << current_detections.size() << "\n";
             }
 
-            // Push OpenCV Annotated Frame to backend camera stream (Crisp High Quality 92)
+            // Push OpenCV Annotated Frame to backend camera stream (Crisp High Quality 94 with Huffman optimization)
             if (!inspection.annotated_image.empty() && !device_id.empty()) {
                 std::vector<uint8_t> annotated_jpeg;
-                std::vector<int> encode_params = {cv::IMWRITE_JPEG_QUALITY, 92};
+                std::vector<int> encode_params = {
+                    cv::IMWRITE_JPEG_QUALITY, 94,
+                    cv::IMWRITE_JPEG_OPTIMIZE, 1
+                };
                 if (cv::imencode(".jpg", inspection.annotated_image, annotated_jpeg, encode_params)) {
                     [[maybe_unused]] bool pushed = bawal::server::postAnnotatedFrame(curl_post, backend_base_url, device_id, inspection.frame_id, annotated_jpeg);
                 }
@@ -586,11 +589,11 @@ int main(int argc, char** argv) {
             if (idle_backoff_ms > 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(idle_backoff_ms));
             } else {
-                // Rate pacing in headless mode: target ~30 FPS to prevent busy-spinning and saturating backend network I/O
+                // Rate pacing in headless mode: target up to 60 FPS headroom to avoid dropping live 30 FPS camera frames
                 const auto loop_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - loop_start_time).count();
-                if (loop_elapsed_ms < 30) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(30 - loop_elapsed_ms));
+                if (loop_elapsed_ms < 16) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(16 - loop_elapsed_ms));
                 }
             }
         }

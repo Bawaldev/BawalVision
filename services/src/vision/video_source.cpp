@@ -16,15 +16,19 @@ namespace {
 
 uint64_t computeFastFingerprint(const std::vector<uint8_t>& buf) noexcept {
     const size_t len = buf.size();
-    if (len < 16) return len;
-    uint64_t head = 0, mid = 0, tail = 0;
-    std::memcpy(&head, buf.data(), 8);
-    std::memcpy(&mid, buf.data() + (len / 2), 8);
-    std::memcpy(&tail, buf.data() + len - 8, 8);
+    if (len < 32) return len;
+    uint64_t p0 = 0, p1 = 0, p2 = 0, p3 = 0, p4 = 0;
+    std::memcpy(&p0, buf.data(), 8);
+    std::memcpy(&p1, buf.data() + (len / 4), 8);
+    std::memcpy(&p2, buf.data() + (len / 2), 8);
+    std::memcpy(&p3, buf.data() + (len * 3 / 4), 8);
+    std::memcpy(&p4, buf.data() + len - 8, 8);
     uint64_t h = len;
-    h ^= head + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    h ^= mid  + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    h ^= tail + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= p0 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= p1 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= p2 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= p3 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= p4 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
     return h;
 }
 
