@@ -136,6 +136,13 @@ END $$;`).Error; err != nil {
 	}))
 
 	apiGroup := app.Group("/api/v1")
+	app.Get("/api/v1/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"service": "bawal-vision-backend",
+			"version": version,
+		})
+	})
 	api.RegisterDeviceRoutes(apiGroup, db)
 	api.RegisterFrontendRoutes(apiGroup, db)
 	api.RegisterCameraRoutes(apiGroup, db)

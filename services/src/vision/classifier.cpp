@@ -376,7 +376,6 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
         // Pure per-row pixel transformation: no shared container writes.
         // schedule(runtime) lets the runtime adapt to hybrid/homogeneous CPUs.
-        #pragma omp parallel for schedule(runtime)
         for (int h = 0; h < target_h; ++h) {
             const auto* __restrict row_ptr = m_resized_buffer.ptr<cv::Vec3b>(h);
             const int row_offset = h * target_w;

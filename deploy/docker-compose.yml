@@ -71,12 +71,13 @@ services:
     environment:
       - HEADLESS=1
       - QT_QPA_PLATFORM=offscreen
-      - BACKEND_HOST=backend
+      - BACKEND_HOST=host.docker.internal
       - BACKEND_PORT=8080
       - MODEL_PATH=${MODEL_PATH:-/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx}
       - OMP_WAIT_POLICY=PASSIVE
-      - OMP_NUM_THREADS=2
+      - OMP_NUM_THREADS=4
       - OMP_SCHEDULE=static
+      - OMP_PROC_BIND=true
       - CAMERA_VFLIP=${CAMERA_VFLIP:-1}
       - CAMERA_HFLIP=${CAMERA_HFLIP:-0}
       - CONF_THRESHOLD=${CONF_THRESHOLD:-0.35}
@@ -85,10 +86,10 @@ services:
       - ../ml/AI1/model:/app/ml/AI1/model:ro
       - ../ml/AI1/runs:/app/ml/AI1/runs:ro
       - ../examples:/app/examples:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - bawal-net
-    depends_on:
-      - backend
 
   frontend:
     image: bawal-frontend:latest
@@ -100,13 +101,13 @@ services:
     ports:
       - "${FRONTEND_PORT:-3001}:3000"
     environment:
-      - BACKEND_URL=http://backend:8080
+      - BACKEND_URL=http://host.docker.internal:8080
       - HOST=0.0.0.0
       - PORT=3000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - bawal-net
-    depends_on:
-      - backend
 
   grafana:
     image: grafana/grafana-oss:latest

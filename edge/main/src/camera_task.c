@@ -1,43 +1,20 @@
 #include "camera_task.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "esp_camera.h"
-#include "esp_heap_caps.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
-#include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-#include "freertos/task.h"
 #include "pins.h"
-#include "system_monitor.h"
-#include "wifi.h"
 
 static const char *TAG = "CAMERA_OV5640";
 
-#define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY /* 64 KB or 128 KB */
-
-typedef struct {
-  camera_frame_header_t header;
-  uint8_t *data;
-} frame_slot_t;
-
-/* Double-buffering slots */
-static frame_slot_t s_slots[2] = {0};
-static volatile int s_ready_idx = 0;       /* Buffer siap kirim untuk HTTP */
-static volatile int s_write_idx = 1;       /* Buffer kerja untuk penangkap kamera */
-static volatile bool s_has_new_frame = false;
-
-static SemaphoreHandle_t s_camera_mutex = NULL;
-static uint32_t s_frame_counter = 0;
 static bool s_is_initialized = false;
-static bool s_is_streaming = false;
 static char s_detected_camera_model[32] = "OV5640";
 
-bool is_camera_streaming(void) { return s_is_streaming; }
+bool camera_task_is_ready(void) {
+  return s_is_initialized;
+}
 
 const char *camera_get_sensor_name(void) {
   return s_detected_camera_model;
@@ -46,24 +23,6 @@ const char *camera_get_sensor_name(void) {
 esp_err_t camera_task_init(void) {
   if (s_is_initialized)
     return ESP_OK;
-
-  s_camera_mutex = xSemaphoreCreateMutex();
-  if (s_camera_mutex == NULL)
-    return ESP_ERR_NO_MEM;
-
-  /* Pre-alokasi 2 slot buffer tetap di PSRAM sekali saat boot */
-  for (int i = 0; i < 2; i++) {
-    s_slots[i].data = (uint8_t *)heap_caps_malloc(
-        FIXED_FRAME_CAPACITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_slots[i].data == NULL) {
-      s_slots[i].data = (uint8_t *)malloc(FIXED_FRAME_CAPACITY);
-    }
-    if (s_slots[i].data == NULL) {
-      vSemaphoreDelete(s_camera_mutex);
-      return ESP_ERR_NO_MEM;
-    }
-    memset(&s_slots[i].header, 0, sizeof(camera_frame_header_t));
-  }
 
   camera_config_t config = {
       .pin_pwdn = CAM_PIN_PWDN,
@@ -89,8 +48,8 @@ esp_err_t camera_task_init(void) {
       .ledc_channel = LEDC_CHANNEL_0,
 
       .pixel_format = PIXFORMAT_JPEG,
-      .frame_size = FRAMESIZE_VGA, // 640x480
-      .jpeg_quality = 28,
+      .frame_size = FRAMESIZE_QVGA,
+      .jpeg_quality = 22,
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -114,170 +73,40 @@ esp_err_t camera_task_init(void) {
     } else if (s->id.PID == 0x7721 || (s->id.PID >> 8) == 0x77) {
       strncpy(s_detected_camera_model, "OV7725", sizeof(s_detected_camera_model) - 1);
     } else {
-      snprintf(s_detected_camera_model, sizeof(s_detected_camera_model), "SENSOR_0x%04X", (unsigned int)s->id.PID);
+      snprintf(s_detected_camera_model, sizeof(s_detected_camera_model), "SENSOR_0x%04X",
+               (unsigned int)s->id.PID);
     }
-    ESP_LOGI(TAG, "Camera sensor scanned successfully: %s (PID: 0x%04x)", s_detected_camera_model, (unsigned int)s->id.PID);
+    ESP_LOGI(TAG, "Camera sensor: %s (PID: 0x%04x)", s_detected_camera_model,
+             (unsigned int)s->id.PID);
 
-    // =========================================================================
-    // 1. FRAME GEOMETRY & JPEG COMPRESSION
-    // =========================================================================
-    s->set_vflip(s, 0);                 // Set vertical flip (0 = disabled, 1 = inverted)
-    s->set_hmirror(s, 0);               // Set horizontal mirror (0 = disabled, 1 = mirrored)
-    s->set_framesize(s, FRAMESIZE_VGA); // 640x480 resolution (native aspect ratio for YOLO & SIMD)
-    s->set_quality(s, 28);              // Quality factor 28 for balanced ~8-10 KB frames
+    s->set_vflip(s, 0);
+    s->set_hmirror(s, 0);
+    s->set_framesize(s, FRAMESIZE_QVGA);
+    s->set_quality(s, 22);
 
-    // =========================================================================
-    // 2. AUTOMATIC WHITE BALANCE (AWB) ENGINE
-    // =========================================================================
-    s->set_whitebal(s, 1);              // Enable hardware Auto White Balance (0 = disable, 1 = enable)
-    s->set_awb_gain(s, 1);              // Enable AWB gain multipliers across R, G, and B color channels
-    s->set_wb_mode(s, 0);               // AWB operating mode: 0 = Auto / Neutral ambient tracking
+    s->set_whitebal(s, 1);
+    s->set_awb_gain(s, 1);
+    s->set_wb_mode(s, 0);
 
-    // =========================================================================
-    // 3. EXPOSURE & ANALOG GAIN CONTROL (ANTI-HOTSPOT & ANTI-BLACKOUT)
-    // =========================================================================
-    s->set_exposure_ctrl(s, 1);         // Enable hardware Automatic Exposure Control (AEC)
-    s->set_aec2(s, 1);                  // Enable DSP AEC2 algorithm for proper ambient indoor lighting
-    s->set_ae_level(s, 0);              // Target exposure compensation level: 0 = Standard/Balanced
-    s->set_gain_ctrl(s, 1);             // Enable Automatic Gain Control (AGC) circuit
-    s->set_gainceiling(s, (gainceiling_t)4); // Set hardware analog gain ceiling to 8x (GAINCEILING_8X)
+    s->set_exposure_ctrl(s, 1);
+    s->set_aec2(s, 0);
+    s->set_ae_level(s, 0);
+    s->set_gain_ctrl(s, 1);
+    s->set_gainceiling(s, GAINCEILING_16X);
 
-    // =========================================================================
-    // 4. HARDWARE OPTICAL & LENS CALIBRATION
-    // =========================================================================
-    s->set_bpc(s, 0);                   // Black Pixel Correction (0 = disabled to preserve low-light shadow detail)
-    s->set_wpc(s, 1);                   // White Pixel Correction (1 = enabled to filter out hot/stuck pixels from thermal drift)
-    s->set_raw_gma(s, 1);               // Enable sensor raw Gamma correction curve to preserve midtone dynamic range
-    s->set_lenc(s, 1);                  // Enable Lens Vignetting Correction (equalizes illumination across optical corners)
-    s->set_dcw(s, 0);                   // Downsize / Crop Windowing disabled (preserves standard optical FOV)
+    s->set_bpc(s, 0);
+    s->set_wpc(s, 1);
+    s->set_raw_gma(s, 1);
+    s->set_lenc(s, 1);
+    s->set_dcw(s, 0);
 
-    // =========================================================================
-    // 5. COLOR & SPATIAL TUNING (NEUTRAL BASELINE FOR OPENCV / YOLO)
-    // =========================================================================
-    s->set_brightness(s, 0);            // Sensor baseline brightness: 0 = Neutral calibrated level
-    s->set_contrast(s, 0);              // Sensor contrast: 0 = Neutral (prevents white plates from blowing out highlight details)
-    s->set_saturation(s, 0);            // Sensor saturation: 0 = Neutral (avoids artificial purple/green color banding around lights)
-    s->set_sharpness(s, 0);             // Sensor edge sharpness: 0 = Neutral (prevents edge halos and amplified sensor noise floor)
+    s->set_brightness(s, 0);
+    s->set_contrast(s, 0);
+    s->set_saturation(s, 0);
+    s->set_sharpness(s, 0);
   }
 
   s_is_initialized = true;
-  ESP_LOGI(TAG, "Pre-allocated 2x %d KB PSRAM frame buffers OK", FIXED_FRAME_CAPACITY / 1024);
+  ESP_LOGI(TAG, "JPEG QVGA @ 25 FPS, 2x PSRAM DMA buffers, CAMERA_GRAB_LATEST");
   return ESP_OK;
-}
-
-/* Mengambil salinan frame untuk HTTP sender dengan durasi lock seminimal mungkin */
-esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
-  if (out_frame == NULL || out_frame->data == NULL)
-    return ESP_ERR_INVALID_ARG;
-
-  /* Timeout 25ms: cukup untuk menunggu giliran swap tanpa menahan pipeline */
-  if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(25)) != pdTRUE) {
-    return ESP_ERR_TIMEOUT;
-  }
-
-  frame_slot_t *slot = &s_slots[s_ready_idx];
-
-  /* Hanya kirim frame riil dari sensor kamera */
-  if (!s_has_new_frame || slot->header.buffer_len == 0) {
-    xSemaphoreGive(s_camera_mutex);
-    return ESP_ERR_NOT_FOUND;
-  }
-
-  uint32_t copy_len = slot->header.buffer_len;
-  if (copy_len > out_frame->capacity) {
-    copy_len = out_frame->capacity;
-  }
-
-  memcpy(&out_frame->header, &slot->header, sizeof(camera_frame_header_t));
-  memcpy(out_frame->data, slot->data, copy_len);
-  out_frame->header.buffer_len = copy_len;
-  s_has_new_frame = false;
-
-  xSemaphoreGive(s_camera_mutex);
-  return ESP_OK;
-}
-
-void Camera_Capture_Task(void *pvParameters) {
-  (void)pvParameters;
-  ESP_LOGI(TAG, "OV5640 CSP Frame Ingestion Task running");
-
-  const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
-
-  for (;;) {
-    TickType_t start_tick = xTaskGetTickCount();
-
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (fb == NULL) {
-      ESP_LOGW(TAG, "Frame grab failed: esp_camera_fb_get returned NULL");
-      vTaskDelay(pdMS_TO_TICKS(50));
-      continue;
-    }
-
-    /* Validasi penanda JPEG SOI (0xFF, 0xD8) */
-    if (fb->format == PIXFORMAT_JPEG) {
-      if (fb->len < 4 || fb->buf[0] != 0xFF || fb->buf[1] != 0xD8) {
-        ESP_LOGW(TAG, "Dropping corrupted JPEG frame (len: %u)", (unsigned)fb->len);
-        esp_camera_fb_return(fb);
-        vTaskDelay(pdMS_TO_TICKS(20));
-        continue;
-      }
-    }
-
-    s_is_streaming = true;
-
-    /* Clamping ukuran frame tanpa realloc dinamis */
-    uint32_t payload_len = fb->len;
-    if (payload_len > FIXED_FRAME_CAPACITY) {
-      ESP_LOGW(TAG, "Frame melebihi alokasi (%u > %d), clamped", (unsigned)payload_len, FIXED_FRAME_CAPACITY);
-      payload_len = FIXED_FRAME_CAPACITY;
-    }
-
-    /* Tulis frame ke slot kerja saat ini */
-    frame_slot_t *slot = &s_slots[s_write_idx];
-    memcpy(slot->data, fb->buf, payload_len);
-
-    slot->header.buffer_len = payload_len;
-    slot->header.width = fb->width ? fb->width : DEFAULT_FRAME_WIDTH;
-    slot->header.height = fb->height ? fb->height : DEFAULT_FRAME_HEIGHT;
-    slot->header.format = (fb->format == PIXFORMAT_JPEG) ? FRAME_FORMAT_JPEG : FRAME_FORMAT_RAW;
-    slot->header.frame_id = ++s_frame_counter;
-    slot->header.timestamp_ms = esp_timer_get_time() / 1000;
-
-    /* Kembalikan buffer hardware DMA DVP secepat mungkin */
-    esp_camera_fb_return(fb);
-
-    /* Pointer Swap instan: tunggu mutex hingga 10ms jika consumer sedang menyalin frame */
-    if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-      int temp = s_ready_idx;
-      s_ready_idx = s_write_idx;
-      s_write_idx = temp;
-      s_has_new_frame = true;
-      xSemaphoreGive(s_camera_mutex);
-    } else {
-      /* Jika consumer sedang membaca terlalu lama, frame berikutnya akan menimpa slot kerja */
-      ESP_LOGD(TAG, "HTTP task sedang membaca, frame ditimpa tanpa blocking");
-    }
-
-    TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
-    if (elapsed_ticks < frame_interval_ticks) {
-      vTaskDelay(frame_interval_ticks - elapsed_ticks);
-    } else {
-      taskYIELD();
-    }
-  }
-}
-
-#define CAM_TASK_STACK_SIZE 4096
-static StaticTask_t s_cam_task_buffer;
-static StackType_t s_cam_task_stack[CAM_TASK_STACK_SIZE];
-
-TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id) {
-  if (!s_is_initialized) {
-    if (camera_task_init() != ESP_OK)
-      return NULL;
-  }
-
-  return xTaskCreateStaticPinnedToCore(
-      Camera_Capture_Task, "Cam_Capture_Task", CAM_TASK_STACK_SIZE, NULL,
-      priority, s_cam_task_stack, &s_cam_task_buffer, core_id);
 }

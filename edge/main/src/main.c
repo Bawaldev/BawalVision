@@ -9,6 +9,8 @@
 
 // Peripheral and low-level hardware control drivers
 #include "driver/gpio.h"
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_cpu.h"
 #include "esp_rom_sys.h"
 #include "soc/gpio_struct.h"
@@ -16,20 +18,17 @@
 #include "data.h"
 #include "lcd_task.h"
 #include "camera_task.h"
-#include "test.h"
 #include "wifi.h"
 #include "led_strip.h"
 #include "pins.h"
 
 static const char *TAG = "MAIN";
 
-#define TELEMETRY_QUEUE_LEN 5
 #define LCD_TASK_STACK_SIZE 4096
 #define WIFI_TASK_STACK_SIZE 4096
 #define HTTP_STREAM_STACK_SIZE 4096
-#define TEST_PRODUCER_STACK_SIZE 4096
 #define USB_PROV_STACK_SIZE 4096
-#define BUTTON_LED_TASK_STACK_SIZE 2048
+#define BUTTON_LED_TASK_STACK_SIZE 4096
 
 #define WS2812_LED_GPIO      GPIO_NUM_48
 
@@ -37,10 +36,6 @@ static const int s_candidate_indicator_pins[] = {
     21,  // Secondary indicator / flash LED on S3 CAM
     38,  // Auxiliary indicator / backlight pin
 };
-
-static QueueHandle_t s_telemetry_queue = NULL;
-static StaticQueue_t s_telemetry_queue_struct;
-static uint8_t s_telemetry_queue_storage[TELEMETRY_QUEUE_LEN * sizeof(telemetry_data_t)];
 
 static StaticTask_t s_lcd_task_buffer;
 static StackType_t s_lcd_task_stack[LCD_TASK_STACK_SIZE];
@@ -53,10 +48,6 @@ static StaticTask_t s_http_stream_task_buffer;
 static StackType_t s_http_stream_task_stack[HTTP_STREAM_STACK_SIZE];
 static TaskHandle_t s_http_sender_task_handle = NULL;
 
-static StaticTask_t s_test_producer_task_buffer;
-static StackType_t s_test_producer_task_stack[TEST_PRODUCER_STACK_SIZE];
-static TaskHandle_t s_test_task_handle = NULL;
-
 static StaticTask_t s_usb_prov_task_buffer;
 static StackType_t s_usb_prov_task_stack[USB_PROV_STACK_SIZE];
 static TaskHandle_t s_usb_prov_task_handle = NULL;
@@ -65,7 +56,6 @@ static StaticTask_t s_button_led_task_buffer;
 static StackType_t s_button_led_task_stack[BUTTON_LED_TASK_STACK_SIZE];
 static TaskHandle_t s_button_led_task_handle = NULL;
 
-static TaskHandle_t s_camera_task_handle = NULL;
 
 /* ============================================================
  *  Helper: Send WS2812 0-pulse stream (240 MHz cycle timing)
@@ -220,6 +210,16 @@ static void button_led_task(void *pvParameters) {
  *  app_main
  * ============================================================ */
 void app_main(void) {
+    /* Install USB-Serial-JTAG interrupt driver with 1024-byte ring buffer so JSON provisioning commands never overflow hardware FIFO */
+    usb_serial_jtag_driver_config_t usbjtag_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    usbjtag_cfg.rx_buffer_size = 1024;
+    usbjtag_cfg.tx_buffer_size = 1024;
+    if (usb_serial_jtag_driver_install(&usbjtag_cfg) == ESP_OK) {
+        usb_serial_jtag_vfs_use_driver();
+        usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_LF);
+        usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_LF);
+    }
+
     /* Disable all indicator and WS2812 LEDs */
     disable_all_indicator_leds();
 
@@ -240,21 +240,11 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* Create telemetry data queue via deterministic static allocation */
-    s_telemetry_queue = xQueueCreateStatic(TELEMETRY_QUEUE_LEN, sizeof(telemetry_data_t),
-                                           s_telemetry_queue_storage, &s_telemetry_queue_struct);
-    if (s_telemetry_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate Static FreeRTOS Queue");
-        return;
-    }
-
     /* Initialize OV5640 CSP camera driver */
     ESP_LOGI(TAG, "Initializing OV5640 CSP Camera Driver (esp_camera)...");
     ret = camera_task_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize Camera Driver: %s", esp_err_to_name(ret));
-    } else {
-        s_camera_task_handle = camera_task_start(5, 1);
     }
 
     /* Connect to Wi-Fi station */
@@ -271,30 +261,21 @@ void app_main(void) {
         return;
     }
 
-    /* Dispatcher task for telemetry dispatch pinned to Core 0 */
+    /* Standby telemetry heartbeat task pinned to Core 0 */
     s_wifi_task_handle = xTaskCreateStaticPinnedToCore(
         WiFi_Server_Task, "WiFi_Server_Task", WIFI_TASK_STACK_SIZE,
-        (void *)s_telemetry_queue, 5, s_wifi_task_stack, &s_wifi_task_buffer, 0);
+        NULL, 5, s_wifi_task_stack, &s_wifi_task_buffer, 0);
     if (s_wifi_task_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create WiFi_Server_Task");
         return;
     }
 
-    /* Dedicated HTTP video streamer task pinned to Core 1 */
+    /* Dedicated HTTP video streamer task pinned to Core 0 (alongside Wi-Fi/LwIP networking stack) */
     s_http_sender_task_handle = xTaskCreateStaticPinnedToCore(
         http_stream_sender_task, "HTTP_Stream_Task", HTTP_STREAM_STACK_SIZE,
-        NULL, 4, s_http_stream_task_stack, &s_http_stream_task_buffer, 1);
+        NULL, 4, s_http_stream_task_stack, &s_http_stream_task_buffer, 0);
     if (s_http_sender_task_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create HTTP_Stream_Task");
-        return;
-    }
-
-    /* Telemetry producer task pinned to Core 1 */
-    s_test_task_handle = xTaskCreateStaticPinnedToCore(
-        test_telemetry_producer_task, "Test_Producer_Task", TEST_PRODUCER_STACK_SIZE,
-        (void *)s_telemetry_queue, 3, s_test_producer_task_stack, &s_test_producer_task_buffer, 1);
-    if (s_test_task_handle == NULL) {
-        ESP_LOGE(TAG, "Failed to create Test_Producer_Task");
         return;
     }
 

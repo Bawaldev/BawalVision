@@ -109,6 +109,9 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 	clientIP := requestClientIP(c)
 
 	existing, hasExisting := inspection.GlobalInspectionStore.GetLatestTelemetry(deviceID)
+	if hasExisting && nowUnix-existing.Timestamp < 5 {
+		return
+	}
 	if hasExisting && c.Get("X-ESP-Temp") == "" {
 		existing.Timestamp = nowUnix
 		if clientIP != "" {
@@ -332,14 +335,16 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 	camGroup.Get("/active", func(c *fiber.Ctx) error {
 		activeID := camera_handler.GlobalCameraStore.GetActiveDeviceID()
 		if activeID == "" {
-			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-				"error":     "No active camera device found",
-				"active":    false,
-				"device_id": "",
-				"fps":       0.0,
+			return c.JSON(fiber.Map{
+				"active":       false,
+				"device_id":    "",
+				"fps":          0.0,
+				"frames_total": camera_handler.GlobalCameraStore.GetFrameCount(),
+				"message":      "No active camera device found",
 			})
 		}
 		fps := camera_handler.GlobalCameraStore.GetActiveFPS()
+		framesTotal := camera_handler.GlobalCameraStore.GetFrameCount()
 		if isMockDeviceOrHeader(nil, activeID) {
 			c.Set("X-Stream-Source", "MOCK_VIDEO")
 			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
@@ -360,6 +365,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 				"source_type":      "mock_video",
 				"telemetry_struct": "MockTelemetryPayload",
 				"fps":              fps,
+				"frames_total":     framesTotal,
 				"video_source":     videoSrc,
 				"video_uuid":       videoUUID,
 				"message":          "Mock video simulation stream active",
@@ -377,6 +383,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			"source_type":      "live_esp32",
 			"telemetry_struct": "TelemetryIngressPayload",
 			"fps":              fps,
+			"frames_total":     framesTotal,
 			"camera_model":     camModel,
 			"message":          "Live ESP32-S3 camera stream active",
 		})
