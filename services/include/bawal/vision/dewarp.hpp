@@ -62,6 +62,13 @@ public:
         return m_has_undistort_map;
     }
 
+    /**
+     * @brief Check whether perspective transformation matrix is active.
+     */
+    [[nodiscard]] bool hasPerspective() const noexcept {
+        return m_has_perspective;
+    }
+
 private:
     void updateFusedMaps();
 

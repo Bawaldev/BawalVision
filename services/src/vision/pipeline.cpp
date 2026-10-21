@@ -172,6 +172,17 @@ void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
         return;
     }
 
+    static int s_enable_enhance = -1;
+    if (s_enable_enhance == -1) {
+        const char* ee = std::getenv("ENABLE_ENHANCE");
+        s_enable_enhance = (ee && (std::string(ee) == "0" || std::string(ee) == "false" || std::string(ee) == "passthrough")) ? 0 : 1;
+    }
+
+    if (s_enable_enhance == 0) {
+        dst = src;
+        return;
+    }
+
     // Adaptive illumination, Retinex dynamic range, and noise restoration.
     IlluminationEnhancerAI::process(src, dst, m_clahe);
 }
@@ -214,9 +225,14 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
         oriented = normalized_frame;
     }
 
-    // Lens dewarping (only for physical ESP32-S3 OV5640 wide-angle lens; rectilinear MP4 videos need no fisheye warp).
+    // Lens dewarping: Only active if explicitly requested (ENABLE_DEWARP=1) or perspective map is calibrated
     cv::Mat dewarped;
-    if (!is_mock_video) {
+    static int s_enable_dewarp = -1;
+    if (s_enable_dewarp == -1) {
+        const char* ed = std::getenv("ENABLE_DEWARP");
+        s_enable_dewarp = (ed && (std::string(ed) == "1" || std::string(ed) == "true")) ? 1 : 0;
+    }
+    if (!is_mock_video && (s_enable_dewarp == 1 || m_dewarper.hasPerspective())) {
         if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented.clone();
     } else {
         dewarped = oriented;
@@ -258,24 +274,45 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
 
     out_detections.assign(local_buf.begin(), local_buf.begin() + count);
 
+    // RealESRGAN gating.
+    // The classifier already scores spoilage on the native-resolution crop. Super-resolution only adds
+    // texture information for SMALL crops (distant / tiny food items). Running a 2x tiled CPU SR pass on
+    // large crops cost ~150-900 ms per inference (YOLO itself is ~40-80 ms) and starved the stream thread.
+    //  - Only crops whose longest side <= kMaxSrSide (single ncnn tile) are upscaled.
+    //  - At most one SR pass per inference, and at most once every kSrMinIntervalMs.
+    //  - Disable entirely with ENABLE_SR=0.
+    static int s_enable_sr = -1;
+    if (s_enable_sr == -1) {
+        const char* es = std::getenv("ENABLE_SR");
+        s_enable_sr = (es && (std::string(es) == "0" || std::string(es) == "false")) ? 0 : 1;
+    }
+    constexpr int kMaxSrSide = 160;
+    constexpr int64_t kSrMinIntervalMs = 1000;
+    static auto s_last_sr_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    bool sr_budget_available = (s_enable_sr == 1) &&
+        (std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now() - s_last_sr_time).count() >= kSrMinIntervalMs);
+
     for (auto& det : out_detections) {
+        if (!sr_budget_available) break;
         if (det.class_id < 0 || det.class_name == "no_food") continue;
 
         cv::Rect crop_rect = det.bbox & cv::Rect(0, 0, enhanced_frame.cols, enhanced_frame.rows);
-        if (crop_rect.width >= 16 && crop_rect.height >= 16) {
+        if (crop_rect.width >= 16 && crop_rect.height >= 16 &&
+            std::max(crop_rect.width, crop_rect.height) <= kMaxSrSide) {
             cv::Mat food_crop = enhanced_frame(crop_rect);
             cv::Mat sr_crop;
 
+            // RealESRGAN Super-Resolution evaluates fine surface texture for spoilage without destructive downsample blending
             if (m_enhancer.process(food_crop, sr_crop) && !sr_crop.empty()) {
                 SpoilageMetric sr_spoilage = evaluateSpoilageAVX2(sr_crop, det.class_name);
 
                 det.spoilage.avg_luminance = 0.5f * sr_spoilage.avg_luminance + 0.5f * det.spoilage.avg_luminance;
                 det.spoilage.discoloration_ratio = 0.5f * sr_spoilage.discoloration_ratio + 0.5f * det.spoilage.discoloration_ratio;
                 det.spoilage.is_visually_spoiled = (det.spoilage.discoloration_ratio > 0.35f);
-                cv::Mat restored_roi;
-                cv::resize(sr_crop, restored_roi, crop_rect.size(), 0, 0, cv::INTER_AREA);
-                cv::addWeighted(restored_roi, 0.5, enhanced_frame(crop_rect), 0.5, 0.0, const_cast<cv::Mat&>(enhanced_frame)(crop_rect));
             }
+            s_last_sr_time = std::chrono::steady_clock::now();
+            sr_budget_available = false;
         }
     }
     return true;

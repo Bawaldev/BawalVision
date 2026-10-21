@@ -34,9 +34,28 @@ char g_wifi_ssid[32] = {0};
 char g_wifi_pass[64] = {0};
 char g_backend_ip[32] = {0};
 
+static esp_http_client_handle_t s_stream_client = NULL;
+static char s_cached_stream_url[URL_BUFFER_SIZE] = {0};
+
+/**
+ * @brief Cleanly teardown and reset camera HTTP streaming client.
+ *
+ * Ensures all hanging socket descriptors are completely closed and recycled
+ * whenever Wi-Fi state shifts (association, disconnect, IP reassignment).
+ */
+static void wifi_reset_stream_client(void) {
+    if (s_stream_client != NULL) {
+        esp_http_client_close(s_stream_client);
+        esp_http_client_cleanup(s_stream_client);
+        s_stream_client = NULL;
+        memset(s_cached_stream_url, 0, sizeof(s_cached_stream_url));
+    }
+}
+
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        wifi_reset_stream_client();
         if (strlen(g_wifi_ssid) > 0) {
             esp_wifi_connect();
             ESP_LOGI(TAG_WIFI, "Connecting to AP '%s'...", g_wifi_ssid);
@@ -46,9 +65,12 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             lcd_update_http_status("WAIT USB WIFI...", false);
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
-        ESP_LOGI(TAG_WIFI, "Associated with AP '%s'. Requesting IP via DHCP...", g_wifi_ssid);
+        /* Strictly disable Wi-Fi Modem Sleep upon association to eliminate socket dropouts & latency spikes */
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        ESP_LOGI(TAG_WIFI, "Associated with AP '%s' (Modem sleep disabled). Requesting IP via DHCP...", g_wifi_ssid);
         lcd_update_http_status("DHCP REQUEST...", false);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_reset_stream_client();
         wifi_event_sta_disconnected_t* dis = (wifi_event_sta_disconnected_t*) event_data;
         ESP_LOGW(TAG_WIFI, "Connection lost (Reason code: %d)", dis->reason);
         if (g_wifi_event_group != NULL) {
@@ -63,10 +85,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             esp_wifi_connect();
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        /* Enforce power save disabled on IP acquisition & reset stream sockets to bind cleanly to new IP */
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        wifi_reset_stream_client();
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         char ip_str[24];
         snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
-        ESP_LOGI(TAG_WIFI, "Obtained IP: %s", ip_str);
+        ESP_LOGI(TAG_WIFI, "Obtained IP: %s (PS_NONE enforced)", ip_str);
         ESP_LOGI(TAG_WIFI, "Gateway IP: " IPSTR, IP2STR(&event->ip_info.gw));
         g_wifi_retry_num = 0;
         if (g_wifi_event_group != NULL) {
@@ -426,6 +451,7 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,teleme
         lcd_update_http_status("HTTP: TIMEOUT", true);
     }
 
+    esp_http_client_close(client);
     esp_http_client_cleanup(client);
     cJSON_Delete(root);
     cJSON_free(json_string);
@@ -457,20 +483,14 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     char url[URL_BUFFER_SIZE];
     snprintf(url, sizeof(url), "http://%s:%d%s", backend_ip, port, CAMERA_FRAME_ENDPOINT);
 
-    static esp_http_client_handle_t s_stream_client = NULL;
-    static char s_cached_stream_url[URL_BUFFER_SIZE] = {0};
-
     /* Reuse persistent HTTP client with TCP Keep-Alive to eliminate per-frame socket handshakes */
     if (s_stream_client == NULL || strcmp(s_cached_stream_url, url) != 0) {
-        if (s_stream_client != NULL) {
-            esp_http_client_cleanup(s_stream_client);
-            s_stream_client = NULL;
-        }
+        wifi_reset_stream_client();
         esp_http_client_config_t config = {
             .url = url,
             .method = HTTP_METHOD_POST,
-            .timeout_ms = 1500,
-            .buffer_size_tx = 8192,
+            .timeout_ms = 4000,
+            .buffer_size_tx = 16384,
             .keep_alive_enable = true,
         };
         s_stream_client = esp_http_client_init(&config);
@@ -500,10 +520,17 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     esp_http_client_set_post_field(s_stream_client, (const char *)s_local_tx_frame.data, s_local_tx_frame.header.buffer_len);
 
     esp_err_t err = esp_http_client_perform(s_stream_client);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Stream socket error (%s), reconnecting on next frame", esp_err_to_name(err));
-        esp_http_client_cleanup(s_stream_client);
-        s_stream_client = NULL;
+    if (err == ESP_OK) {
+        int status = esp_http_client_get_status_code(s_stream_client);
+        if (status != 200 && status != 201) {
+            ESP_LOGW(TAG, "Stream rejected with status %d, resetting client", status);
+            wifi_reset_stream_client();
+            err = ESP_FAIL;
+        }
+    } else {
+        ESP_LOGW(TAG, "Stream socket error (%s), recycling connection", esp_err_to_name(err));
+        wifi_reset_stream_client();
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     return err;
@@ -524,6 +551,7 @@ void http_stream_sender_task(void *pvParameters) {
         if (g_wifi_event_group != NULL) {
             EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(500));
             if (!(bits & WIFI_CONNECTED_BIT)) {
+                wifi_reset_stream_client();
                 vTaskDelay(pdMS_TO_TICKS(500));
                 continue;
             }
@@ -540,7 +568,7 @@ void http_stream_sender_task(void *pvParameters) {
         esp_err_t err = send_camera_frame_to_backend(backend_ip, backend_port, target_device_id);
         if (err == ESP_ERR_NOT_FOUND) {
             /* No new frame ready yet from camera ISP, yield briefly */
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
 
@@ -578,6 +606,13 @@ void WiFi_Server_Task(void *pvParameters) {
         uint16_t backend_port = (uint16_t)atoi(CONFIG_BACKEND_PORT);
         if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
             ESP_LOGE(TAG, "Failed to resolve backend gateway IP. Skipping dispatch.");
+            continue;
+        }
+
+        /* If camera stream is actively transmitting, telemetry is already delivered
+           on every single frame in HTTP headers (X-ESP-Temp, X-ESP-CPU-Load).
+           Bypass standalone POST to completely eliminate socket contention on fd 54. */
+        if (is_camera_streaming()) {
             continue;
         }
 
