@@ -3,6 +3,7 @@
 
     interface Props {
         isConnected?: boolean;
+        isMock?: boolean;
         cpuTemperature?: number | null;
         temperature?: number | null;
         cpuLoad?: number | null;
@@ -12,6 +13,7 @@
 
     let {
         isConnected = false,
+        isMock = false,
         cpuTemperature = null,
         temperature = null,
         cpuLoad = null,
@@ -19,13 +21,17 @@
         sceneOptical = undefined
     }: Props = $props();
 
-    // ESP32-S3 real temperature, CPU temp, and CPU utility are ONLY available if the ESP device is connected
+    // ESP32-S3 real temperature, CPU temp, and CPU utility are available if connected or simulated in mock mode
     let isDeviceActive = $derived(
-        Boolean(isConnected) && temperature != null && temperature > 0
+        (Boolean(isConnected) && temperature != null && temperature > 0) || isMock
     );
 
     let displayRealTemp = $derived(
-        isDeviceActive && temperature != null ? temperature : null
+        temperature != null ? temperature : (isMock ? 37.2 : null)
+    );
+
+    let displayCpuLoad = $derived(
+        cpuLoad != null ? cpuLoad : (isMock ? 18 : null)
     );
 </script>
 
@@ -35,10 +41,26 @@
             <span class="room-icon">🌡️</span>
             <div>
                 <h4>Thermal & Hardware Telemetry</h4>
-                <p class="sub-label">{isDeviceActive ? 'ESP-IDF Live ESP32-S3 Real Temperature' : 'ESP-IDF Device Disconnected'}</p>
+                <p class="sub-label">
+                    {#if isMock}
+                        Simulated Node Telemetry (MOCK_VIDEO_CAM)
+                    {:else if isDeviceActive}
+                        ESP-IDF Live ESP32-S3 Real Temperature
+                    {:else}
+                        ESP-IDF Device Disconnected
+                    {/if}
+                </p>
             </div>
         </div>
-        <span class="bus-badge" class:offline={!isDeviceActive}>{isDeviceActive ? `v${firmwareVersion}` : 'Offline'}</span>
+        <span class="bus-badge" class:offline={!isDeviceActive && !isMock} class:mock={isMock}>
+            {#if isMock}
+                Mock Sim
+            {:else if isDeviceActive}
+                v{firmwareVersion}
+            {:else}
+                Offline
+            {/if}
+        </span>
     </div>
 
     <!-- Horizontal IoT Metrics Strip -->
@@ -48,7 +70,7 @@
             <div class="stat-text">
                 {#if isDeviceActive && displayRealTemp != null}
                     <span class="val">{displayRealTemp.toFixed(1)} <small>°C</small></span>
-                    <span class="stat-tag">ESP32-S3 Temp</span>
+                    <span class="stat-tag">{isMock ? 'Node Temp (Sim)' : 'ESP32-S3 Temp'}</span>
                 {:else}
                     <span class="val na">-- <small>°C</small></span>
                     <span class="stat-tag offline">Offline</span>
@@ -58,9 +80,9 @@
         <div class="stat-item" class:is-disabled={!isDeviceActive}>
             <span class="icon">⚡</span>
             <div class="stat-text">
-                {#if isDeviceActive && cpuLoad != null}
-                    <span class="val">{cpuLoad} <small>%</small></span>
-                    <span class="stat-tag">CPU Load</span>
+                {#if isDeviceActive && displayCpuLoad != null}
+                    <span class="val">{displayCpuLoad} <small>%</small></span>
+                    <span class="stat-tag">{isMock ? 'Vision Load (Sim)' : 'CPU Load'}</span>
                 {:else}
                     <span class="val na">-- <small>%</small></span>
                     <span class="stat-tag offline">Offline</span>
@@ -73,9 +95,9 @@
     <div class="meters-container">
         <div class="meter-bar-item" class:meter-disabled={!isDeviceActive}>
             <div class="meter-labels">
-                <span>ESP32-S3 Temperature</span>
+                <span>{isMock ? 'Simulated Node Temperature' : 'ESP32-S3 Temperature'}</span>
                 {#if isDeviceActive && displayRealTemp != null}
-                    <strong>{displayRealTemp.toFixed(1)} °C</strong>
+                    <strong>{displayRealTemp.toFixed(1)} °C {isMock ? '(Sim)' : ''}</strong>
                 {:else}
                     <strong class="na-label">Unavailable (Disconnected)</strong>
                 {/if}
@@ -87,15 +109,15 @@
 
         <div class="meter-bar-item" class:meter-disabled={!isDeviceActive}>
             <div class="meter-labels">
-                <span>Core CPU Utilization</span>
-                {#if isDeviceActive && cpuLoad != null}
-                    <strong>{cpuLoad} %</strong>
+                <span>{isMock ? 'Vision Engine Load' : 'Core CPU Utilization'}</span>
+                {#if isDeviceActive && displayCpuLoad != null}
+                    <strong>{displayCpuLoad} % {isMock ? '(Sim)' : ''}</strong>
                 {:else}
                     <strong class="na-label">Unavailable (Disconnected)</strong>
                 {/if}
             </div>
             <div class="progress-track">
-                <div class="progress-fill cpu" style={`width: ${isDeviceActive && cpuLoad != null ? Math.min(100, Math.max(0, cpuLoad)) : 0}%`}></div>
+                <div class="progress-fill cpu" style={`width: ${isDeviceActive && displayCpuLoad != null ? Math.min(100, Math.max(0, displayCpuLoad)) : 0}%`}></div>
             </div>
         </div>
 
@@ -171,6 +193,12 @@
         background: #fef2f2;
         color: #dc2626;
         border-color: #fecaca;
+    }
+
+    .bus-badge.mock {
+        background: #fef3c7;
+        color: #d97706;
+        border-color: #fde68a;
     }
 
     .stat-item.is-disabled {

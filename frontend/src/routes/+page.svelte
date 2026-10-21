@@ -467,6 +467,12 @@
             : systemConfig.deviceId
     );
 
+    let isMockMode = $derived(
+        Boolean(telemetry?.is_mock_active) ||
+        telemetry?.source_type === 'mock_video' ||
+        (resolvedActiveDevice != null && (resolvedActiveDevice === 'MOCK_VIDEO_CAM' || resolvedActiveDevice.startsWith('MOCK_')))
+    );
+
     let realMemoryText = $derived.by(() => {
         if (serverMemoryMB != null && serverMemoryMB > 0) {
             return `Memory usage: ${serverMemoryMB >= 1024 ? (serverMemoryMB / 1024).toFixed(2) + ' GB' : Math.round(serverMemoryMB) + ' MB'}`;
@@ -508,6 +514,7 @@
             memoryMB={serverMemoryMB}
             {parallelCores}
             {isOnline}
+            isMock={isMockMode}
             onToggleGraviton={() => {
                 if (gravitonAvailable) {
                     systemConfig.gravitonEngineEnabled = !systemConfig.gravitonEngineEnabled;

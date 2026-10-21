@@ -101,6 +101,7 @@
         <!-- 3. Thermal & Hardware Telemetry (Physical Environmental Telemetry) -->
         <EnvironmentalTelemetry
             isConnected={isOnline && (telemetry?.is_connected ?? false)}
+            isMock={Boolean(telemetry?.is_mock_active || telemetry?.source_type === 'mock_video')}
             cpuTemperature={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.cpu_temperature : null}
             temperature={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.temperature : null}
             cpuLoad={isOnline && (telemetry?.is_connected ?? false) ? telemetry?.cpu_load : null}

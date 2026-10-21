@@ -659,7 +659,7 @@
                 <video
                     bind:this={mockVideoEl}
                     src={mockVideoSrc}
-                    alt="Mock Video Feed"
+                    aria-label="Mock Video Feed"
                     class="feed-video"
                     crossorigin="anonymous"
                     playsinline
