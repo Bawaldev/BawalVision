@@ -3,6 +3,7 @@
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -65,6 +66,17 @@ httplib::Client& getPersistentHttpClient(
     int rw_timeout_ms
 ) {
     thread_local std::unordered_map<std::string, std::unique_ptr<httplib::Client>> tls_clients;
+    thread_local std::string tls_last_key;
+    thread_local httplib::Client* tls_last_client = nullptr;
+
+    // Fast path: production URLs are stable, so avoid re-splitting and map
+    // lookup (and its temporary std::string) on every 30 FPS request.
+    if (tls_last_client != nullptr && backend_base_url == tls_last_key) {
+        tls_last_client->set_connection_timeout(std::chrono::milliseconds(conn_timeout_ms > 0 ? conn_timeout_ms : 800));
+        tls_last_client->set_read_timeout(std::chrono::milliseconds(rw_timeout_ms > 0 ? rw_timeout_ms : 1500));
+        tls_last_client->set_write_timeout(std::chrono::milliseconds(rw_timeout_ms > 0 ? rw_timeout_ms : 1500));
+        return *tls_last_client;
+    }
 
     const auto [base_key, _] = splitUrlBaseAndPath(backend_base_url);
     auto it = tls_clients.find(base_key);
@@ -76,6 +88,8 @@ httplib::Client& getPersistentHttpClient(
     }
 
     httplib::Client& client = *(it->second);
+    tls_last_key.assign(backend_base_url);
+    tls_last_client = &client;
     client.set_connection_timeout(std::chrono::milliseconds(conn_timeout_ms > 0 ? conn_timeout_ms : 800));
     client.set_read_timeout(std::chrono::milliseconds(rw_timeout_ms > 0 ? rw_timeout_ms : 1500));
     client.set_write_timeout(std::chrono::milliseconds(rw_timeout_ms > 0 ? rw_timeout_ms : 1500));
@@ -414,12 +428,14 @@ float fetchDynamicThreshold(
     }
 
     const size_t val_start = pos + key.size();
-    try {
-        const float parsed = std::stof(std::string(json.substr(val_start, 10)));
-        return std::clamp(parsed, 0.25f, 0.98f);
-    } catch (...) {
+    float parsed = fallback_val;
+    const char* begin = json.data() + val_start;
+    const char* end = json.data() + json.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+    if (ec != std::errc() || ptr == begin) {
         return fallback_val;
     }
+    return std::clamp(parsed, 0.25f, 0.98f);
 }
 
 } // namespace bawal::server

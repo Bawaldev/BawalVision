@@ -26,7 +26,7 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
         return metric;
     }
 
-    // Tentukan channel yang dibutuhkan SEBELUM melakukan cv::cvtColor
+    // Select the required channel BEFORE running cv::cvtColor.
     uint8_t base_thresh = 30;
     bool use_v_channel = false;
 
@@ -40,7 +40,7 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
         base_thresh = 30;
     }
 
-    // Hanya jalankan 1 kali konversi warna sesuai kebutuhan kelas
+    // Run exactly one colour conversion for the selected food class.
     thread_local cv::Mat tl_converted;
     thread_local std::vector<cv::Mat> tl_planes(3);
 
