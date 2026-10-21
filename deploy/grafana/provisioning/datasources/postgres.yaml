@@ -1,0 +1,21 @@
+apiVersion: 1
+
+datasources:
+  - name: BawalVision PostgreSQL
+    type: postgres
+    uid: P1809D3C010E54C28
+    access: proxy
+    url: postgres:5432
+    user: ${POSTGRES_USER:-postgres}
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD:-postgres}
+    jsonData:
+      database: ${POSTGRES_DB:-bawal_vision}
+      sslmode: disable
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+      postgresVersion: 1600
+    isDefault: true
+    editable: true
+
