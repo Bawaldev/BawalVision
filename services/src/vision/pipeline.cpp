@@ -255,7 +255,7 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
     out_inspection.raw_image = dewarped;
 
-    // SIMD low-light & underexposure evaluation via Google Highway
+    // OpenCV mean-based low-light & underexposure evaluation
     out_inspection.dark_status = m_dark_detector.detect(dewarped);
 
     // ISP enhancement (IlluminationEnhancerAI)
@@ -363,7 +363,7 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented;
     out_inspection.raw_image = dewarped;
 
-    // SIMD low-light & underexposure evaluation via Google Highway
+    // OpenCV mean-based low-light & underexposure evaluation
     out_inspection.dark_status = m_dark_detector.detect(dewarped);
 
     // ISP enhancement
@@ -414,7 +414,7 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
     // Low-light underexposure or backlight hotspot conflict banner
     if (inspection.dark_status.is_dark) {
         char dark_txt[96];
-        std::snprintf(dark_txt, sizeof(dark_txt), "LOW LIGHT [Hwy SIMD] Gain: %.1fx",
+        std::snprintf(dark_txt, sizeof(dark_txt), "LOW LIGHT [OpenCV] Gain: %.1fx",
                       static_cast<double>(inspection.dark_status.suggested_boost_gain));
         int base = 0;
         cv::Size tsz = cv::getTextSize(dark_txt, cv::FONT_HERSHEY_SIMPLEX, 0.40, 1, &base);

@@ -52,7 +52,6 @@ jobs:
             libopencv-dev \
             libomp-dev \
             libcurl4-openssl-dev \
-            libhwy-dev \
             libfmt-dev \
             libcpp-httplib-dev \
             nlohmann-json3-dev \

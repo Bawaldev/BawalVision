@@ -594,3 +594,9 @@ func (s *CameraStore) GetActiveFPS() float64 {
 	}
 	return math.Round(s.fps*10) / 10
 }
+
+func (s *CameraStore) GetFrameCount() uint64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.frameCount
+}
