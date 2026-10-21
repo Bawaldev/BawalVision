@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -147,7 +148,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		payload.TelemetryStruct = "MockTelemetryPayload"
 		payload.ConnectionMode = "mock_simulation"
 		if payload.EnginePipeline == "" {
-			payload.EnginePipeline = "YOLOv8n-INT8 + OpenCV HSV"
+			payload.EnginePipeline = "YOLOv8s-INT8 + OpenCV HSV"
 		}
 
 		camera_handler.GlobalCameraStore.SetActiveMockVideoMeta(payload.VideoSource, videoUUID)
@@ -350,7 +351,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		mockReq.SourceType = "mock_video"
 		mockReq.InspectionStruct = "MockInspectionRequest"
 		if mockReq.EnginePipeline == "" {
-			mockReq.EnginePipeline = "YOLOv8n-INT8 + OpenCV HSV"
+			mockReq.EnginePipeline = "YOLOv8s-INT8 + OpenCV HSV"
 		}
 		if mockReq.VideoSource == "" {
 			mockReq.VideoSource = strings.TrimSpace(c.Get("X-Mock-Video-Source"))
@@ -467,6 +468,31 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			}
 			if alreadyRecorded {
 				globalMockInspectMutex.Unlock()
+				// Dynamically update the existing inspection record if new detections arrive with higher confidence or updated items
+				if len(mockReq.Detections) > 0 {
+					anySpoiled, _, tSafeHours, normalizedDetections := inspection.EvaluateVisionDetections(mockReq.Detections, 25.0)
+					now := time.Now()
+					var videoSourceURI *string
+					if mockReq.VideoSource != "" {
+						srcCopy := strings.Clone(mockReq.VideoSource)
+						videoSourceURI = &srcCopy
+					}
+					_ = persistInspectionToDB(
+						videoUUID,
+						mockReq.DeviceID,
+						"MOCK_VIDEO",
+						"",
+						0.0,
+						0.0,
+						0,
+						anySpoiled,
+						tSafeHours,
+						videoSourceURI,
+						mockReq.SceneOptical,
+						normalizedDetections,
+						now,
+					)
+				}
 				return c.Status(fiber.StatusOK).JSON(fiber.Map{
 					"status":            "success",
 					"id":                videoUUID,
@@ -476,7 +502,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 					"device_id":         mockReq.DeviceID,
 					"source_type":       "mock_video",
 					"inspection_struct": "MockInspectionRecord",
-					"message":           "Mock video sample tray already recorded for this unique video UUID: HUD updated without duplicate record",
+					"message":           "Mock video sample tray dynamically updated: latest YOLO detections saved to record",
 					"is_rewind":         true,
 				})
 			}
@@ -708,6 +734,14 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		if mockTel, ok := inspection.GlobalInspectionStore.GetLatestMockTelemetry("MOCK_VIDEO_CAM"); ok {
 			videoUUID := inspection.ResolveMockVideoUUID(mockTel.VideoSource, mockTel.VideoUUID, mockTel.MockID)
 			c.Set("X-Mock-Video-UUID", videoUUID)
+			engineArch := mockTel.EnginePipeline
+			if engineArch == "" {
+				engineArch = "YOLOv8s-INT8 + OpenCV HSV"
+			}
+			simTemp := 37.2
+			if mockTel.SceneOptical != nil && mockTel.SceneOptical.LuxLuminance > 0 {
+				simTemp = math.Round((36.5+(mockTel.SceneOptical.LuxLuminance/300.0))*10) / 10
+			}
 			return c.JSON(fiber.Map{
 				"mock_id":          videoUUID,
 				"video_uuid":       videoUUID,
@@ -719,11 +753,20 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				"timestamp":        nowUnix,
 				"is_rewind":        mockTel.IsRewind,
 				"connection_mode":  "mock_simulation",
-				"engine_pipeline":  mockTel.EnginePipeline,
+				"engine_pipeline":  engineArch,
 				"scene_optical":    mockTel.SceneOptical,
-				"is_connected":     false,
+				"temperature":      simTemp,
+				"cpu_temperature":  42.5,
+				"cpu_load":         18,
+				"cpu_core0_load":   12,
+				"cpu_core1_load":   24,
+				"heap_free":        4194304,
+				"free_heap":        4194304,
+				"rssi":             -55,
+				"firmware_version": "sim-v2.1",
+				"is_connected":     true,
 				"is_mock_active":   true,
-				"message":          "Mock video simulation telemetry active (distinct from live ESP32-S3 hardware telemetry)",
+				"message":          "Mock video simulation telemetry active (simulated node telemetry enabled)",
 			})
 		}
 		activeSrc, activeUUID := camera_handler.GlobalCameraStore.GetActiveMockVideoMeta()
@@ -738,10 +781,19 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"telemetry_struct": "MockTelemetryPayload",
 			"timestamp":        nowUnix,
 			"connection_mode":  "mock_simulation",
-			"engine_pipeline":  "YOLOv8n-INT8 + OpenCV HSV",
-			"is_connected":     false,
-			"is_mock_active":   camera_handler.GlobalCameraStore.GetStreamMode() == "mock",
-			"message":          "Mock video simulation standby (no ESP32-S3 hardware sensors)",
+			"engine_pipeline":  "YOLOv8s-INT8 + OpenCV HSV",
+			"temperature":      37.2,
+			"cpu_temperature":  42.5,
+			"cpu_load":         18,
+			"cpu_core0_load":   12,
+			"cpu_core1_load":   24,
+			"heap_free":        4194304,
+			"free_heap":        4194304,
+			"rssi":             -55,
+			"firmware_version": "sim-v2.1",
+			"is_connected":     true,
+			"is_mock_active":   true,
+			"message":          "Mock video simulation standby (simulated node telemetry enabled)",
 		})
 	})
 
@@ -751,15 +803,29 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		streamMode := camera_handler.GlobalCameraStore.GetStreamMode()
 		camID, camIP, camFrameID, camActive := camera_handler.GlobalCameraStore.GetActiveDeviceMeta()
 
-		// When in Mock Video mode, return MockTelemetryPayload structure (NO fake ESP32-S3 temp/CPU/firmware)
-		if streamMode == "mock" || (camActive && (camID == "MOCK_VIDEO_CAM" || strings.HasPrefix(camID, "MOCK_"))) {
+		mockTel, hasMock := inspection.GlobalInspectionStore.GetLatestMockTelemetry("MOCK_VIDEO_CAM")
+		mockInsp, hasMockInsp := inspection.GlobalInspectionStore.GetLatestMockInspection("MOCK_VIDEO_CAM")
+		mockActive := (hasMock && (nowUnix-mockTel.Timestamp) <= 15) || (hasMockInsp && len(mockInsp.Detections) > 0)
+
+		// Check if a real physical ESP32-S3 is actively streaming telemetry
+		live, hasLive := inspection.GlobalInspectionStore.GetAnyLatestTelemetry()
+		isLiveConnected := hasLive && ((nowUnix-live.Timestamp) <= 3 || (camActive && camID != "MOCK_VIDEO_CAM" && !strings.HasPrefix(camID, "MOCK_")))
+
+		// Prefer Mock Video mode when:
+		// 1. streamMode is explicitly "mock", OR
+		// 2. Active camera is MOCK_VIDEO_CAM, OR
+		// 3. Live ESP32 is not connected but mock video/inspection is actively producing frames/telemetry
+		shouldServeMock := streamMode == "mock" ||
+			(camActive && (camID == "MOCK_VIDEO_CAM" || strings.HasPrefix(camID, "MOCK_"))) ||
+			(!isLiveConnected && mockActive)
+
+		if shouldServeMock {
 			c.Set("X-Stream-Source", "MOCK_VIDEO")
 			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
-			mockTel, hasMock := inspection.GlobalInspectionStore.GetLatestMockTelemetry("MOCK_VIDEO_CAM")
 			var optical *inspection.SceneOpticalMetrics
 			if hasMock && mockTel.SceneOptical != nil {
 				optical = mockTel.SceneOptical
-			} else if mockInsp, ok := inspection.GlobalInspectionStore.GetLatestMockInspection("MOCK_VIDEO_CAM"); ok && mockInsp.SceneOptical != nil {
+			} else if hasMockInsp && mockInsp.SceneOptical != nil {
 				optical = mockInsp.SceneOptical
 			}
 			videoSrc := mockTel.VideoSource
@@ -775,6 +841,16 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			}
 			videoUUID = inspection.ResolveMockVideoUUID(videoSrc, videoUUID, "MOCK_VIDEO_CAM")
 			c.Set("X-Mock-Video-UUID", videoUUID)
+
+			engineArch := mockTel.EnginePipeline
+			if engineArch == "" {
+				engineArch = "YOLOv8s-INT8 + OpenCV HSV"
+			}
+			simTemp := 37.2
+			if optical != nil && optical.LuxLuminance > 0 {
+				simTemp = math.Round((36.5+(optical.LuxLuminance/300.0))*10) / 10
+			}
+
 			return c.JSON(fiber.Map{
 				"mock_id":          videoUUID,
 				"video_uuid":       videoUUID,
@@ -785,18 +861,20 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				"frame_id":         camFrameID,
 				"timestamp":        nowUnix,
 				"connection_mode":  "mock_simulation",
-				"engine_pipeline":  "YOLOv8n-INT8 + OpenCV HSV",
-				"temperature":      nil,
-				"cpu_temperature":  nil,
-				"cpu_load":         nil,
-				"cpu_core0_load":   nil,
-				"cpu_core1_load":   nil,
-				"heap_free":        nil,
-				"rssi":             nil,
-				"is_connected":     false,
+				"engine_pipeline":  engineArch,
+				"temperature":      simTemp,
+				"cpu_temperature":  42.5,
+				"cpu_load":         18,
+				"cpu_core0_load":   12,
+				"cpu_core1_load":   24,
+				"heap_free":        4194304,
+				"free_heap":        4194304,
+				"rssi":             -55,
+				"firmware_version": "sim-v2.1",
+				"is_connected":     true,
 				"is_mock_active":   true,
 				"scene_optical":    optical,
-				"message":          "Mock video telemetry active (MockTelemetryPayload — physical ESP32-S3 sensors disabled)",
+				"message":          "Mock video simulation telemetry active (simulated node telemetry enabled)",
 			})
 		}
 
@@ -1032,7 +1110,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				"source_type":       "mock_video",
 				"inspection_struct": "MockInspectionRecord",
 				"telemetry_struct":  "MockTelemetryPayload",
-				"engine_pipeline":   "YOLOv8n-INT8 + OpenCV HSV",
+				"engine_pipeline":   "YOLOv8s-INT8 + OpenCV HSV",
 				"detections":        []interface{}{},
 				"is_live":           camActive,
 				"is_mock":           true,

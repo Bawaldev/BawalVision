@@ -2,5 +2,6 @@
   "C_Cpp.intelliSenseEngine": "disabled",
   "clangd.arguments": [
     "--query-driver=**/*xtensa-esp*-elf-*,**/*xtensa-esp32s3-elf-*,**/*riscv32-esp-elf-*,/usr/bin/gcc,/usr/bin/g++,/usr/bin/clang,/usr/bin/clang++"
-  ]
+  ],
+  "cmake.sourceDirectory": "/home/fariswirakusuma/Proyekan/BawalVision/edge"
 }
