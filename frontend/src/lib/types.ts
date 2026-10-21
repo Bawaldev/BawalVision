@@ -209,6 +209,7 @@ export interface DeviceHardwareStatus {
 
 export interface EspConnectionResult {
     success: boolean;
+    status?: string;
     deviceId: string;
     firmwareVersion?: string;
     rssi?: number;
@@ -216,6 +217,7 @@ export interface EspConnectionResult {
     ipAddress?: string;
     usbPort?: string;
     provisionedSsid?: string;
+    wifiConnected?: boolean;
     connectionMode?: 'wifi_lan' | 'usb_serial' | 'disconnected';
     message?: string;
 }

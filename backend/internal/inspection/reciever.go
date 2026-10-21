@@ -38,8 +38,14 @@ func (s *InspectionStore) StoreTelemetry(payload TelemetryIngressPayload) {
 	}
 
 	s.Lock()
+	defer s.Unlock()
+
+	if existing, ok := s.readings[payload.DeviceID]; ok &&
+		existing.ConnectionMode == "wifi_lan" && payload.ConnectionMode != "wifi_lan" &&
+		existing.Timestamp > 0 && nowUnix-existing.Timestamp <= 30 {
+		return
+	}
 	s.readings[payload.DeviceID] = payload
-	s.Unlock()
 }
 
 func (s *InspectionStore) StoreMockTelemetry(payload MockTelemetryPayload) {
@@ -260,5 +266,3 @@ func (s *InspectionStore) ClearAllDetections() {
 	s.latestInspections = make(map[string]IngressInspectionRequest)
 	s.latestMockInspections = make(map[string]MockInspectionRequest)
 }
-
-

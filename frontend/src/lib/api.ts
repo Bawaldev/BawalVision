@@ -195,12 +195,14 @@ export async function connectEspDevice(
         if (response.ok && data.success) {
             return {
                 success: true,
+                status: data.status,
                 deviceId: data.device_id || cleanId,
                 firmwareVersion: data.firmware_version || '1.0.0',
                 latencyMs: data.latency_ms ?? 8,
                 ipAddress: data.ip_address || '',
                 usbPort: data.usb_port || '',
                 provisionedSsid: data.provisioned_ssid || '',
+                wifiConnected: data.wifi_connected,
                 connectionMode: data.connection_mode || 'wifi_lan',
                 message: data.message || 'Connected to ESP32-S3 hardware'
             };
@@ -225,7 +227,8 @@ export async function provisionEspViaUsb(
     usbPort: string,
     ssid: string,
     password: string,
-    baseUrl = BASE_URL
+    baseUrl = BASE_URL,
+    backendIp = ''
 ): Promise<EspConnectionResult> {
     try {
         const response = await fetch(`${baseUrl}/devices/usb/provision`, {
@@ -237,18 +240,21 @@ export async function provisionEspViaUsb(
             body: JSON.stringify({
                 usb_port: usbPort,
                 ssid,
-                password
+                password,
+                backend_ip: backendIp
             })
         });
         const data = await response.json().catch(() => ({}));
         if (response.ok && data.success) {
             return {
                 success: true,
+                status: data.status,
                 deviceId: data.device_id || 'ESP32S3_USB',
                 firmwareVersion: data.firmware_version || '1.0.0',
                 ipAddress: data.usb_port || usbPort,
                 usbPort: data.usb_port || usbPort,
                 provisionedSsid: data.provisioned_ssid || ssid,
+                wifiConnected: !!data.wifi_connected,
                 connectionMode: 'usb_serial',
                 message: data.message || `Provisioned server Wi-Fi '${ssid}' over ${usbPort}`
             };

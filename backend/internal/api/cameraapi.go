@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,21 @@ import (
 	fiber "github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
 )
+
+// requestClientIP prefers the edge node's self-reported address over the
+// immediate peer address, which is the host-side proxy/Docker gateway when
+// the ESP32-S3 connects through `just edge-proxy`.
+func requestClientIP(c *fiber.Ctx) string {
+	if c != nil {
+		if ip := strings.TrimSpace(c.Get("X-Device-IP")); ip != "" {
+			if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() != nil {
+				return ip
+			}
+		}
+		return c.IP()
+	}
+	return ""
+}
 
 func isMockDeviceOrHeader(c *fiber.Ctx, deviceID string) bool {
 	if deviceID == "MOCK_VIDEO_CAM" || strings.HasPrefix(deviceID, "MOCK_") {
@@ -90,7 +106,7 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 	}
 
 	nowUnix := time.Now().Unix()
-	clientIP := c.IP()
+	clientIP := requestClientIP(c)
 
 	existing, hasExisting := inspection.GlobalInspectionStore.GetLatestTelemetry(deviceID)
 	if hasExisting && c.Get("X-ESP-Temp") == "" {
@@ -159,6 +175,11 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 		Temperature:     realTemp,
 		CPUTemperature:  cpuTemp,
 		CurrentCPULoad:  cpuLoad,
+		CPUCore0Load:    existing.CPUCore0Load,
+		CPUCore1Load:    existing.CPUCore1Load,
+		HeapFree:        existing.HeapFree,
+		FreeHeap:        existing.FreeHeap,
+		RSSI:            existing.RSSI,
 		IPAddress:       clientIP,
 		ConnectionMode:  "wifi_lan",
 		CameraModel:     camModel,
@@ -196,7 +217,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 					videoUUID = inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, devID)
 				}
 				if len(imageBytes) > 0 {
-					ipStr := strings.Clone(c.IP())
+					ipStr := strings.Clone(requestClientIP(c))
 					isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
 					camera_handler.GlobalCameraStore.StoreRawFrameWithMockMeta(devID, payload.FrameID, imageBytes, ipStr, isRewind, videoSrc, videoUUID)
 					syncTelemetryFromCameraIngress(c, devID, payload.FrameID)
@@ -205,7 +226,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 					c.Set("X-Stream-Source", "MOCK_VIDEO")
 					c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
 					c.Set("X-Mock-Video-UUID", videoUUID)
-					return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+					return c.Status(fiber.StatusOK).JSON(fiber.Map{
 						"status":           "mock_frame_accepted",
 						"source_type":      "mock_video",
 						"telemetry_struct": "MockTelemetryPayload",
@@ -218,7 +239,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 				}
 				c.Set("X-Stream-Source", "LIVE_ESP32")
 				c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
-				return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+				return c.Status(fiber.StatusOK).JSON(fiber.Map{
 					"status":           "success",
 					"source_type":      "live_esp32",
 					"telemetry_struct": "TelemetryIngressPayload",
@@ -240,7 +261,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		imageBytes := make([]byte, len(body))
 		copy(imageBytes, body)
 
-		ipStr := strings.Clone(c.IP())
+		ipStr := strings.Clone(requestClientIP(c))
 		isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
 		isMock := isMockDeviceOrHeader(c, deviceID)
 		videoSrc := strings.Clone(strings.TrimSpace(c.Get("X-Mock-Video-Source")))
@@ -260,7 +281,8 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 			c.Set("X-Stream-Source", "LIVE_ESP32")
 			c.Set("X-Telemetry-Struct", "TelemetryIngressPayload")
 		}
-		return c.SendStatus(fiber.StatusOK)
+		c.Set("Connection", "keep-alive")
+		return c.Status(fiber.StatusOK).Send(nil)
 	}
 
 	annotatedIngressHandler := func(c *fiber.Ctx) error {
@@ -282,7 +304,8 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 
 		camera_handler.GlobalCameraStore.StoreAnnotatedFrame(deviceID, uint32(frameID), imageBytes)
 
-		return c.SendStatus(fiber.StatusOK)
+		c.Set("Connection", "keep-alive")
+		return c.Status(fiber.StatusOK).Send(nil)
 	}
 
 	camGroup.Post("/stream", ingressHandler)

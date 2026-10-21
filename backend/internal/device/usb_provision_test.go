@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDetectServerWiFiConfigAndParseSerial(t *testing.T) {
@@ -50,6 +51,34 @@ func TestDetectServerWiFiConfigAndParseSerial(t *testing.T) {
 	_ = os.Unsetenv("WIFI_SSID")
 	_ = os.Unsetenv("WIFI_PASS")
 	_ = os.Unsetenv("BACKEND_IP")
+}
+
+func TestReadSerialAckFiltersStaleStatus(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	defer r.Close()
+
+	go func() {
+		defer w.Close()
+		time.Sleep(30 * time.Millisecond)
+		_, _ = w.WriteString("I (100) WIFI_STA: BAWAL_ACK:{\"status\":\"ok\"}\n")
+		_, _ = w.WriteString("I (200) WIFI_STA: BAWAL_ACK:{\"status\":\"wifi_provisioned\",\"device_id\":\"ESP32S3_TEST\",\"ssid\":\"HostWiFi\"}\n")
+	}()
+
+	ack := readSerialAck(r, time.Now().Add(500*time.Millisecond), "/dev/ttyACM0", func(a *ESPSerialAck) bool {
+		return a.Status == "wifi_provisioned" || a.Status == "error"
+	})
+	if ack == nil {
+		t.Fatalf("expected wifi_provisioned ACK")
+	}
+	if ack.Status != "wifi_provisioned" {
+		t.Fatalf("expected stale ok status to be ignored, got %q", ack.Status)
+	}
+	if ack.DeviceID != "ESP32S3_TEST" {
+		t.Fatalf("unexpected DeviceID: %s", ack.DeviceID)
+	}
 }
 
 func TestUSBSecurityValidation(t *testing.T) {

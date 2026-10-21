@@ -18,7 +18,10 @@ extern "C" {
 #define DEFAULT_FRAME_HEIGHT 480
 #define INITIAL_BUF_CAPACITY (256 * 1024) /* 256 KB PSRAM buffer */
 #define DEVICE_ID            "ESP32-S3-BENCH-01"
-#define STREAM_FPS           25
+/* 15 FPS keeps the ~7 KB JPEG stream within weak-AP airtime budgets and
+   leaves room for telemetry/control traffic. The vision service is the
+   downstream bottleneck anyway. */
+#define STREAM_FPS           15
 
 /**
  * 
