@@ -67,6 +67,35 @@ func TestEvaluateFoodQuality(t *testing.T) {
 	}
 }
 
+func TestStoreTelemetryPrefersFreshWiFiOverUSB(t *testing.T) {
+	store := NewInspectionStore()
+	now := time.Now().Unix()
+
+	store.StoreTelemetry(TelemetryIngressPayload{
+		DeviceID:       "ESP32S3_WIFI",
+		ConnectionMode: "wifi_lan",
+		Timestamp:      now,
+		Temperature:    37.5,
+	})
+	store.StoreTelemetry(TelemetryIngressPayload{
+		DeviceID:       "ESP32S3_WIFI",
+		ConnectionMode: "usb_serial",
+		Timestamp:      now,
+		Temperature:    99.0,
+	})
+
+	got, ok := store.GetLatestTelemetry("ESP32S3_WIFI")
+	if !ok {
+		t.Fatalf("expected telemetry to be stored")
+	}
+	if got.ConnectionMode != "wifi_lan" {
+		t.Fatalf("expected wifi_lan to take priority, got %q", got.ConnectionMode)
+	}
+	if got.Temperature != 37.5 {
+		t.Fatalf("expected Wi-Fi temperature to be preserved, got %.1f", got.Temperature)
+	}
+}
+
 func TestStoreTelemetryBootTimestampNormalization(t *testing.T) {
 	store := NewInspectionStore()
 	// ESP32-S3 without SNTP sends seconds since boot (e.g. 120)
@@ -88,5 +117,3 @@ func TestStoreTelemetryBootTimestampNormalization(t *testing.T) {
 		t.Errorf("expected normalized server timestamp close to %d, got %d", nowUnix, got.Timestamp)
 	}
 }
-
-

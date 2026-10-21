@@ -515,7 +515,7 @@ func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
 		if currentMode == "live" && idIsMock {
 			continue
 		}
-		if (now-f.TimestampMS) <= 2500 && (latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS) {
+		if (now-f.TimestampMS) <= 5000 && (latestFrame == nil || f.TimestampMS > latestFrame.TimestampMS) {
 			curr := f
 			latestFrame = &curr
 		}
@@ -556,7 +556,7 @@ func (s *CameraStore) GetActiveDeviceMeta() (string, string, uint32, bool) {
 	var latest CachedFrame
 	var found bool
 	for id, f := range s.rawFrames {
-		if id != "" && id != "\\" && id != "/" && id != "null" && (now-f.TimestampMS) <= 2500 {
+		if id != "" && id != "\\" && id != "/" && id != "null" && (now-f.TimestampMS) <= 5000 {
 			isMock := id == "MOCK_VIDEO_CAM" || strings.HasPrefix(id, "MOCK_")
 			if isMock {
 				continue

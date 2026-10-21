@@ -263,33 +263,58 @@ void app_main(void) {
 
     /* Start ST7789/ST7735 128x160 SPI TFT LVGL Dashboard Task pinned to Core 0 */
     ESP_LOGI(TAG, "Starting 128x160 SPI TFT LVGL Task (Static)...");
-    xTaskCreateStaticPinnedToCore(lcd_task, "lcd_task", LCD_TASK_STACK_SIZE, NULL, 5,
-                                  s_lcd_task_stack, &s_lcd_task_buffer, 0);
+    TaskHandle_t lcd_task_handle = xTaskCreateStaticPinnedToCore(
+        lcd_task, "lcd_task", LCD_TASK_STACK_SIZE, NULL, 5,
+        s_lcd_task_stack, &s_lcd_task_buffer, 0);
+    if (lcd_task_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to create lcd_task");
+        return;
+    }
 
     /* Dispatcher task for telemetry dispatch pinned to Core 0 */
     s_wifi_task_handle = xTaskCreateStaticPinnedToCore(
         WiFi_Server_Task, "WiFi_Server_Task", WIFI_TASK_STACK_SIZE,
         (void *)s_telemetry_queue, 5, s_wifi_task_stack, &s_wifi_task_buffer, 0);
+    if (s_wifi_task_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to create WiFi_Server_Task");
+        return;
+    }
 
     /* Dedicated HTTP video streamer task pinned to Core 1 */
     s_http_sender_task_handle = xTaskCreateStaticPinnedToCore(
         http_stream_sender_task, "HTTP_Stream_Task", HTTP_STREAM_STACK_SIZE,
         NULL, 4, s_http_stream_task_stack, &s_http_stream_task_buffer, 1);
+    if (s_http_sender_task_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to create HTTP_Stream_Task");
+        return;
+    }
 
     /* Telemetry producer task pinned to Core 1 */
     s_test_task_handle = xTaskCreateStaticPinnedToCore(
         test_telemetry_producer_task, "Test_Producer_Task", TEST_PRODUCER_STACK_SIZE,
         (void *)s_telemetry_queue, 3, s_test_producer_task_stack, &s_test_producer_task_buffer, 1);
+    if (s_test_task_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to create Test_Producer_Task");
+        return;
+    }
 
     /* USB Serial / UART Wi-Fi Provisioning task pinned to Core 0 */
     s_usb_prov_task_handle = xTaskCreateStaticPinnedToCore(
         usb_serial_provisioning_task, "USB_Prov_Task", USB_PROV_STACK_SIZE,
         NULL, 3, s_usb_prov_task_stack, &s_usb_prov_task_buffer, 0);
+    if (s_usb_prov_task_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to create USB_Prov_Task");
+        return;
+    }
 
     /* Button-controlled LED task pinned to Core 0 */
     s_button_led_task_handle = xTaskCreateStaticPinnedToCore(
         button_led_task, "Button_LED_Task", BUTTON_LED_TASK_STACK_SIZE,
         NULL, 2, s_button_led_task_stack, &s_button_led_task_buffer, 0);
+    if (s_button_led_task_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to create Button_LED_Task");
+        return;
+    }
 
     ESP_LOGI(TAG, "All system static tasks started successfully.");
 }

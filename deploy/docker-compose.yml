@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-bawal_vision}
     ports:
-      - "${POSTGRES_PORT:-5433}:5433"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../backend/internal/data/templates/shema.sql:/docker-entrypoint-initdb.d/01_schema.sql
@@ -28,7 +28,11 @@ services:
     container_name: bawal_backend
     restart: unless-stopped
     ports:
-      - "${BACKEND_PORT:-8080}:8080"
+      - "8080:8080"
+      - "8765:8765/udp"
+    env_file:
+      - path: ../.env
+        required: false
     environment:
       - PORT=8080
       - DB_HOST=postgres
@@ -37,9 +41,8 @@ services:
       - DB_NAME=${POSTGRES_DB:-bawal_vision}
       - DB_PORT=5432
       - DB_SSLMODE=disable
-      - WIFI_SSID=${WIFI_SSID:-}
-      - WIFI_PASS=${WIFI_PASS:-}
-      - BACKEND_IP=${BACKEND_IP:-}
+      - DISCOVERY_PORT=8765
+      - USB_AUTO_PROVISION=${USB_AUTO_PROVISION:-0}
     privileged: true
     volumes:
       - /dev:/dev
