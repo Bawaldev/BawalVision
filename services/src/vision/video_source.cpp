@@ -60,7 +60,8 @@ VideoSource::VideoSource(VideoSource&& other) noexcept
       target_height(other.target_height),
       enable_enchant(other.enable_enchant),
       did_rewind(other.did_rewind),
-      is_duplicate_frame(other.is_duplicate_frame) {
+      is_duplicate_frame(other.is_duplicate_frame),
+      last_frame_time(other.last_frame_time) {
     other.curl_handle = nullptr;
 }
 
@@ -84,6 +85,7 @@ VideoSource& VideoSource::operator=(VideoSource&& other) noexcept {
         enable_enchant = other.enable_enchant;
         did_rewind = other.did_rewind;
         is_duplicate_frame = other.is_duplicate_frame;
+        last_frame_time = other.last_frame_time;
         other.curl_handle = nullptr;
     }
     return *this;
@@ -95,6 +97,7 @@ bool VideoSource::open(SourceMode new_mode, const std::string& uri) {
     did_rewind = false;
     is_duplicate_frame = false;
     last_frame_hash = 0;
+    last_frame_time = {};
 
     if (!clahe) {
         clahe = cv::createCLAHE(1.5, cv::Size(8, 8));
@@ -135,8 +138,6 @@ bool VideoSource::grabNextFrame(cv::Mat& out_frame) {
 
     // 1. Local MP4 mock video mode with Real-Time Frame Pacing & Auto-Loop
     if (mode == SourceMode::LOCAL_MP4) {
-        static auto s_last_frame_time = std::chrono::steady_clock::now();
-
         double fps = cap.get(cv::CAP_PROP_FPS);
         if (fps <= 1.0 || fps > 120.0) fps = 30.0; // Default 30 FPS if metadata is empty/invalid
         const auto target_duration = std::chrono::microseconds(static_cast<int64_t>(1000000.0 / fps));
@@ -151,13 +152,20 @@ bool VideoSource::grabNextFrame(cv::Mat& out_frame) {
             did_rewind = false;
         }
 
-        // Pace MP4 frame reading to match live camera speed (prevents 100% CPU and fast-forward)
+        // Pace MP4 frame reading to match live camera speed (prevents 100% CPU and
+        // fast-forward). Track an absolute deadline so decode time is subtracted
+        // from the sleep instead of being added on top of it.
         const auto now = std::chrono::steady_clock::now();
-        const auto elapsed = now - s_last_frame_time;
-        if (elapsed < target_duration) {
-            std::this_thread::sleep_for(target_duration - elapsed);
+        if (last_frame_time.time_since_epoch().count() == 0) {
+            last_frame_time = now;
         }
-        s_last_frame_time = std::chrono::steady_clock::now();
+        const auto deadline = last_frame_time + target_duration;
+        if (now < deadline) {
+            std::this_thread::sleep_until(deadline);
+            last_frame_time = deadline;
+        } else {
+            last_frame_time = now;
+        }
     }
     // 2. Physical USB camera mode
     else if (mode == SourceMode::WEBCAM_USB) {

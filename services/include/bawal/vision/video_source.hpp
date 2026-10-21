@@ -6,6 +6,7 @@
 #include <opencv2/core/mat.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -45,6 +46,10 @@ struct VideoSource {
     bool enable_enchant{false};        ///< If true, grabNextFrame automatically applies IlluminationEnhancerAI
     bool did_rewind{false};            ///< Flag indicating the video wrapped around to frame 0
     bool is_duplicate_frame{false};    ///< True if the latest HTTP frame matched last_frame_hash
+
+    // Per-instance MP4 pacing clock. A function-local static here would make all
+    // VideoSource instances share (and race on) the same scheduler.
+    std::chrono::steady_clock::time_point last_frame_time{};
 
     VideoSource();
     ~VideoSource();

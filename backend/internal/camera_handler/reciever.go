@@ -201,7 +201,10 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 		return
 	}
 
-	subs := make([]chan []byte, 0, len(s.subscribers))
+	// Broadcast while holding the lock. Sends are non-blocking (buffer size 1,
+	// drop-oldest), so this critical section stays short. Keeping unsubscribe
+	// and send under the same lock eliminates the send-on-closed-channel race:
+	// a subscriber can no longer be removed/closed between snapshot and send.
 	for _, sub := range s.subscribers {
 		isMatch := sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*"
 		if !isMatch {
@@ -209,27 +212,24 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 				isMatch = true
 			}
 		}
-		if isMatch {
-			subs = append(subs, sub.ch)
+		if !isMatch {
+			continue
+		}
+		select {
+		case sub.ch <- data:
+		default:
+			// Drop the oldest queued frame, then publish the newest one.
+			select {
+			case <-sub.ch:
+			default:
+			}
+			select {
+			case sub.ch <- data:
+			default:
+			}
 		}
 	}
 	s.Unlock()
-
-	// Non-blocking instantaneous broadcast with stale frame drop
-	for _, ch := range subs {
-		select {
-		case ch <- data:
-		default:
-			select {
-			case <-ch:
-			default:
-			}
-			select {
-			case ch <- data:
-			default:
-			}
-		}
-	}
 }
 
 func (s *CameraStore) StoreAnnotatedFrame(deviceID string, frameID uint32, data []byte) {
@@ -258,7 +258,8 @@ func (s *CameraStore) StoreAnnotatedFrame(deviceID string, frameID uint32, data 
 		TimestampMS: now,
 	}
 
-	subs := make([]chan []byte, 0, len(s.subscribers))
+	// Broadcast under the store lock; see StoreRawFrameWithMockMeta for the
+	// send-on-closed-channel race this prevents. Sends are non-blocking.
 	for _, sub := range s.subscribers {
 		isMatch := sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*"
 		if !isMatch {
@@ -266,26 +267,23 @@ func (s *CameraStore) StoreAnnotatedFrame(deviceID string, frameID uint32, data 
 				isMatch = true
 			}
 		}
-		if isMatch {
-			subs = append(subs, sub.ch)
+		if !isMatch {
+			continue
+		}
+		select {
+		case sub.ch <- data:
+		default:
+			select {
+			case <-sub.ch:
+			default:
+			}
+			select {
+			case sub.ch <- data:
+			default:
+			}
 		}
 	}
 	s.Unlock()
-
-	for _, ch := range subs {
-		select {
-		case ch <- data:
-		default:
-			select {
-			case <-ch:
-			default:
-			}
-			select {
-			case ch <- data:
-			default:
-			}
-		}
-	}
 }
 
 func (s *CameraStore) Subscribe(deviceID string) (<-chan []byte, func()) {
@@ -596,5 +594,3 @@ func (s *CameraStore) GetActiveFPS() float64 {
 	}
 	return math.Round(s.fps*10) / 10
 }
-
-

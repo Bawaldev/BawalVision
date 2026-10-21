@@ -32,10 +32,6 @@ namespace bawal::vision {
 namespace {
 
 #if BAWAL_HAVE_NCNN
-static std::unique_ptr<ncnn::Net> s_realesrgan_net = nullptr;
-#endif
-
-#if BAWAL_HAVE_NCNN
 // Returns the number of threads to use for NCNN CPU inference.
 // We use 75% of available hardware threads, capped at 6.
 // On a 6-core Xeon W (12 threads) this gives 6 threads, which is
@@ -50,6 +46,19 @@ int getOptimalCpuThreads() {
 
 } // anonymous namespace
 
+// Per-instance NCNN graph holder (defined out-of-line because the header stays
+// independent of the optional NCNN dependency).
+struct RealESRGANEngine::NcnnHolder {
+#if BAWAL_HAVE_NCNN
+    ncnn::Net net;
+#endif
+};
+
+RealESRGANEngine::RealESRGANEngine()
+    : m_ncnn(std::make_unique<NcnnHolder>()) {}
+
+RealESRGANEngine::~RealESRGANEngine() = default;
+
 // ==============================================================================
 // SIMD fallback (used only when NCNN model is unavailable)
 // ==============================================================================
@@ -61,7 +70,7 @@ __attribute__((target_clones("avx2,fma", "default")))
 
 void applyFastSuperResolutionSIMD(const cv::Mat& src, cv::Mat& dst, int scale) {
     if (src.empty()) return;
-    if (scale <= 1) { dst = src.clone(); return; }
+    if (scale <= 1) { dst = src; return; }
 
     const int target_w = src.cols * scale;
     const int target_h = src.rows * scale;
@@ -104,7 +113,8 @@ bool RealESRGANEngine::processOpenCVDNN(const cv::Mat& input, cv::Mat& output) {
             const float* g_plane = prob.ptr<float>(0, 1);
             const float* b_plane = prob.ptr<float>(0, 2);
 
-            #pragma omp parallel for schedule(static)
+            // Rows are spatially independent; no shared writes inside the loop.
+            #pragma omp parallel for schedule(runtime)
             for (int y = 0; y < out_h; ++y) {
                 auto* row = output.ptr<cv::Vec3b>(y);
                 const int offset = y * out_w;
@@ -127,6 +137,7 @@ bool RealESRGANEngine::processOpenCVDNN(const cv::Mat& input, cv::Mat& output) {
 // NCNN init - CPU only configuration
 // ==============================================================================
 bool RealESRGANEngine::init(const RealESRGANConfig& config) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     params = config.params;
     is_initialized = false;
     is_dnn_ready = false;
@@ -148,23 +159,21 @@ bool RealESRGANEngine::init(const RealESRGANConfig& config) {
 
 #if BAWAL_HAVE_NCNN
     try {
-        if (!s_realesrgan_net) {
-            s_realesrgan_net = std::make_unique<ncnn::Net>();
-        }
+        ncnn::Net& net = m_ncnn->net;
 
         // CPU-only configuration
-        s_realesrgan_net->opt.use_vulkan_compute = 0;
-        s_realesrgan_net->opt.use_fp16_packed = false;
-        s_realesrgan_net->opt.use_fp16_storage = false;
-        s_realesrgan_net->opt.use_fp16_arithmetic = false;
-        s_realesrgan_net->opt.use_winograd_convolution = 1;
-        s_realesrgan_net->opt.use_sgemm_convolution = 1;
-        s_realesrgan_net->opt.use_int8_inference = 0;
-        s_realesrgan_net->opt.use_packing_layout = true;
-        s_realesrgan_net->opt.use_bf16_storage = false;
+        net.opt.use_vulkan_compute = 0;
+        net.opt.use_fp16_packed = false;
+        net.opt.use_fp16_storage = false;
+        net.opt.use_fp16_arithmetic = false;
+        net.opt.use_winograd_convolution = 1;
+        net.opt.use_sgemm_convolution = 1;
+        net.opt.use_int8_inference = 0;
+        net.opt.use_packing_layout = true;
+        net.opt.use_bf16_storage = false;
 
         const int num_threads = getOptimalCpuThreads();
-        s_realesrgan_net->opt.num_threads = num_threads;
+        net.opt.num_threads = num_threads;
 
         std::cout << "[RealESRGAN] CPU-only mode: " << num_threads
                   << " threads (detected " << ncnn::get_big_cpu_count()
@@ -199,8 +208,8 @@ bool RealESRGANEngine::init(const RealESRGANConfig& config) {
                 continue;
             }
 
-            int ret_p = s_realesrgan_net->load_param(param_file.string().c_str());
-            int ret_b = s_realesrgan_net->load_model(bin_file.string().c_str());
+            int ret_p = net.load_param(param_file.string().c_str());
+            int ret_b = net.load_model(bin_file.string().c_str());
             if (ret_p == 0 && ret_b == 0) {
                 if (candidate.find("x2") != std::string::npos) params.scale = 2;
                 else if (candidate.find("x3") != std::string::npos) params.scale = 3;
@@ -235,6 +244,11 @@ bool RealESRGANEngine::init(const RealESRGANConfig& config) {
 bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
     if (input.empty()) return false;
 
+    // Serialize access to the mutable DNN/NCNN session. The lock intentionally
+    // covers the inference itself (the session cannot be shared) but protects
+    // only this engine instance, not any shared global network.
+    std::lock_guard<std::mutex> lock(m_mutex);
+
     // Prefer ONNX if it was loaded
     if (is_dnn_ready) {
         if (processOpenCVDNN(input, output)) return true;
@@ -243,7 +257,8 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
     const int scale = (params.scale > 0) ? params.scale : 2;
 
 #if BAWAL_HAVE_NCNN
-    if (is_initialized && s_realesrgan_net) {
+    if (is_initialized) {
+        ncnn::Net& net = m_ncnn->net;
         try {
             const int w = input.cols;
             const int h = input.rows;
@@ -281,7 +296,7 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
                                                        w, h,
                                                        static_cast<int>(input.step));
                 in.substract_mean_normalize(nullptr, norm_vals);
-                ncnn::Extractor ex = s_realesrgan_net->create_extractor();
+                ncnn::Extractor ex = net.create_extractor();
                 ex.input("data", in);
                 ncnn::Mat out;
                 if (ex.extract("output", out) == 0 && !out.empty()) {
@@ -314,7 +329,7 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
                                                                tile.cols, tile.rows,
                                                                static_cast<int>(tile.step));
                         in.substract_mean_normalize(nullptr, norm_vals);
-                        ncnn::Extractor ex = s_realesrgan_net->create_extractor();
+                        ncnn::Extractor ex = net.create_extractor();
                         ex.input("data", in);
                         ncnn::Mat out;
                         if (ex.extract("output", out) == 0 && !out.empty()) {
@@ -362,11 +377,9 @@ bool RealESRGANEngine::process(const cv::Mat& input, cv::Mat& output) {
 }
 
 void RealESRGANEngine::release() {
+    std::lock_guard<std::mutex> lock(m_mutex);
 #if BAWAL_HAVE_NCNN
-    if (s_realesrgan_net) {
-        s_realesrgan_net->clear();
-        s_realesrgan_net.reset();
-    }
+    m_ncnn->net.clear();
 #endif
     if (!dnn_net.empty()) dnn_net = cv::dnn::Net();
     is_dnn_ready = false;
@@ -402,8 +415,6 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
     uint64_t sum_lum_weighted = 0;
     uint64_t total_weight = 0;
     int dark_pixels = 0, bright_pixels = 0, total_samples = 0;
-    double sum_b = 0, sum_g = 0, sum_r = 0;
-    int mid_count = 0;
 
     for (int y = 0; y < src.rows; y += step_y) {
         const auto* row = src.ptr<cv::Vec3b>(y);
@@ -420,11 +431,6 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
 
             if (lum < 65) dark_pixels++;
             else if (lum > 200) bright_pixels++;
-
-            if (lum >= 30 && lum <= 210) {
-                sum_b += b; sum_g += g; sum_r += r;
-                mid_count++;
-            }
         }
     }
 
@@ -434,23 +440,34 @@ void IlluminationEnhancerAI::process(const cv::Mat& src_in, cv::Mat& dst, cv::Pt
     const bool is_backlit = (dark_ratio > 0.25f && bright_ratio > 0.15f);
     const bool needs_illumination_boost = (avg_lum < 75.0f || is_backlit);
 
-    // Case 1: Well-lit balanced scene -> Zero-loss pristine passthrough (Preserves 100% native camera sensor sharpness & true colors)
+    // Case 1: Well-lit balanced scene -> zero-copy passthrough.
+    // The source is owned by the caller for the duration of the frame; returning
+    // a shallow cv::Mat reference avoids a full-frame clone every 33 ms.
     if (!needs_illumination_boost) {
-        dst = src.clone();
+        dst = src;
         return;
     }
 
-    // Case 2: Dark / underexposed scene -> Gentle L-channel contrast lift without chroma degradation or blurring
+    // Case 2: Dark / underexposed scene -> Gentle L-channel contrast lift without chroma degradation or blurring.
+    // CLAHE is stateful and NOT thread-safe. Using a thread-local instance avoids a
+    // mutex on the shared pipeline object and removes the data race on setClipLimit/apply.
     thread_local cv::Mat tl_lab;
     thread_local std::vector<cv::Mat> tl_planes(3);
+    thread_local cv::Ptr<cv::CLAHE> tl_clahe;
+
+    if (!tl_clahe) {
+        const double clip = persistent_clahe ? persistent_clahe->getClipLimit() : 1.5;
+        const cv::Size tiles = persistent_clahe ? persistent_clahe->getTilesGridSize() : cv::Size(8, 8);
+        tl_clahe = cv::createCLAHE(clip, tiles);
+    }
 
     cv::cvtColor(src, tl_lab, cv::COLOR_BGR2Lab);
     cv::split(tl_lab, tl_planes);
 
-    if (persistent_clahe && !tl_planes.empty()) {
+    if (!tl_planes.empty()) {
         const double dynamic_clip = is_backlit ? 1.25 : 1.10;
-        persistent_clahe->setClipLimit(dynamic_clip);
-        persistent_clahe->apply(tl_planes[0], tl_planes[0]); // Lift shadow contrast on L channel only
+        tl_clahe->setClipLimit(dynamic_clip);
+        tl_clahe->apply(tl_planes[0], tl_planes[0]); // Lift shadow contrast on L channel only
     }
 
     // A and B color channels remain 100% pure & unblurred to prevent color bleeding on food
