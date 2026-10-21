@@ -241,7 +241,7 @@
                         {:else if activeChartTab === 'cpu'}
                             cpu 1 & cpu 2 load
                         {:else if activeChartTab === 'grafana'}
-                            grafana direct postgresql analytics
+                            real-time ai model telemetry (yolov8)
                         {:else}
                             temperature telemetry
                         {/if}
@@ -286,7 +286,7 @@
                             class:active={activeChartTab === 'grafana'}
                             onclick={() => (activeChartTab = 'grafana')}
                         >
-                            📊 Grafana Live
+                            🤖 AI Model Monitor
                         </button>
                     </div>
                 </div>
@@ -498,7 +498,7 @@
                 {:else if activeChartTab === 'grafana'}
                     <!-- GRAFANA EMBED: Direct PostgreSQL Real-Time Dashboard -->
                     <div class="grafana-embed-tab-wrapper" style="padding: 0 0.5rem; width: 100%;">
-                        <GrafanaAnalyticsEmbed height="340px" />
+                        <GrafanaAnalyticsEmbed height="560px" />
                     </div>
                 {:else if activeChartTab === 'cpu'}
                     <!-- SINGLE VIEW: Full Height CPU 1 & CPU 2 Chart -->
