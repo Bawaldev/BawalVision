@@ -19,7 +19,9 @@
 #include <opencv2/imgproc.hpp>
 
 #include "bawal/vision.hpp"
+#include "bawal/vision/frame_grabber.hpp"
 #include "bawal/server.hpp"
+#include "bawal/server/async_frame_publisher.hpp"
 
 using namespace bawal::vision;
 using namespace bawal::server;
@@ -52,6 +54,7 @@ int main(int argc, char** argv) {
 
     const std::string backend_base_url = fmt::format("http://{}:{}", backend_host, backend_port);
     std::string device_id = "";
+    bool device_id_pinned = false;
 
     auto sanitizeID = [](std::string id) -> std::string {
         while (!id.empty() && (id.front() == ' ' || id.front() == '"' || id.front() == '\'' || id.front() == '*' || id.front() == '/')) {
@@ -70,6 +73,7 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]).length() > 0) {
         device_id = sanitizeID(argv[1]);
         if (!device_id.empty()) {
+            device_id_pinned = true;
             std::cout << "[CONFIG] Device ID resolved from CLI Argument: " << device_id << "\n";
         }
     } 
@@ -78,6 +82,7 @@ int main(int argc, char** argv) {
         if (const char* env_dev = std::getenv("DEVICE_ID")) {
             device_id = sanitizeID(env_dev);
             if (!device_id.empty()) {
+                device_id_pinned = true;
                 std::cout << "[CONFIG] Device ID resolved from Environment Variable: " << device_id << "\n";
             }
         }
@@ -195,47 +200,80 @@ int main(int argc, char** argv) {
     }
 
     uint64_t frame_seq = 0;
-    int discovery_tick = 0;
     auto last_ai_dispatch = std::chrono::steady_clock::now() - std::chrono::seconds(1);
-    // Asynchronous Background AI Worker Thread
+
+    // Capture (I/O) is fully decoupled from processing and inference. The grabber
+    // owns the blocking HTTP/decoder work; the main loop only consumes the newest
+    // completed frame.
+    LatestFrameGrabber frame_grabber(pipeline.getVideoSource());
+    frame_grabber.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
+    frame_grabber.start();
+
+    // Asynchronous background AI worker. It consumes a single-slot mailbox, so
+    // frames that arrive while inference is busy are dropped rather than queued.
     std::mutex ai_mutex;
-    std::condition_variable ai_cv;
-    cv::Mat ai_input_frame;
-    bool new_ai_frame_available = false;
+    LatestMatMailbox ai_mailbox(3);
     std::atomic<bool> ai_worker_running{true};
     std::atomic<bool> ai_detections_updated{false};
     std::atomic<bool> video_has_rewound{false};
     std::vector<DetectionResult> shared_detections;
     std::string current_device_id = device_id;
 
+    // Non-blocking discovery service (never runs in the frame path).
+    std::mutex discovery_mutex;
+    std::string discovered_device_id;
+    bool discovery_has_update = false;
+    std::atomic<bool> discovery_running{true};
+
     auto last_valid_detection_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+
+    std::thread discovery_worker([&]() {
+        if (use_video_source) {
+            return;
+        }
+        while (discovery_running.load(std::memory_order_acquire)) {
+            const std::string id = bawal::server::discoverActiveDeviceID(nullptr, backend_base_url);
+            {
+                std::lock_guard<std::mutex> lock(discovery_mutex);
+                if (id != discovered_device_id) {
+                    discovered_device_id = id;
+                    discovery_has_update = true;
+                }
+            }
+            for (int i = 0; i < 40 && discovery_running.load(std::memory_order_acquire); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+        }
+    });
 
     std::thread ai_worker([&]() {
         CURL* curl_db = curl_easy_init();
         auto last_dispatch_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         std::string last_state_signature;
+        std::vector<DetectionResult> detected;
+        std::vector<DetectionResult> valid_detections;
+        auto last_thresh_sync = std::chrono::steady_clock::now();
 
-        while (ai_worker_running.load()) {
+        while (ai_worker_running.load(std::memory_order_acquire)) {
             cv::Mat frame_to_process;
             std::string dev_id;
             {
-                std::unique_lock<std::mutex> lock(ai_mutex);
-                ai_cv.wait(lock, [&]() { return new_ai_frame_available || !ai_worker_running.load(); });
-                if (!ai_worker_running.load()) break;
-                frame_to_process = ai_input_frame;
+                std::lock_guard<std::mutex> lock(ai_mutex);
                 dev_id = current_device_id;
-                new_ai_frame_available = false;
+            }
+
+            if (!ai_mailbox.waitTake(frame_to_process, std::chrono::milliseconds(100))) {
+                continue;
             }
 
             if (frame_to_process.empty()) continue;
 
             const int64_t t0 = cv::getTickCount();
-            std::vector<DetectionResult> detected;
+            detected.clear();
             if (pipeline.runInference(frame_to_process, detected)) {
                 const double infer_ms = ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
                 
                 // Periodically synchronize dynamic confidence threshold from backend (every ~3 seconds)
-                static auto last_thresh_sync = std::chrono::steady_clock::now();
                 const auto now_thresh = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now_thresh - last_thresh_sync).count() >= 3) {
                     last_thresh_sync = now_thresh;
@@ -248,7 +286,7 @@ int main(int argc, char** argv) {
                 }
 
                 const float min_conf_threshold = pipeline.getConfidenceThreshold();
-                std::vector<DetectionResult> valid_detections;
+                valid_detections.clear();
                 for (const auto& d : detected) {
                     if (d.class_id >= 0 && d.confidence >= min_conf_threshold && d.class_name != "no_food" && d.class_name != "no_model") {
                         valid_detections.push_back(d);
@@ -342,7 +380,8 @@ int main(int argc, char** argv) {
                 };
 
                 if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty()) {
-                    const bool is_rewound = video_has_rewound.load();
+                    // Consume the rewind flag once: subsequent frames are not rewind events.
+                    const bool is_rewound = video_has_rewound.exchange(false, std::memory_order_relaxed);
                     const std::string engine_pipeline = fmt::format("{} + OpenCV HSV", pipeline.getModelArchitecture());
                     std::string payload_json = is_mock_source
                         ? fmt::format(
@@ -416,111 +455,122 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+
+            // Return the processed Mat allocation to the mailbox pool.
+            ai_mailbox.recycle(std::move(frame_to_process));
         }
         if (curl_db) curl_easy_cleanup(curl_db);
     });
 
-    constexpr int kIdleBackoffMinMs = 50;
-    constexpr int kIdleBackoffMaxMs = 1000;
-    int idle_backoff_ms = 0;  
+    AsyncAnnotatedFramePublisher frame_publisher(backend_base_url);
+    frame_publisher.start();
+
+    // Event-driven device switch cleanup. Clearing a stale device entry is a rare
+    // operation, so it runs in a short-lived isolated worker rather than blocking
+    // the capture/processing loop on an HTTP round-trip.
+    auto postDeviceClearAsync = [backend_base_url](std::string id) {
+        if (id.empty()) {
+            return;
+        }
+        std::thread([backend_base_url, id = std::move(id)]() {
+            const bool is_mock = (id == "MOCK_VIDEO_CAM" || id.rfind("MOCK_", 0) == 0);
+            const std::string json = is_mock
+                ? fmt::format(R"({{"mock_id":"{}","device_id":"{}","detections":[]}})", id, id)
+                : fmt::format(R"({{"device_id":"{}","detections":[]}})", id);
+            if (is_mock) {
+                (void)bawal::server::postMockInspectionPayload(nullptr, backend_base_url, json);
+            } else {
+                (void)bawal::server::postInspectionPayload(nullptr, backend_base_url, json);
+            }
+        }).detach();
+    };
+
+    std::vector<DetectionResult> current_detections;
+    current_detections.reserve(32);
+    std::vector<uint8_t> annotated_jpeg;
+    static const std::vector<int> kEncodeParams = {
+        cv::IMWRITE_JPEG_QUALITY, 94,
+        cv::IMWRITE_JPEG_OPTIMIZE, 1
+    };
+    InspectionOutput inspection;
 
     while (true) {
-        const auto loop_start_time = std::chrono::steady_clock::now();
         bool frame_ok = false;
-        InspectionOutput inspection;
+        inspection.is_valid = false;
+        inspection.detections.clear();
+        inspection.dark_status = DarkDetectionResult{};
 
-        cv::Mat frame_to_stream;
-        auto& video_source = pipeline.getVideoSource();
-
-        if (use_video_source) {
-            if (!video_source.grabNextFrame(frame_to_stream) || frame_to_stream.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(30));
-                continue;
+        CapturedFrame captured;
+        const auto wait_budget = use_video_source ? std::chrono::milliseconds(50)
+                                                  : std::chrono::milliseconds(10);
+        if (!frame_grabber.waitTake(captured, wait_budget) || captured.image.empty()) {
+            if (!headless) {
+                (void)cv::waitKey(1);
             }
-            if (video_source.didRewind()) {
+            continue;
+        }
+
+        cv::Mat frame_to_stream = std::move(captured.image);
+
+        if (captured.rewound) {
+            pipeline.resetTracker();
+            video_has_rewound.store(true, std::memory_order_relaxed);
+            fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
+        }
+
+        if (!use_video_source) {
+            std::string discovered;
+            bool has_discovery_update = false;
+            {
+                std::lock_guard<std::mutex> lock(discovery_mutex);
+                if (discovery_has_update) {
+                    discovered = discovered_device_id;
+                    discovery_has_update = false;
+                    has_discovery_update = true;
+                }
+            }
+
+            if (device_id_pinned) {
+                // An explicitly configured device is authoritative; ignore
+                // discovery churn rather than switching to an unrelated stream.
+                has_discovery_update = false;
+            }
+
+            if (has_discovery_update && discovered != device_id) {
+                const std::string prev_device_id = device_id;
+                device_id = discovered;
+
+                {
+                    std::lock_guard<std::mutex> lock(ai_mutex);
+                    current_device_id = device_id;
+                    shared_detections.clear();
+                    last_valid_detection_time = std::chrono::steady_clock::now();
+                }
                 pipeline.resetTracker();
-                video_has_rewound.store(true);
-                fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
-            }
-            inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
-        } else {
-            if (device_id.empty() || idle_backoff_ms > 0 || (discovery_tick++ % 15 == 0)) {
-                const std::string discovered = discoverActiveDeviceID(curl_fetch, backend_base_url);
-                if (!discovered.empty() && discovered != "\\" && discovered != "/" && (discovered != device_id || stream_url.find(discovered) == std::string::npos)) {
-                    const bool device_changed = (discovered != device_id);
-                    const std::string prev_device_id = device_id;
-                    device_id = discovered;
-                    {
-                        std::lock_guard<std::mutex> lock(ai_mutex);
-                        current_device_id = device_id;
-                        if (device_changed) {
-                            shared_detections.clear();
-                        }
-                    }
-                    if (device_changed) {
-                        pipeline.resetTracker();
-                        if (!prev_device_id.empty()) {
-                            const bool prev_is_mock = (prev_device_id == "MOCK_VIDEO_CAM" || prev_device_id.rfind("MOCK_", 0) == 0);
-                            const std::string clear_prev = prev_is_mock
-                                ? fmt::format(R"({{"mock_id":"{}","device_id":"{}","detections":[]}})", prev_device_id, prev_device_id)
-                                : fmt::format(R"({{"device_id":"{}","detections":[]}})", prev_device_id);
-                            if (prev_is_mock) {
-                                (void)bawal::server::postMockInspectionPayload(curl_post, backend_base_url, clear_prev);
-                            } else {
-                                (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_prev);
-                            }
-                        }
-                        const bool new_is_mock = (device_id == "MOCK_VIDEO_CAM" || device_id.rfind("MOCK_", 0) == 0);
-                        const std::string clear_new = new_is_mock
-                            ? fmt::format(R"({{"mock_id":"{}","device_id":"{}","detections":[]}})", device_id, device_id)
-                            : fmt::format(R"({{"device_id":"{}","detections":[]}})", device_id);
-                        if (new_is_mock) {
-                            (void)bawal::server::postMockInspectionPayload(curl_post, backend_base_url, clear_new);
-                        } else {
-                            (void)bawal::server::postInspectionPayload(curl_post, backend_base_url, clear_new);
-                        }
-                    }
-                    stream_url = fmt::format("{}/api/v1/camera/latest/{}/raw", backend_base_url, device_id);
-                    video_source.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
-                    fmt::print("[SUCCESS] Active camera stream connected: {}\n", device_id);
-                    fmt::print("[INFO] Ingestion URL: {}\n", stream_url);
-                } else if (discovered.empty() && idle_backoff_ms > 200 && !device_id.empty()) {
-                    device_id = "";
-                    stream_url = fmt::format("{}/api/v1/camera/latest/raw", backend_base_url);
-                    video_source.setStreamUrl(stream_url, stream_url);
-                }
-            }
+                postDeviceClearAsync(prev_device_id);
+                postDeviceClearAsync(device_id);
 
-            if (video_source.grabNextFrame(frame_to_stream) && !frame_to_stream.empty()) {
-                if (idle_backoff_ms > 0) {
-                    std::cout << "[INFO] Camera frames resumed.\n";
-                }
-                idle_backoff_ms = 0;
-            } else {
-                if (idle_backoff_ms == 0) {
-                    std::cout << "[INFO] No camera frame available. Backing off until an ESP32 stream appears...\n";
-                    idle_backoff_ms = kIdleBackoffMinMs;
-                } else {
-                    idle_backoff_ms = std::min(idle_backoff_ms * 2, kIdleBackoffMaxMs);
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(idle_backoff_ms));
-                continue;
+                stream_url = device_id.empty()
+                    ? fmt::format("{}/api/v1/camera/latest/raw", backend_base_url)
+                    : fmt::format("{}/api/v1/camera/latest/{}/raw", backend_base_url, device_id);
+                frame_grabber.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
+                fmt::print("[INFO] Active camera stream: {}\n", device_id.empty() ? "<none>" : device_id);
+                fmt::print("[INFO] Ingestion URL: {}\n", stream_url);
             }
 
             // Avoid re-processing and flood-broadcasting duplicate frames unless async AI detections updated
-            const bool detections_changed = ai_detections_updated.exchange(false);
-            if (video_source.is_duplicate_frame && !detections_changed) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(8));
+            const bool detections_changed = ai_detections_updated.exchange(false, std::memory_order_relaxed);
+            if (captured.duplicate && !detections_changed) {
                 continue;
             }
-            inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
         }
 
-        // Get currently active detections
-        std::vector<DetectionResult> current_detections;
+        inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
+
+        // Get currently active detections (copy under the short-lived lock).
         {
             std::lock_guard<std::mutex> lock(ai_mutex);
-            current_detections = shared_detections;
+            current_detections.assign(shared_detections.begin(), shared_detections.end());
         }
 
         // High-Speed Real-Time Video Streaming Pass (Dewarp + Fast ISP + Overlay, < 6 ms)
@@ -533,13 +583,10 @@ int main(int argc, char** argv) {
             const auto now_ai = std::chrono::steady_clock::now();
             const auto ms_since_ai = std::chrono::duration_cast<std::chrono::milliseconds>(now_ai - last_ai_dispatch).count();
             if (ms_since_ai >= 90) {
-                std::unique_lock<std::mutex> lock(ai_mutex, std::try_to_lock);
-                if (lock.owns_lock() && !new_ai_frame_available) {
-                    ai_input_frame = inspection.dewarped_image.clone();
-                    new_ai_frame_available = true;
-                    last_ai_dispatch = now_ai;
-                    ai_cv.notify_one();
-                }
+                // Copy into a pooled Mat and hand it over without blocking. If the
+                // AI worker is still busy, the previous pending frame is replaced.
+                ai_mailbox.publish(inspection.dewarped_image);
+                last_ai_dispatch = now_ai;
             }
 
             if (frame_seq % 60 == 1) {
@@ -548,15 +595,12 @@ int main(int argc, char** argv) {
                           << current_detections.size() << "\n";
             }
 
-            // Push OpenCV Annotated Frame to backend camera stream (Crisp High Quality 94 with Huffman optimization)
+            // Encode on the processing thread (CPU-bound) but hand the blocking
+            // HTTP upload to the async publisher. The publisher keeps only the
+            // newest frame, so a slow backend can never stall this loop.
             if (!inspection.annotated_image.empty() && !device_id.empty()) {
-                std::vector<uint8_t> annotated_jpeg;
-                std::vector<int> encode_params = {
-                    cv::IMWRITE_JPEG_QUALITY, 94,
-                    cv::IMWRITE_JPEG_OPTIMIZE, 1
-                };
-                if (cv::imencode(".jpg", inspection.annotated_image, annotated_jpeg, encode_params)) {
-                    [[maybe_unused]] bool pushed = bawal::server::postAnnotatedFrame(curl_post, backend_base_url, device_id, inspection.frame_id, annotated_jpeg);
+                if (cv::imencode(".jpg", inspection.annotated_image, annotated_jpeg, kEncodeParams)) {
+                    (void)frame_publisher.publish(device_id, inspection.frame_id, annotated_jpeg);
                 }
             }
         }
@@ -580,30 +624,25 @@ int main(int argc, char** argv) {
 
             cv::imshow(window_name, display_frame);
 
-            const int key = cv::waitKey(idle_backoff_ms > 0 ? idle_backoff_ms : 10);
+            const int key = cv::waitKey(1);
             if (key == 'q' || key == 'Q' || key == 27) {
                 std::cout << "[INFO] User requested stop. Closing vision window...\n";
                 break;
             }
-        } else {
-            if (idle_backoff_ms > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(idle_backoff_ms));
-            } else {
-                // Rate pacing in headless mode: target up to 60 FPS headroom to avoid dropping live 30 FPS camera frames
-                const auto loop_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - loop_start_time).count();
-                if (loop_elapsed_ms < 16) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(16 - loop_elapsed_ms));
-                }
-            }
         }
     }
 
-    ai_worker_running.store(false);
-    ai_cv.notify_all();
+    // Shutdown order: stop producers first, then workers, then network uploader.
+    frame_grabber.stop();
+    discovery_running.store(false, std::memory_order_release);
+    ai_worker_running.store(false, std::memory_order_release);
+    if (discovery_worker.joinable()) {
+        discovery_worker.join();
+    }
     if (ai_worker.joinable()) {
         ai_worker.join();
     }
+    frame_publisher.stop();
 
     if (!headless) {
         cv::destroyAllWindows();

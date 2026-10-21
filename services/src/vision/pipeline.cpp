@@ -6,6 +6,9 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <string_view>
+#include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <filesystem>
 #include <array>
@@ -14,16 +17,49 @@
 
 namespace bawal::vision {
 
+namespace {
+
+bool envFlagValue(const char* name, bool default_value) noexcept {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr) {
+        return default_value;
+    }
+    const std::string_view value(raw);
+    return value == "1" || value == "true" || value == "TRUE" ||
+           value == "yes" || value == "on";
+}
+
+} // anonymous namespace
+
 bool InspectionPipeline::initialize(std::string_view model_path, int target_width, int target_height) {
     m_width = target_width;
     m_height = target_height;
 
     const char* env_c = std::getenv("CONF_THRESHOLD");
     if (env_c != nullptr) {
-        try { m_conf_threshold = std::clamp(std::stof(env_c), 0.25f, 0.98f); } catch (...) {}
+        try {
+            m_conf_threshold.store(std::clamp(std::stof(env_c), 0.25f, 0.98f),
+                                   std::memory_order_relaxed);
+        } catch (...) {}
     } else {
-        m_conf_threshold = 0.35f;
+        m_conf_threshold.store(0.35f, std::memory_order_relaxed);
     }
+
+    // Parse all runtime flags exactly once, before any worker thread starts.
+    m_enable_enhance = true;
+    if (const char* ee = std::getenv("ENABLE_ENHANCE")) {
+        const std::string_view v(ee);
+        m_enable_enhance = !(v == "0" || v == "false" || v == "passthrough");
+    }
+    m_vflip = envFlagValue("CAMERA_VFLIP", false);
+    m_hflip = envFlagValue("CAMERA_HFLIP", false);
+    m_enable_dewarp = envFlagValue("ENABLE_DEWARP", false);
+    m_enable_sr = true;
+    if (const char* es = std::getenv("ENABLE_SR")) {
+        const std::string_view v(es);
+        m_enable_sr = !(v == "0" || v == "false");
+    }
+    m_last_sr_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     auto calib = CameraCalibrationParams::createDefaultOV5640(cv::Size(m_width, m_height));
     if (!m_dewarper.initCameraCalibration(calib.camera_matrix, calib.dist_coeffs, calib.image_size)) {
@@ -172,13 +208,7 @@ void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
         return;
     }
 
-    static int s_enable_enhance = -1;
-    if (s_enable_enhance == -1) {
-        const char* ee = std::getenv("ENABLE_ENHANCE");
-        s_enable_enhance = (ee && (std::string(ee) == "0" || std::string(ee) == "false" || std::string(ee) == "passthrough")) ? 0 : 1;
-    }
-
-    if (s_enable_enhance == 0) {
+    if (!m_enable_enhance) {
         dst = src;
         return;
     }
@@ -203,23 +233,14 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
 
     const int64_t t_start = cv::getTickCount();
-    out_inspection.raw_image = normalized_frame;
     out_inspection.is_valid = false;
 
     // Camera orientation from environment (applies to physical ESP32-S3 hardware sensor mount, not mock MP4 files).
-    static int s_vflip = -1, s_hflip = -1;
-    if (s_vflip == -1) {
-        const char* ev = std::getenv("CAMERA_VFLIP");
-        s_vflip = (ev && (std::string(ev) == "1" || std::string(ev) == "true")) ? 1 : 0;
-        const char* eh = std::getenv("CAMERA_HFLIP");
-        s_hflip = (eh && (std::string(eh) == "1" || std::string(eh) == "true")) ? 1 : 0;
-    }
-
     cv::Mat oriented;
     if (!is_mock_video) {
-        if (s_vflip && s_hflip) cv::flip(normalized_frame, oriented, -1);
-        else if (s_vflip) cv::flip(normalized_frame, oriented, 0);
-        else if (s_hflip) cv::flip(normalized_frame, oriented, 1);
+        if (m_vflip && m_hflip) cv::flip(normalized_frame, oriented, -1);
+        else if (m_vflip) cv::flip(normalized_frame, oriented, 0);
+        else if (m_hflip) cv::flip(normalized_frame, oriented, 1);
         else oriented = normalized_frame;
     } else {
         oriented = normalized_frame;
@@ -227,13 +248,8 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
 
     // Lens dewarping: Only active if explicitly requested (ENABLE_DEWARP=1) or perspective map is calibrated
     cv::Mat dewarped;
-    static int s_enable_dewarp = -1;
-    if (s_enable_dewarp == -1) {
-        const char* ed = std::getenv("ENABLE_DEWARP");
-        s_enable_dewarp = (ed && (std::string(ed) == "1" || std::string(ed) == "true")) ? 1 : 0;
-    }
-    if (!is_mock_video && (s_enable_dewarp == 1 || m_dewarper.hasPerspective())) {
-        if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented.clone();
+    if (!is_mock_video && (m_enable_dewarp || m_dewarper.hasPerspective())) {
+        if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented;
     } else {
         dewarped = oriented;
     }
@@ -281,17 +297,22 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
     //  - Only crops whose longest side <= kMaxSrSide (single ncnn tile) are upscaled.
     //  - At most one SR pass per inference, and at most once every kSrMinIntervalMs.
     //  - Disable entirely with ENABLE_SR=0.
-    static int s_enable_sr = -1;
-    if (s_enable_sr == -1) {
-        const char* es = std::getenv("ENABLE_SR");
-        s_enable_sr = (es && (std::string(es) == "0" || std::string(es) == "false")) ? 0 : 1;
-    }
     constexpr int kMaxSrSide = 160;
     constexpr int64_t kSrMinIntervalMs = 1000;
-    static auto s_last_sr_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
-    bool sr_budget_available = (s_enable_sr == 1) &&
-        (std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::steady_clock::now() - s_last_sr_time).count() >= kSrMinIntervalMs);
+
+    // Reserve the single SR budget slot under a very short critical section,
+    // then release the mutex before the expensive inference. Holding it across
+    // process() would serialize concurrent callers for hundreds of milliseconds.
+    bool sr_budget_available = false;
+    {
+        std::lock_guard<std::mutex> sr_lock(m_sr_mutex);
+        const auto now = std::chrono::steady_clock::now();
+        sr_budget_available = m_enable_sr &&
+            (std::chrono::duration_cast<std::chrono::milliseconds>(now - m_last_sr_time).count() >= kSrMinIntervalMs);
+        if (sr_budget_available) {
+            m_last_sr_time = now;
+        }
+    }
 
     for (auto& det : out_detections) {
         if (!sr_budget_available) break;
@@ -311,7 +332,6 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
                 det.spoilage.discoloration_ratio = 0.5f * sr_spoilage.discoloration_ratio + 0.5f * det.spoilage.discoloration_ratio;
                 det.spoilage.is_visually_spoiled = (det.spoilage.discoloration_ratio > 0.35f);
             }
-            s_last_sr_time = std::chrono::steady_clock::now();
             sr_budget_available = false;
         }
     }
@@ -332,24 +352,15 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
 
     const int64_t t_start = cv::getTickCount();
 
-    // Camera orientation from environment. Read once and cached.
-    static int s_vflip = -1, s_hflip = -1;
-    if (s_vflip == -1) {
-        const char* ev = std::getenv("CAMERA_VFLIP");
-        s_vflip = (ev && (std::string(ev) == "1" || std::string(ev) == "true")) ? 1 : 0;
-        const char* eh = std::getenv("CAMERA_HFLIP");
-        s_hflip = (eh && (std::string(eh) == "1" || std::string(eh) == "true")) ? 1 : 0;
-    }
-
     cv::Mat oriented;
-    if (s_vflip && s_hflip) cv::flip(normalized_frame, oriented, -1);
-    else if (s_vflip) cv::flip(normalized_frame, oriented, 0);
-    else if (s_hflip) cv::flip(normalized_frame, oriented, 1);
+    if (m_vflip && m_hflip) cv::flip(normalized_frame, oriented, -1);
+    else if (m_vflip) cv::flip(normalized_frame, oriented, 0);
+    else if (m_hflip) cv::flip(normalized_frame, oriented, 1);
     else oriented = normalized_frame;
 
     // Lens dewarping
     cv::Mat dewarped;
-    if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented.clone();
+    if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented;
     out_inspection.raw_image = dewarped;
 
     // SIMD low-light & underexposure evaluation via Google Highway
@@ -382,19 +393,29 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         return;
     }
 
-    if (inspection.detections.empty() && !inspection.dark_status.is_dark) {
+    const float conf_threshold = m_conf_threshold.load(std::memory_order_relaxed);
+
+    // Fast path: nothing to draw. Return a shallow reference, never a clone.
+    if (inspection.detections.empty() &&
+        !inspection.dark_status.is_dark &&
+        !inspection.dark_status.has_hotspot_conflict) {
         out_display = inspection.dewarped_image;
         return;
     }
 
-    out_display = inspection.dewarped_image.clone();
+    // Reuse one pre-allocated HUD buffer instead of cloning a full frame each time.
+    if (m_overlay_buffer.size() != inspection.dewarped_image.size() ||
+        m_overlay_buffer.type() != inspection.dewarped_image.type()) {
+        m_overlay_buffer.create(inspection.dewarped_image.size(), inspection.dewarped_image.type());
+    }
+    inspection.dewarped_image.copyTo(m_overlay_buffer);
+    out_display = m_overlay_buffer;
 
     // Low-light underexposure or backlight hotspot conflict banner
     if (inspection.dark_status.is_dark) {
-        std::ostringstream ss_dark;
-        ss_dark << "LOW LIGHT [Hwy SIMD] Gain: " << std::fixed << std::setprecision(1)
-                << inspection.dark_status.suggested_boost_gain << "x";
-        const std::string dark_txt = ss_dark.str();
+        char dark_txt[96];
+        std::snprintf(dark_txt, sizeof(dark_txt), "LOW LIGHT [Hwy SIMD] Gain: %.1fx",
+                      static_cast<double>(inspection.dark_status.suggested_boost_gain));
         int base = 0;
         cv::Size tsz = cv::getTextSize(dark_txt, cv::FONT_HERSHEY_SIMPLEX, 0.40, 1, &base);
         cv::Point bg_tl(8, out_display.rows - tsz.height - 12);
@@ -403,18 +424,18 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         cv::putText(out_display, dark_txt, cv::Point(12, out_display.rows - 8),
                     cv::FONT_HERSHEY_SIMPLEX, 0.40, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     } else if (inspection.dark_status.has_hotspot_conflict) {
-        const std::string glare_txt = "BACKLIGHT CONFLICT (Gain 2.5x Suppressed)";
+        static constexpr char kGlareTxt[] = "BACKLIGHT CONFLICT (Gain 2.5x Suppressed)";
         int base = 0;
-        cv::Size tsz = cv::getTextSize(glare_txt, cv::FONT_HERSHEY_SIMPLEX, 0.40, 1, &base);
+        cv::Size tsz = cv::getTextSize(kGlareTxt, cv::FONT_HERSHEY_SIMPLEX, 0.40, 1, &base);
         cv::Point bg_tl(8, out_display.rows - tsz.height - 12);
         cv::Point bg_br(8 + tsz.width + 8, out_display.rows - 4);
         cv::rectangle(out_display, bg_tl, bg_br, cv::Scalar(20, 140, 200), cv::FILLED);
-        cv::putText(out_display, glare_txt, cv::Point(12, out_display.rows - 8),
+        cv::putText(out_display, kGlareTxt, cv::Point(12, out_display.rows - 8),
                     cv::FONT_HERSHEY_SIMPLEX, 0.40, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     }
 
     for (const auto& det : inspection.detections) {
-        if (det.class_id < 0 || det.confidence < m_conf_threshold ||
+        if (det.class_id < 0 || det.confidence < conf_threshold ||
             det.class_name == "no_food" || det.class_name == "no_model") {
             continue;
         }
@@ -422,12 +443,12 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         const float spoilage_pct = std::clamp(det.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
         const float freshness_score = std::clamp(100.0f - spoilage_pct, 0.0f, 100.0f);
 
-        std::string status_badge = "PASS";
+        const char* status_badge = "PASS";
         cv::Scalar box_color = cv::Scalar(40, 200, 40);
 
         // Quality Status Determination:
         // REJECT is strictly reserved for confirmed spoilage / degradation.
-        // Detections with mild discoloration or near threshold (0.58 - 0.70) trigger human inspection REVIEW.
+        // Detections with mild discoloration or near threshold trigger human inspection REVIEW.
         if (det.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f) {
             status_badge = "REJECT";
             box_color = cv::Scalar(30, 30, 235);
@@ -443,12 +464,13 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
 
         cv::rectangle(out_display, clamped_box, box_color, 2);
 
-        std::ostringstream ss;
-        ss << det.class_name << " " << std::fixed << std::setprecision(0)
-           << (det.confidence * 100.0f) << "% ["
-           << status_badge << " " << std::fixed << std::setprecision(0)
-           << freshness_score << "%]";
-        std::string label = ss.str();
+        // Stack-only label formatting: no std::ostringstream/std::string per box.
+        char label[160];
+        std::snprintf(label, sizeof(label), "%.*s %d%% [%s %d%%]",
+                      static_cast<int>(det.class_name.size()), det.class_name.data(),
+                      static_cast<int>(det.confidence * 100.0f),
+                      status_badge,
+                      static_cast<int>(freshness_score));
 
         int baseline = 0;
         cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.44, 1, &baseline);

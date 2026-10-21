@@ -4,6 +4,7 @@
 #include <string>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
@@ -41,6 +42,13 @@ struct RealESRGANConfig {
  * @brief Standalone Super-Resolution and Enhancement engine leveraging OpenCV DNN and Tencent NCNN.
  */
 struct RealESRGANEngine {
+    RealESRGANEngine();
+    ~RealESRGANEngine();
+
+    // A model instance owns a mutable NCNN/DNN session and must never be copied.
+    RealESRGANEngine(const RealESRGANEngine&) = delete;
+    RealESRGANEngine& operator=(const RealESRGANEngine&) = delete;
+
     /**
      * @brief Initialize NCNN or OpenCV DNN pipeline, allocate compute shaders, and load model weights.
      * 
@@ -96,6 +104,15 @@ struct RealESRGANEngine {
     bool is_dnn_ready{false};   ///< Operational readiness state flag (OpenCV DNN)
     cv::dnn::Net dnn_net;       ///< OpenCV DNN Neural Network container
     RealESRGANParams params;    ///< Compact active hot parameters (14 bytes) retained during runtime
+
+private:
+    // The NCNN graph is no longer a process-wide static: each engine instance
+    // owns an isolated, mutex-protected session. This removes the data race when
+    // the AI worker performs ROI super-resolution while another pipeline path is
+    // active, and makes engine lifetime deterministic.
+    struct NcnnHolder;
+    std::unique_ptr<NcnnHolder> m_ncnn;
+    std::mutex m_mutex;
 };
 
 /**

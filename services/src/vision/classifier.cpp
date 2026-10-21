@@ -5,6 +5,7 @@
 #include <iostream>
 #include <algorithm>
 #include <vector>
+#include <utility>
 #include <omp.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/dnn.hpp>
@@ -168,21 +169,6 @@ inline float computeIoU(const CompactBBox& a, const CompactBBox& b) {
     return inter_area / union_area;
 }
 
-inline float computeIoU(const cv::Rect& a, const cv::Rect& b) {
-    int inter_x1 = std::max(a.x, b.x);
-    int inter_y1 = std::max(a.y, b.y);
-    int inter_x2 = std::min(a.x + a.width, b.x + b.width);
-    int inter_y2 = std::min(a.y + a.height, b.y + b.height);
-
-    int inter_w = std::max(0, inter_x2 - inter_x1);
-    int inter_h = std::max(0, inter_y2 - inter_y1);
-    float inter_area = static_cast<float>(inter_w * inter_h);
-
-    float union_area = static_cast<float>(a.area() + b.area()) - inter_area;
-    if (union_area <= 0.0f) return 0.0f;
-    return inter_area / union_area;
-}
-
 } // anonymous namespace
 
 FoodClassifier::FoodClassifier() 
@@ -202,7 +188,19 @@ FoodClassifier::FoodClassifier()
 
 bool FoodClassifier::init(std::string_view model_path, int thread_count) {
     std::lock_guard<std::mutex> lock(m_infer_mutex);
-    m_is_ready = false;
+    m_is_ready.store(false, std::memory_order_release);
+
+    // Pre-allocate every reusable buffer exactly once. All later calls only
+    // clear/resize within existing capacity, so the 30 FPS loop never touches
+    // the allocator for post-processing scratch data.
+    m_resized_buffer.create(640, 640, CV_8UC3);
+    m_scratch_boxes.reserve(128);
+    m_scratch_confidences.reserve(128);
+    m_scratch_class_ids.reserve(128);
+    m_scratch_nms_indices.reserve(128);
+    m_scratch_detections.reserve(64);
+    m_scratch_matched.reserve(64);
+    m_tracked_items.reserve(32);
 
     std::vector<std::string> candidate_paths;
     if (!model_path.empty()) {
@@ -281,8 +279,8 @@ bool FoodClassifier::init(std::string_view model_path, int thread_count) {
                 static_cast<float*>(::operator new[](K_TENSOR_ELEMENTS * sizeof(float), std::align_val_t{64}))
             );
             m_tracked_items.clear();
-            m_tracked_items.reserve(32);
-            m_is_ready = true;
+            m_reset_tracker.store(false, std::memory_order_relaxed);
+            m_is_ready.store(true, std::memory_order_release);
             m_active_model_path = path;
 
             // Detect architecture from model filename
@@ -330,13 +328,22 @@ bool FoodClassifier::detect(const cv::Mat& frame,
     }
 
     std::lock_guard<std::mutex> lock(m_infer_mutex);
-    if (!m_is_ready || !m_session) {
+    if (!m_is_ready.load(std::memory_order_acquire) || !m_session) {
         return false;
     }
 
+    // Consume a pending non-blocking tracker reset before doing any work.
+    resetTrackerLocked();
+
     try {
-        // High-speed vectorized AVX2 scene optical analysis & illuminance telemetry
-        m_last_optical = evaluateSceneOptical(frame);
+        // High-speed vectorized AVX2 scene optical analysis & illuminance telemetry.
+        // Publish the snapshot under a short-lived dedicated mutex so the stream
+        // thread never races with the AI worker or waits for the full inference.
+        {
+            SceneOpticalMetrics optical = evaluateSceneOptical(frame);
+            std::lock_guard<std::mutex> optical_lock(m_optical_mutex);
+            m_last_optical = std::move(optical);
+        }
 
         constexpr int target_w = 640;
         constexpr int target_h = 640;
@@ -367,7 +374,9 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         }
         constexpr float inv255 = 1.0f / 255.0f;
 
-        #pragma omp parallel for schedule(static)
+        // Pure per-row pixel transformation: no shared container writes.
+        // schedule(runtime) lets the runtime adapt to hybrid/homogeneous CPUs.
+        #pragma omp parallel for schedule(runtime)
         for (int h = 0; h < target_h; ++h) {
             const auto* __restrict row_ptr = m_resized_buffer.ptr<cv::Vec3b>(h);
             const int row_offset = h * target_w;
@@ -440,13 +449,13 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             return false;
         }
 
-        std::vector<cv::Rect> boxes;
-        std::vector<float> confidences;
-        std::vector<int> class_ids;
-
-        boxes.reserve(64);
-        confidences.reserve(64);
-        class_ids.reserve(64);
+        // Reuse pre-allocated scratch buffers (capacity reserved in init()).
+        std::vector<cv::Rect>& boxes = m_scratch_boxes;
+        std::vector<float>& confidences = m_scratch_confidences;
+        std::vector<int>& class_ids = m_scratch_class_ids;
+        boxes.clear();
+        confidences.clear();
+        class_ids.clear();
 
         // Vectorized candidate box parsing with early score threshold rejection (bypassing coordinate decode for >95% anchors)
         for (int a = 0; a < num_anchors; ++a) {
@@ -540,7 +549,8 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         }
 
         // 5. Non-Maximum Suppression (NMS)
-        std::vector<int> nms_indices;
+        std::vector<int>& nms_indices = m_scratch_nms_indices;
+        nms_indices.clear();
         cv::dnn::NMSBoxes(boxes, confidences, conf_threshold, nms_threshold, nms_indices);
 
         // If YOLO detects no candidates this frame, age existing tracks instead of clearing immediately
@@ -568,8 +578,8 @@ bool FoodClassifier::detect(const cv::Mat& frame,
             return true;
         }
 
-        std::vector<DetectionResult> current_detections;
-        current_detections.reserve(nms_indices.size());
+        std::vector<DetectionResult>& current_detections = m_scratch_detections;
+        current_detections.clear();
 
         // 6. Build High-Precision Detections from YOLO Neural Inference
         for (int idx : nms_indices) {
@@ -615,7 +625,9 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         }
 
         // 8. Temporal Tracking & Smoothing (Stabilizes Bounding Boxes & Suppresses Flicker)
-        std::vector<bool> matched(current_detections.size(), false);
+        std::vector<uint8_t>& matched = m_scratch_matched;
+        matched.resize(current_detections.size(), 0);
+        std::fill(matched.begin(), matched.end(), uint8_t{0});
 
         for (auto& tracked : m_tracked_items) {
             float best_iou = 0.0f;

@@ -1,4 +1,5 @@
 #include "bawal/vision/camera_receiver.hpp"
+#include <cctype>
 #include <charconv>
 #include <cstring>
 #include <iostream>
@@ -39,10 +40,17 @@ void CameraReceiver::decodeBase64ToScratch(std::string_view in) {
     const size_t in_len = in.size();
     if (in_len == 0) return;
 
-    m_scratch_buffer.reserve((in_len / 4 + 1) * 3);
+    // Worst-case decoded size. resize() only allocates the first time; later
+    // calls write in place through the index. No per-byte push_back bounds check.
+    const size_t max_out = (in_len / 4 + 1) * 3;
+    if (m_scratch_buffer.capacity() < max_out) {
+        m_scratch_buffer.reserve(max_out);
+    }
+    m_scratch_buffer.resize(max_out);
 
     uint32_t buf = 0;
     int bits = 0;
+    size_t out = 0;
 
     for (const char ch : in) {
         if (ch == '=') break;
@@ -52,10 +60,11 @@ void CameraReceiver::decodeBase64ToScratch(std::string_view in) {
             bits += 6;
             if (bits >= 8) {
                 bits -= 8;
-                m_scratch_buffer.push_back(static_cast<uint8_t>((buf >> bits) & 0xFF));
+                m_scratch_buffer[out++] = static_cast<uint8_t>((buf >> bits) & 0xFF);
             }
         }
     }
+    m_scratch_buffer.resize(out);
 }
 
 bool CameraReceiver::decode(const CameraFrameHeader& header, const uint8_t* raw_bytes, size_t len, DecodedFrame& out_frame) {
@@ -67,6 +76,24 @@ bool CameraReceiver::decode(const CameraFrameHeader& header, const uint8_t* raw_
         return false;
     }
 
+    // Reject malformed headers before constructing cv::Mat views over the
+    // network buffer. Without these checks a hostile width/height/length pair
+    // makes OpenCV read past the received payload (out-of-bounds read).
+    constexpr uint64_t kMaxDimension = 16384;
+    const uint64_t width = header.width;
+    const uint64_t height = header.height;
+    if ((header.buffer_len != 0 && header.buffer_len > len) ||
+        width > kMaxDimension || height > kMaxDimension) {
+        m_metrics.corrupted_frames++;
+        return false;
+    }
+
+    const auto hasPayloadFor = [&](uint64_t bytes_per_pixel) -> bool {
+        if (width == 0 || height == 0) return false;
+        const uint64_t required = width * height * bytes_per_pixel;
+        return required > 0 && required <= static_cast<uint64_t>(len);
+    };
+
     try {
         switch (static_cast<FrameFormat>(header.format)) {
             case FrameFormat::JPEG: {
@@ -76,8 +103,8 @@ bool CameraReceiver::decode(const CameraFrameHeader& header, const uint8_t* raw_
                 break;
             }
             case FrameFormat::RGB888: {
-                if (header.width > 0 && header.height > 0) {
-                    cv::Mat rgb_mat(static_cast<int>(header.height), static_cast<int>(header.width), CV_8UC3, const_cast<uint8_t*>(raw_bytes));
+                if (hasPayloadFor(3)) {
+                    cv::Mat rgb_mat(static_cast<int>(height), static_cast<int>(width), CV_8UC3, const_cast<uint8_t*>(raw_bytes));
                     if (m_config.auto_convert_bgr) {
                         cv::cvtColor(rgb_mat, out_frame.image, cv::COLOR_RGB2BGR);
                     } else {
@@ -88,16 +115,16 @@ bool CameraReceiver::decode(const CameraFrameHeader& header, const uint8_t* raw_
                 break;
             }
             case FrameFormat::RGB565: {
-                if (header.width > 0 && header.height > 0) {
-                    cv::Mat rgb565_mat(static_cast<int>(header.height), static_cast<int>(header.width), CV_8UC2, const_cast<uint8_t*>(raw_bytes));
+                if (hasPayloadFor(2)) {
+                    cv::Mat rgb565_mat(static_cast<int>(height), static_cast<int>(width), CV_8UC2, const_cast<uint8_t*>(raw_bytes));
                     cv::cvtColor(rgb565_mat, out_frame.image, cv::COLOR_BGR5652BGR);
                     out_frame.is_valid = !out_frame.image.empty();
                 }
                 break;
             }
             case FrameFormat::GRAYSCALE: {
-                if (header.width > 0 && header.height > 0) {
-                    cv::Mat gray_mat(static_cast<int>(header.height), static_cast<int>(header.width), CV_8UC1, const_cast<uint8_t*>(raw_bytes));
+                if (hasPayloadFor(1)) {
+                    cv::Mat gray_mat(static_cast<int>(height), static_cast<int>(width), CV_8UC1, const_cast<uint8_t*>(raw_bytes));
                     out_frame.image = gray_mat.clone();
                     out_frame.is_valid = !out_frame.image.empty();
                 }
@@ -134,6 +161,12 @@ bool CameraReceiver::decodeFromBinaryPacket(const uint8_t* packet_bytes, size_t 
 
     const uint8_t* payload_ptr = packet_bytes + sizeof(CameraFrameHeader);
     size_t payload_len = packet_len - sizeof(CameraFrameHeader);
+
+    // Honour the declared payload length, but never trust it to exceed the
+    // bytes actually present in the packet.
+    if (header.buffer_len > 0 && header.buffer_len <= payload_len) {
+        payload_len = header.buffer_len;
+    }
 
     return decode(header, payload_ptr, payload_len, out_frame);
 }

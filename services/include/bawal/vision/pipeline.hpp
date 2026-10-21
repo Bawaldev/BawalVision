@@ -1,5 +1,8 @@
 #pragma once
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -139,12 +142,13 @@ public:
         m_classifier.resetTracker();
     }
 
-    // Dynamic Confidence Threshold Accessors (Range: 0.25 - 0.98, Default: 0.35)
+    // Dynamic Confidence Threshold Accessors (Range: 0.25 - 0.98, Default: 0.35).
+    // Atomic because the AI worker updates it while the stream thread renders the HUD.
     void setConfidenceThreshold(float thresh) noexcept {
-        m_conf_threshold = std::clamp(thresh, 0.25f, 0.98f);
+        m_conf_threshold.store(std::clamp(thresh, 0.25f, 0.98f), std::memory_order_relaxed);
     }
     [[nodiscard]] float getConfidenceThreshold() const noexcept {
-        return m_conf_threshold;
+        return m_conf_threshold.load(std::memory_order_relaxed);
     }
 
     /**
@@ -171,7 +175,25 @@ private:
     FoodClassifier m_classifier;
     DarkDetector m_dark_detector;
     cv::Ptr<cv::CLAHE> m_clahe;
-    float m_conf_threshold{0.35f};
+
+    // Runtime configuration is parsed once in initialize() instead of being
+    // lazily initialised through function-local statics (which race when the
+    // pipeline is driven from more than one thread).
+    std::atomic<float> m_conf_threshold{0.35f};
+    bool m_enable_enhance{true};
+    bool m_vflip{false};
+    bool m_hflip{false};
+    bool m_enable_dewarp{false};
+    bool m_enable_sr{true};
+
+    // Super-resolution rate limiter (touched only by runInference()).
+    std::mutex m_sr_mutex;
+    std::chrono::steady_clock::time_point m_last_sr_time{};
+
+    // Reused HUD destination buffer. Avoids allocating a fresh full-frame Mat
+    // in renderOverlay() for every streamed frame.
+    cv::Mat m_overlay_buffer;
+
     int m_width{640};
     int m_height{480};
 };

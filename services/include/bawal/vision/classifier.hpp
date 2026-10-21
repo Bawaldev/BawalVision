@@ -9,6 +9,7 @@
 #include <span>
 #include <memory>
 #include <mutex>
+#include <atomic>
 #include <array>
 #include <new>
 
@@ -116,7 +117,18 @@ public:
     FoodClassifier();
     ~FoodClassifier() = default;
 
-    [[nodiscard]] const SceneOpticalMetrics& getLastOpticalMetrics() const noexcept { return m_last_optical; }
+    /**
+     * @brief Returns a thread-safe snapshot of the optical metrics produced by the
+     *        most recent inference pass.
+     *
+     * The stream thread reads this while the AI worker is updating it. Returning a
+     * copy under a dedicated (very short-held) mutex avoids both a data race and
+     * blocking the stream on the long-lived inference mutex.
+     */
+    [[nodiscard]] SceneOpticalMetrics getLastOpticalMetrics() const {
+        std::lock_guard<std::mutex> lock(m_optical_mutex);
+        return m_last_optical;
+    }
 
     /**
      * @brief Initializes the ONNX Runtime Engine with the YOLOv8 food detection model.
@@ -160,7 +172,7 @@ public:
      */
     [[nodiscard]] bool predict(const cv::Mat& bgr_image, ClassificationResult& out_result);
 
-    [[nodiscard]] bool isReady() const noexcept { return m_is_ready; }
+    [[nodiscard]] bool isReady() const noexcept { return m_is_ready.load(std::memory_order_acquire); }
 
     /**
      * @brief Gets the active model architecture string (e.g. YOLOv8s-INT8, YOLOv8s, YOLOv8n-INT8).
@@ -175,19 +187,29 @@ public:
     [[nodiscard]] std::string_view getActiveModelPath() const noexcept { return m_active_model_path; }
 
     /**
-     * @brief Reset temporal object tracks (e.g. on video rewind or scene cut).
+     * @brief Request temporal track reset without blocking the caller.
+     *
+     * The flag is consumed at the start of the next detect() call (while the
+     * inference mutex is already held), so the stream thread never waits for a
+     * long-running inference just to clear the tracker.
      */
     void resetTracker() noexcept {
-        std::lock_guard<std::mutex> lock(m_infer_mutex);
-        m_tracked_items.clear();
+        m_reset_tracker.store(true, std::memory_order_relaxed);
     }
 
 private:
+    void resetTrackerLocked() noexcept {
+        if (m_reset_tracker.exchange(false, std::memory_order_relaxed)) {
+            m_tracked_items.clear();
+        }
+    }
 
     // Model metadata (static, zero heap overhead)
     std::vector<std::string_view> m_class_names;
     std::mutex m_infer_mutex;
-    bool m_is_ready{false};
+    mutable std::mutex m_optical_mutex;
+    std::atomic<bool> m_is_ready{false};
+    std::atomic<bool> m_reset_tracker{false};
     std::string m_model_arch{"YOLOv8s-INT8"};
     std::string m_active_model_path{};
     SceneOpticalMetrics m_last_optical;
@@ -212,6 +234,15 @@ private:
     };
     std::unique_ptr<float[], AlignedDeleter> m_input_tensor_values;
     cv::Mat m_resized_buffer;
+
+    // Pre-allocated post-processing scratch (reserved once in init, cleared per call).
+    // Eliminates per-frame heap churn in the 30 FPS detection path.
+    std::vector<cv::Rect> m_scratch_boxes;
+    std::vector<float> m_scratch_confidences;
+    std::vector<int> m_scratch_class_ids;
+    std::vector<int> m_scratch_nms_indices;
+    std::vector<DetectionResult> m_scratch_detections;
+    std::vector<uint8_t> m_scratch_matched;
     std::vector<TrackedItem> m_tracked_items;
 };
 
