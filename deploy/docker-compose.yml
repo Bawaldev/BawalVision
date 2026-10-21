@@ -108,8 +108,33 @@ services:
     depends_on:
       - backend
 
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: bawal_grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3002}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - bawal-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+    driver: local
+  grafana_data:
     driver: local
 
 networks:
