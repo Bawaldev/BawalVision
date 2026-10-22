@@ -249,18 +249,29 @@
         wifiConnectSuccess = false;
 
         const ssid = (selectedSsid || selectedNetwork.ssid || '').trim();
-        const portToUse = selectedUsbPort || detectedUsbPorts[0]?.port || '/dev/ttyACM0';
+        const detectedPort = detectedUsbPorts[0]?.port || '';
         const gatewayIpToUse = (gatewayHostIp || detectedHostIp || serverBackendIp || '').trim();
 
         try {
-            // Dynamic Wi-Fi + Custom Gateway Host IP provisioning over USB CDC.
-            const res = await provisionEspViaUsb(
-                portToUse,
-                ssid,
-                connectPassword,
-                formState.backendUrl,
-                gatewayIpToUse
-            );
+            // Prefer the backend when it can actually see the board's USB node.
+            // Otherwise go straight to Web Serial: under Docker Desktop the
+            // daemon runs in a VM, so host /dev/ttyACM* is never visible and a
+            // backend call would only fail with "port not accessible".
+            let res: EspConnectionResult;
+            if (detectedPort) {
+                res = await provisionEspViaUsb(
+                    detectedPort,
+                    ssid,
+                    connectPassword,
+                    formState.backendUrl,
+                    gatewayIpToUse
+                );
+                if (!res.success && isWebSerialAvailable() && /not accessible|no such file|no USB serial/i.test(res.message || '')) {
+                    res = await provisionViaBrowserSerial(ssid, connectPassword, gatewayIpToUse);
+                }
+            } else {
+                res = await provisionViaBrowserSerial(ssid, connectPassword, gatewayIpToUse);
+            }
 
             if (res.success) {
                 const targetIp = res.gatewayHostIp || gatewayIpToUse || 'auto';
@@ -369,6 +380,105 @@
         });
     }
 
+    function isWebSerialAvailable(): boolean {
+        return typeof navigator !== 'undefined' && 'serial' in navigator;
+    }
+
+    // Direct browser-to-board provisioning. Essential when the backend runs in
+    // Docker Desktop, where the daemon VM cannot see host /dev/ttyACM* nodes.
+    async function provisionViaBrowserSerial(
+        ssid: string,
+        password: string,
+        gatewayIp: string
+    ): Promise<EspConnectionResult> {
+        const failure = (message: string): EspConnectionResult => ({
+            success: false,
+            deviceId: '',
+            connectionMode: 'disconnected',
+            message
+        });
+
+        if (!isWebSerialAvailable()) {
+            return failure(
+                'The backend cannot see host USB serial (Docker Desktop runs in a VM), and Web Serial is unavailable. ' +
+                    'Open this page in Chrome/Edge on localhost, or run the backend on the host with `just edge-stack`.'
+            );
+        }
+        if (!ssid) {
+            return failure('Target Wi-Fi SSID is required.');
+        }
+
+        let port: any = null;
+        try {
+            port = await withTimeout(
+                (navigator as any).serial.requestPort({
+                    filters: [{ usbVendorId: 0x303a }] // Espressif Systems
+                }),
+                20000
+            );
+        } catch (err: any) {
+            return failure(
+                err?.name === 'NotFoundError'
+                    ? 'Serial port selection canceled.'
+                    : err?.message || 'Unable to request USB serial access.'
+            );
+        }
+
+        try {
+            await port.open({ baudRate: 115200 });
+            // Opening the CDC port asserts DTR and resets the ESP32-S3; give
+            // the firmware time to boot its provisioning task before writing.
+            await new Promise((resolve) => setTimeout(resolve, 3500));
+
+            const encoder = new TextEncoder();
+            const writer = port.writable.getWriter();
+            const payload =
+                JSON.stringify({
+                    cmd: 'set_wifi',
+                    ssid,
+                    pass: password || '',
+                    backend_ip: gatewayIp || (typeof window !== 'undefined' ? window.location.hostname : ''),
+                    backend_port: 8080
+                }) + '\n';
+
+            await writer.write(encoder.encode(payload));
+            writer.releaseLock();
+
+            const ack = await readBawalAck(port, 7000);
+            if (!ack || (ack.status !== 'wifi_provisioned' && ack.status !== 'ok')) {
+                return failure(
+                    ack
+                        ? `ESP32-S3 returned status '${ack.status || 'unknown'}'.`
+                        : 'No BAWAL_ACK received from ESP32-S3. Close idf.py monitor or any other serial tool and retry.'
+                );
+            }
+
+            const targetSsid = ack.ssid || ssid;
+            return {
+                success: true,
+                status: ack.status,
+                deviceId: ack.device_id || espUsbStatus?.device_id || formState.deviceId || 'ESP32S3_USB',
+                firmwareVersion: ack.firmware_version || '1.0.0',
+                latencyMs: 4,
+                ipAddress: ack.backend_ip || gatewayIp || 'USB Serial',
+                usbPort: 'Web Serial',
+                provisionedSsid: targetSsid,
+                gatewayHostIp: gatewayIp || ack.backend_ip || '',
+                wifiConnected: !!ack.wifi_connected,
+                connectionMode: 'usb_serial',
+                message: `Provisioned ${targetSsid} via Web Serial`
+            };
+        } catch (err: any) {
+            return failure(err?.message || 'Failed to provision Wi-Fi over Web Serial.');
+        } finally {
+            if (port) {
+                try {
+                    await port.close();
+                } catch {}
+            }
+        }
+    }
+
     // Server-side fallback: the backend opens /dev/ttyACM* directly, so it
     // works even when the browser lacks Web Serial or the user denies access.
     async function provisionViaServer(targetPort: string, ssidOverride?: string): Promise<boolean> {
@@ -379,6 +489,18 @@
         if (hw?.server_wifi) {
             if (hw.server_wifi.ssid) serverWifiSsid = hw.server_wifi.ssid;
             if (hw.server_wifi.backend_ip) serverBackendIp = hw.server_wifi.backend_ip;
+        }
+
+        const visiblePorts = hw?.usb_ports || [];
+        if (visiblePorts.length === 0) {
+            webSerialStatus = 'error';
+            webSerialMsg =
+                'The backend cannot see any USB serial device. Docker Desktop cannot pass host USB through to its VM; ' +
+                'run `just edge-stack` (backend on host) or use Chrome/Edge on localhost for Direct Browser Connect.';
+            return false;
+        }
+        if (!visiblePorts.some((p) => p.port === targetPort)) {
+            targetPort = visiblePorts[0].port;
         }
 
         const ssid = (ssidOverride || hw?.server_wifi?.ssid || serverWifiSsid || '').trim();
@@ -414,6 +536,15 @@
         isWebSerialConnecting = true;
         pairingPort = targetPort;
         webSerialStatus = 'idle';
+
+        // No backend-visible node (common under Docker Desktop): skip the
+        // guaranteed-to-fail server call and go straight to browser Web Serial.
+        if (detectedUsbPorts.length === 0) {
+            isWebSerialConnecting = false;
+            await handleDirectWebSerialConnect(false);
+            return;
+        }
+
         webSerialMsg = `Reading active host Wi-Fi and provisioning ${targetPort}...`;
 
         try {
@@ -580,11 +711,11 @@
         connectingStepText = 'Checking shared Wi-Fi network & scanning server USB ports (/dev/ttyACM*, /dev/ttyUSB*)...';
 
         try {
-            const res = await connectEspDevice(targetId, formState.backendUrl, {
-                usbPort: selectedUsbPort,
-                ssid: serverWifiSsid,
-                password: serverWifiPassword
-            });
+            // Detection only: let the backend prefer live LAN telemetry and
+            // auto-scan USB only when no Wi-Fi device is online. Passing an
+            // SSID or USB port forces USB provisioning, which fails when the
+            // board is already online (or when Docker cannot see host USB).
+            const res = await connectEspDevice(targetId, formState.backendUrl);
 
             if (res.success) {
                 connectionStatus = 'connected';
