@@ -9,6 +9,9 @@ import (
 )
 
 func TestDetectServerWiFiConfigAndParseSerial(t *testing.T) {
+	// Keep the test hermetic: hide nmcli/iwgetid so the host's live Wi-Fi
+	// cannot override the env values under test.
+	t.Setenv("PATH", t.TempDir())
 	t.Setenv("WIFI_SSID", "BawalFactory_5G")
 	t.Setenv("WIFI_PASS", "supersecret123")
 	t.Setenv("BACKEND_IP", "192.168.1.50")

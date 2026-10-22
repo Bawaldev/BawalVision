@@ -2,6 +2,7 @@ package inspection
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -17,8 +18,8 @@ func TestInspectionBatchWorker_EnqueueNonBlocking(t *testing.T) {
 		flushPeriod: 100 * time.Millisecond,
 		ctx:         ctx,
 		cancel:      cancel,
-		running:     true,
 	}
+	w.running.Store(true)
 
 	task1 := BatchInspectionTask{RecordID: "task-1"}
 	task2 := BatchInspectionTask{RecordID: "task-2"}
@@ -49,6 +50,39 @@ func TestInspectionBatchWorker_EnqueueNonBlocking(t *testing.T) {
 	if first.RecordID != "task-2" {
 		t.Fatalf("expected oldest task to be task-2 (task-1 dropped), got %s", first.RecordID)
 	}
+}
+
+func TestInspectionBatchWorker_StopConcurrentWithEnqueue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &InspectionBatchWorker{
+		queue:       make(chan BatchInspectionTask, 32),
+		batchSize:   10,
+		flushPeriod: time.Hour,
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+	w.running.Store(true)
+
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		<-ctx.Done()
+	}()
+
+	var writers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		writers.Add(1)
+		go func() {
+			defer writers.Done()
+			for j := 0; j < 500; j++ {
+				w.Enqueue(BatchInspectionTask{RecordID: "task"})
+				w.FlushNow()
+			}
+		}()
+	}
+
+	w.Stop()
+	writers.Wait()
 }
 
 func TestEvaluateFoodQuality(t *testing.T) {

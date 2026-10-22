@@ -308,6 +308,16 @@ func DetectServerWiFiConfig() ServerWiFiConfig {
 
 	liveIP := detectLocalLANIPv4()
 
+	// Explicit BACKEND_IP (shell/.env) overrides the live LAN address; the
+	// live value stays available separately as DetectedHostIP.
+	backendIP := strings.TrimSpace(os.Getenv("BACKEND_IP"))
+	if backendIP == "" {
+		backendIP = strings.TrimSpace(envMap["BACKEND_IP"])
+	}
+	if backendIP == "" {
+		backendIP = liveIP
+	}
+
 	pass := strings.TrimSpace(os.Getenv("WIFI_PASS"))
 	if pass == "" {
 		pass = envMap["WIFI_PASS"]
@@ -325,7 +335,7 @@ func DetectServerWiFiConfig() ServerWiFiConfig {
 		SSID:           ssid,
 		Password:       pass,
 		HasPassword:    pass != "",
-		BackendIP:      liveIP,
+		BackendIP:      backendIP,
 		BackendPort:    backendPort,
 		DetectedHostIP: liveIP,
 	}
