@@ -13,7 +13,11 @@
 extern "C" {
 #endif
 
-#define NVS_NAMESPACE "wifi_config"
+#define NVS_NAMESPACE "bawal_cfg"
+#define NVS_KEY_WIFI_SSID    "wifi_ssid"
+#define NVS_KEY_WIFI_PASS    "wifi_pass"
+#define NVS_KEY_BACKEND_IP   "backend_ip"
+#define NVS_KEY_BACKEND_PORT "backend_port"
 #define BACKEND_ENDPOINT "/api/v1/telemetry"
 #define CAMERA_FRAME_ENDPOINT "/api/v1/camera/frame"
 #define BACKEND_DISCOVERY_PORT 8765
@@ -97,6 +101,11 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,
  * @brief Resolve the backend IPv4 address from NVS, build config, or UDP discovery.
  */
 bool get_backend_ip(char *out_ip, size_t max_len);
+
+/**
+ * @brief Build complete target URL for a given endpoint based on priority.
+ */
+esp_err_t get_backend_url(const char *endpoint, char *out_url, size_t max_len);
 
 /**
  * @brief Return the effective backend TCP port.

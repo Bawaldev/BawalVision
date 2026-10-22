@@ -228,7 +228,7 @@ export async function provisionEspViaUsb(
     ssid: string,
     password: string,
     baseUrl = BASE_URL,
-    backendIp = ''
+    gatewayHostIp = ''
 ): Promise<EspConnectionResult> {
     try {
         const response = await fetch(`${baseUrl}/devices/usb/provision`, {
@@ -241,7 +241,8 @@ export async function provisionEspViaUsb(
                 usb_port: usbPort,
                 ssid,
                 password,
-                backend_ip: backendIp
+                backend_ip: gatewayHostIp,
+                gateway_host_ip: gatewayHostIp
             })
         });
         const data = await response.json().catch(() => ({}));
@@ -254,9 +255,10 @@ export async function provisionEspViaUsb(
                 ipAddress: data.usb_port || usbPort,
                 usbPort: data.usb_port || usbPort,
                 provisionedSsid: data.provisioned_ssid || ssid,
+                gatewayHostIp: data.gateway_host_ip || data.backend_ip || gatewayHostIp,
                 wifiConnected: !!data.wifi_connected,
                 connectionMode: 'usb_serial',
-                message: data.message || `Provisioned server Wi-Fi '${ssid}' over ${usbPort}`
+                message: data.message || `Provisioned Wi-Fi '${ssid}' over ${usbPort}`
             };
         }
         return {

@@ -42,6 +42,10 @@
         }
         return options;
     });
+    let detectedHostIp = $state('');
+    let gatewayHostIp = $state('');
+    let selectedSsid = $state('');
+    let connectToast = $state('');
     let serverWifiSsid = $state('');
     let serverWifiPassword = $state('');
     let serverBackendIp = $state('');
@@ -121,6 +125,16 @@
             }
             if (hw.server_wifi.backend_ip) {
                 serverBackendIp = hw.server_wifi.backend_ip;
+            }
+        }
+
+        // Live host LAN IP (non-Docker interface) used as the Gateway Host IP
+        // default in the provisioning modal.
+        const liveHostIp = hw.detected_host_ip || hw.server_wifi?.detected_host_ip || hw.server_wifi?.backend_ip || '';
+        if (liveHostIp) {
+            detectedHostIp = liveHostIp;
+            if (!gatewayHostIp) {
+                gatewayHostIp = liveHostIp;
             }
         }
 
@@ -206,6 +220,7 @@
 
     function handleSelectNetwork(net: WiFiNetworkInfo) {
         selectedNetwork = net;
+        selectedSsid = net.ssid;
         if (net.is_server || net.ssid === serverWifiSsid) {
             connectPassword = serverWifiPassword;
         } else {
@@ -233,50 +248,35 @@
         connectError = '';
         wifiConnectSuccess = false;
 
-        const portToUse = selectedUsbPort || (detectedUsbPorts[0]?.port ?? '/dev/ttyACM0');
+        const ssid = (selectedSsid || selectedNetwork.ssid || '').trim();
+        const portToUse = selectedUsbPort || detectedUsbPorts[0]?.port || '/dev/ttyACM0';
+        const gatewayIpToUse = (gatewayHostIp || detectedHostIp || serverBackendIp || '').trim();
 
         try {
-            // 1. If connecting to the server/local Wi-Fi network, first check if already on LAN
-            if (selectedNetwork.is_server || selectedNetwork.ssid === serverWifiSsid) {
-                const probe = await connectEspDevice(formState.deviceId, formState.backendUrl, {
-                    usbPort: portToUse,
-                    ssid: selectedNetwork.ssid,
-                    password: connectPassword
-                });
-                if (probe.success) {
-                    wifiConnectSuccess = true;
-                    wifiSuccessMsg = `Connected to ESP32-S3 on ${selectedNetwork.ssid} (${probe.ipAddress || 'Wi-Fi LAN'})!`;
-                    connectionStatus = 'connected';
-                    lastConnDetails = probe;
-                    onDeviceConnectionChange?.(true, probe.deviceId);
-                    await refreshHardwareStatus();
-                    setTimeout(() => {
-                        closeConnectModal();
-                    }, 1400);
-                    return;
-                }
-            }
-
-            // 2. Provision ESP32-S3 via USB Serial
+            // Dynamic Wi-Fi + Custom Gateway Host IP provisioning over USB CDC.
             const res = await provisionEspViaUsb(
                 portToUse,
-                selectedNetwork.ssid,
+                ssid,
                 connectPassword,
-                formState.backendUrl
+                formState.backendUrl,
+                gatewayIpToUse
             );
 
             if (res.success) {
+                const targetIp = res.gatewayHostIp || gatewayIpToUse || 'auto';
                 wifiConnectSuccess = true;
-                wifiSuccessMsg = `✓ Provisioned ${selectedNetwork.ssid} to ESP32-S3! Syncing link...`;
+                wifiSuccessMsg = `ESP32 Connected to ${ssid} targeting ${targetIp}`;
                 connectionStatus = 'connected';
                 lastConnDetails = res;
+                connectToast = `✓ ${wifiSuccessMsg}`;
+                setTimeout(() => (connectToast = ''), 6000);
                 onDeviceConnectionChange?.(true, res.deviceId);
                 await refreshHardwareStatus();
                 setTimeout(() => {
                     closeConnectModal();
                 }, 1600);
             } else {
-                connectError = res.message || `Failed to connect ESP32-S3 to ${selectedNetwork.ssid}`;
+                connectError = res.message || `Failed to connect ESP32-S3 to ${ssid}`;
             }
         } catch (err: any) {
             connectError = err?.message || 'Provisioning request failed.';
@@ -382,7 +382,7 @@
         }
 
         const ssid = (ssidOverride || hw?.server_wifi?.ssid || serverWifiSsid || '').trim();
-        const backendIp = hw?.server_wifi?.backend_ip || serverBackendIp;
+        const backendIp = (gatewayHostIp || hw?.detected_host_ip || hw?.server_wifi?.detected_host_ip || hw?.server_wifi?.backend_ip || serverBackendIp || '').trim();
         if (!ssid) {
             webSerialStatus = 'error';
             webSerialMsg = 'Server Wi-Fi SSID is unavailable; cannot provision the ESP32-S3.';
@@ -424,7 +424,7 @@
             }
 
             const ssid = hw?.server_wifi?.ssid || serverWifiSsid;
-            const backendIp = hw?.server_wifi?.backend_ip || serverBackendIp;
+            const backendIp = (gatewayHostIp || hw?.detected_host_ip || hw?.server_wifi?.detected_host_ip || hw?.server_wifi?.backend_ip || serverBackendIp || '').trim();
             const res = await provisionEspViaUsb(
                 targetPort,
                 ssid,
@@ -514,8 +514,8 @@
                 cmd: 'set_wifi',
                 ssid: serverWifiSsid,
                 pass: knownPassword || '',
-                backend_ip: serverBackendIp || (typeof window !== 'undefined' ? window.location.hostname : ''),
-                backend_port: '8080'
+                backend_ip: gatewayHostIp || serverBackendIp || (typeof window !== 'undefined' ? window.location.hostname : ''),
+                backend_port: 8080
             }) + '\n';
 
             await writer.write(encoder.encode(payload));
@@ -535,6 +535,7 @@
                     ipAddress: serverBackendIp || ack.backend_ip || 'USB Serial',
                     usbPort: targetPort,
                     provisionedSsid: ssid,
+                    gatewayHostIp: gatewayHostIp || serverBackendIp || ack.backend_ip || '',
                     wifiConnected: !!ack.wifi_connected,
                     connectionMode: 'usb_serial',
                     message: `Provisioned ${ssid} via Web Serial`
@@ -1012,7 +1013,7 @@
 
                             <div class="dialog-field">
                                 <label for="wifi-dialog-ssid">Target Wi-Fi Network (SSID)</label>
-                                <input id="wifi-dialog-ssid" type="text" class="fedora-input disabled" value={selectedNetwork.ssid} readonly />
+                                <input id="wifi-dialog-ssid" type="text" class="fedora-input" bind:value={selectedSsid} placeholder="Wi-Fi SSID" />
                             </div>
 
                             <div class="dialog-field">
@@ -1063,7 +1064,13 @@
                                 </div>
                                 <div class="dialog-field half">
                                     <label for="wifi-dialog-backend">Gateway Host IP</label>
-                                    <input id="wifi-dialog-backend" type="text" class="fedora-input disabled" value={serverBackendIp || ''} readonly />
+                                    <input
+                                        id="wifi-dialog-backend"
+                                        type="text"
+                                        class="fedora-input"
+                                        bind:value={gatewayHostIp}
+                                        placeholder={detectedHostIp || 'Auto-detect laptop Wi-Fi IP'}
+                                    />
                                 </div>
                             </div>
 
@@ -1229,6 +1236,10 @@
             </button>
         </div>
     </form>
+
+    {#if connectToast}
+        <div class="connect-toast">{connectToast}</div>
+    {/if}
 </div>
 
 <style>
@@ -1278,6 +1289,22 @@
         border-radius: var(--radius-pill);
         font-size: 0.75rem;
         font-weight: 700;
+    }
+
+    .connect-toast {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        z-index: 3000;
+        max-width: 420px;
+        background: var(--accent-green-dim);
+        color: var(--accent-green);
+        border: 1px solid rgba(34, 197, 94, 0.35);
+        padding: 12px 18px;
+        border-radius: var(--radius-lg);
+        font-size: 0.85rem;
+        font-weight: 700;
+        box-shadow: var(--shadow-card);
     }
 
     .settings-form {

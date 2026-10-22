@@ -1256,14 +1256,16 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"device_id":        devID,
 			"firmware_version": fwVer,
 			"ip_address":       ipAddr,
+			"detected_host_ip": wifiCfg.DetectedHostIP,
 			"usb_ports":        usbPorts,
 			"esp_usb_status":   espUSBStatus,
 			"wifi_networks":    device.ScanAvailableWiFiNetworks(),
 			"server_wifi": fiber.Map{
-				"ssid":         wifiCfg.SSID,
-				"has_password": wifiCfg.HasPassword,
-				"backend_ip":   wifiCfg.BackendIP,
-				"backend_port": wifiCfg.BackendPort,
+				"ssid":             wifiCfg.SSID,
+				"has_password":     wifiCfg.HasPassword,
+				"backend_ip":       wifiCfg.BackendIP,
+				"detected_host_ip": wifiCfg.DetectedHostIP,
+				"backend_port":     wifiCfg.BackendPort,
 			},
 		})
 	})
@@ -1314,10 +1316,11 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 	// 6. POST Connect ESP32-S3 (Same Wi-Fi LAN Discovery + Automatic USB /dev/ttyACM* & /dev/ttyUSB* Wi-Fi Sync)
 	router.Post("/devices/connect", func(c *fiber.Ctx) error {
 		var req struct {
-			DeviceID string `json:"device_id"`
-			USBPort  string `json:"usb_port"`
-			SSID     string `json:"ssid"`
-			Password string `json:"password"`
+			DeviceID      string `json:"device_id"`
+			USBPort       string `json:"usb_port"`
+			SSID          string `json:"ssid"`
+			Password      string `json:"password"`
+			GatewayHostIP string `json:"gateway_host_ip"`
 		}
 		_ = c.BodyParser(&req)
 		requestedID := strings.TrimSpace(req.DeviceID)
@@ -1390,8 +1393,15 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			if pass == "" {
 				pass = wifiCfg.Password
 			}
+			gatewayIP := strings.TrimSpace(req.GatewayHostIP)
+			if gatewayIP == "" {
+				gatewayIP = wifiCfg.DetectedHostIP
+			}
+			if gatewayIP == "" {
+				gatewayIP = wifiCfg.BackendIP
+			}
 
-			ack, err := device.ProvisionESP32ViaUSB(targetPort, ssid, pass, wifiCfg.BackendIP, wifiCfg.BackendPort)
+			ack, err := device.ProvisionESP32ViaUSB(targetPort, ssid, pass, gatewayIP, wifiCfg.BackendPort)
 			if err != nil {
 				return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
 					"success": false,
@@ -1423,7 +1433,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 
 			msg := fmt.Sprintf("ESP32-S3 detected on USB %s", targetPort)
 			if ssid != "" {
-				msg = fmt.Sprintf("ESP32-S3 detected on %s and provisioned to server Wi-Fi '%s' (Backend: %s)", targetPort, ssid, wifiCfg.BackendIP)
+				msg = fmt.Sprintf("ESP32-S3 detected on %s and provisioned to Wi-Fi '%s' (Gateway Host: %s)", targetPort, ssid, gatewayIP)
 			}
 
 			return c.JSON(fiber.Map{
@@ -1434,6 +1444,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 				"ip_address":       targetPort,
 				"usb_port":         targetPort,
 				"provisioned_ssid": ssid,
+				"gateway_host_ip":  gatewayIP,
 				"wifi_connected":   ack.WiFiConnected,
 				"connection_mode":  "usb_serial",
 				"latency_ms":       4,
@@ -1453,10 +1464,11 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 	// 7. POST Explicit USB Wi-Fi Provisioning (/dev/ttyACM* or /dev/ttyUSB*)
 	router.Post("/devices/usb/provision", func(c *fiber.Ctx) error {
 		var req struct {
-			USBPort   string `json:"usb_port"`
-			SSID      string `json:"ssid"`
-			Password  string `json:"password"`
-			BackendIP string `json:"backend_ip"`
+			USBPort       string `json:"usb_port"`
+			SSID          string `json:"ssid"`
+			Password      string `json:"password"`
+			BackendIP     string `json:"backend_ip"`
+			GatewayHostIP string `json:"gateway_host_ip"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"success": false, "message": "Invalid JSON request"})
@@ -1471,7 +1483,16 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		if pass == "" {
 			pass = wifiCfg.Password
 		}
-		backendIP := strings.TrimSpace(req.BackendIP)
+
+		// Gateway host IP priority: explicit request -> live auto-detected
+		// host LAN IP -> configured backend IP. Never rely on ip_info.gw.
+		backendIP := strings.TrimSpace(req.GatewayHostIP)
+		if backendIP == "" {
+			backendIP = strings.TrimSpace(req.BackendIP)
+		}
+		if backendIP == "" {
+			backendIP = wifiCfg.DetectedHostIP
+		}
 		if backendIP == "" {
 			backendIP = wifiCfg.BackendIP
 		}
@@ -1513,9 +1534,10 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			"usb_port":         ack.USBPort,
 			"provisioned_ssid": provisionedSSID,
 			"backend_ip":       backendIP,
+			"gateway_host_ip":  backendIP,
 			"wifi_connected":   ack.WiFiConnected,
 			"connection_mode":  "usb_serial",
-			"message":          fmt.Sprintf("%s (%s, Backend %s)", state, ack.USBPort, backendIP),
+			"message":          fmt.Sprintf("%s (%s, Gateway Host IP %s)", state, ack.USBPort, backendIP),
 		})
 	})
 

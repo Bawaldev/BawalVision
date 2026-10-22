@@ -46,6 +46,9 @@ type ServerWiFiConfig struct {
 	HasPassword bool   `json:"has_password"`
 	BackendIP   string `json:"backend_ip"`
 	BackendPort string `json:"backend_port"`
+	// DetectedHostIP is always the live LAN IPv4 address of the host
+	// (Wi-Fi/Ethernet, non-Docker interface), independent of .env overrides.
+	DetectedHostIP string `json:"detected_host_ip"`
 }
 
 // WiFiNetworkInfo represents a detected or known Wi-Fi network in Fedora / GNOME style.
@@ -73,6 +76,7 @@ type ESPSerialAck struct {
 
 var (
 	provisionMu      sync.Mutex
+	ackMu            sync.Mutex
 	provisionedPorts = make(map[string]time.Time)
 	lastUSBAck       *ESPSerialAck
 )
@@ -146,8 +150,8 @@ func containsControlChars(s string) bool {
 
 // GetLastUSBAck returns the most recent ESP32-S3 acknowledgment or telemetry received over USB.
 func GetLastUSBAck() *ESPSerialAck {
-	provisionMu.Lock()
-	defer provisionMu.Unlock()
+	ackMu.Lock()
+	defer ackMu.Unlock()
 	if lastUSBAck == nil {
 		return nil
 	}
@@ -241,14 +245,14 @@ func ScanUSBSerialPorts() []USBPortInfo {
 			}
 		}
 
-		provisionMu.Lock()
+		ackMu.Lock()
 		if lastUSBAck != nil && (lastUSBAck.USBPort == info.Port || filepath.Clean(lastUSBAck.USBPort) == devPath) {
 			info.DeviceID = lastUSBAck.DeviceID
 			info.CurrentSSID = lastUSBAck.SSID
 			info.WiFiConnected = lastUSBAck.WiFiConnected
 			info.Temperature = lastUSBAck.Temperature
 		}
-		provisionMu.Unlock()
+		ackMu.Unlock()
 
 		ports = append(ports, info)
 	}
@@ -320,11 +324,12 @@ func DetectServerWiFiConfig() ServerWiFiConfig {
 	}
 
 	return ServerWiFiConfig{
-		SSID:        ssid,
-		Password:    pass,
-		HasPassword: pass != "",
-		BackendIP:   backendIP,
-		BackendPort: backendPort,
+		SSID:           ssid,
+		Password:       pass,
+		HasPassword:    pass != "",
+		BackendIP:      backendIP,
+		BackendPort:    backendPort,
+		DetectedHostIP: detectLocalLANIPv4(),
 	}
 }
 
@@ -568,11 +573,23 @@ func configureSerial115200(fd uintptr) error {
 	tio.Cflag |= syscall.CS8 | syscall.CREAD | syscall.CLOCAL | syscall.B115200
 	tio.Ispeed = syscall.B115200
 	tio.Ospeed = syscall.B115200
+	// VMIN=0/VTIME=1: blocking reads return after 100 ms even with no data,
+	// so the Go poller never parks forever waiting for a silent ESP32.
+	tio.Cc[syscall.VMIN] = 0
+	tio.Cc[syscall.VTIME] = 1
 
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(&tio))); errno != 0 {
 		return errno
 	}
 	return nil
+}
+
+// dropModemControlLines clears DTR/RTS after opening a USB CDC/ACM port.
+// Toggling these lines is what triggers the ESP32 auto-reset circuit; dropping
+// them mirrors what a terminal (pyserial) does and avoids a second reset pulse.
+func dropModemControlLines(fd uintptr) {
+	var bits int = syscall.TIOCM_DTR | syscall.TIOCM_RTS
+	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCMBIC), uintptr(unsafe.Pointer(&bits)))
 }
 
 // ProvisionESP32ViaUSB opens a validated USB serial port (/dev/ttyACM* or /dev/ttyUSB*), sends the server's Wi-Fi
@@ -602,6 +619,11 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 		password = wifiCfg.Password
 	}
 	if backendIP == "" {
+		// Prefer the live auto-detected host LAN IP; fall back to the
+		// configured value only when no interface could be detected.
+		backendIP = wifiCfg.DetectedHostIP
+	}
+	if backendIP == "" {
 		backendIP = wifiCfg.BackendIP
 	}
 	if backendPort == "" {
@@ -622,15 +644,27 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 	}
 	defer func() { _ = f.Close() }()
 
+	_ = syscall.SetNonblock(int(f.Fd()), true)
 	_ = configureSerial115200(f.Fd())
-	drainSerialInput(f, 150*time.Millisecond)
+	dropModemControlLines(f.Fd())
+	// Opening a USB CDC/ACM port asserts DTR, which resets ESP32-S3 boards.
+	// Wait for the firmware to boot and start its provisioning task before
+	// sending the JSON command, otherwise the command is lost mid-boot.
+	time.Sleep(3500 * time.Millisecond)
+	drainSerialInput(f, 200*time.Millisecond)
 
-	// Build JSON command for ESP32-S3 usb_serial_provisioning_task
-	cmdPayload := map[string]string{
+	// Build JSON command for ESP32-S3 usb_serial_provisioning_task.
+	// The gateway host IP is persisted to NVS as "backend_ip" so the node can
+	// stream standalone (untethered) after the USB cable is removed.
+	portNum, _ := strconv.Atoi(cleanPort)
+	if portNum <= 0 || portNum > 65535 {
+		portNum = 8080
+	}
+	cmdPayload := map[string]interface{}{
 		"cmd":          "set_wifi",
 		"ssid":         cleanSSID,
 		"backend_ip":   cleanIP,
-		"backend_port": cleanPort,
+		"backend_port": portNum,
 	}
 	if cleanPass != "" {
 		cmdPayload["pass"] = cleanPass
@@ -638,18 +672,21 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 
 	cmdBytes, _ := json.Marshal(cmdPayload)
 	cmdLine := append(cmdBytes, '\n')
-	if _, err := f.Write(cmdLine); err != nil {
+	if err := serialWrite(f, cmdLine); err != nil {
 		return nil, fmt.Errorf("failed to write Wi-Fi provisioning command to %s: %w", validPort, err)
 	}
 
-	deadline := time.Now().Add(7 * time.Second)
+	// BAWAL_ACK must arrive within 3.5 s or the provisioning is reported failed.
+	deadline := time.Now().Add(3500 * time.Millisecond)
 	parsedAck := readSerialAck(f, deadline, validPort, func(ack *ESPSerialAck) bool {
 		return ack.Status == "wifi_provisioned" || ack.Status == "error"
 	})
 	if parsedAck == nil {
 		return nil, fmt.Errorf("no BAWAL_ACK received from ESP32-S3 on %s", validPort)
 	}
+	ackMu.Lock()
 	lastUSBAck = parsedAck
+	ackMu.Unlock()
 	if parsedAck.Status != "wifi_provisioned" {
 		return nil, fmt.Errorf("ESP32-S3 provisioning failed with status %q", parsedAck.Status)
 	}
@@ -675,21 +712,27 @@ func ProbeESP32ViaUSB(portPath string) (*ESPSerialAck, error) {
 	}
 	defer func() { _ = f.Close() }()
 
+	_ = syscall.SetNonblock(int(f.Fd()), true)
 	_ = configureSerial115200(f.Fd())
+	dropModemControlLines(f.Fd())
+	// Same DTR auto-reset as provisioning: wait for boot before querying.
+	time.Sleep(3500 * time.Millisecond)
 	drainSerialInput(f, 100*time.Millisecond)
 
 	// Send status query to ESP32-S3
 	cmdLine := []byte("{\"cmd\":\"status\"}\n")
-	if _, err := f.Write(cmdLine); err != nil {
+	if err := serialWrite(f, cmdLine); err != nil {
 		return nil, fmt.Errorf("failed to write status query to %s: %w", validPort, err)
 	}
 
-	deadline := time.Now().Add(800 * time.Millisecond)
+	deadline := time.Now().Add(1200 * time.Millisecond)
 	parsedAck := readSerialAck(f, deadline, validPort, nil)
 	if parsedAck == nil {
 		return nil, fmt.Errorf("no response from ESP32 on %s", validPort)
 	}
+	ackMu.Lock()
 	lastUSBAck = parsedAck
+	ackMu.Unlock()
 
 	return parsedAck, nil
 }
@@ -698,11 +741,52 @@ func drainSerialInput(f *os.File, duration time.Duration) {
 	deadline := time.Now().Add(duration)
 	buf := make([]byte, 256)
 	for time.Now().Before(deadline) {
-		n, err := f.Read(buf)
-		if n == 0 || err != nil {
+		n, err := serialRead(f, buf)
+		if n <= 0 || err != nil {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
+}
+
+// serialRead performs a true non-blocking read directly on the fd. Using
+// os.File.Read would park in the Go netpoller whenever the ESP32 is silent,
+// ignoring the tty VMIN/VTIME timeout entirely.
+func serialRead(f *os.File, buf []byte) (int, error) {
+	for {
+		n, err := syscall.Read(int(f.Fd()), buf)
+		if err == syscall.EINTR {
+			continue
+		}
+		return n, err
+	}
+}
+
+// serialWrite writes all bytes to the non-blocking fd, retrying EAGAIN until
+// the deadline. Returns an error on timeout or a hard failure.
+func serialWrite(f *os.File, data []byte) error {
+	deadline := time.Now().Add(2 * time.Second)
+	remaining := data
+	for len(remaining) > 0 {
+		n, err := syscall.Write(int(f.Fd()), remaining)
+		if err == syscall.EINTR {
+			continue
+		}
+		if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("serial write timed out")
+			}
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return fmt.Errorf("serial write returned %d bytes", n)
+		}
+		remaining = remaining[n:]
+	}
+	return nil
 }
 
 func readSerialAck(f *os.File, deadline time.Time, portPath string, accept func(*ESPSerialAck) bool) *ESPSerialAck {
@@ -710,7 +794,7 @@ func readSerialAck(f *os.File, deadline time.Time, portPath string, accept func(
 	buf := make([]byte, 512)
 
 	for time.Now().Before(deadline) {
-		n, err := f.Read(buf)
+		n, err := serialRead(f, buf)
 		if n > 0 {
 			pending = append(pending, buf[:n]...)
 			for {
@@ -805,8 +889,10 @@ func StartUSBAutoProvisioner(onTelemetry func(ack *ESPSerialAck)) {
 					if err == nil && ack != nil {
 						provisionMu.Lock()
 						provisionedPorts[p.Port] = time.Now()
-						lastUSBAck = ack
 						provisionMu.Unlock()
+						ackMu.Lock()
+						lastUSBAck = ack
+						ackMu.Unlock()
 						if onTelemetry != nil {
 							onTelemetry(ack)
 						}
