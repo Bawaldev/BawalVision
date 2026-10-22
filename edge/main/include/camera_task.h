@@ -13,8 +13,8 @@
 extern "C" {
 #endif
 
-#define DEFAULT_FRAME_WIDTH  320
-#define DEFAULT_FRAME_HEIGHT 240
+#define DEFAULT_FRAME_WIDTH  640
+#define DEFAULT_FRAME_HEIGHT 480
 #define STREAM_FPS           12
 #define INITIAL_BUF_CAPACITY (256 * 1024)
 

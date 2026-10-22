@@ -90,8 +90,8 @@ esp_err_t camera_task_init(void) {
       .ledc_channel = LEDC_CHANNEL_0,
 
       .pixel_format = PIXFORMAT_JPEG,
-      .frame_size = FRAMESIZE_QVGA, // 320x240 (anti-bufferbloat target)
-      .jpeg_quality = 26,           // Stable 4-6 KB payload, prevents VBR motion spikes
+      .frame_size = FRAMESIZE_VGA, // 640x480 resolution
+      .jpeg_quality = 18,          // Sharp, artifact-free VGA quality
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -124,8 +124,8 @@ esp_err_t camera_task_init(void) {
     // =========================================================================
     s->set_vflip(s, 1);                  // Kunci vertikal (tegak)
     s->set_hmirror(s, 0);                // Kunci horizontal (tanpa mirror)
-    s->set_framesize(s, FRAMESIZE_QVGA); // 320x240 resolution
-    s->set_quality(s, 26);               // Quality 26: 4-6 KB stable payload anti-VBR spike
+    s->set_framesize(s, FRAMESIZE_VGA);  // 640x480 resolution
+    s->set_quality(s, 18);               // Quality 18: Crisp VGA image
 
     // =========================================================================
     // 2. AUTOMATIC WHITE BALANCE (AWB) ENGINE
@@ -137,11 +137,11 @@ esp_err_t camera_task_init(void) {
     // =========================================================================
     // 3. EXPOSURE & ANALOG GAIN CONTROL (ANTI-HOTSPOT & ANTI-BLACKOUT)
     // =========================================================================
-    s->set_exposure_ctrl(s, 1);         // Enable hardware Automatic Exposure Control (AEC)
-    s->set_aec2(s, 0);                  // Disable DSP AEC2 (prevent indoor framerate degradation)
-    s->set_ae_level(s, 0);              // Target exposure compensation level: 0 = Standard/Balanced
+    s->set_exposure_ctrl(s, 1);         // Auto exposure aktif
+    s->set_aec2(s, 0);                  // Matikan aec2 agar tidak over-sensitif terhadap lampu plafon
+    s->set_ae_level(s, 1);              // Target eksposur dinaikkan sedikit (+1)
     s->set_gain_ctrl(s, 1);             // Enable Automatic Gain Control (AGC) circuit
-    s->set_gainceiling(s, (gainceiling_t)GAINCEILING_8X); // 8x analog gain ceiling prevents high ISO noise grain
+    s->set_gainceiling(s, (gainceiling_t)GAINCEILING_4X); // Redam bintik noise di area gelap
 
     // =========================================================================
     // 4. HARDWARE OPTICAL & LENS CALIBRATION
@@ -155,9 +155,9 @@ esp_err_t camera_task_init(void) {
     // =========================================================================
     // 5. COLOR & SPATIAL TUNING (ENHANCED DETAIL FOR COMPUTER VISION)
     // =========================================================================
-    s->set_brightness(s, 0);            // Sensor baseline brightness: 0 = Neutral calibrated level
-    s->set_contrast(s, 1);              // Contrast +1: Enhances separation between food objects and background
-    s->set_saturation(s, 1);            // Saturation +1: Vivid color discrimination for freshness classification
+    s->set_brightness(s, 1);            // Angkat kecerahan dasar
+    s->set_contrast(s, 1);              // Perjelas kontur objek
+    s->set_saturation(s, 1);            // Warna lebih hidup
     s->set_sharpness(s, 1);             // Edge sharpness +1: Crisper boundary delineation without ringing
     if (s->set_denoise) {
       s->set_denoise(s, 2);             // Hardware 2D spatial de-noising level 2 (suppresses CMOS sensor grain)

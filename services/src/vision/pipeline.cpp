@@ -203,18 +203,45 @@ bool InspectionPipeline::execute(const std::vector<uint8_t>& raw_frame_bytes, In
 }
 
 void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
-    if (src.empty()) {
-        dst = src;
-        return;
-    }
+    if (src.empty()) { dst = src; return; }
 
     if (!m_enable_enhance) {
         dst = src;
         return;
     }
 
-    // Adaptive illumination, Retinex dynamic range, and noise restoration.
-    IlluminationEnhancerAI::process(src, dst, m_clahe);
+    // 1. Gray-World AWB
+    cv::Scalar mean_bgr = cv::mean(src);
+    const double gray_target = (mean_bgr[0] + mean_bgr[1] + mean_bgr[2]) / 3.0;
+    const float gain_b = static_cast<float>((mean_bgr[0] > 1.0) ? (gray_target / mean_bgr[0]) : 1.0f);
+    const float gain_g = static_cast<float>((mean_bgr[1] > 1.0) ? (gray_target / mean_bgr[1]) : 1.0f);
+    const float gain_r = static_cast<float>((mean_bgr[2] > 1.0) ? (gray_target / mean_bgr[2]) : 1.0f);
+
+    cv::Mat balanced;
+    std::vector<cv::Mat> channels(3);
+    cv::split(src, channels);
+    channels[0].convertTo(channels[0], -1, gain_b, 0);
+    channels[1].convertTo(channels[1], -1, gain_g, 0);
+    channels[2].convertTo(channels[2], -1, gain_r, 0);
+    cv::merge(channels, balanced);
+
+    // 2. CLAHE pada kanal L* (angkat bayangan gelap wajah tanpa bikin silau lampu plafon)
+    cv::Mat lab;
+    cv::cvtColor(balanced, lab, cv::COLOR_BGR2Lab);
+    std::vector<cv::Mat> lab_planes;
+    cv::split(lab, lab_planes);
+
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(1.6, cv::Size(8, 8));
+    clahe->apply(lab_planes[0], lab_planes[0]);
+    cv::merge(lab_planes, lab);
+
+    cv::Mat contrast_enhanced;
+    cv::cvtColor(lab, contrast_enhanced, cv::COLOR_Lab2BGR);
+
+    // 3. Unsharp Masking Ringan
+    cv::Mat low_freq;
+    cv::GaussianBlur(contrast_enhanced, low_freq, cv::Size(0, 0), 1.5);
+    cv::addWeighted(contrast_enhanced, 1.20, low_freq, -0.20, 0, dst);
 }
 
 bool InspectionPipeline::processStream(const cv::Mat& frame,
