@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,7 +31,7 @@ type CameraStore struct {
 	subscribers     map[uint64]*subscriber
 	subCounter      uint64
 	lastFrameTimeMS int64
-	frameCount      uint64
+	frameCount      atomic.Uint64
 	fps             float64
 	streamMode      string // "live" (default) or "mock"
 	activeVideoSrc  string
@@ -160,7 +161,7 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 		}
 	}
 	s.lastFrameTimeMS = now
-	s.frameCount++
+	s.frameCount.Add(1)
 
 	if isMockDevice {
 		if strings.TrimSpace(videoSource) != "" {
@@ -598,5 +599,5 @@ func (s *CameraStore) GetActiveFPS() float64 {
 func (s *CameraStore) GetFrameCount() uint64 {
 	s.RLock()
 	defer s.RUnlock()
-	return s.frameCount
+	return s.frameCount.Load()
 }
