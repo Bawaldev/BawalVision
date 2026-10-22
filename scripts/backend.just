@@ -1,36 +1,55 @@
 COMPOSE_FILE := justfile_directory() + "/deploy/docker-compose.yml"
+BACKEND_PORT := env_var_or_default("BACKEND_PORT", "8080")
+BACKEND_HOST_PORT := env_var_or_default("BACKEND_HOST_PORT", "18080")
+POSTGRES_PORT := env_var_or_default("DB_PORT", env_var_or_default("POSTGRES_PORT", "5433"))
+API_URL := "http://localhost:" + BACKEND_PORT + "/api/v1"
+DEV_ID := env_var_or_default("DEVICE_ID", "")
 
+# --- VISION (C++20 & OpenCV) ---
+
+# Install native C++ and OpenCV apt dependencies
+[group('Vision')]
 setup-deps:
     sudo apt update
     sudo apt install -y build-essential cmake ninja-build pkg-config \
         libopencv-dev libomp-dev libfmt-dev libcpp-httplib-dev nlohmann-json3-dev
 
+# Configure C++ vision service with CMake
+[group('Vision')]
 configure-vision target="Release":
     cd {{ justfile_directory() }} && cmake -B services/build -S services \
         -DCMAKE_BUILD_TYPE={{ target }} \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
+# Build C++ vision service
+[group('Vision')]
 build-vision target="Release":
     cd {{ justfile_directory() }} && if [ ! -f "services/build/Makefile" ] && [ ! -f "services/build/build.ninja" ]; then just configure-vision {{ target }}; fi
     cd {{ justfile_directory() }} && cmake --build services/build --parallel $(nproc)
 
-run-vision device_id=env_var_or_default("DEVICE_ID", ""):
+# Run C++ vision inspection service
+[group('Vision')]
+run-vision device_id=DEV_ID:
     cd {{ justfile_directory() }} && if [ ! -f "services/build/bin/vision_service" ]; then just build-vision; fi
     cd {{ justfile_directory() }} && DEVICE_ID="{{ device_id }}" ./services/build/bin/vision_service "{{ device_id }}"
 
-# --- RACE CONDITION DETECTION (ThreadSanitizer) ---
-
+# Configure ThreadSanitizer build for vision service
+[group('Vision')]
 configure-vision-tsan:
     cd {{ justfile_directory() }} && cmake -B services/build-tsan -S services \
         -DCMAKE_BUILD_TYPE=Debug \
         -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -O1" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
+# Build ThreadSanitizer binary for vision service
+[group('Vision')]
 build-vision-tsan:
     cd {{ justfile_directory() }} && if [ ! -f "services/build-tsan/Makefile" ] && [ ! -f "services/build-tsan/build.ninja" ]; then just configure-vision-tsan; fi
     cd {{ justfile_directory() }} && cmake --build services/build-tsan --parallel $(nproc)
 
-run-vision-tsan device_id=env_var_or_default("DEVICE_ID", ""):
+# Run vision service under gdb with ThreadSanitizer
+[group('Vision')]
+run-vision-tsan device_id=DEV_ID:
     #!/usr/bin/env bash
     if [ ! -f "services/build-tsan/bin/vision_service" ]; then
         just build-vision-tsan
@@ -40,68 +59,92 @@ run-vision-tsan device_id=env_var_or_default("DEVICE_ID", ""):
         -ex "set environment TSAN_OPTIONS=suppressions={{ justfile_directory() }}/services/tsan_suppressions.txt:ignore_noninstrumented_modules=1:second_deadlock_stack=1" \
         -ex "run" \
         --args ./services/build-tsan/bin/vision_service "{{ device_id }}"
-# ------------------------------------------------------
 
+# --- BACKEND (Go Fiber & PostgreSQL) ---
+
+# Build Go API gateway binary
+[group('Backend')]
 build-gateway:
     cd {{ justfile_directory() }}/backend && go build -o bin/gateway cmd/server/main.go
 
+# Run Go API gateway on host
+[group('Backend')]
 run-gateway:
     @just allow-firewall
     cd {{ justfile_directory() }}/backend && \
         DB_HOST={{ env_var_or_default("DB_HOST", "localhost") }} \
-        DB_PORT={{ env_var_or_default("DB_PORT", env_var_or_default("POSTGRES_PORT", "5433")) }} \
+        DB_PORT={{ POSTGRES_PORT }} \
         go run cmd/server/main.go
 
-# ESP32-S3 edge stack: Postgres in compose + backend on the host.
+# Run Postgres in Docker + Go gateway on host (for ESP32)
+[group('Backend')]
 edge-stack:
-    # Docker Desktop for Linux cannot forward LAN TCP payloads to published
-    # container ports (UDP discovery still works), so edge frames/telemetry
-    # must reach a host-side backend.
     @just compose-up postgres
     @docker compose -f {{ COMPOSE_FILE }} stop backend >/dev/null 2>&1 || true
     cd {{ justfile_directory() }}/backend && \
         DB_HOST={{ env_var_or_default("DB_HOST", "localhost") }} \
-        DB_PORT={{ env_var_or_default("DB_PORT", env_var_or_default("POSTGRES_PORT", "5433")) }} \
+        DB_PORT={{ POSTGRES_PORT }} \
         go run cmd/server/main.go
 
-test-api base_url=("http://localhost:" + env_var_or_default("BACKEND_PORT", "8080") + "/api/v1"):
+# Run API endpoint integration tests
+[group('Backend')]
+test-api base_url=API_URL:
     cd {{ justfile_directory() }} && BASE_URL="{{ base_url }}" ./backend/scripts/test_api.sh
 
+# Run Go backend unit tests
+[group('Backend')]
 test-backend:
     cd {{ justfile_directory() }}/backend && go test -v ./...
 
-clean:
-    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/services/build-tsan {{ justfile_directory() }}/backend/bin {{ justfile_directory() }}/frontend/.svelte-kit/output
-
 # --- FRONTEND (Svelte 5 + TypeScript) ---
+
+# Install npm dependencies for SvelteKit frontend
+[group('Frontend')]
 install-frontend:
     cd {{ justfile_directory() }}/frontend && npm install
 
+# Run SvelteKit frontend in development mode
+[group('Frontend')]
 run-frontend:
     cd {{ justfile_directory() }}/frontend && npm run dev
 
+# Build production assets for frontend
+[group('Frontend')]
 build-frontend:
     cd {{ justfile_directory() }}/frontend && npm run build
 
+# Run svelte-check TypeScript validation
+[group('Frontend')]
 check-frontend:
     cd {{ justfile_directory() }}/frontend && npm run check
-# ----------------------------------------
 
 # --- CONTAINER & DOCKER ORCHESTRATION ---
+
+# Start docker-compose service(s) in background
+[group('Docker')]
 compose-up service="":
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} up -d {{ service }}
 
+# Stop all docker-compose services
+[group('Docker')]
 compose-down:
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} down
 
+# Build or rebuild docker-compose service images
+[group('Docker')]
 compose-build service="":
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} build {{ service }}
 
+# Follow docker-compose logs for service(s)
+[group('Docker')]
 compose-logs service="":
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} logs -f {{ service }}
 
-# Host-side TCP bridge for ESP32-S3 -> Docker backend on Docker Desktop.
-edge-proxy host_port=env_var_or_default("BACKEND_PORT", "8080") container_port=env_var_or_default("BACKEND_HOST_PORT", "18080"):
+# --- NETWORK & FIREWALL UTILITIES ---
+
+# Bridge LAN :8080 to Docker :18080
+[group('Network')]
+edge-proxy host_port=BACKEND_PORT container_port=BACKEND_HOST_PORT:
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v socat >/dev/null 2>&1; then
@@ -112,6 +155,8 @@ edge-proxy host_port=env_var_or_default("BACKEND_PORT", "8080") container_port=e
     echo "[INFO] Bridging 0.0.0.0:{{ host_port }} -> 127.0.0.1:{{ container_port }} (Docker Desktop workaround)"
     exec socat TCP-LISTEN:{{ host_port }},reuseaddr,fork TCP:127.0.0.1:{{ container_port }}
 
+# Terminate running edge-proxy bridge processes
+[group('Network')]
 stop-edge-proxy:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -123,7 +168,9 @@ stop-edge-proxy:
     kill $pids 2>/dev/null || true
     echo "[INFO] Stopped edge-proxy ($pids)."
 
-allow-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
+# Allow TCP backend and UDP discovery ports through firewall
+[group('Network')]
+allow-firewall port=BACKEND_PORT proto="tcp":
     #!/usr/bin/env bash
     set -eo pipefail
     discovery_port="${DISCOVERY_PORT:-8765}"
@@ -142,7 +189,9 @@ allow-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
         netsh advfirewall firewall add rule name="BawalVision_discovery" dir=in action=allow protocol=udp localport=${discovery_port} >/dev/null 2>&1 || true
     fi
 
-deny-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
+# Remove firewall rules for backend and UDP discovery
+[group('Network')]
+deny-firewall port=BACKEND_PORT proto="tcp":
     #!/usr/bin/env bash
     set -eo pipefail
     discovery_port="${DISCOVERY_PORT:-8765}"
@@ -160,3 +209,10 @@ deny-firewall port=env_var_or_default("BACKEND_PORT", "8080") proto="tcp":
         netsh advfirewall firewall delete rule name="BawalVision_{{ port }}" >/dev/null 2>&1 || true
         netsh advfirewall firewall delete rule name="BawalVision_discovery" >/dev/null 2>&1 || true
     fi
+
+# --- GENERAL UTILITIES ---
+
+# Clean build artifacts across all services
+[group('General')]
+clean:
+    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/services/build-tsan {{ justfile_directory() }}/backend/bin {{ justfile_directory() }}/frontend/.svelte-kit/output

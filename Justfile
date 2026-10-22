@@ -8,6 +8,7 @@ import 'scripts/backend.just'
 import 'scripts/edge.just'
 import 'scripts/ml.just'
 
+[private]
 default:
     @just --list
 

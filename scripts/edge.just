@@ -1,28 +1,47 @@
+# Edge (ESP32-S3 Firmware) Recipes
+
+DEFAULT_PORT := env_var_or_default("PORT", "/dev/ttyACM0")
+
+# Build ESP32-S3 firmware
+[group('Edge')]
 build-edge:
     @just _idf-exec "build"
 
+# Clean ESP-IDF build directory
+[group('Edge')]
+clean-edge:
+    @just _idf-exec "fullclean"
+
+# Reconfigure ESP-IDF CMake project
+[group('Edge')]
 configure-edge:
     @just _idf-exec "reconfigure"
 
-
-flash-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
-    @just _idf-exec "-p {{ port }} flash monitor"
-
-monitor-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
-    @just _idf-exec "-p {{ port }} monitor"
-
-run-edge port=env_var_or_default("PORT", "/dev/ttyACM0"):
-    just build-edge
-    just flash-edge {{ port }}
-
-erase-nvs port=env_var_or_default("PORT", "/dev/ttyACM0"):
+# Erase flash / NVS on ESP32-S3
+[group('Edge')]
+erase-nvs port=DEFAULT_PORT:
     @just _idf-exec "-p {{ port }} erase-flash"
 
+# Flash firmware and open serial monitor
+[group('Edge')]
+flash-edge port=DEFAULT_PORT:
+    @just _idf-exec "-p {{ port }} flash monitor"
+
+# Open ESP-IDF interactive menuconfig
+[group('Edge')]
 menuconfig-edge:
     @just _idf-exec "menuconfig"
 
-clean-edge:
-    @just _idf-exec "fullclean"
+# Open serial monitor on port
+[group('Edge')]
+monitor-edge port=DEFAULT_PORT:
+    @just _idf-exec "-p {{ port }} monitor"
+
+# Build, flash, and monitor ESP32-S3
+[group('Edge')]
+run-edge port=DEFAULT_PORT:
+    just build-edge
+    just flash-edge {{ port }}
 
 [private]
 _idf-exec cmd:
