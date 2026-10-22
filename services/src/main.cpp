@@ -454,11 +454,6 @@ int main(int argc, char** argv) {
 
     std::vector<DetectionResult> current_detections;
     current_detections.reserve(32);
-    std::vector<uint8_t> annotated_jpeg;
-    static const std::vector<int> kEncodeParams = {
-        cv::IMWRITE_JPEG_QUALITY, 94,
-        cv::IMWRITE_JPEG_OPTIMIZE, 1
-    };
     InspectionOutput inspection;
 
     while (true) {
@@ -569,9 +564,9 @@ int main(int argc, char** argv) {
             }
 
             if (!inspection.annotated_image.empty() && !device_id.empty()) {
-                if (cv::imencode(".jpg", inspection.annotated_image, annotated_jpeg, kEncodeParams)) {
-                    (void)frame_publisher.publish(device_id, inspection.frame_id, annotated_jpeg);
-                }
+                // Encoding + HTTP upload are owned by the publisher worker;
+                // publish() deep-copies so the overlay buffer can be reused.
+                (void)frame_publisher.publish(device_id, inspection.frame_id, inspection.annotated_image);
             }
         }
 
