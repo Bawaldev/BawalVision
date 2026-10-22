@@ -1,0 +1,111 @@
+#include "bawal/ipc/shm_consumer.hpp"
+
+
+namespace bawal::ipc {
+
+bool ShmFrameConsumer::init() {
+    m_shm_fd = shm_open(SHM_NAME, O_RDONLY, 0666);
+    if (m_shm_fd < 0) {
+        std::cerr << "[SHM] Gagal membuka shm_open: " << strerror(errno) << std::endl;
+        return false;
+    }
+    void* ptr = mmap(nullptr, TOTAL_SHM_SIZE, PROT_READ, MAP_SHARED, m_shm_fd, 0);
+    if (ptr == MAP_FAILED) {
+        std::cerr << "[SHM] mmap gagal: " << strerror(errno) << std::endl;
+        return false;
+    }
+    m_base_ptr = reinterpret_cast<uint8_t*>(ptr);
+    m_global_hdr = reinterpret_cast<ShmGlobalHeader*>(m_base_ptr);
+    if (m_global_hdr->magic != SHM_MAGIC) {
+        std::cerr << "[SHM] Magic header tidak cocok (backend belum siap?)" << std::endl;
+        return false;
+    }
+
+    unlink(SOCK_NOTIFY_PATH);
+    m_server_sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (m_server_sock < 0) {
+        std::cerr << "[SHM] Gagal membuat UDS notify: " << strerror(errno) << std::endl;
+        return false;
+    }
+
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, SOCK_NOTIFY_PATH, sizeof(addr.sun_path) - 1);
+
+    if (bind(m_server_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::cerr << "[SHM] Gagal bind UDS notify: " << strerror(errno) << std::endl;
+        return false;
+    }
+    // Backend and vision may run as different users; allow the Go producer to
+    // connect to the notify socket regardless of umask.
+    chmod(SOCK_NOTIFY_PATH, 0666);
+
+    listen(m_server_sock, 1);
+    std::cout << "[SHM] Consumer siap. Menunggu Go backend terhubung...\n";
+    return true;
+}
+
+bool ShmFrameConsumer::waitForNextFrame(cv::Mat& out_bgr_frame, uint32_t& out_frame_id) {
+    if (m_client_sock < 0) {
+        m_client_sock = accept(m_server_sock, nullptr, nullptr);
+        if (m_client_sock < 0) return false;
+        std::cout << "[SHM] Go backend terhubung ke pipeline C++!\n";
+    }
+
+    uint64_t latest_seq = 0;
+    ssize_t n = read(m_client_sock, &latest_seq, sizeof(latest_seq));
+    if (n <= 0) {
+        close(m_client_sock);
+        m_client_sock = -1;
+        return false;
+    }
+
+    // Drain every queued notification and process only the freshest sequence.
+    // Without this, a slow consumer would replay old tokens and build latency.
+    uint64_t queued_seq = 0;
+    while (recv(m_client_sock, &queued_seq, sizeof(queued_seq), MSG_DONTWAIT) == sizeof(queued_seq)) {
+        latest_seq = queued_seq;
+    }
+
+    uint64_t global_seq = m_global_hdr->write_seq.load(std::memory_order_acquire);
+    if (global_seq > latest_seq) {
+        latest_seq = global_seq;
+    }
+    if (latest_seq == 0) {
+        return false;
+    }
+
+    uint32_t slot_idx = (latest_seq - 1) & (SHM_NUM_SLOTS - 1);
+    size_t slot_offset = sizeof(ShmGlobalHeader) + (slot_idx * SLOT_STRIDE);
+
+    auto* slot_hdr = reinterpret_cast<ShmSlotHeader*>(m_base_ptr + slot_offset);
+    const uint8_t* payload_ptr = m_base_ptr + slot_offset + sizeof(ShmSlotHeader);
+
+    if (slot_hdr->ready.load(std::memory_order_acquire) != 1) {
+        return false;
+    }
+
+    uint32_t size = slot_hdr->payload_size;
+    if (size == 0 || size > SHM_SLOT_CAPACITY) {
+        return false;
+    }
+
+    out_frame_id = slot_hdr->frame_id;
+    cv::Mat raw_jpeg_view(1, static_cast<int>(size), CV_8UC1, const_cast<uint8_t*>(payload_ptr));
+    cv::imdecode(raw_jpeg_view, cv::IMREAD_COLOR, &out_bgr_frame);
+
+    return !out_bgr_frame.empty();
+}
+
+void ShmFrameConsumer::cleanup() {
+    if (m_client_sock >= 0) close(m_client_sock);
+    if (m_server_sock >= 0) {
+        close(m_server_sock);
+        unlink(SOCK_NOTIFY_PATH);
+    }
+    if (m_base_ptr != nullptr) munmap(m_base_ptr, TOTAL_SHM_SIZE);
+    if (m_shm_fd >= 0) close(m_shm_fd);
+}
+
+
+};

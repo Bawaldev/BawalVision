@@ -22,7 +22,7 @@
 #include "bawal/vision/frame_grabber.hpp"
 #include "bawal/server.hpp"
 #include "bawal/server/async_frame_publisher.hpp"
-
+#include "bawal/ipc.hpp"
 using namespace bawal::vision;
 using namespace bawal::server;
 
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
         : (backend_base_url + "/api/v1/camera/latest/raw");
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
-    // 4. Initialize Inspection Pipeline Orchestrator (Prioritizing YOLOv8s over YOLOv8n)
+    // 4. Inisialisasi Model AI Inspection Pipeline
     std::string model_path = "/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx";
     if (const char* env_model = std::getenv("MODEL_PATH")) {
         if (std::string(env_model).length() > 0) {
@@ -110,49 +110,16 @@ int main(int argc, char** argv) {
         }
     } else {
         const std::vector<std::string> candidate_model_paths = {
-            // Priority 1: YOLOv8s INT8
             "/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
             "ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
             "../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
             "../../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
-            "../../../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
             "/app/weights/yolov8s_int8.onnx",
-            "/app/weights/yolo8s_int8.onnx",
             "weights/yolov8s_int8.onnx",
-            "weights/yolo8s_int8.onnx",
-            "../weights/yolov8s_int8.onnx",
-            "../../weights/yolov8s_int8.onnx",
-
-            // Priority 2: YOLOv8s FP32
             "/app/ml/AI1/model/yolov8s/ai1_vision.onnx",
-            "/app/ml/AI1/model/yolov8s/yolov8s.onnx",
             "ml/AI1/model/yolov8s/ai1_vision.onnx",
-            "ml/AI1/model/yolov8s/yolov8s.onnx",
-            "../ml/AI1/model/yolov8s/ai1_vision.onnx",
-            "../../ml/AI1/model/yolov8s/ai1_vision.onnx",
-            "../../../ml/AI1/model/yolov8s/ai1_vision.onnx",
-            "/app/weights/yolov8s.onnx",
-            "weights/yolov8s.onnx",
-            "../weights/yolov8s.onnx",
-            "../../weights/yolov8s.onnx",
-
-            // Priority 3: Fallback to YOLOv8n INT8 / Generic
             "/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
-            "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
-            "../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
-            "../../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
-            "../../../ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
-            "/app/weights/ai1_vision_int8.onnx",
-            "weights/ai1_vision_int8.onnx",
-            "../weights/ai1_vision_int8.onnx",
-            "../../weights/ai1_vision_int8.onnx",
-            "../../../weights/ai1_vision_int8.onnx",
-
-            // Priority 4: Fallback to YOLOv8n FP32
-            "/app/ml/AI1/model/yolov8n/ai1_vision.onnx",
-            "ml/AI1/model/yolov8n/ai1_vision.onnx",
-            "../ml/AI1/model/yolov8n/ai1_vision.onnx",
-            "../../ml/AI1/model/yolov8n/ai1_vision.onnx"
+            "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx"
         };
         for (const auto& p : candidate_model_paths) {
             std::ifstream check(p.c_str());
@@ -172,15 +139,13 @@ int main(int argc, char** argv) {
               << (pipeline.getEnhancer().isReady() ? "Active (NCNN Vulkan / Multi-Arch SIMD)" : "Standby") 
               << " | Scale: " << pipeline.getEnhancer().params.scale << "x\n";
 
-    CURL* curl_fetch = curl_easy_init();
-    CURL* curl_post = curl_easy_init();
-
     const std::string window_name = "BawalVision AI1 Inspection Pipeline";
     if (!headless) {
         cv::namedWindow(window_name, cv::WINDOW_NORMAL);
         cv::resizeWindow(window_name, 800, 600);
     }
 
+    // 5. Inisialisasi Ingestion (Mock MP4 vs Zero-Copy POSIX SHM IPC)
     bool use_video_source = false;
     if (const char* env_video = std::getenv("VIDEO_PATH")) {
         if (std::string(env_video).length() > 0) {
@@ -194,23 +159,54 @@ int main(int argc, char** argv) {
             }
         }
     }
-    if (!use_video_source) {
-        (void)pipeline.openVideoSource(SourceMode::ESP32_STREAM, stream_url);
-        pipeline.getVideoSource().setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
+
+    bool use_shm = false;
+    bawal::ipc::ShmFrameConsumer shm_consumer;
+    LatestMatMailbox shm_mailbox(2);
+    std::atomic<bool> shm_worker_running{false};
+    std::atomic<uint32_t> shm_latest_frame_id{0};
+    std::thread shm_worker;
+
+    // Fallback HTTP FrameGrabber (hanya aktif jika mode video lokal atau jika SHM gagal)
+    LatestFrameGrabber frame_grabber(pipeline.getVideoSource());
+
+    if (use_video_source) {
+        frame_grabber.start();
+    } else {
+        // Coba inisialisasi Consumer SHM modular
+        if (shm_consumer.init()) {
+            use_shm = true;
+            shm_worker_running.store(true, std::memory_order_release);
+
+            // Ingestion worker asinkron: Menunggu sinyal frame SHM tanpa menyandera GUI main loop
+            shm_worker = std::thread([&]() {
+                cv::Mat decoded;
+                uint32_t fid = 0;
+                while (shm_worker_running.load(std::memory_order_acquire)) {
+                    if (shm_consumer.waitForNextFrame(decoded, fid)) {
+                        if (!decoded.empty()) {
+                            shm_latest_frame_id.store(fid, std::memory_order_relaxed);
+                            shm_mailbox.publish(decoded);
+                        }
+                    } else {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    }
+                }
+            });
+            fmt::print("[IPC] POSIX Shared Memory zero-copy consumer aktif!\n");
+        } else {
+            fmt::print("[WARN] Gagal mengaktifkan SHM. Fallback otomatis ke HTTP frame grabber.\n");
+            (void)pipeline.openVideoSource(SourceMode::ESP32_STREAM, stream_url);
+            pipeline.getVideoSource().setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
+            frame_grabber.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
+            frame_grabber.start();
+        }
     }
 
     uint64_t frame_seq = 0;
     auto last_ai_dispatch = std::chrono::steady_clock::now() - std::chrono::seconds(1);
 
-    // Capture (I/O) is fully decoupled from processing and inference. The grabber
-    // owns the blocking HTTP/decoder work; the main loop only consumes the newest
-    // completed frame.
-    LatestFrameGrabber frame_grabber(pipeline.getVideoSource());
-    frame_grabber.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
-    frame_grabber.start();
-
-    // Asynchronous background AI worker. It consumes a single-slot mailbox, so
-    // frames that arrive while inference is busy are dropped rather than queued.
+    // AI Worker Asinkron (Single-Slot Mailbox Decoupled)
     std::mutex ai_mutex;
     LatestMatMailbox ai_mailbox(3);
     std::atomic<bool> ai_worker_running{true};
@@ -219,7 +215,6 @@ int main(int argc, char** argv) {
     std::vector<DetectionResult> shared_detections;
     std::string current_device_id = device_id;
 
-    // Non-blocking discovery service (never runs in the frame path).
     std::mutex discovery_mutex;
     std::string discovered_device_id;
     bool discovery_has_update = false;
@@ -228,9 +223,7 @@ int main(int argc, char** argv) {
     auto last_valid_detection_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     std::thread discovery_worker([&]() {
-        if (use_video_source) {
-            return;
-        }
+        if (use_video_source) return;
         while (discovery_running.load(std::memory_order_acquire)) {
             const std::string id = bawal::server::discoverActiveDeviceID(nullptr, backend_base_url);
             {
@@ -273,7 +266,7 @@ int main(int argc, char** argv) {
             if (pipeline.runInference(frame_to_process, detected)) {
                 const double infer_ms = ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
                 
-                // Periodically synchronize dynamic confidence threshold from backend (every ~3 seconds)
+                // Sinkronisasi Confidence Threshold dinamis dari backend tiap 3 detik
                 const auto now_thresh = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now_thresh - last_thresh_sync).count() >= 3) {
                     last_thresh_sync = now_thresh;
@@ -301,7 +294,6 @@ int main(int argc, char** argv) {
                         last_valid_detection_time = std::chrono::steady_clock::now();
                         ai_detections_updated.store(true);
                     } else {
-                        // Only clear after 1.5s of no detections to avoid HUD flicker
                         const auto now = std::chrono::steady_clock::now();
                         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_valid_detection_time).count();
                         if (elapsed_ms > 1500 && !shared_detections.empty()) {
@@ -322,9 +314,6 @@ int main(int argc, char** argv) {
                     fmt::print("\n");
                 }
 
-                // State-Change Hysteresis & Selective Sync Gatekeeper:
-                // Only dispatch if the food detection state has changed (new item or status change)
-                // or if 15 seconds have passed (periodic heartbeat). Enforces a minimum debounce.
                 const auto current_time = std::chrono::steady_clock::now();
                 const auto elapsed_since_dispatch = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_dispatch_time).count();
 
@@ -342,17 +331,12 @@ int main(int argc, char** argv) {
                 const bool heartbeat_sync = is_mock_source ? (elapsed_since_dispatch >= 2500) : (elapsed_since_dispatch >= 15000);
                 const bool debounce_ok = (elapsed_since_dispatch >= 800);
 
-                // Shared YOLO object detection + OpenCV optical/spoilage JSON serializer formatted with fmt::format
                 auto serializeVisionDetectionsJson = [&](std::string& out_body, const std::vector<DetectionResult>& dets) {
                     const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
                     out_body += fmt::format(
                         R"("scene_optical":{{"avg_r":{:.1f},"avg_g":{:.1f},"avg_b":{:.1f},"lux_luminance":{:.1f},"color_temperature":{},"white_balance_status":"{}"}},"detections":[)",
-                        optical.avg_r,
-                        optical.avg_g,
-                        optical.avg_b,
-                        optical.lux_luminance,
-                        optical.color_temperature,
-                        optical.white_balance_status
+                        optical.avg_r, optical.avg_g, optical.avg_b,
+                        optical.lux_luminance, optical.color_temperature, optical.white_balance_status
                     );
                     for (size_t i = 0; i < dets.size(); ++i) {
                         const auto& vd = dets[i];
@@ -360,19 +344,11 @@ int main(int argc, char** argv) {
                         const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f)
                                                        ? "REJECT"
                                                        : ((spoilage_pct >= 25.0f || vd.confidence < 0.60f) ? "REVIEW" : "PASS");
-                        if (i > 0) {
-                            out_body.push_back(',');
-                        }
+                        if (i > 0) out_body.push_back(',');
                         out_body += fmt::format(
                             R"({{"food_name":"{}","similarity_rate":{:.4f},"spoilage_score":{:.2f},"status":"{}","box":[{},{},{},{}]}})",
-                            vd.class_name,
-                            vd.confidence,
-                            spoilage_pct,
-                            status,
-                            vd.bbox.x,
-                            vd.bbox.y,
-                            vd.bbox.width,
-                            vd.bbox.height
+                            vd.class_name, vd.confidence, spoilage_pct, status,
+                            vd.bbox.x, vd.bbox.y, vd.bbox.width, vd.bbox.height
                         );
                     }
                     out_body.push_back(']');
@@ -380,21 +356,16 @@ int main(int argc, char** argv) {
                 };
 
                 if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty()) {
-                    // Consume the rewind flag once: subsequent frames are not rewind events.
                     const bool is_rewound = video_has_rewound.exchange(false, std::memory_order_relaxed);
                     const std::string engine_pipeline = fmt::format("{} + OpenCV HSV", pipeline.getModelArchitecture());
                     std::string payload_json = is_mock_source
                         ? fmt::format(
                               R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest","engine_pipeline":"{}","is_rewind":{},)",
-                              dev_id,
-                              dev_id,
-                              engine_pipeline,
-                              is_rewound ? "true" : "false"
+                              dev_id, dev_id, engine_pipeline, is_rewound ? "true" : "false"
                           )
                         : fmt::format(
                               R"({{"device_id":"{}","source_type":"live_esp32","is_rewind":{},)",
-                              dev_id,
-                              is_rewound ? "true" : "false"
+                              dev_id, is_rewound ? "true" : "false"
                           );
 
                     const auto optical = serializeVisionDetectionsJson(payload_json, valid_detections);
@@ -403,16 +374,9 @@ int main(int argc, char** argv) {
                     if (is_mock_source) {
                         const std::string mock_telemetry_json = fmt::format(
                             R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","telemetry_struct":"MockTelemetryPayload","connection_mode":"mock_simulation","engine_pipeline":"{}","is_rewind":{},"scene_optical":{{"avg_r":{:.1f},"avg_g":{:.1f},"avg_b":{:.1f},"lux_luminance":{:.1f},"color_temperature":{},"white_balance_status":"{}"}}}})",
-                            dev_id,
-                            dev_id,
-                            engine_pipeline,
-                            is_rewound ? "true" : "false",
-                            optical.avg_r,
-                            optical.avg_g,
-                            optical.avg_b,
-                            optical.lux_luminance,
-                            optical.color_temperature,
-                            optical.white_balance_status
+                            dev_id, dev_id, engine_pipeline, is_rewound ? "true" : "false",
+                            optical.avg_r, optical.avg_g, optical.avg_b, optical.lux_luminance,
+                            optical.color_temperature, optical.white_balance_status
                         );
                         (void)bawal::server::postMockTelemetryPayload(backend_base_url, mock_telemetry_json);
                     }
@@ -436,8 +400,7 @@ int main(int argc, char** argv) {
                     std::string clear_json = is_mock_source
                         ? fmt::format(
                               R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest",)",
-                              dev_id,
-                              dev_id
+                              dev_id, dev_id
                           )
                         : fmt::format(
                               R"({{"device_id":"{}","source_type":"live_esp32",)",
@@ -456,7 +419,6 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Return the processed Mat allocation to the mailbox pool.
             ai_mailbox.recycle(std::move(frame_to_process));
         }
         if (curl_db) curl_easy_cleanup(curl_db);
@@ -465,13 +427,8 @@ int main(int argc, char** argv) {
     AsyncAnnotatedFramePublisher frame_publisher(backend_base_url);
     frame_publisher.start();
 
-    // Event-driven device switch cleanup. Clearing a stale device entry is a rare
-    // operation, so it runs in a short-lived isolated worker rather than blocking
-    // the capture/processing loop on an HTTP round-trip.
     auto postDeviceClearAsync = [backend_base_url](std::string id) {
-        if (id.empty()) {
-            return;
-        }
+        if (id.empty()) return;
         std::thread([backend_base_url, id = std::move(id)]() {
             const bool is_mock = (id == "MOCK_VIDEO_CAM" || id.rfind("MOCK_", 0) == 0);
             const std::string json = is_mock
@@ -500,22 +457,38 @@ int main(int argc, char** argv) {
         inspection.detections.clear();
         inspection.dark_status = DarkDetectionResult{};
 
-        CapturedFrame captured;
-        const auto wait_budget = use_video_source ? std::chrono::milliseconds(50)
-                                                  : std::chrono::milliseconds(10);
-        if (!frame_grabber.waitTake(captured, wait_budget) || captured.image.empty()) {
-            if (!headless) {
-                (void)cv::waitKey(1);
+        cv::Mat frame_to_stream;
+        uint32_t active_fid = 0;
+
+        // INGESTION: POSIX SHM IPC vs HTTP Grabber (Mock Video)
+        if (use_shm) {
+            if (!shm_mailbox.waitTake(frame_to_stream, std::chrono::milliseconds(10)) || frame_to_stream.empty()) {
+                if (!headless) (void)cv::waitKey(1);
+                continue;
             }
-            continue;
-        }
+            active_fid = shm_latest_frame_id.load(std::memory_order_relaxed);
+        } else {
+            CapturedFrame captured;
+            const auto wait_budget = use_video_source ? std::chrono::milliseconds(50)
+                                                      : std::chrono::milliseconds(10);
+            if (!frame_grabber.waitTake(captured, wait_budget) || captured.image.empty()) {
+                if (!headless) (void)cv::waitKey(1);
+                continue;
+            }
 
-        cv::Mat frame_to_stream = std::move(captured.image);
+            frame_to_stream = std::move(captured.image);
+            active_fid = static_cast<uint32_t>(frame_seq + 1);
 
-        if (captured.rewound) {
-            pipeline.resetTracker();
-            video_has_rewound.store(true, std::memory_order_relaxed);
-            fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
+            if (captured.rewound) {
+                pipeline.resetTracker();
+                video_has_rewound.store(true, std::memory_order_relaxed);
+                fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
+            }
+
+            const bool detections_changed = ai_detections_updated.exchange(false, std::memory_order_relaxed);
+            if (captured.duplicate && !detections_changed) {
+                continue;
+            }
         }
 
         if (!use_video_source) {
@@ -531,8 +504,6 @@ int main(int argc, char** argv) {
             }
 
             if (device_id_pinned) {
-                // An explicitly configured device is authoritative; ignore
-                // discovery churn rather than switching to an unrelated stream.
                 has_discovery_update = false;
             }
 
@@ -553,38 +524,30 @@ int main(int argc, char** argv) {
                 stream_url = device_id.empty()
                     ? fmt::format("{}/api/v1/camera/latest/raw", backend_base_url)
                     : fmt::format("{}/api/v1/camera/latest/{}/raw", backend_base_url, device_id);
-                frame_grabber.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
+                if (!use_shm) {
+                    frame_grabber.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
+                }
                 fmt::print("[INFO] Active camera stream: {}\n", device_id.empty() ? "<none>" : device_id);
                 fmt::print("[INFO] Ingestion URL: {}\n", stream_url);
             }
-
-            // Avoid re-processing and flood-broadcasting duplicate frames unless async AI detections updated
-            const bool detections_changed = ai_detections_updated.exchange(false, std::memory_order_relaxed);
-            if (captured.duplicate && !detections_changed) {
-                continue;
-            }
         }
 
-        inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
+        inspection.frame_id = (active_fid > 0) ? active_fid : static_cast<uint32_t>(frame_seq + 1);
 
-        // Get currently active detections (copy under the short-lived lock).
         {
             std::lock_guard<std::mutex> lock(ai_mutex);
             current_detections.assign(shared_detections.begin(), shared_detections.end());
         }
 
-        // High-Speed Real-Time Video Streaming Pass (Dewarp + Fast ISP + Overlay, < 6 ms)
+        // Real-Time Video Streaming Pass (Dewarp + Fast ISP + Overlay, < 6 ms)
         const bool is_mock_video = use_video_source || (device_id.find("MOCK") != std::string::npos);
         if (pipeline.processStream(frame_to_stream, current_detections, inspection, is_mock_video)) {
             frame_ok = true;
             frame_seq++;
 
-            // Dispatch frame to background AI worker with responsive pacing (~11 inferences/sec on YOLOv8s INT8)
             const auto now_ai = std::chrono::steady_clock::now();
             const auto ms_since_ai = std::chrono::duration_cast<std::chrono::milliseconds>(now_ai - last_ai_dispatch).count();
             if (ms_since_ai >= 90) {
-                // Copy into a pooled Mat and hand it over without blocking. If the
-                // AI worker is still busy, the previous pending frame is replaced.
                 ai_mailbox.publish(inspection.dewarped_image);
                 last_ai_dispatch = now_ai;
             }
@@ -595,9 +558,6 @@ int main(int argc, char** argv) {
                           << current_detections.size() << "\n";
             }
 
-            // Encode on the processing thread (CPU-bound) but hand the blocking
-            // HTTP upload to the async publisher. The publisher keeps only the
-            // newest frame, so a slow backend can never stall this loop.
             if (!inspection.annotated_image.empty() && !device_id.empty()) {
                 if (cv::imencode(".jpg", inspection.annotated_image, annotated_jpeg, kEncodeParams)) {
                     (void)frame_publisher.publish(device_id, inspection.frame_id, annotated_jpeg);
@@ -608,12 +568,11 @@ int main(int argc, char** argv) {
         if (!headless) {
             cv::Mat display_frame;
             if (!frame_ok || inspection.annotated_image.empty()) {
-                // Standby Waiting HUD
                 display_frame = cv::Mat::zeros(480, 640, CV_8UC3);
                 cv::putText(display_frame, "BAWAL VISION AI1 PIPELINE", cv::Point(145, 180),
                             cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
-                cv::putText(display_frame, "Waiting for ESP32-S3 Stream...", cv::Point(145, 230),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
+                cv::putText(display_frame, use_shm ? "Waiting for SHM Frame..." : "Waiting for ESP32-S3 Stream...",
+                            cv::Point(145, 230), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
                 cv::putText(display_frame, "Target Device: " + device_id, cv::Point(145, 265),
                             cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(100, 255, 100), 1, cv::LINE_AA);
                 cv::putText(display_frame, "URL: " + stream_url, cv::Point(145, 295),
@@ -632,8 +591,17 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Shutdown order: stop producers first, then workers, then network uploader.
-    frame_grabber.stop();
+    // Prosedur Shutdown Urut & Bersih
+    if (use_shm) {
+        shm_worker_running.store(false, std::memory_order_release);
+        if (shm_worker.joinable()) {
+            shm_worker.join();
+        }
+        // shm_consumer otomatis dieksekusi destruktornya (RAII)
+    } else {
+        frame_grabber.stop();
+    }
+
     discovery_running.store(false, std::memory_order_release);
     ai_worker_running.store(false, std::memory_order_release);
     if (discovery_worker.joinable()) {
@@ -648,8 +616,6 @@ int main(int argc, char** argv) {
         cv::destroyAllWindows();
     }
 
-    if (curl_fetch) curl_easy_cleanup(curl_fetch);
-    if (curl_post) curl_easy_cleanup(curl_post);
     if (curl) {
         curl_easy_cleanup(curl);
     }

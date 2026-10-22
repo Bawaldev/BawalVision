@@ -44,14 +44,22 @@ services:
       - DISCOVERY_PORT=8765
       - USB_AUTO_PROVISION=${USB_AUTO_PROVISION:-0}
     privileged: false
+    # Requires native Linux Docker. Docker Desktop VMs cannot pass through
+    # host USB devices; on Docker Desktop run the gateway on the host instead
+    # (`just edge-stack`) so it can open /dev/ttyACM0 directly.
     devices:
       - "/dev/ttyACM0:/dev/ttyACM0"
+    # Share the host IPC namespace so /dev/shm frames and the notify socket are
+    # visible to the vision container (zero-copy frame hand-off).
+    ipc: host
     volumes:
       - /sys:/sys:ro
       - ../.cache_trash:/app/.cache_trash:ro
       - ../examples:/app/examples:ro
     group_add:
-      - dialout
+      # Host dialout GID (typically 18) so the non-root container user can
+      # open the mapped /dev/ttyACM0 node with its 0660 root:dialout mode.
+      - "${DIALOUT_GID:-18}"
     device_cgroup_rules:
       - 'c *:* rmw'
     networks:
@@ -67,6 +75,8 @@ services:
       dockerfile: deploy/Dockerfile.vision
     container_name: bawal_vision
     restart: unless-stopped
+    # Must share the backend's IPC namespace to consume /dev/shm frames.
+    ipc: host
     ports:
       - "${VISION_PORT:-8081}:8080"
     environment:
@@ -90,6 +100,9 @@ services:
       - ../examples:/app/examples:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      backend:
+        condition: service_started
     networks:
       - bawal-net
 

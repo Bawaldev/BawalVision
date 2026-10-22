@@ -8,14 +8,33 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"bawal_vision_backend/internal/camera_handler"
 	"bawal_vision_backend/internal/inspection"
+	"bawal_vision_backend/internal/shm"
 
 	fiber "github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
 )
+
+var (
+	globalShmProducer *shm.ShmProducer
+	shmInitOnce       sync.Once
+)
+
+func getShmProducer() *shm.ShmProducer {
+	shmInitOnce.Do(func() {
+		p, err := shm.NewShmProducer()
+		if err != nil {
+			return
+		}
+		p.ConnectNotifyListener()
+		globalShmProducer = p
+	})
+	return globalShmProducer
+}
 
 // requestClientIP prefers the edge node's self-reported address over the
 // immediate peer address, which is the host-side proxy/Docker gateway when
@@ -190,6 +209,8 @@ func syncTelemetryFromCameraIngress(c *fiber.Ctx, deviceID string, frameID uint3
 }
 
 func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
+	_ = getShmProducer()
+
 	camGroup := router.Group("/camera")
 
 	ingressHandler := func(c *fiber.Ctx) error {
@@ -220,6 +241,10 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 					videoUUID = inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, devID)
 				}
 				if len(imageBytes) > 0 {
+					if prod := getShmProducer(); prod != nil {
+						_ = prod.WriteFrame(payload.FrameID, imageBytes)
+					}
+
 					ipStr := strings.Clone(requestClientIP(c))
 					isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
 					camera_handler.GlobalCameraStore.StoreRawFrameWithMockMeta(devID, payload.FrameID, imageBytes, ipStr, isRewind, videoSrc, videoUUID)
@@ -260,6 +285,9 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 
 		frameIDHeader := c.Get("X-Frame-ID", "0")
 		frameID, _ := strconv.ParseUint(frameIDHeader, 10, 32)
+		if prod := getShmProducer(); prod != nil {
+			_ = prod.WriteFrame(uint32(frameID), body)
+		}
 
 		imageBytes := make([]byte, len(body))
 		copy(imageBytes, body)
@@ -464,23 +492,53 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		c.Set("X-Accel-Buffering", "no")
 		c.Set("Connection", "close")
 
+		// Bound the kernel send queue so a slow browser cannot accumulate
+		// seconds worth of old VGA frames. With a ~20 KB frame, 64 KB keeps
+		// at most a couple of frames in flight; the writer always serves the
+		// freshest frame from the store on the next tick.
+		conn := c.Context().Conn()
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			_ = tcpConn.SetNoDelay(true)
+			_ = tcpConn.SetWriteBuffer(32 * 1024)
+		}
+
 		c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+			const (
+				frameInterval = 35 * time.Millisecond
+				writeTimeout  = 150 * time.Millisecond
+			)
+
 			notifyChan, unsubscribe := camera_handler.GlobalCameraStore.Subscribe(deviceID)
 			defer unsubscribe()
 
+			writeFrame := func(frame []byte) error {
+				// A write deadline turns a stalled client into a clean stream
+				// disconnect instead of an ever-growing latency queue.
+				if conn != nil {
+					_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+				}
+				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame)); err != nil {
+					return err
+				}
+				if _, err := w.Write(frame); err != nil {
+					return err
+				}
+				if _, err := w.WriteString("\r\n"); err != nil {
+					return err
+				}
+				return w.Flush()
+			}
+
 			var lastSentVersion uint64 = 0
 
-			// Send current frame immediately if available
 			if initialFrame, ver, ok := camera_handler.GlobalCameraStore.GetLatestStreamFrameMeta(deviceID); ok && len(initialFrame) > 0 {
 				lastSentVersion = ver
-				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(initialFrame)); err == nil {
-					_, _ = w.Write(initialFrame)
-					_, _ = w.WriteString("\r\n")
-					_ = w.Flush()
+				if err := writeFrame(initialFrame); err != nil {
+					return
 				}
 			}
 
-			ticker := time.NewTicker(35 * time.Millisecond) // up to ~28 FPS
+			ticker := time.NewTicker(frameInterval) // up to ~28 FPS
 			defer ticker.Stop()
 
 			for {
@@ -492,7 +550,8 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 				case <-ticker.C:
 				}
 
-				// Drain any pending notifications so stale signals are discarded
+				// Drain any pending notifications: they only mean "new frame
+				// available", so stale signals are discarded rather than queued.
 				for {
 					select {
 					case _, ok := <-notifyChan:
@@ -505,26 +564,17 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 				}
 			drained:
 
-				// Zero-Queue Drop: Always fetch latest frame pointer directly from memory
+				// Zero-Queue Drop: always fetch the latest frame pointer
+				// directly from memory, never from a per-client backlog.
 				frameBytes, ver, ok := camera_handler.GlobalCameraStore.GetLatestStreamFrameMeta(deviceID)
 				if !ok || len(frameBytes) == 0 || ver <= lastSentVersion {
 					continue
 				}
 				lastSentVersion = ver
 
-				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frameBytes)); err != nil {
-					break
+				if err := writeFrame(frameBytes); err != nil {
+					return
 				}
-				if _, err := w.Write(frameBytes); err != nil {
-					break
-				}
-				if _, err := w.WriteString("\r\n"); err != nil {
-					break
-				}
-				if err := w.Flush(); err != nil {
-					break
-				}
-				time.Sleep(35 * time.Millisecond)
 			}
 		})
 

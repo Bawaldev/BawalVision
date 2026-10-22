@@ -35,6 +35,13 @@
     let errorMessage = $state('');
     let detectedUsbPorts = $state<USBPortInfo[]>([]);
     let selectedUsbPort = $state('');
+    let portOptions = $derived.by(() => {
+        const options = detectedUsbPorts.map((p) => p.port);
+        for (const fallback of ['/dev/ttyACM0', '/dev/ttyUSB0']) {
+            if (!options.includes(fallback)) options.push(fallback);
+        }
+        return options;
+    });
     let serverWifiSsid = $state('');
     let serverWifiPassword = $state('');
     let serverBackendIp = $state('');
@@ -92,10 +99,16 @@
         if (!hw) return;
 
         detectedUsbPorts = hw.usb_ports || [];
-        if (detectedUsbPorts.length > 0 && !selectedUsbPort) {
-            selectedUsbPort = detectedUsbPorts[0].port;
-        } else if (detectedUsbPorts.length === 0) {
-            selectedUsbPort = '';
+        const preferredPort =
+            detectedUsbPorts.find((p) => p.port === '/dev/ttyACM0') ||
+            detectedUsbPorts.find((p) => p.port === '/dev/ttyUSB0') ||
+            detectedUsbPorts[0];
+        if (detectedUsbPorts.length === 0) {
+            // Keep the Hardware Flash Port dropdown usable even before the
+            // host exposes the device node to the backend.
+            selectedUsbPort = '/dev/ttyACM0';
+        } else if (!selectedUsbPort || !detectedUsbPorts.some((p) => p.port === selectedUsbPort)) {
+            selectedUsbPort = preferredPort?.port || '/dev/ttyACM0';
         }
 
         if (hw.wifi_networks && hw.wifi_networks.length > 0) {
@@ -202,6 +215,9 @@
         wifiConnectSuccess = false;
         wifiSuccessMsg = '';
         showConnectModal = true;
+        // Refresh the USB slot list every time the modal opens so the
+        // Hardware Flash Port selector never renders empty.
+        void refreshHardwareStatus();
     }
 
     function closeConnectModal() {
@@ -269,6 +285,15 @@
         }
     }
 
+    function portLabel(port: string): string {
+        const info = detectedUsbPorts.find((p) => p.port === port);
+        if (info?.product) {
+            return `${port} (${info.product})`;
+        }
+        if (port === '/dev/ttyACM0') return `${port} (ESP32-S3 JTAG / Serial)`;
+        return `${port} (USB Serial)`;
+    }
+
     function applyProvisionedResult(res: EspConnectionResult, port: string, ssid: string) {
         connectionStatus = 'connected';
         lastConnDetails = res;
@@ -325,6 +350,63 @@
         return null;
     }
 
+    function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(
+                () => reject(new Error('Timed out waiting for browser serial authorization')),
+                timeoutMs
+            );
+            promise.then(
+                (value) => {
+                    clearTimeout(timer);
+                    resolve(value);
+                },
+                (err) => {
+                    clearTimeout(timer);
+                    reject(err);
+                }
+            );
+        });
+    }
+
+    // Server-side fallback: the backend opens /dev/ttyACM* directly, so it
+    // works even when the browser lacks Web Serial or the user denies access.
+    async function provisionViaServer(targetPort: string, ssidOverride?: string): Promise<boolean> {
+        webSerialStatus = 'idle';
+        webSerialMsg = `Web Serial is unavailable. Falling back to server-side USB provisioning on ${targetPort}...`;
+
+        const hw = await fetchDeviceStatus(formState.backendUrl);
+        if (hw?.server_wifi) {
+            if (hw.server_wifi.ssid) serverWifiSsid = hw.server_wifi.ssid;
+            if (hw.server_wifi.backend_ip) serverBackendIp = hw.server_wifi.backend_ip;
+        }
+
+        const ssid = (ssidOverride || hw?.server_wifi?.ssid || serverWifiSsid || '').trim();
+        const backendIp = hw?.server_wifi?.backend_ip || serverBackendIp;
+        if (!ssid) {
+            webSerialStatus = 'error';
+            webSerialMsg = 'Server Wi-Fi SSID is unavailable; cannot provision the ESP32-S3.';
+            return false;
+        }
+
+        const res = await provisionEspViaUsb(
+            targetPort,
+            ssid,
+            serverWifiPassword,
+            formState.backendUrl,
+            backendIp
+        );
+        if (res.success) {
+            applyProvisionedResult(res, targetPort, res.provisionedSsid || ssid);
+            await refreshHardwareStatus();
+            return true;
+        }
+
+        webSerialStatus = 'error';
+        webSerialMsg = res.message || `Server-side USB provisioning failed on ${targetPort}.`;
+        return false;
+    }
+
     async function handlePairUsbDevice(portOverride?: string) {
         if (isWebSerialConnecting) return;
 
@@ -362,7 +444,7 @@
 
             if (typeof navigator !== 'undefined' && 'serial' in navigator && ssid) {
                 isWebSerialConnecting = false;
-                await handleDirectWebSerialConnect();
+                await handleDirectWebSerialConnect(false);
             }
         } catch (err: any) {
             webSerialStatus = 'error';
@@ -373,16 +455,23 @@
         }
     }
 
-    async function handleDirectWebSerialConnect() {
+    async function handleDirectWebSerialConnect(allowBackendFallback = true) {
+        const targetPort = selectedUsbPort || detectedUsbPorts[0]?.port || '/dev/ttyACM0';
+
         if (typeof navigator === 'undefined' || !('serial' in navigator)) {
+            if (allowBackendFallback) {
+                await provisionViaServer(targetPort);
+                return;
+            }
             webSerialStatus = 'error';
             webSerialMsg = 'Web Serial API is available in Chromium, Google Chrome, or Microsoft Edge on Fedora Linux.';
             return;
         }
 
         isWebSerialConnecting = true;
+        pairingPort = targetPort;
         webSerialStatus = 'idle';
-        webSerialMsg = 'Requesting serial port authorization (/dev/ttyACM0 or /dev/ttyUSB0)...';
+        webSerialMsg = `Requesting serial port authorization for ${targetPort}...`;
         let port: any = null;
 
         try {
@@ -394,14 +483,25 @@
                 }
             }
             if (!serverWifiSsid) {
-                throw new Error('Active host Wi-Fi SSID is unavailable. Use backend USB provisioning.');
+                throw new Error('Active host Wi-Fi SSID is unavailable.');
             }
 
-            port = await (navigator as any).serial.requestPort({
-                filters: [
-                    { usbVendorId: 0x303a } // Espressif Systems
-                ]
-            });
+            try {
+                // Never leave the modal hanging on the browser permission
+                // prompt: time out and hand the job to the backend instead.
+                port = await withTimeout(
+                    (navigator as any).serial.requestPort({
+                        filters: [
+                            { usbVendorId: 0x303a } // Espressif Systems
+                        ]
+                    }),
+                    4000
+                );
+            } catch (authErr: any) {
+                if (!allowBackendFallback) throw authErr;
+                await provisionViaServer(targetPort, serverWifiSsid);
+                return;
+            }
 
             await port.open({ baudRate: 115200 });
 
@@ -433,29 +533,33 @@
                     firmwareVersion: ack.firmware_version || '1.0.0',
                     latencyMs: 4,
                     ipAddress: serverBackendIp || ack.backend_ip || 'USB Serial',
-                    usbPort: '/dev/ttyACM0',
+                    usbPort: targetPort,
                     provisionedSsid: ssid,
                     wifiConnected: !!ack.wifi_connected,
                     connectionMode: 'usb_serial',
                     message: `Provisioned ${ssid} via Web Serial`
                 };
-                applyProvisionedResult(result, '/dev/ttyACM0', ssid);
+                applyProvisionedResult(result, targetPort, ssid);
                 await refreshHardwareStatus();
             } else {
-                webSerialStatus = 'error';
-                webSerialMsg = ack
+                const message = ack
                     ? `ESP32-S3 returned status '${ack.status || 'unknown'}'.`
                     : 'No BAWAL_ACK received from ESP32-S3. Check USB permissions and that idf.py monitor is closed.';
+                if (allowBackendFallback) {
+                    await provisionViaServer(targetPort, serverWifiSsid);
+                } else {
+                    webSerialStatus = 'error';
+                    webSerialMsg = message;
+                }
             }
         } catch (err: any) {
-            if (err.name !== 'NotFoundError') {
-                webSerialStatus = 'error';
-                webSerialMsg = err?.message || 'Failed to open serial port.';
+            if (allowBackendFallback) {
+                await provisionViaServer(targetPort, serverWifiSsid);
             } else {
                 webSerialStatus = 'error';
-                if (!webSerialMsg) {
-                    webSerialMsg = 'Serial port selection canceled.';
-                }
+                webSerialMsg = err?.name === 'NotFoundError'
+                    ? 'Serial port selection canceled.'
+                    : (err?.message || 'Failed to open serial port.');
             }
         } finally {
             if (port) {
@@ -464,6 +568,7 @@
                 } catch {}
             }
             isWebSerialConnecting = false;
+            pairingPort = '';
         }
     }
 
@@ -649,9 +754,9 @@
                         <button
                             type="button"
                             class="fedora-accent-pill-btn"
-                            onclick={handleDirectWebSerialConnect}
+                            onclick={() => handleDirectWebSerialConnect(true)}
                             disabled={isWebSerialConnecting}
-                            title="Pair ESP32-S3 via Web Serial using the active host Wi-Fi"
+                            title="Pair ESP32-S3 via Web Serial, falling back to server-side USB provisioning"
                         >
                             {#if isWebSerialConnecting}
                                 <span class="btn-spinner"></span> Pairing...
@@ -951,14 +1056,9 @@
                                 <div class="dialog-field half">
                                     <label for="wifi-dialog-port">Hardware Flash Port</label>
                                     <select id="wifi-dialog-port" bind:value={selectedUsbPort} class="fedora-select">
-                                        {#if detectedUsbPorts.length > 0}
-                                            {#each detectedUsbPorts as p}
-                                                <option value={p.port}>{p.port} ({p.product || 'ESP32-S3'})</option>
-                                            {/each}
-                                        {:else}
-                                            <option value="/dev/ttyACM0">/dev/ttyACM0 (ESP32-S3 JTAG)</option>
-                                            <option value="/dev/ttyUSB0">/dev/ttyUSB0 (ESP32 Serial)</option>
-                                        {/if}
+                                        {#each portOptions as port}
+                                            <option value={port}>{portLabel(port)}</option>
+                                        {/each}
                                     </select>
                                 </div>
                                 <div class="dialog-field half">
