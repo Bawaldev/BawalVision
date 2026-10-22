@@ -79,7 +79,7 @@ esp_err_t camera_task_init(void) {
     ESP_LOGI(TAG, "Camera sensor: %s (PID: 0x%04x)", s_detected_camera_model,
              (unsigned int)s->id.PID);
 
-    s->set_vflip(s, 0);
+    s->set_vflip(s, 1);
     s->set_hmirror(s, 0);
     s->set_framesize(s, FRAMESIZE_QVGA);
     s->set_quality(s, 24);

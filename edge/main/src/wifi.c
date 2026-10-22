@@ -896,7 +896,7 @@ static void frame_drain_responses(uint32_t *ok_count) {
 }
 
 void http_stream_sender_task(void *pvParameters) {
-    const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
+    const TickType_t frame_interval_ticks = pdMS_TO_TICKS(70);
     char backend_ip[32];
     char device_id[DEVICE_ID_MAX_LEN];
     telemetry_data_t meta;

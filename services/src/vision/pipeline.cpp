@@ -235,16 +235,8 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     const int64_t t_start = cv::getTickCount();
     out_inspection.is_valid = false;
 
-    // Camera orientation from environment (applies to physical ESP32-S3 hardware sensor mount, not mock MP4 files).
-    cv::Mat oriented;
-    if (!is_mock_video) {
-        if (m_vflip && m_hflip) cv::flip(normalized_frame, oriented, -1);
-        else if (m_vflip) cv::flip(normalized_frame, oriented, 0);
-        else if (m_hflip) cv::flip(normalized_frame, oriented, 1);
-        else oriented = normalized_frame;
-    } else {
-        oriented = normalized_frame;
-    }
+    // Orientation is locked in the sensor driver (set_vflip/set_hmirror).
+    cv::Mat oriented = normalized_frame;
 
     // Lens dewarping: Only active if explicitly requested (ENABLE_DEWARP=1) or perspective map is calibrated
     cv::Mat dewarped;
@@ -345,11 +337,8 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
 
     const int64_t t_start = cv::getTickCount();
 
-    cv::Mat oriented;
-    if (m_vflip && m_hflip) cv::flip(normalized_frame, oriented, -1);
-    else if (m_vflip) cv::flip(normalized_frame, oriented, 0);
-    else if (m_hflip) cv::flip(normalized_frame, oriented, 1);
-    else oriented = normalized_frame;
+    // Orientation is locked in the sensor driver (set_vflip/set_hmirror).
+    cv::Mat oriented = normalized_frame;
 
     // Lens dewarping
     cv::Mat dewarped;
