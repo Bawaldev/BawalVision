@@ -34,7 +34,7 @@
 #include "system_monitor.h"
 #include "esp_camera.h"
 
-#define HTTP_TIMEOUT_MS 350
+#define HTTP_TIMEOUT_MS 300
 #define DISCOVERY_RETRY_MS 5000
 #define DISCOVERY_TOTAL_TIMEOUT_MS 700
 
@@ -818,7 +818,7 @@ static int frame_socket_open(const char *ip, uint16_t port) {
         return -1;
     }
 
-    struct timeval timeout = {.tv_sec = 0, .tv_usec = 350000};
+    struct timeval timeout = {.tv_sec = 0, .tv_usec = 300000};
     (void)setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     (void)setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     int nodelay = 1;
@@ -842,7 +842,7 @@ static int frame_socket_open(const char *ip, uint16_t port) {
         fd_set writefds;
         FD_ZERO(&writefds);
         FD_SET(sock, &writefds);
-        struct timeval connect_timeout = {.tv_sec = 0, .tv_usec = 350000};
+        struct timeval connect_timeout = {.tv_sec = 0, .tv_usec = 300000};
         int ready = select(sock + 1, NULL, &writefds, NULL, &connect_timeout);
         if (ready <= 0) {
             close(sock);
@@ -896,7 +896,7 @@ static void frame_drain_responses(uint32_t *ok_count) {
 }
 
 void http_stream_sender_task(void *pvParameters) {
-    const TickType_t frame_interval_ticks = pdMS_TO_TICKS(80);
+    const TickType_t frame_interval_ticks = pdMS_TO_TICKS(33);
     char backend_ip[32];
     char device_id[DEVICE_ID_MAX_LEN];
     telemetry_data_t meta;
@@ -915,7 +915,7 @@ void http_stream_sender_task(void *pvParameters) {
         copy_string(device_id, sizeof(device_id), "ESP32-S3");
     }
 
-    ESP_LOGI(TAG, "HTTP stream sender started (80 ms pacing, device=%s)", device_id);
+    ESP_LOGI(TAG, "HTTP stream sender started (33 ms pacing, device=%s)", device_id);
 
     for (;;) {
         TickType_t start_tick = xTaskGetTickCount();
@@ -1119,7 +1119,7 @@ void usb_serial_provisioning_task(void *pvParameters) {
 
         if (ch == EOF) {
             clearerr(stdin);
-            vTaskDelay(pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 

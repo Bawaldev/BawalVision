@@ -258,15 +258,8 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     // OpenCV mean-based low-light & underexposure evaluation
     out_inspection.dark_status = m_dark_detector.detect(dewarped);
 
-    // ISP enhancement only when the scene is genuinely dark.
-    cv::Mat enhanced;
-    if (m_video_source.enable_enchant || !out_inspection.dark_status.is_dark) {
-        enhanced = dewarped;
-    } else {
-        enhanceImage(dewarped, enhanced);
-    }
-
-    out_inspection.dewarped_image = enhanced;
+    // Stream thread: no ISP/SR/CLAHE. AI worker owns all heavy lifting.
+    out_inspection.dewarped_image = dewarped;
     out_inspection.detections = active_detections;
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
     renderOverlay(out_inspection, out_inspection.annotated_image);
@@ -366,13 +359,9 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     // OpenCV mean-based low-light & underexposure evaluation
     out_inspection.dark_status = m_dark_detector.detect(dewarped);
 
-    // ISP enhancement only when the scene is genuinely dark.
+    // Lightweight SIMD ISP (zero-copy passthrough for well-lit scenes).
     cv::Mat enhanced;
-    if (!out_inspection.dark_status.is_dark) {
-        enhanced = dewarped;
-    } else {
-        enhanceImage(dewarped, enhanced);
-    }
+    enhanceImage(dewarped, enhanced);
     out_inspection.dewarped_image = enhanced;
 
     std::vector<DetectionResult> detected;
