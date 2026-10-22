@@ -11,7 +11,3 @@ import 'scripts/ml.just'
 default:
     @just --list
 
-merge-compile-commands:
-    python3 scripts/combine_compile_commands.py
-
-configure-all: configure-vision configure-edge merge-compile-commands

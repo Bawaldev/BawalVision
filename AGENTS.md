@@ -89,9 +89,8 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
   (`edge/main/CMakeLists.txt`, `WIFI_SSID`/`WIFI_PASS`/`BACKEND_IP`/`BACKEND_PORT`).
   `.env` is gitignored; edit `.env.example` for new keys. Changing `.env` re-triggers
   edge configure automatically.
-- **`just configure-all` / `just merge-compile-commands` are broken** — they call
-  `scripts/combine_compile_commands.py`, which does not exist. For clangd, `.clangd`
-  reads the per-tree databases `edge/build/compile_commands.json` and
+- **Compile commands & clangd**: For clangd, `.clangd` reads the per-tree
+  databases `edge/build/compile_commands.json` and
   `services/build/compile_commands.json`; generate them with `just build-edge` and
   `just configure-vision`. MS IntelliSense is disabled (`.vscode/settings.json`).
 - **Frontend lockfiles are gitignored** (`package-lock.json`), so `npm ci` can never
