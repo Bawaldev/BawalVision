@@ -29,6 +29,7 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+      - "8765:8765/udp"
     env_file:
       - path: ../.env
         required: false
@@ -70,9 +71,11 @@ services:
     ports:
       - "${FRONTEND_PORT:-3001}:3000"
     environment:
-      BACKEND_URL: http://bawal_backend:8080
+      BACKEND_URL: ${FRONTEND_BACKEND_URL:-http://bawal_backend:8080}
       HOST: 0.0.0.0
       PORT: "3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - bawal_backend
     networks:

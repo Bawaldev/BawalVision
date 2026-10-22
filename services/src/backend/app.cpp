@@ -2,9 +2,15 @@
 
 #include "bawal/backend/database.hpp"
 
+#include <arpa/inet.h>
+#include <glob.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -75,6 +81,154 @@ uint32_t parseHeaderU32(const crow::request& req, const char* name, uint32_t fal
     return static_cast<uint32_t>(parsed);
 }
 
+bool isMockDeviceId(std::string_view id) {
+    return id == "MOCK_VIDEO_CAM" || id.rfind("MOCK_", 0) == 0;
+}
+
+uint64_t nowUnixSeconds() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+std::string trimCopy(std::string value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
+        value.erase(value.begin());
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
+        value.pop_back();
+    }
+    return value;
+}
+
+bool looksDockerOrLoopbackIp(std::string_view ip);
+
+std::string requestClientIp(const crow::request& req) {
+    std::string ip = req.remote_ip_address;
+    if (ip.rfind("::ffff:", 0) == 0) {
+        ip = ip.substr(7);
+    }
+    // Docker bridge / Desktop VM addresses are not the device's LAN address;
+    // report nothing instead of a misleading container gateway IP.
+    if (looksDockerOrLoopbackIp(ip)) {
+        return {};
+    }
+    return ip;
+}
+
+std::string readSysfsValue(const std::string& path) {
+    std::ifstream input(path);
+    std::string value;
+    std::getline(input, value);
+    return trimCopy(value);
+}
+
+struct UsbPortInfo {
+    std::string port;
+    std::string name;
+    std::string vendor_id;
+    std::string product_id;
+    std::string manufacturer;
+    std::string product;
+    bool is_esp32{false};
+};
+
+bool isEspUsbVendor(std::string_view vendor_id) {
+    return vendor_id == "303a" || vendor_id == "10c4" ||
+           vendor_id == "1a86" || vendor_id == "0403";
+}
+
+std::vector<UsbPortInfo> scanUsbSerialPorts() {
+    std::vector<UsbPortInfo> ports;
+    for (const char* pattern : {"/dev/ttyACM*", "/dev/ttyUSB*"}) {
+        glob_t matches{};
+        if (glob(pattern, 0, nullptr, &matches) != 0) {
+            globfree(&matches);
+            continue;
+        }
+        for (std::size_t i = 0; i < matches.gl_pathc; ++i) {
+            UsbPortInfo info;
+            info.port = matches.gl_pathv[i];
+            const std::string node = std::filesystem::path(info.port).filename().string();
+            info.name = node.rfind("ttyACM", 0) == 0 ? "ESP32-S3 USB Serial/JTAG"
+                                                     : "USB Serial";
+
+            const std::string sys = "/sys/class/tty/" + node + "/device";
+            std::error_code ec;
+            const std::filesystem::path device = std::filesystem::canonical(sys, ec);
+            const std::string base = ec ? sys : device.string();
+            info.vendor_id = readSysfsValue(base + "/../idVendor");
+            info.product_id = readSysfsValue(base + "/../idProduct");
+            info.manufacturer = readSysfsValue(base + "/../manufacturer");
+            info.product = readSysfsValue(base + "/../product");
+            info.is_esp32 = isEspUsbVendor(info.vendor_id) ||
+                            info.manufacturer.find("Espressif") != std::string::npos;
+            ports.push_back(std::move(info));
+        }
+        globfree(&matches);
+    }
+    return ports;
+}
+
+bool looksDockerOrLoopbackIp(std::string_view ip) {
+    if (ip.empty() || ip == "0.0.0.0") {
+        return true;
+    }
+    if (ip.rfind("127.", 0) == 0 || ip.rfind("192.168.65.", 0) == 0) {
+        return true;
+    }
+    if (ip.rfind("172.", 0) == 0) {
+        const std::size_t dot = ip.find('.', 4);
+        if (dot != std::string_view::npos) {
+            const std::string second(ip.substr(4, dot - 4));
+            char* end = nullptr;
+            const long octet = std::strtol(second.c_str(), &end, 10);
+            if (end != second.c_str() && octet >= 16 && octet <= 31) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::string detectHostLanIp() {
+    for (const char* key : {"HOST_LAN_IP", "BACKEND_IP"}) {
+        const char* value = std::getenv(key);
+        if (value != nullptr && *value != '\0' && !looksDockerOrLoopbackIp(value)) {
+            return value;
+        }
+    }
+
+    std::string fallback;
+    ifaddrs* interfaces = nullptr;
+    if (getifaddrs(&interfaces) != 0) {
+        return {};
+    }
+    for (ifaddrs* it = interfaces; it != nullptr; it = it->ifa_next) {
+        if (it->ifa_addr == nullptr || it->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        char buffer[INET_ADDRSTRLEN] = {0};
+        const auto* addr = reinterpret_cast<const sockaddr_in*>(it->ifa_addr);
+        if (inet_ntop(AF_INET, &addr->sin_addr, buffer, sizeof(buffer)) == nullptr) {
+            continue;
+        }
+        const std::string ip(buffer);
+        if (looksDockerOrLoopbackIp(ip)) {
+            continue;
+        }
+        if (ip.rfind("192.168.", 0) == 0 || ip.rfind("10.", 0) == 0) {
+            freeifaddrs(interfaces);
+            return ip;
+        }
+        if (fallback.empty()) {
+            fallback = ip;
+        }
+    }
+    freeifaddrs(interfaces);
+    return fallback;
+}
+
 int base64Value(char c) {
     if (c >= 'A' && c <= 'Z') return c - 'A';
     if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -141,6 +295,11 @@ struct FrameIngressRequest {
     uint32_t frame_id{0};
     uint16_t width{0};
     uint16_t height{0};
+    std::string camera_model;
+    float temperature{0.0f};
+    uint8_t cpu_load{0};
+    bool has_temperature{false};
+    bool has_cpu_load{false};
     std::vector<uint8_t> image;
 };
 
@@ -205,6 +364,26 @@ std::optional<FrameIngressRequest> parseFrameIngress(const crow::request& req) {
     if (parsed.frame_id == 0) {
         parsed.frame_id = parseHeaderU32(req, "X-Frame-ID");
     }
+
+    const std::string temperature_header = req.get_header_value("X-ESP-Temp");
+    if (!temperature_header.empty()) {
+        char* end = nullptr;
+        const float value = std::strtof(temperature_header.c_str(), &end);
+        if (end != temperature_header.c_str()) {
+            parsed.temperature = value;
+            parsed.has_temperature = true;
+        }
+    }
+    const std::string load_header = req.get_header_value("X-ESP-CPU-Load");
+    if (!load_header.empty()) {
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(load_header.c_str(), &end, 10);
+        if (end != load_header.c_str() && value <= 100) {
+            parsed.cpu_load = static_cast<uint8_t>(value);
+            parsed.has_cpu_load = true;
+        }
+    }
+    parsed.camera_model = req.get_header_value("X-Camera-Model");
 
     return parsed;
 }
@@ -417,10 +596,21 @@ void BackendApp::configure() {
     cors.global()
         .methods(crow::HTTPMethod::Get, crow::HTTPMethod::Post, crow::HTTPMethod::Options)
         .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Device-ID",
-                 "X-Frame-ID", "X-Width", "X-Height", "X-Stream-Source",
-                 "X-Telemetry-Struct", "X-Mock-Video-Source", "X-Mock-Video-UUID",
+                 "X-Device-Token", "X-Frame-ID", "X-Width", "X-Height",
+                 "X-ESP-Temp", "X-ESP-CPU-Load", "X-Camera-Model",
+                 "X-Stream-Source", "X-Telemetry-Struct", "X-Inspection-Source",
+                 "X-Inspection-Struct", "X-Mock-Video-Source", "X-Mock-Video-UUID",
                  "X-Is-Rewind", "X-Video-Rewind")
         .expose("X-Stream-Source", "X-Telemetry-Struct", "X-Mock-Video-UUID");
+
+    if (const char* configured = std::getenv("CONF_THRESHOLD");
+        configured != nullptr && *configured != '\0') {
+        char* end = nullptr;
+        const double value = std::strtod(configured, &end);
+        if (end != configured && value >= 0.25 && value <= 0.98) {
+            m_confidence_threshold.store(value);
+        }
+    }
 
     // Camera ingress is high-frequency; keep Crow's per-request INFO logging
     // out of the hot path unless explicitly requested for debugging.
@@ -460,6 +650,8 @@ void BackendApp::registerRoutes() {
     registerInspectionRoutes();
     registerExampleRoutes();
     registerCompatibilityRoutes();
+    registerDeviceRoutes();
+    registerSystemRoutes();
 }
 
 void BackendApp::registerCameraRoutes() {
@@ -478,6 +670,25 @@ void BackendApp::registerCameraRoutes() {
             // thread observes the correct device id on the very first frame.
             m_state.updateFrame(parsed->device_id, parsed->frame_id, parsed->image,
                                 parsed->width, parsed->height);
+
+            // Real ESP32-S3 nodes attach temperature, CPU load, and camera
+            // model headers to every frame. Fold them into the telemetry cache
+            // so the UI stays live even between JSON heartbeat POSTs.
+            if (parsed->has_temperature || parsed->has_cpu_load ||
+                !parsed->camera_model.empty()) {
+                TelemetrySample sample;
+                sample.device_id = parsed->device_id;
+                sample.camera_model = parsed->camera_model;
+                sample.ip_address = requestClientIp(req);
+                sample.timestamp = nowUnixSeconds();
+                sample.temperature = parsed->temperature;
+                sample.cpu_temperature = parsed->temperature;
+                sample.cpu_load = parsed->cpu_load;
+                sample.has_temperature = parsed->has_temperature;
+                sample.has_cpu_temperature = parsed->has_temperature;
+                sample.has_cpu_load = parsed->has_cpu_load;
+                m_state.updateTelemetry(sample);
+            }
 
             if (!m_producer.writeFrame(parsed->frame_id, parsed->image,
                                        parsed->width, parsed->height, 0)) {
@@ -592,51 +803,111 @@ void BackendApp::registerCameraRoutes() {
 void BackendApp::registerTelemetryRoutes() {
     CROW_ROUTE(m_app, "/api/v1/telemetry/latest")([this]() {
         const CameraView camera = m_state.camera();
+        const TelemetryView telemetry = m_state.telemetry();
         const InspectionView inspection = m_state.inspection();
 
+        const bool mock_camera = camera.active && isMockDeviceId(camera.device_id);
+        const bool telemetry_fresh = telemetry.valid && telemetry.age_ms <= 30'000ULL;
+        const bool live_camera = camera.active && !mock_camera;
+        const bool connected = telemetry_fresh || live_camera;
+
         crow::json::wvalue body;
-        body["source_type"] = "live_esp32";
-        body["telemetry_struct"] = "TelemetryIngressPayload";
-        body["timestamp"] = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count());
+        body["timestamp"] = nowUnixSeconds();
         body["vision_ready"] = m_state.visionReady();
         body["shm_write_sequence"] = m_producer.writeSequence();
 
-        if (camera.active) {
-            body["device_id"] = camera.device_id;
-            body["temperature"] = 38.4;
+        if (!connected && mock_camera) {
+            // Mock video simulation: serve MockTelemetryPayload so the UI can
+            // label the source clearly instead of faking hardware data.
+            float sim_temperature = 37.2f;
+            if (inspection.valid && inspection.optical.lux_luminance > 0.0f) {
+                sim_temperature = std::round(
+                    (36.5f + inspection.optical.lux_luminance / 300.0f) * 10.0f) / 10.0f;
+            }
+
+            body["mock_id"] = "MOCK_VIDEO_CAM";
+            body["device_id"] = "MOCK_VIDEO_CAM";
+            body["source_type"] = "mock_video";
+            body["telemetry_struct"] = "MockTelemetryPayload";
+            body["connection_mode"] = "mock_simulation";
+            body["engine_pipeline"] = inspection.engine_pipeline.empty()
+                ? "YOLOv8s-INT8 + OpenCV HSV"
+                : inspection.engine_pipeline;
+            body["temperature"] = sim_temperature;
             body["cpu_temperature"] = 42.5;
-            body["cpu_load"] = static_cast<uint32_t>(22);
-            body["cpu_core0_load"] = static_cast<uint32_t>(17);
-            body["cpu_core1_load"] = static_cast<uint32_t>(27);
+            body["cpu_load"] = static_cast<uint32_t>(18);
+            body["cpu_core0_load"] = static_cast<uint32_t>(12);
+            body["cpu_core1_load"] = static_cast<uint32_t>(24);
             body["heap_free"] = static_cast<uint64_t>(4194304);
+            body["free_heap"] = static_cast<uint64_t>(4194304);
             body["rssi"] = static_cast<int32_t>(-55);
-            body["firmware_version"] = "crow-cpp-1.0";
-            body["connection_mode"] = "wifi_lan";
-            body["camera_model"] = "OV5640";
+            body["firmware_version"] = "sim-v2.1";
             body["is_connected"] = true;
-            body["message"] = "Live ESP32-S3 hardware telemetry (Crow in-process cache)";
+            body["is_mock_active"] = true;
+            body["frame_id"] = camera.frame_id;
+            body["message"] = "Mock video simulation telemetry active";
+        } else if (connected) {
+            body["device_id"] = !telemetry.device_id.empty() ? telemetry.device_id
+                                                             : camera.device_id;
+            body["source_type"] = "live_esp32";
+            body["telemetry_struct"] = "TelemetryIngressPayload";
+            body["firmware_version"] = telemetry.firmware_version.empty()
+                ? "1.0.0"
+                : telemetry.firmware_version;
+            body["ip_address"] = telemetry.ip_address;
+            body["connection_mode"] = telemetry.connection_mode.empty()
+                ? "wifi_lan"
+                : telemetry.connection_mode;
+            body["camera_model"] = telemetry.camera_model.empty()
+                ? "OV5640"
+                : telemetry.camera_model;
+            body["is_connected"] = true;
+
+            body["temperature"] = telemetry.has_temperature
+                ? crow::json::wvalue(telemetry.temperature)
+                : crow::json::wvalue(nullptr);
+            body["cpu_temperature"] = telemetry.has_cpu_temperature
+                ? crow::json::wvalue(telemetry.cpu_temperature)
+                : crow::json::wvalue(nullptr);
+            if (telemetry.has_cpu_load) {
+                const uint8_t core0 = telemetry.cpu_core0_load >= 0
+                    ? static_cast<uint8_t>(telemetry.cpu_core0_load)
+                    : telemetry.cpu_load;
+                const uint8_t core1 = telemetry.cpu_core1_load >= 0
+                    ? static_cast<uint8_t>(telemetry.cpu_core1_load)
+                    : telemetry.cpu_load;
+                body["cpu_load"] = static_cast<uint32_t>(telemetry.cpu_load);
+                body["cpu_core0_load"] = static_cast<uint32_t>(core0);
+                body["cpu_core1_load"] = static_cast<uint32_t>(core1);
+            } else {
+                body["cpu_load"] = nullptr;
+            }
+            if (telemetry.has_heap_free) {
+                body["heap_free"] = telemetry.heap_free;
+                body["free_heap"] = telemetry.heap_free;
+            }
+            if (telemetry.has_rssi) {
+                body["rssi"] = static_cast<int32_t>(telemetry.rssi);
+            }
+            if (inspection.valid) {
+                crow::json::wvalue optical;
+                writeOpticalJson(optical, inspection.optical);
+                body["scene_optical"] = std::move(optical);
+            }
+            body["message"] = "Live ESP32-S3 hardware telemetry";
         } else {
             body["device_id"] = "DISCONNECTED";
+            body["source_type"] = "live_esp32";
+            body["telemetry_struct"] = "TelemetryIngressPayload";
+            body["firmware_version"] = "1.0.0";
+            body["connection_mode"] = "disconnected";
+            body["is_connected"] = false;
             body["temperature"] = nullptr;
             body["cpu_temperature"] = nullptr;
             body["cpu_load"] = nullptr;
-            body["cpu_core0_load"] = nullptr;
-            body["cpu_core1_load"] = nullptr;
             body["heap_free"] = nullptr;
             body["rssi"] = nullptr;
-            body["firmware_version"] = "crow-cpp-1.0";
-            body["connection_mode"] = "wifi_lan";
-            body["camera_model"] = "OV5640";
-            body["is_connected"] = false;
             body["message"] = "ESP32-S3 hardware disconnected (Crow backend)";
-        }
-
-        if (inspection.valid) {
-            crow::json::wvalue optical;
-            writeOpticalJson(optical, inspection.optical);
-            body["scene_optical"] = std::move(optical);
         }
 
         return crow::response(body);
@@ -649,17 +920,90 @@ void BackendApp::registerTelemetryRoutes() {
                 return jsonError(400, "Invalid JSON telemetry payload");
             }
 
-            std::string device_id = req.get_header_value("X-Device-ID");
-            if (doc.has("device_id") && doc["device_id"].t() == crow::json::type::String) {
-                device_id = static_cast<std::string>(doc["device_id"].s());
+            TelemetrySample sample;
+            sample.ip_address = requestClientIp(req);
+            sample.connection_mode = "wifi_lan";
+            sample.timestamp = nowUnixSeconds();
+
+            const auto read_string = [&doc](const char* key, std::string& out) {
+                if (doc.has(key) && doc[key].t() == crow::json::type::String) {
+                    out = static_cast<std::string>(doc[key].s());
+                }
+            };
+            const auto read_number = [&doc](const char* key, double& out) {
+                if (doc.has(key) && doc[key].t() == crow::json::type::Number) {
+                    out = doc[key].d();
+                    return true;
+                }
+                return false;
+            };
+
+            read_string("device_id", sample.device_id);
+            if (sample.device_id.empty()) {
+                sample.device_id = req.get_header_value("X-Device-ID");
             }
-            device_id = sanitizeDeviceId(std::move(device_id));
+            sample.device_id = sanitizeDeviceId(std::move(sample.device_id));
+            read_string("firmware_version", sample.firmware_version);
+            read_string("camera_model", sample.camera_model);
+            read_string("connection_mode", sample.connection_mode);
+
+            double number = 0.0;
+            if (read_number("timestamp", number) && number > 0) {
+                sample.timestamp = static_cast<uint64_t>(number);
+            }
+            if (read_number("temperature", number)) {
+                sample.temperature = static_cast<float>(number);
+                sample.has_temperature = true;
+            }
+            if (read_number("cpu_temperature", number)) {
+                sample.cpu_temperature = static_cast<float>(number);
+                sample.has_cpu_temperature = true;
+            }
+            if (read_number("cpu_load", number) || read_number("current_cpu_load", number)) {
+                sample.cpu_load = static_cast<int>(number);
+                sample.has_cpu_load = true;
+            }
+            if (read_number("cpu_core0_load", number)) {
+                sample.cpu_core0_load = static_cast<int>(number);
+            }
+            if (read_number("cpu_core1_load", number)) {
+                sample.cpu_core1_load = static_cast<int>(number);
+            }
+            if (read_number("free_heap", number) || read_number("heap_free", number)) {
+                if (number > 0) {
+                    sample.heap_free = static_cast<uint64_t>(number);
+                    sample.has_heap_free = true;
+                }
+            }
+            if (read_number("rssi", number)) {
+                sample.rssi = static_cast<int>(number);
+                sample.has_rssi = true;
+            }
+
+            m_state.updateTelemetry(sample);
 
             crow::json::wvalue body;
             body["status"] = "success";
+            body["source_type"] = "live_esp32";
             body["telemetry_struct"] = "TelemetryIngressPayload";
-            body["device_id"] = device_id.empty() ? "DEFAULT_CAMERA" : device_id;
-            body["message"] = "Telemetry accepted by the C++ Crow backend";
+            body["device_id"] = sample.device_id.empty() ? "DEFAULT_CAMERA"
+                                                         : sample.device_id;
+            body["message"] = "Live ESP32-S3 hardware telemetry heartbeat recorded";
+            return crow::response(body);
+        });
+
+    CROW_ROUTE(m_app, "/api/v1/telemetry/mock")
+        .methods(crow::HTTPMethod::Post)([](const crow::request& req) {
+            const auto doc = crow::json::load(req.body);
+            if (!doc) {
+                return jsonError(400, "Invalid MockTelemetryPayload JSON");
+            }
+            crow::json::wvalue body;
+            body["status"] = "success";
+            body["source_type"] = "mock_video";
+            body["telemetry_struct"] = "MockTelemetryPayload";
+            body["device_id"] = "MOCK_VIDEO_CAM";
+            body["message"] = "Mock telemetry accepted";
             return crow::response(body);
         });
 }
@@ -922,6 +1266,287 @@ void BackendApp::registerCompatibilityRoutes() {
         crow::json::wvalue body(std::move(records));
         return crow::response(body);
     });
+}
+
+void BackendApp::registerDeviceRoutes() {
+    CROW_ROUTE(m_app, "/api/v1/devices/status")([this]() {
+        const CameraView camera = m_state.camera();
+        const TelemetryView telemetry = m_state.telemetry();
+        const bool telemetry_fresh = telemetry.valid && telemetry.age_ms <= 30'000ULL;
+        const bool live_camera = camera.active && !isMockDeviceId(camera.device_id);
+
+        bool connected = false;
+        std::string connection_mode = "disconnected";
+        std::string device_id;
+        std::string firmware_version;
+        std::string ip_address;
+
+        if (telemetry_fresh) {
+            connected = true;
+            connection_mode = telemetry.connection_mode.empty() ? "wifi_lan"
+                                                                : telemetry.connection_mode;
+            device_id = telemetry.device_id;
+            firmware_version = telemetry.firmware_version.empty() ? "1.0.0"
+                                                                  : telemetry.firmware_version;
+            ip_address = telemetry.ip_address;
+        } else if (live_camera) {
+            connected = true;
+            connection_mode = "wifi_lan";
+            device_id = camera.device_id;
+            firmware_version = telemetry.firmware_version.empty() ? "1.0.0"
+                                                                  : telemetry.firmware_version;
+            ip_address = telemetry.ip_address;
+        }
+
+        const std::vector<UsbPortInfo> usb_ports = scanUsbSerialPorts();
+        const std::string host_ip = detectHostLanIp();
+        const char* ssid = std::getenv("WIFI_SSID");
+        const char* wifi_pass = std::getenv("WIFI_PASS");
+        const char* backend_ip_env = std::getenv("BACKEND_IP");
+
+        crow::json::wvalue body;
+        body["connected"] = connected;
+        body["connection_mode"] = connection_mode;
+        body["device_id"] = device_id;
+        body["firmware_version"] = firmware_version;
+        body["ip_address"] = ip_address;
+        body["detected_host_ip"] = host_ip;
+
+        crow::json::wvalue::list ports;
+        for (const auto& port : usb_ports) {
+            crow::json::wvalue item;
+            item["port"] = port.port;
+            item["name"] = port.name;
+            item["vendor_id"] = port.vendor_id;
+            item["product_id"] = port.product_id;
+            item["manufacturer"] = port.manufacturer;
+            item["product"] = port.product;
+            item["is_esp32"] = port.is_esp32;
+            ports.emplace_back(std::move(item));
+        }
+        body["usb_ports"] = std::move(ports);
+
+        if (!usb_ports.empty()) {
+            crow::json::wvalue esp_status;
+            esp_status["port"] = usb_ports.front().port;
+            esp_status["device_id"] = device_id;
+            esp_status["current_ssid"] = ssid != nullptr ? ssid : "";
+            esp_status["wifi_connected"] = connected;
+            esp_status["temperature"] =
+                telemetry.has_temperature ? telemetry.temperature : 0.0f;
+            body["esp_usb_status"] = std::move(esp_status);
+        }
+
+        crow::json::wvalue::list networks;
+        body["wifi_networks"] = std::move(networks);
+
+        crow::json::wvalue server_wifi;
+        server_wifi["ssid"] = ssid != nullptr ? ssid : "";
+        server_wifi["has_password"] = wifi_pass != nullptr && *wifi_pass != '\0';
+        const std::string backend_ip =
+            (backend_ip_env != nullptr && *backend_ip_env != '\0') ? backend_ip_env
+                                                                   : host_ip;
+        server_wifi["backend_ip"] = backend_ip;
+        server_wifi["detected_host_ip"] = host_ip;
+        server_wifi["backend_port"] = std::to_string(m_config.port);
+        body["server_wifi"] = std::move(server_wifi);
+
+        return crow::response(body);
+    });
+
+    CROW_ROUTE(m_app, "/api/v1/devices/wifi/networks")([]() {
+        crow::json::wvalue body;
+        crow::json::wvalue::list networks;
+        body["networks"] = std::move(networks);
+        return crow::response(body);
+    });
+
+    CROW_ROUTE(m_app, "/api/v1/devices/usb/probe")
+        .methods(crow::HTTPMethod::Post)([](const crow::request& req) {
+            std::string requested;
+            const auto doc = crow::json::load(req.body);
+            if (doc && doc.has("port") && doc["port"].t() == crow::json::type::String) {
+                requested = trimCopy(static_cast<std::string>(doc["port"].s()));
+            }
+
+            const std::vector<UsbPortInfo> ports = scanUsbSerialPorts();
+            if (ports.empty()) {
+                crow::json::wvalue body;
+                body["success"] = false;
+                body["message"] =
+                    "No USB serial port detected (/dev/ttyACM* or /dev/ttyUSB*)";
+                return crow::response(400, body);
+            }
+
+            std::string port = requested.empty() ? ports.front().port : requested;
+            const bool present = std::any_of(
+                ports.begin(), ports.end(),
+                [&port](const UsbPortInfo& candidate) { return candidate.port == port; });
+            if (!present) {
+                crow::json::wvalue body;
+                body["success"] = false;
+                body["port"] = port;
+                body["message"] = "USB serial port " + port +
+                                  " is not present on the backend host";
+                return crow::response(404, body);
+            }
+
+            crow::json::wvalue body;
+            body["success"] = false;
+            body["port"] = port;
+            body["message"] =
+                "USB serial port " + port +
+                " detected, but serial probing is not accessible from this backend build; "
+                "use the browser Web Serial flow to query the ESP32-S3.";
+            return crow::response(body);
+        });
+
+    CROW_ROUTE(m_app, "/api/v1/devices/connect")
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            std::string requested_id;
+            std::string requested_port;
+            const auto doc = crow::json::load(req.body);
+            if (doc) {
+                if (doc.has("device_id") && doc["device_id"].t() == crow::json::type::String) {
+                    requested_id = sanitizeDeviceId(
+                        static_cast<std::string>(doc["device_id"].s()));
+                }
+                if (doc.has("usb_port") && doc["usb_port"].t() == crow::json::type::String) {
+                    requested_port = trimCopy(static_cast<std::string>(doc["usb_port"].s()));
+                }
+            }
+
+            const CameraView camera = m_state.camera();
+            const TelemetryView telemetry = m_state.telemetry();
+            const bool telemetry_fresh = telemetry.valid && telemetry.age_ms <= 30'000ULL;
+            const bool live_camera = camera.active && !isMockDeviceId(camera.device_id);
+            const auto matches = [&requested_id](const std::string& id) {
+                return requested_id.empty() || id == requested_id;
+            };
+
+            if (telemetry_fresh && matches(telemetry.device_id)) {
+                crow::json::wvalue body;
+                body["success"] = true;
+                body["status"] = "connected";
+                body["device_id"] = telemetry.device_id;
+                body["firmware_version"] = telemetry.firmware_version.empty()
+                    ? "1.0.0"
+                    : telemetry.firmware_version;
+                body["ip_address"] = telemetry.ip_address;
+                body["connection_mode"] = telemetry.connection_mode.empty()
+                    ? "wifi_lan"
+                    : telemetry.connection_mode;
+                body["latency_ms"] = 8;
+                body["message"] = "ESP32-S3 detected on the shared Wi-Fi network";
+                return crow::response(body);
+            }
+            if (live_camera && matches(camera.device_id)) {
+                crow::json::wvalue body;
+                body["success"] = true;
+                body["status"] = "connected";
+                body["device_id"] = camera.device_id;
+                body["firmware_version"] = telemetry.firmware_version.empty()
+                    ? "1.0.0"
+                    : telemetry.firmware_version;
+                body["ip_address"] = telemetry.ip_address;
+                body["connection_mode"] = "wifi_lan";
+                body["latency_ms"] = 11;
+                body["message"] = "ESP32-S3 camera node active on the shared Wi-Fi network";
+                return crow::response(body);
+            }
+
+            const std::vector<UsbPortInfo> ports = scanUsbSerialPorts();
+            crow::json::wvalue body;
+            body["success"] = false;
+            body["device_id"] = requested_id;
+            body["connection_mode"] = "disconnected";
+            if (!ports.empty() || !requested_port.empty()) {
+                const std::string port =
+                    !requested_port.empty() ? requested_port : ports.front().port;
+                body["usb_port"] = port;
+                body["message"] =
+                    "USB serial port " + port +
+                    " is present, but Wi-Fi provisioning is not accessible from the "
+                    "backend process; use the browser Web Serial flow to provision "
+                    "the ESP32-S3.";
+            } else {
+                body["message"] =
+                    "No ESP32-S3 detected on the server Wi-Fi network or USB serial "
+                    "slots (/dev/ttyACM*, /dev/ttyUSB*).";
+            }
+            return crow::response(body);
+        });
+
+    CROW_ROUTE(m_app, "/api/v1/devices/usb/provision")
+        .methods(crow::HTTPMethod::Post)([](const crow::request& req) {
+            std::string port;
+            const auto doc = crow::json::load(req.body);
+            if (doc && doc.has("usb_port") && doc["usb_port"].t() == crow::json::type::String) {
+                port = trimCopy(static_cast<std::string>(doc["usb_port"].s()));
+            }
+            if (port.empty()) {
+                const std::vector<UsbPortInfo> ports = scanUsbSerialPorts();
+                if (!ports.empty()) {
+                    port = ports.front().port;
+                }
+            }
+
+            crow::json::wvalue body;
+            body["success"] = false;
+            body["usb_port"] = port;
+            body["message"] =
+                std::string("USB serial provisioning is not accessible from the backend "
+                            "process") +
+                (port.empty() ? std::string(".") : (" on " + port + ".")) +
+                " Use the browser Web Serial flow to provision the ESP32-S3.";
+            return crow::response(body);
+        });
+
+    CROW_ROUTE(m_app, "/api/v1/devices/disconnect")
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            std::string device_id;
+            const auto doc = crow::json::load(req.body);
+            if (doc && doc.has("device_id") && doc["device_id"].t() == crow::json::type::String) {
+                device_id = sanitizeDeviceId(static_cast<std::string>(doc["device_id"].s()));
+            }
+
+            m_state.disconnectDevice(device_id);
+
+            crow::json::wvalue body;
+            body["success"] = true;
+            body["message"] = "Device disconnected";
+            return crow::response(body);
+        });
+}
+
+void BackendApp::registerSystemRoutes() {
+    CROW_ROUTE(m_app, "/api/v1/system/threshold")([this]() {
+        const double rounded =
+            std::round(m_confidence_threshold.load() * 100.0) / 100.0;
+        crow::json::wvalue body;
+        body["threshold"] = rounded;
+        body["min"] = 0.25;
+        body["max"] = 0.98;
+        body["default"] = 0.35;
+        return crow::response(body);
+    });
+
+    CROW_ROUTE(m_app, "/api/v1/system/threshold")
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            const auto doc = crow::json::load(req.body);
+            if (!doc || !doc.has("threshold") ||
+                doc["threshold"].t() != crow::json::type::Number) {
+                return jsonError(400, "Missing numeric threshold");
+            }
+
+            const double clamped = std::clamp(doc["threshold"].d(), 0.25, 0.98);
+            m_confidence_threshold.store(clamped);
+
+            crow::json::wvalue body;
+            body["status"] = "success";
+            body["threshold"] = std::round(clamped * 100.0) / 100.0;
+            return crow::response(body);
+        });
 }
 
 int BackendApp::run() {
