@@ -27,8 +27,13 @@ CONFIG_SPIRAM_USE_MALLOC=y
 
 # =========================================================================
 # Console & System Logging
+# UART0 console drives the CH343 USB-UART bridge (/dev/ttyACM0), which is how
+# provisioning JSON commands/ACKs reach the host. The native USB-Serial-JTAG
+# port is still polled by the provisioning task when connected.
 # =========================================================================
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
 CONFIG_LOG_COLORS=y

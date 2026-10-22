@@ -190,6 +190,7 @@ export interface DeviceHardwareStatus {
     device_id: string;
     firmware_version: string;
     ip_address: string;
+    detected_host_ip?: string;
     usb_ports: USBPortInfo[];
     esp_usb_status?: {
         port: string;
@@ -203,6 +204,7 @@ export interface DeviceHardwareStatus {
         ssid: string;
         has_password: boolean;
         backend_ip: string;
+        detected_host_ip?: string;
         backend_port: string;
     };
 }
@@ -217,6 +219,7 @@ export interface EspConnectionResult {
     ipAddress?: string;
     usbPort?: string;
     provisionedSsid?: string;
+    gatewayHostIp?: string;
     wifiConnected?: boolean;
     connectionMode?: 'wifi_lan' | 'usb_serial' | 'disconnected';
     message?: string;

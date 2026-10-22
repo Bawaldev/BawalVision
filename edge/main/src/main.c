@@ -10,7 +10,6 @@
 // Peripheral and low-level hardware control drivers
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
-#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_cpu.h"
 #include "esp_rom_sys.h"
 #include "soc/gpio_struct.h"
@@ -210,15 +209,13 @@ static void button_led_task(void *pvParameters) {
  *  app_main
  * ============================================================ */
 void app_main(void) {
-    /* Install USB-Serial-JTAG interrupt driver with 1024-byte ring buffer so JSON provisioning commands never overflow hardware FIFO */
+    /* Install USB-Serial-JTAG interrupt driver so native-USB provisioning
+     * commands are readable in addition to the UART0 console. The primary
+     * STDIO console is UART0 (CH343 bridge -> /dev/ttyACM0). */
     usb_serial_jtag_driver_config_t usbjtag_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     usbjtag_cfg.rx_buffer_size = 1024;
     usbjtag_cfg.tx_buffer_size = 1024;
-    if (usb_serial_jtag_driver_install(&usbjtag_cfg) == ESP_OK) {
-        usb_serial_jtag_vfs_use_driver();
-        usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_LF);
-        usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_LF);
-    }
+    (void)usb_serial_jtag_driver_install(&usbjtag_cfg);
 
     /* Disable all indicator and WS2812 LEDs */
     disable_all_indicator_leds();
