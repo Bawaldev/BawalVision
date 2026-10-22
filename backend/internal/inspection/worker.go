@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bawal_vision_backend/internal/food"
@@ -39,8 +40,7 @@ type InspectionBatchWorker struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
-	running      bool
-	mu           sync.Mutex
+	running      atomic.Bool
 }
 
 var GlobalBatchWorker *InspectionBatchWorker
@@ -66,8 +66,8 @@ func InitGlobalBatchWorker(db *gorm.DB, bufferCap, batchSize int, flushPeriod ti
 		flushPeriod:  flushPeriod,
 		ctx:          ctx,
 		cancel:       cancel,
-		running:      true,
 	}
+	w.running.Store(true)
 
 	GlobalBatchWorker = w
 	w.Start()
@@ -76,7 +76,7 @@ func InitGlobalBatchWorker(db *gorm.DB, bufferCap, batchSize int, flushPeriod ti
 
 // FlushNow triggers an immediate flush of any pending queued inspection tasks to PostgreSQL.
 func (w *InspectionBatchWorker) FlushNow() {
-	if w == nil || !w.running {
+	if w == nil || !w.running.Load() {
 		return
 	}
 	select {
@@ -89,7 +89,7 @@ func (w *InspectionBatchWorker) FlushNow() {
 // Under extreme traffic bursts where the channel saturates, it drops the oldest item
 // to prevent memory bloat and guarantee sub-millisecond HTTP response times.
 func (w *InspectionBatchWorker) Enqueue(task BatchInspectionTask) bool {
-	if w == nil || !w.running {
+	if w == nil || !w.running.Load() {
 		return false
 	}
 
@@ -179,13 +179,9 @@ func (w *InspectionBatchWorker) Stop() {
 	if w == nil {
 		return
 	}
-	w.mu.Lock()
-	if !w.running {
-		w.mu.Unlock()
+	if !w.running.CompareAndSwap(true, false) {
 		return
 	}
-	w.running = false
-	w.mu.Unlock()
 
 	w.cancel()
 	w.wg.Wait()
@@ -409,4 +405,3 @@ func (w *InspectionBatchWorker) flushBatch(batch []BatchInspectionTask) {
 		log.Printf("[BATCH WORKER] Successfully flushed %d inspections to PostgreSQL in %s", len(batch), time.Since(start))
 	}
 }
-
