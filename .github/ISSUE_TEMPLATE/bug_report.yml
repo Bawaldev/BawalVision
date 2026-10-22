@@ -14,8 +14,7 @@ body:
       label: Affected Subsystem
       description: Which part of the BawalVision monorepo is experiencing the issue?
       options:
-        - "C++20 Vision Service (services/)"
-        - "Go Fiber Backend (backend/)"
+        - "C++20 Backend & Vision Pipeline (services/)"
         - "ESP32-S3 Edge Firmware (edge/)"
         - "SvelteKit 5 Frontend (frontend/)"
         - "Machine Learning & Models (ml/)"

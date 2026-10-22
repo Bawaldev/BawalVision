@@ -4,7 +4,6 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=c%2B%2B)](services/)
-[![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go)](backend/)
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5%2Fv6-E7352C?logo=espressif)](edge/)
 [![SvelteKit](https://img.shields.io/badge/SvelteKit-5-FF3E00?logo=svelte)](frontend/)
 
@@ -25,17 +24,17 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
                                      | HTTP POST (Keep-Alive) / Wi-Fi
                                      v
                       +-----------------------------+
-                      |   Go API Gateway (:8080)    |
-                      | - Ingestion & Routing       |
-                      | - JWT & Cookie Auth         |
-                      | - WebSockets & Telemetry    |
+                      |   C++ Crow Backend (:8080)  |
+                      | - SHM Frame Ingress/Routing |
+                      | - In-process YOLOv8/OpenCV  |
+                      | - PostgreSQL telemetry      |
                       +--------------+--------------+
                                      |
              +-----------------------+-----------------------+
              |                                               |
              v                                               v
 +---------------------------+                 +---------------------------+
-| C++ Vision Service (:9001)|                 | SvelteKit 5 HMI (:3001)   |
+| In-Process Vision (SHM)   |                 | SvelteKit 5 HMI (:3001)   |
 | - ONNX Runtime (YOLOv8n)  |                 | - Real-time Live Streams  |
 | - OpenCV & OpenMP (AVX2)  |                 | - Visual Inspection Cards |
 | - Color/Hue & Quality QC  |                 | - Telemetry & Analytics   |
@@ -64,9 +63,9 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
 - **Model:** YOLOv8n object detection backbone exporting static fixed-dimension tensors (`[1, 3, 640, 640]`, Opset 17).
 - **Safety:** ThreadSanitizer (TSan) build configurations to detect data races and deadlocks.
 
-### 3. Backend Gateway (`backend/`)
-- **Engine:** Go 1.24 with Fiber v2, PostgreSQL driver, and WebSocket real-time telemetry broadcaster.
-- **Security:** CSRF protection, HttpOnly cookie authentication, rate limiting, and parameter validation.
+### 3. Unified C++ Backend (`services/`)
+- **Engine:** C++20 Crow HTTP server, POSIX SHM frame ingress, in-process ONNX Runtime YOLOv8 pipeline, and libpq PostgreSQL persistence.
+- **Deployment:** Multi-stage Debian bookworm image (`deploy/Dockerfile.backend`) and `deploy/docker-compose.yml` with only `postgres` + `bawal_backend`.
 
 ### 4. Frontend HMI (`frontend/`)
 - **Stack:** SvelteKit 5 (Runes), TypeScript, Vite, Tailwind CSS, DaisyUI, Chart.js.
@@ -139,15 +138,14 @@ This project uses [just](https://github.com/casey/just) as a centralized, cross-
 | `just configure-vision-tsan` | Configure CMake with ThreadSanitizer for data race detection |
 | `just build-vision-tsan` | Compile C++ Vision binary with ThreadSanitizer instrumentation |
 | `just run-vision-tsan` | Run Vision service with ThreadSanitizer deadlock / race checking |
-| `just build-gateway` | Compile Go Gateway API binary |
-| `just run-gateway` | Run Go Gateway REST API server locally |
-| `just test-api [base_url]` | Run automated REST API & session verification test suite |
-| `just test-backend` | Run Go unit/package tests (`go test -v ./...`) |
+| `just build-backend` | Compile the C++ Crow backend (`bawal_backend`) |
+| `just run-backend` | Run PostgreSQL in Docker and the C++ backend on the host |
+| `just test-api [base_url]` | Run the Crow C++ REST API verification suite |
 | `just install-frontend` | Install SvelteKit npm dependencies (`npm install`) |
 | `just build-frontend` | Build production bundle for SvelteKit HMI |
 | `just check-frontend` | Run Svelte TypeScript diagnostic check (`npm run check`) |
 | `just run-frontend` | Run SvelteKit development server with live reload |
-| `just clean` | Remove all build artifacts (`services/build`, `backend/bin`, etc.) |
+| `just clean` | Remove all build artifacts (`services/build`, frontend build output) |
 
 ---
 
@@ -155,12 +153,12 @@ This project uses [just](https://github.com/casey/just) as a centralized, cross-
 
 | Command | Description |
 |---|---|
-| `just compose-up [service]` | Start containers in background (`postgres`, `backend`, `vision`, `frontend`) |
+| `just compose-up [service]` | Start containers in background (`postgres`, `bawal_backend`) |
 | `just compose-down` | Stop and remove running containers |
 | `just compose-build [service]` | Build container images via Docker Compose |
 | `just compose-logs [service]` | View live aggregated container logs |
-| `just edge-proxy` | Host TCP bridge `:8080 -> 127.0.0.1:18080` for ESP32-S3 on Docker Desktop |
-| `just edge-stack` | Postgres in compose + backend on the host (alternative for ESP32-S3 LAN tests) |
+| `just edge-proxy` | Optional host TCP bridge for Docker Desktop LAN workarounds |
+| `just edge-stack` | Start PostgreSQL + C++ backend in Docker |
 | `just allow-firewall [port]` | Configure firewall rules for gateway port (firewalld / UFW / Windows) |
 | `just deny-firewall [port]` | Remove firewall rule for gateway port |
 
@@ -202,7 +200,7 @@ just compose-build
 just compose-up
 ```
 - **Frontend HMI:** `http://localhost:3001`
-- **Go Gateway API:** `http://localhost:8080/api/v1`
+- **C++ Crow API:** `http://localhost:8080/api/v1`
 - **PostgreSQL:** `localhost:5432`
 
 ### 3. Train & Export Object Detection Model
@@ -227,7 +225,7 @@ just run-edge /dev/ttyACM0
 
 | Contributor | GitHub | Role & Subsystems |
 |:---|:---|:---|
-| **Faris Wirakusuma** | [@fariswirakusuma](https://github.com/fariswirakusuma) | Project Lead, ESP32-S3 Firmware, C++20 Vision Engine, Go Backend Gateway, SvelteKit Frontend |
+| **Faris Wirakusuma** | [@fariswirakusuma](https://github.com/fariswirakusuma) | Project Lead, ESP32-S3 Firmware, C++20 Crow Backend, Vision Engine, SvelteKit Frontend |
 | **Rasyakhairi (OurangIlang)** | [@OurangIlang](https://github.com/OurangIlang) | Machine Learning & YOLOv8 Pipeline, Database Migrations, SvelteKit Frontend |
 | **Daffa Rizqy (pondwatr)** | [@pondwatr](https://github.com/pondwatr) | Embedded Hardware Engineering, Electronics Schematics, ESP32-S3 Edge Node |
 
@@ -250,7 +248,7 @@ We welcome community contributions across all engineering domains: Embedded Hard
      - `fix(scope): ...` for bug fixes.
      - `perf(scope): ...` for SIMD or memory optimizations.
 4. **Local Verification Checklist:**
-   - **Go Backend:** `just test-backend` (passes unit tests with concurrency race detector)
+   - **C++ Backend:** `just compose-up` then `just test-api` (all endpoints must pass)
    - **C++ Vision:** `just build-vision` (compiles without non-portable `-march=native`)
    - **Frontend:** `just check-frontend` (passes SvelteKit type checks)
 5. **Open a Pull Request:** Submit your PR against `main` using our [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).

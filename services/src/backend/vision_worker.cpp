@@ -114,8 +114,8 @@ std::string resolveModelPath() {
     return candidates.front();
 }
 
-VisionWorker::VisionWorker(BackendState& state, std::string model_path)
-    : m_state(state), m_model_path(std::move(model_path)) {}
+VisionWorker::VisionWorker(BackendState& state, std::string model_path, Database* database)
+    : m_state(state), m_database(database), m_model_path(std::move(model_path)) {}
 
 VisionWorker::~VisionWorker() {
     stop();
@@ -168,7 +168,11 @@ void VisionWorker::run() {
     const std::string engine_pipeline =
         std::string(pipeline.getModelArchitecture()) + " + OpenCV HSV";
 
+    constexpr std::chrono::seconds kPersistInterval{2};
+
     uint64_t processed = 0;
+    uint64_t persist_failures = 0;
+    std::chrono::steady_clock::time_point last_persist{};
     while (m_running.load(std::memory_order_acquire)) {
         cv::Mat frame;
         uint32_t frame_id = 0;
@@ -209,6 +213,25 @@ void VisionWorker::run() {
         m_state.updateInspection(device_id, frame_id, soa, optical, engine_pipeline);
 
         processed++;
+
+        if (m_database != nullptr) {
+            const auto now = std::chrono::steady_clock::now();
+            if (last_persist.time_since_epoch().count() == 0 ||
+                now - last_persist >= kPersistInterval) {
+                last_persist = now;
+                if (m_database->saveInspection(device_id, frame_id, soa, optical,
+                                               engine_pipeline)) {
+                    persist_failures = 0;
+                } else {
+                    persist_failures++;
+                    if (persist_failures == 1 || persist_failures % 30 == 0) {
+                        std::cerr << "[DB] Inspection persist skipped/failed ("
+                                  << persist_failures << "); continuing in-memory\n";
+                    }
+                }
+            }
+        }
+
         if (processed % 30 == 1 || !valid.empty()) {
             std::cout << "[VISION] frame #" << frame_id
                       << " | " << infer_ms << " ms | detections: " << valid.size()

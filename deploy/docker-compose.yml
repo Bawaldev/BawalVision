@@ -11,16 +11,16 @@ services:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../backend/internal/data/templates/shema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./postgres/shema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
     networks:
       - bawal-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-bawal_vision}"]
       interval: 3s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  backend:
+  bawal_backend:
     image: bawal-backend:latest
     build:
       context: ..
@@ -29,79 +29,34 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-      - "8765:8765/udp"
     env_file:
       - path: ../.env
         required: false
     environment:
-      - PORT=8080
-      - DB_HOST=postgres
-      - DB_USER=${POSTGRES_USER:-postgres}
-      - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - DB_NAME=${POSTGRES_DB:-bawal_vision}
-      - DB_PORT=5432
-      - DB_SSLMODE=disable
-      - DISCOVERY_PORT=8765
-      - USB_AUTO_PROVISION=${USB_AUTO_PROVISION:-0}
-      - SERIAL_PORT=${SERIAL_PORT:-/dev/null}
-    privileged: false
-    # Opsi Dinamis: Mapping host USB serial device (mis. SERIAL_PORT=/dev/ttyACM0).
-    # Default /dev/null agar compose tetap jalan saat board belum dicolok.
-    devices:
-      - "${SERIAL_PORT:-/dev/null}:${SERIAL_PORT:-/dev/null}"
-    # Share namespace host IPC agar /dev/shm sinkron dengan C++ Vision Engine
-    ipc: host
+      CROW_PORT: "8080"
+      CROW_BIND: "0.0.0.0"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DB_NAME: ${POSTGRES_DB:-bawal_vision}
+      DB_SSLMODE: disable
+      MODEL_PATH: ${MODEL_PATH:-/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx}
+      OMP_NUM_THREADS: "4"
+      OMP_WAIT_POLICY: PASSIVE
+      OMP_SCHEDULE: static
+      OMP_PROC_BIND: "true"
+      CAMERA_VFLIP: ${CAMERA_VFLIP:-1}
+      CAMERA_HFLIP: ${CAMERA_HFLIP:-0}
+      CONF_THRESHOLD: ${CONF_THRESHOLD:-0.35}
+      ENABLE_SR: "0"
     volumes:
-      - /sys:/sys:ro
-      - ../.cache_trash:/app/.cache_trash:ro
+      - ../ml/AI1/model:/app/ml/AI1/model:ro
+      - ../weights:/app/weights:ro
       - ../examples:/app/examples:ro
-    group_add:
-      # Host dialout GID agar user non-root kontainer dapat membuka ttyACM/ttyUSB
-      - "${DIALOUT_GID:-18}"
-    device_cgroup_rules:
-      # Izinkan akses dinamis ke seluruh karakter device subsistem tty (major 166 untuk ACM, 188 untuk USB)
-      - 'c 166:* rmw'
-      - 'c 188:* rmw'
-    networks:
-      - bawal-net
     depends_on:
       postgres:
         condition: service_healthy
-  vision:
-    image: bawal-vision:latest
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.vision
-    container_name: bawal_vision
-    restart: unless-stopped
-    # Must share the backend's IPC namespace to consume /dev/shm frames.
-    ipc: host
-    ports:
-      - "${VISION_PORT:-8081}:8080"
-    environment:
-      - HEADLESS=1
-      - QT_QPA_PLATFORM=offscreen
-      - BACKEND_HOST=host.docker.internal
-      - BACKEND_PORT=8080
-      - MODEL_PATH=${MODEL_PATH:-/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx}
-      - OMP_WAIT_POLICY=PASSIVE
-      - OMP_NUM_THREADS=4
-      - OMP_SCHEDULE=static
-      - OMP_PROC_BIND=true
-      - CAMERA_VFLIP=${CAMERA_VFLIP:-1}
-      - CAMERA_HFLIP=${CAMERA_HFLIP:-0}
-      - CONF_THRESHOLD=${CONF_THRESHOLD:-0.35}
-      - ENABLE_SR=0
-    volumes:
-      - ../weights:/app/weights:rw
-      - ../ml/AI1/model:/app/ml/AI1/model:ro
-      - ../ml/AI1/runs:/app/ml/AI1/runs:ro
-      - ../examples:/app/examples:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      backend:
-        condition: service_started
     networks:
       - bawal-net
 
@@ -115,45 +70,16 @@ services:
     ports:
       - "${FRONTEND_PORT:-3001}:3000"
     environment:
-      - BACKEND_URL=http://backend:8080
-      - HOST=0.0.0.0
-      - PORT=3000
+      BACKEND_URL: http://bawal_backend:8080
+      HOST: 0.0.0.0
+      PORT: "3000"
     depends_on:
-      backend:
-        condition: service_started
+      - bawal_backend
     networks:
       - bawal-net
-
-  grafana:
-    image: grafana/grafana-oss:latest
-    container_name: bawal_grafana
-    restart: unless-stopped
-    ports:
-      - "${GRAFANA_PORT:-3002}:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SECURITY_ALLOW_EMBEDDING=true
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - POSTGRES_DB=${POSTGRES_DB:-bawal_vision}
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-    networks:
-      - bawal-net
-    depends_on:
-      postgres:
-        condition: service_healthy
 
 volumes:
   postgres_data:
-    driver: local
-  grafana_data:
     driver: local
 
 networks:

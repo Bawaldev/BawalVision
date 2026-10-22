@@ -15,7 +15,7 @@ namespace bawal::ipc {
 /**
  * @brief POSIX shared-memory frame producer used by the Crow HTTP ingress.
  *
- * The writer mirrors backend/internal/shm/producer.go byte-for-byte:
+ * The writer uses the shared on-wire layout byte-for-byte:
  *   1. mark the target slot as not-ready,
  *   2. copy the JPEG payload,
  *   3. publish the slot metadata,

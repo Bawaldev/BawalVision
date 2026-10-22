@@ -11,8 +11,7 @@ BawalVision is structured as a polyglot monorepo:
 | Directory | Subsystem | Language / Stack |
 | --------- | --------- | ---------------- |
 | [`edge/`](../edge) | IoT Edge Sensor Node & Display | C, ESP-IDF v5/v6, FreeRTOS, LVGL |
-| [`services/`](../services) | Machine Vision & Inference Pipeline | C++20, OpenCV, ONNX Runtime, OpenMP, SIMD |
-| [`backend/`](../backend) | Real-time Ingestion Gateway & Orchestrator | Go 1.24, Fiber v2, GORM, PostgreSQL |
+| [`services/`](../services) | Crow REST Backend, Machine Vision & Inference Pipeline | C++20, Crow, OpenCV, ONNX Runtime, libpq, OpenMP |
 | [`frontend/`](../frontend) | SCADA & Operator HMI Dashboard | SvelteKit 5, TypeScript, Vite |
 | [`ml/`](../ml) | AI Model Training & Super-Resolution | Python 3.11+, PyTorch, YOLOv8, RealESRGAN |
 | [`deploy/`](../deploy) | Container Deployment & Infrastructure | Docker Compose, Multi-stage Dockerfiles |

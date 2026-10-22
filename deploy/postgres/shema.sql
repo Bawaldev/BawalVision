@@ -32,7 +32,12 @@ CREATE TABLE IF NOT EXISTS inspections (
     temperature NUMERIC(5, 2) NOT NULL DEFAULT 25.00,
     cpu_load SMALLINT NOT NULL DEFAULT 0,
     is_spoiled BOOLEAN NOT NULL DEFAULT FALSE,
-    t_safe_hours NUMERIC(5, 2) NOT NULL DEFAULT 0.00
+    t_safe_hours NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
+    frame_id BIGINT NOT NULL DEFAULT 0,
+    lux_luminance NUMERIC(7, 2) NOT NULL DEFAULT 0.00,
+    white_balance_status VARCHAR(32) NOT NULL DEFAULT 'BALANCED',
+    color_temperature INT NOT NULL DEFAULT 6500,
+    engine_pipeline VARCHAR(128) NOT NULL DEFAULT 'crow-cpp-inline-vision'
 );
 
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS firmware_version VARCHAR(32) NOT NULL DEFAULT '1.0.0';
@@ -42,6 +47,11 @@ ALTER TABLE inspections ADD COLUMN IF NOT EXISTS temperature NUMERIC(5, 2) NOT N
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS cpu_load SMALLINT NOT NULL DEFAULT 0;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS is_spoiled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS t_safe_hours NUMERIC(5, 2) NOT NULL DEFAULT 0.00;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS frame_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS lux_luminance NUMERIC(7, 2) NOT NULL DEFAULT 0.00;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS white_balance_status VARCHAR(32) NOT NULL DEFAULT 'BALANCED';
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS color_temperature INT NOT NULL DEFAULT 6500;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS engine_pipeline VARCHAR(128) NOT NULL DEFAULT 'crow-cpp-inline-vision';
 
 -- Drop legacy user_id and users table for open-source open web architecture
 ALTER TABLE inspections DROP COLUMN IF EXISTS user_id;

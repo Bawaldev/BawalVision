@@ -9,11 +9,11 @@ namespace bawal::ipc {
 constexpr uint32_t SHM_MAGIC = 0x4241574C; // 'BAWL'
 constexpr uint32_t SHM_NUM_SLOTS = 4;
 // ESP32-S3 frames are capped at 256 KB; 512 KB gives headroom while keeping
-// the shared mapping small. Must match slotCapacity in backend/internal/shm/producer.go.
+// the shared mapping small.
 constexpr uint32_t SHM_SLOT_CAPACITY = 512 * 1024; // 512 KB per frame slot
 constexpr const char* SHM_NAME = "/bawal_frame_shm";
-// Keep the notify socket in /dev/shm so the backend and vision containers can
-// share it when both run with `ipc: host`.
+// Keep the notify socket in /dev/shm so an external SHM consumer can share it
+// when running with `ipc: host`.
 constexpr const char* SOCK_NOTIFY_PATH = "/dev/shm/bawal_shm.sock";
 
 // Global Header: Aligned ke 64 byte (1 Cache line)
@@ -46,9 +46,9 @@ static_assert(sizeof(ShmSlotHeader) == 64, "SlotHeader must be 64 bytes");
 constexpr size_t SLOT_STRIDE = sizeof(ShmSlotHeader) + SHM_SLOT_CAPACITY;
 constexpr size_t TOTAL_SHM_SIZE = sizeof(ShmGlobalHeader) + (SHM_NUM_SLOTS * SLOT_STRIDE);
 
-// Layout checks shared with backend/internal/shm/producer.go. The Go producer
-// writes these fields at hard-coded byte offsets, so any layout drift must be
-// caught at compile time rather than silently corrupting frames at runtime.
+// Layout checks for every SHM producer/consumer pair. Fields are written at
+// fixed byte offsets, so layout drift must be caught at compile time rather
+// than silently corrupting frames at runtime.
 static_assert(std::is_standard_layout_v<ShmGlobalHeader>);
 static_assert(std::is_standard_layout_v<ShmSlotHeader>);
 static_assert(offsetof(ShmGlobalHeader, magic) == 0);
