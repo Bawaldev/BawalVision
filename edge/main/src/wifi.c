@@ -34,7 +34,7 @@
 #include "system_monitor.h"
 #include "esp_camera.h"
 
-#define HTTP_TIMEOUT_MS 300
+#define HTTP_TIMEOUT_MS 1500
 #define DISCOVERY_RETRY_MS 5000
 #define DISCOVERY_TOTAL_TIMEOUT_MS 700
 
@@ -818,7 +818,7 @@ static int frame_socket_open(const char *ip, uint16_t port) {
         return -1;
     }
 
-    struct timeval timeout = {.tv_sec = 0, .tv_usec = 300000};
+    struct timeval timeout = {.tv_sec = 1, .tv_usec = 500000};
     (void)setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     (void)setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     int nodelay = 1;
@@ -842,7 +842,7 @@ static int frame_socket_open(const char *ip, uint16_t port) {
         fd_set writefds;
         FD_ZERO(&writefds);
         FD_SET(sock, &writefds);
-        struct timeval connect_timeout = {.tv_sec = 0, .tv_usec = 300000};
+        struct timeval connect_timeout = {.tv_sec = 1, .tv_usec = 500000};
         int ready = select(sock + 1, NULL, &writefds, NULL, &connect_timeout);
         if (ready <= 0) {
             close(sock);
@@ -896,13 +896,13 @@ static void frame_drain_responses(uint32_t *ok_count) {
 }
 
 void http_stream_sender_task(void *pvParameters) {
-    const TickType_t frame_interval_ticks = pdMS_TO_TICKS(70);
     char backend_ip[32];
     char device_id[DEVICE_ID_MAX_LEN];
     telemetry_data_t meta;
     uint32_t frame_id = 0;
     uint32_t timing_frames = 0;
     uint32_t http_ok = 0;
+    uint8_t consecutive_send_errors = 0;
     int64_t capture_us_total = 0;
     int64_t send_us_total = 0;
     TickType_t last_error_log = 0;
@@ -915,11 +915,9 @@ void http_stream_sender_task(void *pvParameters) {
         copy_string(device_id, sizeof(device_id), "ESP32-S3");
     }
 
-    ESP_LOGI(TAG, "HTTP stream sender started (target %d FPS, device=%s)", STREAM_FPS, device_id);
+    ESP_LOGI(TAG, "HTTP stream sender started (100 ms pacing, device=%s)", device_id);
 
     for (;;) {
-        TickType_t start_tick = xTaskGetTickCount();
-
         if (g_wifi_event_group == NULL) {
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
@@ -989,20 +987,27 @@ void http_stream_sender_task(void *pvParameters) {
         esp_camera_fb_return(fb);
 
         if (!sent) {
+            consecutive_send_errors++;
             TickType_t now = xTaskGetTickCount();
             if (last_error_log == 0 ||
                 (TickType_t)(now - last_error_log) >= pdMS_TO_TICKS(5000)) {
-                ESP_LOGW(TAG, "Frame send failed (errno %d)", errno);
+                ESP_LOGW(TAG, "Frame send failed %u/3 (errno %d)",
+                         (unsigned)consecutive_send_errors, errno);
                 last_error_log = now;
             }
-            frame_socket_close();
+            if (consecutive_send_errors >= 3) {
+                ESP_LOGW(TAG, "3 consecutive send failures; resetting socket");
+                frame_socket_close();
+                consecutive_send_errors = 0;
+            }
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
+        consecutive_send_errors = 0;
 
         frame_drain_responses(&http_ok);
-        if (frame_id > 5 && (TickType_t)(xTaskGetTickCount() - s_last_rx_tick) > pdMS_TO_TICKS(2000)) {
-            ESP_LOGW(TAG, "Frame socket stalled for >2 s; reconnecting");
+        if (frame_id > 5 && (TickType_t)(xTaskGetTickCount() - s_last_rx_tick) > pdMS_TO_TICKS(5000)) {
+            ESP_LOGW(TAG, "Frame socket stalled for >5 s; reconnecting");
             frame_socket_close();
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
@@ -1023,12 +1028,7 @@ void http_stream_sender_task(void *pvParameters) {
             send_us_total = 0;
         }
 
-        TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
-        if (elapsed_ticks < frame_interval_ticks) {
-            vTaskDelay(frame_interval_ticks - elapsed_ticks);
-        } else {
-            taskYIELD();
-        }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
