@@ -114,13 +114,30 @@
     let streamEpoch = $state(Date.now());
     let retryCount = $state(0);
     const MAX_RETRIES = 3;
+    let isTabVisible = $state(true);
 
     let activeStreamUrl = $derived(
-        streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`
+        !isTabVisible
+            ? ''
+            : (streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`)
     );
+
+    function handleVisibilityChange() {
+        if (typeof document !== 'undefined') {
+            if (document.hidden) {
+                isTabVisible = false;
+            } else {
+                streamEpoch = Date.now();
+                isTabVisible = true;
+            }
+        }
+    }
 
     // Initial mount: restore persisted source mode, selected video, and fetch examples list with unique UUIDs
     onMount(() => {
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', handleVisibilityChange);
+        }
         if (typeof localStorage !== 'undefined') {
             const savedVideo = localStorage.getItem('bawal_mock_selected_video');
             if (savedVideo && savedVideo !== 'custom') {
@@ -510,6 +527,9 @@
     }
 
     onDestroy(() => {
+        if (typeof document !== 'undefined') {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        }
         stopMockPushing();
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);

@@ -43,9 +43,10 @@ services:
       - DB_SSLMODE=disable
       - DISCOVERY_PORT=8765
       - USB_AUTO_PROVISION=${USB_AUTO_PROVISION:-0}
-    privileged: true
+    privileged: false
+    devices:
+      - "/dev/ttyACM0:/dev/ttyACM0"
     volumes:
-      - /dev:/dev
       - /sys:/sys:ro
       - ../.cache_trash:/app/.cache_trash:ro
       - ../examples:/app/examples:ro
