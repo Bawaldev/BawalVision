@@ -1,5 +1,7 @@
 #include "bawal/ipc/shm_consumer.hpp"
 
+#include <cerrno>
+#include <sys/time.h>
 
 namespace bawal::ipc {
 
@@ -40,8 +42,16 @@ bool ShmFrameConsumer::init() {
     // connect to the notify socket regardless of umask.
     chmod(SOCK_NOTIFY_PATH, 0666);
 
+    // A bounded accept/read makes waitForNextFrame() pollable. Without this,
+    // shutdown would have to close a socket owned by another thread while the
+    // consumer is blocked inside accept() or read().
+    timeval timeout{};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 200 * 1000;
+    (void)setsockopt(m_server_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
     listen(m_server_sock, 1);
-    std::cout << "[SHM] Consumer siap. Menunggu Go backend terhubung...\n";
+    std::cout << "[SHM] Consumer siap. Menunggu producer terhubung...\n";
     return true;
 }
 
@@ -49,12 +59,20 @@ bool ShmFrameConsumer::waitForNextFrame(cv::Mat& out_bgr_frame, uint32_t& out_fr
     if (m_client_sock < 0) {
         m_client_sock = accept(m_server_sock, nullptr, nullptr);
         if (m_client_sock < 0) return false;
-        std::cout << "[SHM] Go backend terhubung ke pipeline C++!\n";
+
+        timeval timeout{};
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 200 * 1000;
+        (void)setsockopt(m_client_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        std::cout << "[SHM] Producer terhubung ke pipeline C++!\n";
     }
 
     uint64_t latest_seq = 0;
     ssize_t n = read(m_client_sock, &latest_seq, sizeof(latest_seq));
     if (n <= 0) {
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return false;
+        }
         close(m_client_sock);
         m_client_sock = -1;
         return false;

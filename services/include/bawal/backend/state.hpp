@@ -1,0 +1,142 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace bawal::backend {
+
+/**
+ * @brief Structure-of-Arrays detection storage shared between the vision
+ * worker and the HTTP handlers.
+ *
+ * The web layer is the only OOP boundary in this process. Detection data is
+ * kept as flat, cache-aligned arrays so NMS, JSON conversion, and any future
+ * SIMD pass can walk one field at a time without touching unused bytes.
+ */
+struct alignas(64) DetectionSoA {
+    static constexpr size_t kMaxDetections = 64;
+    static constexpr size_t kClassNameBytes = 32;
+
+    float x[kMaxDetections]{};
+    float y[kMaxDetections]{};
+    float width[kMaxDetections]{};
+    float height[kMaxDetections]{};
+    float confidence[kMaxDetections]{};
+    float spoilage_score[kMaxDetections]{};
+    int32_t class_id[kMaxDetections]{};
+    uint8_t status[kMaxDetections]{};       // FoodStatus
+    char class_name[kMaxDetections][kClassNameBytes]{};
+
+    uint32_t count{0};
+    uint8_t reserved[60]{};                 // explicit pad to 64-byte multiple
+};
+
+static_assert(alignof(DetectionSoA) == 64, "DetectionSoA must be cache-line aligned");
+static_assert(sizeof(DetectionSoA) == 3968, "DetectionSoA layout/padding mismatch");
+
+enum class FoodStatus : uint8_t {
+    Unknown = 0,
+    Pass = 1,
+    Review = 2,
+    Reject = 3,
+};
+
+struct alignas(64) SceneOpticalSoA {
+    float avg_r{0.0f};
+    float avg_g{0.0f};
+    float avg_b{0.0f};
+    float lux_luminance{0.0f};
+    int32_t color_temperature{6500};
+    char white_balance_status[32]{"BALANCED"};
+    uint8_t reserved[12]{};                 // explicit pad to 64 bytes
+};
+
+static_assert(alignof(SceneOpticalSoA) == 64, "SceneOpticalSoA must be cache-line aligned");
+static_assert(sizeof(SceneOpticalSoA) == 64, "SceneOpticalSoA must be exactly 64 bytes");
+
+struct CameraView {
+    bool active{false};
+    std::string device_id;
+    double fps{0.0};
+    uint64_t frames_total{0};
+    uint64_t last_frame_age_ms{0};
+    uint32_t frame_id{0};
+    uint16_t width{0};
+    uint16_t height{0};
+};
+
+struct InspectionView {
+    bool valid{false};
+    std::string device_id;
+    std::string engine_pipeline;
+    uint64_t sequence{0};
+    uint64_t age_ms{0};
+    uint32_t frame_id{0};
+    DetectionSoA detections;
+    SceneOpticalSoA optical;
+};
+
+/**
+ * @brief Process-local state shared by Crow worker threads and the vision
+ * thread. POSIX SHM carries the frame bytes; this object only carries small
+ * metadata and the latest detection snapshot.
+ */
+class BackendState {
+public:
+    BackendState() = default;
+
+    void updateFrame(std::string_view device_id,
+                     uint32_t frame_id,
+                     const std::vector<uint8_t>& jpeg,
+                     uint16_t width = 0,
+                     uint16_t height = 0);
+
+    void updateInspection(std::string_view device_id,
+                          uint32_t frame_id,
+                          const DetectionSoA& detections,
+                          const SceneOpticalSoA& optical,
+                          std::string_view engine_pipeline);
+
+    [[nodiscard]] CameraView camera() const;
+    [[nodiscard]] InspectionView inspection() const;
+    [[nodiscard]] std::vector<uint8_t> latestJpeg(std::string_view device_id = {}) const;
+
+    void setVisionReady(bool ready) noexcept {
+        m_vision_ready.store(ready, std::memory_order_release);
+    }
+    [[nodiscard]] bool visionReady() const noexcept {
+        return m_vision_ready.load(std::memory_order_acquire);
+    }
+
+private:
+    static uint64_t nowNs() noexcept;
+
+    mutable std::mutex m_mutex;
+
+    std::string m_device_id;
+    std::vector<uint8_t> m_latest_jpeg;
+    uint16_t m_width{0};
+    uint16_t m_height{0};
+
+    uint64_t m_frames_total{0};
+    uint64_t m_last_frame_ns{0};
+    uint64_t m_prev_frame_ns{0};
+    uint32_t m_last_frame_id{0};
+    double m_fps{0.0};
+
+    uint64_t m_inspection_sequence{0};
+    uint64_t m_inspection_timestamp_ns{0};
+    uint32_t m_inspection_frame_id{0};
+    std::string m_inspection_device_id;
+    std::string m_engine_pipeline;
+    DetectionSoA m_detections;
+    SceneOpticalSoA m_optical;
+
+    std::atomic<bool> m_vision_ready{false};
+};
+
+} // namespace bawal::backend
