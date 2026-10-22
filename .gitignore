@@ -13,6 +13,7 @@ cmake-build-*/
 _deps/
 services/build/
 backend/bin/
+backend/server
 ml/ncnn_generator
 
 # CMake Artifacts
