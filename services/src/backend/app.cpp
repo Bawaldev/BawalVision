@@ -215,6 +215,13 @@ void BackendApp::configure() {
                  "X-Is-Rewind", "X-Video-Rewind")
         .expose("X-Stream-Source", "X-Telemetry-Struct", "X-Mock-Video-UUID");
 
+    // Camera ingress is high-frequency; keep Crow's per-request INFO logging
+    // out of the hot path unless explicitly requested for debugging.
+    const char* verbose = std::getenv("CROW_VERBOSE");
+    if (verbose == nullptr || std::string_view(verbose) != "1") {
+        m_app.loglevel(crow::LogLevel::Warning);
+    }
+
     registerRoutes();
 
     m_app.bindaddr(m_config.bind_address).port(m_config.port).multithreaded();
@@ -248,13 +255,15 @@ void BackendApp::registerCameraRoutes() {
                 return jsonError(503, "POSIX SHM producer is not initialized");
             }
 
+            // Publish metadata before the SHM notification so the vision
+            // thread observes the correct device id on the very first frame.
+            m_state.updateFrame(parsed->device_id, parsed->frame_id, parsed->image,
+                                parsed->width, parsed->height);
+
             if (!m_producer.writeFrame(parsed->frame_id, parsed->image,
                                        parsed->width, parsed->height, 0)) {
                 return jsonError(413, "Frame exceeds the POSIX SHM slot capacity");
             }
-
-            m_state.updateFrame(parsed->device_id, parsed->frame_id, parsed->image,
-                                parsed->width, parsed->height);
 
             crow::json::wvalue body;
             body["status"] = "success";

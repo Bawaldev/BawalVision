@@ -26,5 +26,6 @@ private:
     int m_client_sock{-1};
     uint8_t* m_base_ptr{nullptr};
     ShmGlobalHeader* m_global_hdr{nullptr};
+    uint64_t m_last_seq{0};
 };
 };

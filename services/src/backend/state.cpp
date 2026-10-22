@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 
 namespace bawal::backend {
 namespace {
