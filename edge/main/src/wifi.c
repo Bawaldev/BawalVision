@@ -29,7 +29,7 @@
 
 static const char *TAG = "WIFI";
 
-#define STREAM_TX_BUFFER_SIZE 4096
+#define STREAM_TX_BUFFER_SIZE 8192
 #define HTTP_TIMEOUT_MS 350
 
 EventGroupHandle_t g_wifi_event_group = NULL;
@@ -497,10 +497,12 @@ void http_stream_sender_task(void *pvParameters) {
         send_camera_frame_to_backend(backend_ip, get_backend_port(), meta.device_id);
 
         TickType_t elapsed = xTaskGetTickCount() - start_time;
-        if (elapsed < target_interval) {
+        if (elapsed > pdMS_TO_TICKS(65)) {
+            taskYIELD(); // Payload membesar saat gerak ekstrem (>65ms): langsung yield & ambil frame mutakhir (drop-at-source anti-stutter)
+        } else if (elapsed < target_interval) {
             vTaskDelay(target_interval - elapsed);
         } else {
-            taskYIELD(); // Transmisi lambat? Langsung ambil frame berikutnya (drop-at-source)!
+            taskYIELD();
         }
     }
 }
