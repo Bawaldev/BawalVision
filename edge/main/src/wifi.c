@@ -896,7 +896,7 @@ static void frame_drain_responses(uint32_t *ok_count) {
 }
 
 void http_stream_sender_task(void *pvParameters) {
-    const TickType_t frame_interval_ticks = pdMS_TO_TICKS(33);
+    const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
     char backend_ip[32];
     char device_id[DEVICE_ID_MAX_LEN];
     telemetry_data_t meta;
@@ -915,7 +915,7 @@ void http_stream_sender_task(void *pvParameters) {
         copy_string(device_id, sizeof(device_id), "ESP32-S3");
     }
 
-    ESP_LOGI(TAG, "HTTP stream sender started (33 ms pacing, device=%s)", device_id);
+    ESP_LOGI(TAG, "HTTP stream sender started (target %d FPS, device=%s)", STREAM_FPS, device_id);
 
     for (;;) {
         TickType_t start_tick = xTaskGetTickCount();
