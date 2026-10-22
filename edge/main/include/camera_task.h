@@ -12,7 +12,7 @@ extern "C" {
 
 #define DEFAULT_FRAME_WIDTH  640
 #define DEFAULT_FRAME_HEIGHT 480
-#define STREAM_FPS           25
+#define STREAM_FPS           30
 
 /**
  * @brief Initialize the OV5640-compatible camera in JPEG VGA mode.
