@@ -265,7 +265,7 @@
             if (res.success) {
                 const targetIp = res.gatewayHostIp || gatewayIpToUse || 'auto';
                 wifiConnectSuccess = true;
-                wifiSuccessMsg = `ESP32 tersambung ke Wi-Fi ${ssid} targeting ${targetIp}. Kabel USB sekarang dapat dicabut!`;
+                wifiSuccessMsg = `ESP32 Connected to ${ssid} targeting ${targetIp}`;
                 connectionStatus = 'connected';
                 lastConnDetails = res;
                 connectToast = `✓ ${wifiSuccessMsg}`;
@@ -299,12 +299,9 @@
         lastConnDetails = res;
         pairingGraceUntil = Date.now() + 12000;
         webSerialStatus = 'success';
-        const targetIp = res.gatewayHostIp || gatewayHostIp || detectedHostIp || 'auto';
         webSerialMsg = res.wifiConnected === false
-            ? `✓ Credentials stored on ${port}. ESP32 is associating with ${ssid} (target ${targetIp})...`
-            : `✓ ESP32 tersambung ke Wi-Fi ${ssid} targeting ${targetIp}. Kabel USB sekarang dapat dicabut!`;
-        connectToast = `✓ ESP32 tersambung ke Wi-Fi ${ssid} targeting ${targetIp}. Kabel USB sekarang dapat dicabut!`;
-        setTimeout(() => (connectToast = ''), 6000);
+            ? `✓ Credentials stored on ${port}. ESP32-S3 is associating with ${ssid}...`
+            : `✓ ${port} paired to ${ssid}. ESP32-S3 is in sync.`;
         onDeviceConnectionChange?.(true, res.deviceId);
     }
 
@@ -1074,9 +1071,6 @@
                                         bind:value={gatewayHostIp}
                                         placeholder={detectedHostIp || 'Auto-detect laptop Wi-Fi IP'}
                                     />
-                                    <p class="gateway-hint">
-                                        Masukkan IP laptop di jaringan Wi-Fi ini (cek via 'ip a' di terminal host). ESP32 akan mengirim stream ke IP ini.
-                                    </p>
                                 </div>
                             </div>
 
@@ -1103,7 +1097,7 @@
                             </button>
                             <button type="button" class="fedora-btn primary" onclick={handleConnectToSelectedNetwork} disabled={isConnectingWifi}>
                                 {#if isConnectingWifi}
-                                    <span class="btn-spinner"></span> Provisioning NVS & Connecting...
+                                    <span class="btn-spinner"></span> Switching & Connecting ESP32...
                                 {:else if espUsbStatus?.current_ssid && espUsbStatus.current_ssid !== selectedNetwork.ssid}
                                     Switch ESP32 to "{selectedNetwork.ssid}"
                                 {:else if selectedNetwork.is_server}
@@ -2378,13 +2372,6 @@
     .dialog-field-row {
         display: flex;
         gap: 12px;
-    }
-
-    .gateway-hint {
-        margin: 0;
-        font-size: 0.66rem;
-        line-height: 1.35;
-        color: var(--text-muted);
     }
 
     .dialog-field.half {
