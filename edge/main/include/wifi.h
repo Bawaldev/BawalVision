@@ -47,6 +47,7 @@ extern "C" {
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+#define WIFI_DISCOVERY_BIT BIT2
 
 extern EventGroupHandle_t g_wifi_event_group;
 extern char g_wifi_ssid[32];

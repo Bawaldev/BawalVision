@@ -79,6 +79,54 @@ static bool is_valid_ipv4(const char *ip) {
     return inet_pton(AF_INET, ip, &addr) == 1 && addr.s_addr != 0;
 }
 
+static bool get_sta_ip_info(esp_netif_ip_info_t *info) {
+    if (!info) return false;
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    return netif && esp_netif_get_ip_info(netif, info) == ESP_OK &&
+           info->ip.addr != 0 && info->netmask.addr != 0;
+}
+
+static bool is_same_subnet_ip(const char *ip) {
+    struct in_addr addr;
+    esp_netif_ip_info_t info;
+    if (!is_valid_ipv4(ip) || inet_pton(AF_INET, ip, &addr) != 1) return false;
+    if (!get_sta_ip_info(&info)) return false;
+
+    uint32_t ip_host = ntohl(addr.s_addr);
+    uint32_t esp_host = ntohl(info.ip.addr);
+    uint32_t mask_host = ntohl(info.netmask.addr);
+    return (ip_host & mask_host) == (esp_host & mask_host);
+}
+
+static bool is_docker_range(const char *ip) {
+    unsigned int a = 0, b = 0, c = 0, d = 0;
+    if (sscanf(ip, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) return false;
+    return a == 172 && b >= 16 && b <= 31;
+}
+
+// Reject loopback/link-local and Docker bridge IPs, but keep legitimate 172.x
+// LANs working when the ESP and backend are on the same subnet.
+static bool is_valid_lan_ip(const char *ip) {
+    if (!is_valid_ipv4(ip)) return false;
+
+    struct in_addr addr;
+    if (inet_pton(AF_INET, ip, &addr) != 1) return false;
+    uint32_t host = ntohl(addr.s_addr);
+    uint8_t a = (host >> 24) & 0xFF;
+    uint8_t b = (host >> 16) & 0xFF;
+    if (a == 0 || a == 127) return false;
+    if (a == 169 && b == 254) return false;
+
+    if (is_same_subnet_ip(ip)) return true;
+
+    // No STA IP yet (first-time provisioning): accept and let UDP discovery
+    // validate the address after association.
+    esp_netif_ip_info_t info;
+    if (!get_sta_ip_info(&info)) return true;
+
+    return !is_docker_range(ip);
+}
+
 bool wifi_nvs_load_credentials(void) {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
@@ -217,7 +265,13 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
 
     str_trim_copy(g_wifi_ssid, sizeof(g_wifi_ssid), ssid);
     if (pass && pass[0] != '\0') str_trim_copy(g_wifi_pass, sizeof(g_wifi_pass), pass);
-    if (backend_ip && backend_ip[0] != '\0') str_trim_copy(g_backend_ip, sizeof(g_backend_ip), backend_ip);
+    if (backend_ip && backend_ip[0] != '\0') {
+        if (!is_valid_lan_ip(backend_ip)) {
+            ESP_LOGE(TAG, "DITOLAK: Backend IP %s adalah IP Docker/Loopback atau bukan LAN valid", backend_ip);
+            return false;
+        }
+        str_trim_copy(g_backend_ip, sizeof(g_backend_ip), backend_ip);
+    }
     if (backend_port && backend_port[0] != '\0') str_trim_copy(g_backend_port, sizeof(g_backend_port), backend_port);
     s_discovered_ip[0] = '\0';
 
@@ -298,6 +352,9 @@ esp_err_t get_backend_url(const char *endpoint, char *out_url, size_t max_len) {
 
 void wifi_notify_backend_failure(void) {
     s_discovered_ip[0] = '\0';
+    if (g_wifi_event_group) {
+        xEventGroupSetBits(g_wifi_event_group, WIFI_DISCOVERY_BIT);
+    }
 }
 
 bool wifi_camera_stream_is_healthy(void) {
@@ -308,6 +365,83 @@ static void wifi_reconnect_timer_cb(void *arg) {
     (void)arg;
     if (g_wifi_ssid[0] != '\0') {
         (void)esp_wifi_connect();
+    }
+}
+
+// Broadcast discovery: the backend replies from its LAN socket, so the reply's
+// source address is the host's real Wi-Fi IP (even when the backend runs in
+// Docker and its container IP is 172.x).
+static void wifi_discover_backend(void) {
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) {
+        ESP_LOGW(TAG, "Discovery: socket() failed (%d)", errno);
+        return;
+    }
+
+    int broadcast = 1;
+    (void)setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+    struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+    (void)setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in dest = {0};
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(BACKEND_DISCOVERY_PORT);
+    dest.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+
+    const char *probe = BACKEND_DISCOVERY_MAGIC;
+    if (sendto(sock, probe, strlen(probe), 0, (struct sockaddr *)&dest, sizeof(dest)) < 0) {
+        ESP_LOGW(TAG, "Discovery: broadcast failed (%d)", errno);
+        close(sock);
+        return;
+    }
+
+    char buf[256];
+    struct sockaddr_in src;
+    socklen_t src_len = sizeof(src);
+    int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&src, &src_len);
+    if (n <= 0) {
+        close(sock);
+        return;
+    }
+    buf[n] = '\0';
+
+    char ip[INET_ADDRSTRLEN] = {0};
+    if (!inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip))) {
+        close(sock);
+        return;
+    }
+    if (!is_same_subnet_ip(ip)) {
+        ESP_LOGW(TAG, "Discovery: ignoring reply from %s (not on ESP subnet)", ip);
+        close(sock);
+        return;
+    }
+
+    bool changed = strcmp(g_backend_ip, ip) != 0;
+    str_trim_copy(g_backend_ip, sizeof(g_backend_ip), ip);
+
+    cJSON *root = cJSON_Parse(buf);
+    if (root) {
+        cJSON *port = cJSON_GetObjectItemCaseSensitive(root, "backend_port");
+        if (cJSON_IsNumber(port)) {
+            snprintf(g_backend_port, sizeof(g_backend_port), "%d", port->valueint);
+        }
+        cJSON_Delete(root);
+    }
+
+    if (changed) {
+        ESP_LOGI(TAG, "Discovery: backend found at %s:%s", g_backend_ip, g_backend_port);
+        (void)wifi_nvs_save_full_config(g_wifi_ssid, NULL, g_backend_ip, g_backend_port);
+        // The stream sender compares the URL each iteration and rebuilds its
+        // HTTP client when the IP changes; do not touch s_stream_client here.
+    }
+    close(sock);
+}
+
+static void wifi_discovery_task(void *pvParameters) {
+    (void)pvParameters;
+    for (;;) {
+        xEventGroupWaitBits(g_wifi_event_group, WIFI_DISCOVERY_BIT, pdTRUE, pdFALSE, portMAX_DELAY);
+        wifi_discover_backend();
     }
 }
 
@@ -347,7 +481,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         g_wifi_retry_num = 0;
         (void)esp_wifi_set_ps(WIFI_PS_NONE);
         if (g_wifi_event_group) {
-            xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+            xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_DISCOVERY_BIT);
         }
         lcd_update_wifi_status(true, ip_str);
         lcd_update_http_status("WIFI READY", false);
@@ -363,6 +497,13 @@ void wifi_init_sta(void) {
     if (s_wifi_initialized) return;
 
     g_wifi_event_group = xEventGroupCreate();
+    if (g_wifi_event_group == NULL) {
+        ESP_LOGE(TAG, "Failed to create Wi-Fi event group");
+        return;
+    }
+    if (xTaskCreate(wifi_discovery_task, "wifi_discovery", 4096, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "Failed to start backend discovery task");
+    }
 
     const esp_timer_create_args_t timer_args = {
         .callback = wifi_reconnect_timer_cb,
@@ -490,10 +631,10 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
    
     s_err_count++;
     if (s_err_count >= 3) {
-         esp_http_client_close(s_stream_client);
-        // wifi_notify_backend_failure();
+        esp_http_client_close(s_stream_client);
+        wifi_notify_backend_failure();
         s_err_count = 0;
-        vTaskDelay(pdMS_TO_TICKS(40)); 
+        vTaskDelay(pdMS_TO_TICKS(40));
     }
     return ESP_FAIL;
 }

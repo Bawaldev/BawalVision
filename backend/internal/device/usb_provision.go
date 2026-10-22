@@ -306,17 +306,24 @@ func DetectServerWiFiConfig() ServerWiFiConfig {
 		}
 	}
 
-	liveIP := detectLocalLANIPv4()
+	liveIP := getRealHostIP()
 
-	// Explicit BACKEND_IP (shell/.env) overrides the live LAN address; the
-	// live value stays available separately as DetectedHostIP.
+	// Explicit BACKEND_IP (shell/.env) overrides the detected address. It is
+	// the only reliable source inside Docker, where the container cannot see
+	// the host's Wi-Fi interface.
 	backendIP := strings.TrimSpace(os.Getenv("BACKEND_IP"))
 	if backendIP == "" {
 		backendIP = strings.TrimSpace(envMap["BACKEND_IP"])
 	}
+	if !isValidIPv4(backendIP) {
+		backendIP = ""
+	}
 	if backendIP == "" {
 		backendIP = liveIP
 	}
+	// DetectedHostIP stays strictly live. Inside Docker it is empty because the
+	// container cannot see the host Wi-Fi interface; the UI then falls back to
+	// an explicitly configured BACKEND_IP or lets the ESP use UDP discovery.
 
 	pass := strings.TrimSpace(os.Getenv("WIFI_PASS"))
 	if pass == "" {
@@ -519,77 +526,51 @@ func loadDotEnvFallback() map[string]string {
 	return res
 }
 
-func detectLocalLANIPv4() string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return "127.0.0.1"
+func isValidIPv4(raw string) bool {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil {
+		return false
 	}
+	return ip.To4() != nil && !ip.IsLoopback() && !ip.IsUnspecified()
+}
 
-	// Pass 1: Cari khusus interface Wi-Fi (diawali "wl", misal: wlp9s0, wlan0) yang statusnya UP
-	for _, iface := range ifaces {
-		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
-			continue
-		}
-		nameLower := strings.ToLower(iface.Name)
-		if strings.HasPrefix(nameLower, "docker") || strings.HasPrefix(nameLower, "br-") || strings.HasPrefix(nameLower, "veth") {
-			continue
-		}
-
-		if strings.HasPrefix(nameLower, "wl") {
-			if addrs, err := iface.Addrs(); err == nil {
-				for _, addr := range addrs {
-					var ip net.IP
-					switch v := addr.(type) {
-					case *net.IPNet:
-						ip = v.IP
-					case *net.IPAddr:
-						ip = v.IP
-					}
-					if ip != nil && ip.To4() != nil && !ip.IsLoopback() {
-						return ip.To4().String()
-					}
-				}
-			}
+func runningInContainer() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(data)
+		if strings.Contains(s, "docker") || strings.Contains(s, "containerd") || strings.Contains(s, "kubepods") {
+			return true
 		}
 	}
+	return false
+}
 
-	// Pass 2: Cari interface Ethernet fisik (en*, eth*) jika tidak ada Wi-Fi
-	for _, iface := range ifaces {
-		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
-			continue
-		}
-		nameLower := strings.ToLower(iface.Name)
-		if strings.HasPrefix(nameLower, "docker") || strings.HasPrefix(nameLower, "br-") || strings.HasPrefix(nameLower, "veth") {
-			continue
-		}
-
-		if strings.HasPrefix(nameLower, "en") || strings.HasPrefix(nameLower, "eth") {
-			if addrs, err := iface.Addrs(); err == nil {
-				for _, addr := range addrs {
-					var ip net.IP
-					switch v := addr.(type) {
-					case *net.IPNet:
-						ip = v.IP
-					case *net.IPAddr:
-						ip = v.IP
-					}
-					if ip != nil && ip.To4() != nil && !ip.IsLoopback() {
-						return ip.To4().String()
-					}
-				}
-			}
-		}
+// getRealHostIP returns the source address of the host's default route.
+// Inside Docker the default route belongs to the container bridge (172.18.x.x),
+// so it returns "" there instead of leaking an unreachable Docker IP. Callers
+// fall back to explicit BACKEND_IP config or UDP discovery in that case.
+func getRealHostIP() string {
+	if runningInContainer() {
+		return ""
 	}
 
-	// Pass 3: Routing fallback
 	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err == nil {
-		defer conn.Close()
-		localAddr := conn.LocalAddr().(*net.UDPAddr)
-		return localAddr.IP.String()
+	if err != nil {
+		return ""
 	}
+	defer conn.Close()
 
-	return "127.0.0.1"
+	localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || localAddr.IP == nil {
+		return ""
+	}
+	ip := localAddr.IP.To4()
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+		return ""
+	}
+	return ip.String()
 }
 
 // configureSerial115200 configures an open file descriptor for 115200 8N1 raw serial communication on Linux.
