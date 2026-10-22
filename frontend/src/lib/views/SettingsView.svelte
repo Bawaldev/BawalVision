@@ -59,6 +59,35 @@
         message: 'Disconnected'
     });
 
+    function isDockerOrLoopbackIp(raw: string): boolean {
+        const ip = raw.trim();
+        if (!ip) return false;
+        if (ip === 'localhost' || ip.startsWith('127.')) return true;
+        const parts = ip.split('.').map(Number);
+        if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+        return parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31;
+    }
+
+    function isValidGatewayIp(raw: string): boolean {
+        const ip = raw.trim();
+        if (!ip) return true;
+        const parts = ip.split('.').map(Number);
+        if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+        if (parts[0] === 0 || parts[0] === 127 || parts[0] >= 224) return false;
+        if (parts[0] === 169 && parts[1] === 254) return false;
+        if (isDockerOrLoopbackIp(ip)) {
+            // Allow 172.x only when the UI is served from that address, which
+            // means it is the host's real LAN IP rather than a Docker bridge.
+            return typeof window !== 'undefined' && window.location.hostname === ip;
+        }
+        return true;
+    }
+
+    function isUsableLanHost(raw: string): boolean {
+        const ip = raw.trim();
+        return !!ip && ip !== 'localhost' && isValidGatewayIp(ip);
+    }
+
     // Fedora GNOME 45+ Wi-Fi & Peripheral Management State
     let wifiNetworks = $state<WiFiNetworkInfo[]>([]);
     let isScanningWifi = $state(false);
@@ -128,13 +157,22 @@
             }
         }
 
-        // Live host LAN IP (non-Docker interface) used as the Gateway Host IP
-        // default in the provisioning modal.
-        const liveHostIp = hw.detected_host_ip || hw.server_wifi?.detected_host_ip || hw.server_wifi?.backend_ip || '';
-        if (liveHostIp) {
+        // Prefer the address the browser used to reach the UI (if it is a real
+        // LAN IP), then the backend's detected host IP. Never auto-fill a
+        // Docker bridge/loopback address.
+        const browserHost = typeof window !== 'undefined' ? window.location.hostname : '';
+        const liveHostIp = isUsableLanHost(browserHost)
+            ? browserHost
+            : (hw.detected_host_ip || hw.server_wifi?.detected_host_ip || hw.server_wifi?.backend_ip || '');
+        if (liveHostIp && isValidGatewayIp(liveHostIp)) {
             detectedHostIp = liveHostIp;
-            if (!gatewayHostIp) {
+            if (!gatewayHostIp || !isValidGatewayIp(gatewayHostIp)) {
                 gatewayHostIp = liveHostIp;
+            }
+        } else {
+            detectedHostIp = '';
+            if (isDockerOrLoopbackIp(gatewayHostIp)) {
+                gatewayHostIp = '';
             }
         }
 
@@ -250,7 +288,16 @@
 
         const ssid = (selectedSsid || selectedNetwork.ssid || '').trim();
         const detectedPort = detectedUsbPorts[0]?.port || '';
-        const gatewayIpToUse = (gatewayHostIp || detectedHostIp || serverBackendIp || '').trim();
+        let gatewayIpToUse = (gatewayHostIp || detectedHostIp || '').trim();
+        if (!gatewayIpToUse && serverBackendIp && isValidGatewayIp(serverBackendIp)) {
+            gatewayIpToUse = serverBackendIp.trim();
+        }
+        if (gatewayIpToUse && !isValidGatewayIp(gatewayIpToUse)) {
+            connectError =
+                'IP gateway tidak valid (Docker/loopback). Gunakan IP WiFi laptop, atau kosongkan agar ESP menemukan backend via UDP discovery.';
+            isConnectingWifi = false;
+            return;
+        }
 
         try {
             // Prefer the backend when it can actually see the board's USB node.
@@ -437,7 +484,7 @@
                     cmd: 'set_wifi',
                     ssid,
                     pass: password || '',
-                    backend_ip: gatewayIp || (typeof window !== 'undefined' ? window.location.hostname : ''),
+                    backend_ip: gatewayIp,
                     backend_port: 8080
                 }) + '\n';
 
@@ -504,7 +551,24 @@
         }
 
         const ssid = (ssidOverride || hw?.server_wifi?.ssid || serverWifiSsid || '').trim();
-        const backendIp = (gatewayHostIp || hw?.detected_host_ip || hw?.server_wifi?.detected_host_ip || hw?.server_wifi?.backend_ip || serverBackendIp || '').trim();
+        let backendIp = (gatewayHostIp || '').trim();
+        if (backendIp && !isValidGatewayIp(backendIp)) {
+            backendIp = '';
+        }
+        if (!backendIp) {
+            for (const candidate of [
+                hw?.detected_host_ip,
+                hw?.server_wifi?.detected_host_ip,
+                hw?.server_wifi?.backend_ip,
+                serverBackendIp
+            ]) {
+                const value = (candidate || '').trim();
+                if (value && isValidGatewayIp(value)) {
+                    backendIp = value;
+                    break;
+                }
+            }
+        }
         if (!ssid) {
             webSerialStatus = 'error';
             webSerialMsg = 'Server Wi-Fi SSID is unavailable; cannot provision the ESP32-S3.';
@@ -606,8 +670,9 @@
         let port: any = null;
 
         try {
+            let hw: any = null;
             if (!serverWifiSsid || !serverBackendIp) {
-                const hw = await fetchDeviceStatus(formState.backendUrl);
+                hw = await fetchDeviceStatus(formState.backendUrl);
                 if (hw?.server_wifi) {
                     if (hw.server_wifi.ssid) serverWifiSsid = hw.server_wifi.ssid;
                     if (hw.server_wifi.backend_ip) serverBackendIp = hw.server_wifi.backend_ip;
@@ -615,6 +680,30 @@
             }
             if (!serverWifiSsid) {
                 throw new Error('Active host Wi-Fi SSID is unavailable.');
+            }
+
+            let backendIp = (gatewayHostIp || '').trim();
+            if (backendIp && !isValidGatewayIp(backendIp)) {
+                webSerialStatus = 'error';
+                webSerialMsg =
+                    'IP gateway tidak valid (Docker/loopback). Gunakan IP WiFi laptop, atau kosongkan agar ESP menemukan backend via UDP discovery.';
+                return;
+            }
+            if (!backendIp) {
+                const candidates = [
+                    hw?.detected_host_ip,
+                    hw?.server_wifi?.detected_host_ip,
+                    hw?.server_wifi?.backend_ip,
+                    serverBackendIp,
+                    typeof window !== 'undefined' ? window.location.hostname : ''
+                ];
+                for (const candidate of candidates) {
+                    const value = (candidate || '').trim();
+                    if (value && isValidGatewayIp(value)) {
+                        backendIp = value;
+                        break;
+                    }
+                }
             }
 
             try {
@@ -645,7 +734,7 @@
                 cmd: 'set_wifi',
                 ssid: serverWifiSsid,
                 pass: knownPassword || '',
-                backend_ip: gatewayHostIp || serverBackendIp || (typeof window !== 'undefined' ? window.location.hostname : ''),
+                backend_ip: backendIp,
                 backend_port: 8080
             }) + '\n';
 
@@ -1202,6 +1291,9 @@
                                         bind:value={gatewayHostIp}
                                         placeholder={detectedHostIp || 'Auto-detect laptop Wi-Fi IP'}
                                     />
+                                    {#if gatewayHostIp && !isValidGatewayIp(gatewayHostIp)}
+                                        <span class="gateway-ip-error">IP Docker/loopback tidak diizinkan. Gunakan IP WiFi laptop atau kosongkan.</span>
+                                    {/if}
                                 </div>
                             </div>
 
@@ -2579,6 +2671,14 @@
         background: rgba(239, 68, 68, 0.15);
         color: #fca5a5;
         border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .gateway-ip-error {
+        display: block;
+        margin-top: 4px;
+        color: #fca5a5;
+        font-size: 0.72rem;
+        line-height: 1.3;
     }
 
     .dialog-alert.success {
