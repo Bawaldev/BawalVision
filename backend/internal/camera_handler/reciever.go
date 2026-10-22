@@ -13,6 +13,7 @@ type CachedFrame struct {
 	FrameID     uint32
 	ImageBytes  []byte
 	TimestampMS int64
+	Version     uint64
 	ClientIP    string
 	IsRewind    bool
 	VideoSource string
@@ -20,7 +21,7 @@ type CachedFrame struct {
 }
 
 type subscriber struct {
-	ch       chan []byte
+	notify   chan struct{}
 	deviceID string
 }
 
@@ -32,11 +33,15 @@ type CameraStore struct {
 	subCounter      uint64
 	lastFrameTimeMS int64
 	frameCount      atomic.Uint64
+	frameVersion    atomic.Uint64
+	fpsTimestamps   []int64
 	fps             float64
 	streamMode      string // "live" (default) or "mock"
 	activeVideoSrc  string
 	activeVideoUUID string
 }
+
+var GlobalFramesTotal atomic.Uint64
 
 var GlobalCameraStore = &CameraStore{
 	rawFrames:       make(map[string]CachedFrame),
@@ -149,19 +154,31 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 		return
 	}
 	now := time.Now().UnixMilli()
-	if s.lastFrameTimeMS > 0 && now > s.lastFrameTimeMS {
-		dt := float64(now-s.lastFrameTimeMS) / 1000.0
-		if dt > 0.005 && dt < 2.0 {
-			instantFps := 1.0 / dt
-			if s.fps <= 0 {
-				s.fps = instantFps
-			} else {
-				s.fps = 0.85*s.fps + 0.15*instantFps
-			}
-		}
-	}
 	s.lastFrameTimeMS = now
 	s.frameCount.Add(1)
+	ver := s.frameVersion.Add(1)
+	GlobalFramesTotal.Add(1)
+
+	// Rolling 1.5 - 2.0s real FPS calculation
+	s.fpsTimestamps = append(s.fpsTimestamps, now)
+	cutoff := now - 2000
+	idx := 0
+	for idx < len(s.fpsTimestamps) && s.fpsTimestamps[idx] < cutoff {
+		idx++
+	}
+	if idx > 0 {
+		s.fpsTimestamps = s.fpsTimestamps[idx:]
+	}
+	if len(s.fpsTimestamps) >= 2 {
+		dt := float64(now-s.fpsTimestamps[0]) / 1000.0
+		if dt > 0.05 {
+			s.fps = float64(len(s.fpsTimestamps)-1) / dt
+		}
+	} else if len(s.fpsTimestamps) == 1 {
+		if s.fps <= 0 {
+			s.fps = 1.0
+		}
+	}
 
 	if isMockDevice {
 		if strings.TrimSpace(videoSource) != "" {
@@ -181,6 +198,7 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 		FrameID:     frameID,
 		ImageBytes:  data,
 		TimestampMS: now,
+		Version:     ver,
 		ClientIP:    clientIP,
 		IsRewind:    isRewind,
 		VideoSource: videoSource,
@@ -202,10 +220,7 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 		return
 	}
 
-	// Broadcast while holding the lock. Sends are non-blocking (buffer size 1,
-	// drop-oldest), so this critical section stays short. Keeping unsubscribe
-	// and send under the same lock eliminates the send-on-closed-channel race:
-	// a subscriber can no longer be removed/closed between snapshot and send.
+	// Broadcast zero-queue notification while holding lock (cap 1 channel, non-blocking)
 	for _, sub := range s.subscribers {
 		isMatch := sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*"
 		if !isMatch {
@@ -217,17 +232,8 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 			continue
 		}
 		select {
-		case sub.ch <- data:
+		case sub.notify <- struct{}{}:
 		default:
-			// Drop the oldest queued frame, then publish the newest one.
-			select {
-			case <-sub.ch:
-			default:
-			}
-			select {
-			case sub.ch <- data:
-			default:
-			}
 		}
 	}
 	s.Unlock()
@@ -252,15 +258,16 @@ func (s *CameraStore) StoreAnnotatedFrame(deviceID string, frameID uint32, data 
 	}
 
 	now := time.Now().UnixMilli()
+	ver := s.frameVersion.Add(1)
 	s.annotatedFrames[deviceID] = CachedFrame{
 		DeviceID:    deviceID,
 		FrameID:     frameID,
 		ImageBytes:  data,
 		TimestampMS: now,
+		Version:     ver,
 	}
 
-	// Broadcast under the store lock; see StoreRawFrameWithMockMeta for the
-	// send-on-closed-channel race this prevents. Sends are non-blocking.
+	// Broadcast zero-queue notification under store lock
 	for _, sub := range s.subscribers {
 		isMatch := sub.deviceID == "" || sub.deviceID == deviceID || sub.deviceID == "latest" || sub.deviceID == "*"
 		if !isMatch {
@@ -272,31 +279,23 @@ func (s *CameraStore) StoreAnnotatedFrame(deviceID string, frameID uint32, data 
 			continue
 		}
 		select {
-		case sub.ch <- data:
+		case sub.notify <- struct{}{}:
 		default:
-			select {
-			case <-sub.ch:
-			default:
-			}
-			select {
-			case sub.ch <- data:
-			default:
-			}
 		}
 	}
 	s.Unlock()
 }
 
-func (s *CameraStore) Subscribe(deviceID string) (<-chan []byte, func()) {
+func (s *CameraStore) Subscribe(deviceID string) (<-chan struct{}, func()) {
 	s.Lock()
 	defer s.Unlock()
 
 	s.subCounter++
 	id := s.subCounter
-	ch := make(chan []byte, 1)
+	notify := make(chan struct{}, 1)
 
 	s.subscribers[id] = &subscriber{
-		ch:       ch,
+		notify:   notify,
 		deviceID: deviceID,
 	}
 
@@ -305,11 +304,11 @@ func (s *CameraStore) Subscribe(deviceID string) (<-chan []byte, func()) {
 		defer s.Unlock()
 		if sub, ok := s.subscribers[id]; ok {
 			delete(s.subscribers, id)
-			close(sub.ch)
+			close(sub.notify)
 		}
 	}
 
-	return ch, unsubscribe
+	return notify, unsubscribe
 }
 
 func (s *CameraStore) GetRawFrame(deviceID string) ([]byte, bool) {
@@ -434,6 +433,11 @@ func (s *CameraStore) ResetAllRewind() {
 }
 
 func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {
+	b, _, ok := s.GetLatestStreamFrameMeta(deviceID)
+	return b, ok
+}
+
+func (s *CameraStore) GetLatestStreamFrameMeta(deviceID string) ([]byte, uint64, bool) {
 	s.RLock()
 	defer s.RUnlock()
 
@@ -446,16 +450,16 @@ func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {
 	isGenericReq := deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*"
 
 	if currentMode == "mock" && !isGenericReq && !isMockDev {
-		return nil, false
+		return nil, 0, false
 	}
 	if currentMode == "live" && isMockDev {
-		return nil, false
+		return nil, 0, false
 	}
 
-	// 1. Try exact device match for fresh annotated frame
+	// 1. Try exact device match for fresh annotated frame (< 2500ms)
 	if !isGenericReq {
 		if f, ok := s.annotatedFrames[deviceID]; ok && len(f.ImageBytes) > 0 && (now-f.TimestampMS < 2500) {
-			return f.ImageBytes, true
+			return f.ImageBytes, f.Version, true
 		}
 	} else {
 		// 2. Fallback to latest active annotated frame across devices matching stream mode
@@ -474,15 +478,15 @@ func (s *CameraStore) GetStreamFrame(deviceID string) ([]byte, bool) {
 			}
 		}
 		if latestAnn != nil && len(latestAnn.ImageBytes) > 0 && (now-latestAnn.TimestampMS < 2500) {
-			return latestAnn.ImageBytes, true
+			return latestAnn.ImageBytes, latestAnn.Version, true
 		}
 	}
 
 	// 3. Fallback to raw frame
-	return s.getRawFrameLocked(deviceID)
+	return s.getRawFrameMetaLocked(deviceID)
 }
 
-func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
+func (s *CameraStore) getRawFrameMetaLocked(deviceID string) ([]byte, uint64, bool) {
 	now := time.Now().UnixMilli()
 	currentMode := s.streamMode
 	if currentMode == "" {
@@ -492,18 +496,18 @@ func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
 	isGenericReq := deviceID == "" || deviceID == "latest" || deviceID == "UNKNOWN_DEVICE" || deviceID == "*"
 
 	if currentMode == "mock" && !isGenericReq && !isMockDev {
-		return nil, false
+		return nil, 0, false
 	}
 	if currentMode == "live" && isMockDev {
-		return nil, false
+		return nil, 0, false
 	}
 
 	// Try exact device match first
 	if !isGenericReq {
 		if f, ok := s.rawFrames[deviceID]; ok && len(f.ImageBytes) > 0 && (now-f.TimestampMS) <= 2500 {
-			return f.ImageBytes, true
+			return f.ImageBytes, f.Version, true
 		}
-		return nil, false
+		return nil, 0, false
 	}
 
 	// Fallback to latest raw frame across devices matching stream mode
@@ -522,10 +526,10 @@ func (s *CameraStore) getRawFrameLocked(deviceID string) ([]byte, bool) {
 		}
 	}
 	if latestFrame != nil && len(latestFrame.ImageBytes) > 0 {
-		return latestFrame.ImageBytes, true
+		return latestFrame.ImageBytes, latestFrame.Version, true
 	}
 
-	return nil, false
+	return nil, 0, false
 }
 
 func (s *CameraStore) GetActiveDeviceID() string {
@@ -590,8 +594,11 @@ func (s *CameraStore) GetActiveFPS() float64 {
 	s.RLock()
 	defer s.RUnlock()
 	now := time.Now().UnixMilli()
-	if now-s.lastFrameTimeMS > 2500 || s.fps <= 0 {
+	if now-s.lastFrameTimeMS > 2500 {
 		return 0.0
+	}
+	if s.fps <= 0 {
+		return 1.0
 	}
 	return math.Round(s.fps*10) / 10
 }

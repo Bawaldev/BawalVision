@@ -35,6 +35,10 @@ extern "C" {
 #define CONFIG_BACKEND_PORT "8080"
 #endif
 
+#ifndef CONFIG_DEVICE_AUTH_TOKEN
+#define CONFIG_DEVICE_AUTH_TOKEN "bawal_secure_token_prod"
+#endif
+
 #define URL_BUFFER_SIZE 128
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -50,6 +54,11 @@ extern char g_backend_port[8];
  * @brief Initialize Wi-Fi station mode and connect using NVS or build-time credentials.
  */
 void wifi_init_sta(void);
+
+/**
+ * @brief Notify stream sender task that a new camera frame is ready.
+ */
+void wifi_notify_stream_frame_ready(void);
 
 /**
  * @brief Load Wi-Fi and backend configuration from NVS.
