@@ -240,11 +240,17 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* Initialize OV5640 CSP camera driver */
+    /* Initialize OV5640 CSP camera driver and start capture task on Core 1 */
     ESP_LOGI(TAG, "Initializing OV5640 CSP Camera Driver (esp_camera)...");
     ret = camera_task_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize Camera Driver: %s", esp_err_to_name(ret));
+    } else {
+        if (camera_task_start(5, 1) == NULL) {
+            ESP_LOGE(TAG, "Failed to start camera_task on Core 1");
+        } else {
+            ESP_LOGI(TAG, "Camera capture task started on Core 1");
+        }
     }
 
     /* Connect to Wi-Fi station */

@@ -220,6 +220,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 					videoUUID = inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, devID)
 				}
 				if len(imageBytes) > 0 {
+					camera_handler.GlobalFramesTotal.Add(1)
 					ipStr := strings.Clone(requestClientIP(c))
 					isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
 					camera_handler.GlobalCameraStore.StoreRawFrameWithMockMeta(devID, payload.FrameID, imageBytes, ipStr, isRewind, videoSrc, videoUUID)
@@ -273,6 +274,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		if isMock {
 			videoUUID = inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, deviceID)
 		}
+		camera_handler.GlobalFramesTotal.Add(1)
 		camera_handler.GlobalCameraStore.StoreRawFrameWithMockMeta(deviceID, uint32(frameID), imageBytes, ipStr, isRewind, videoSrc, videoUUID)
 		syncTelemetryFromCameraIngress(c, deviceID, uint32(frameID))
 
@@ -334,17 +336,20 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 
 	camGroup.Get("/active", func(c *fiber.Ctx) error {
 		activeID := camera_handler.GlobalCameraStore.GetActiveDeviceID()
+		framesTotal := camera_handler.GlobalFramesTotal.Load()
+		if framesTotal == 0 {
+			framesTotal = camera_handler.GlobalCameraStore.GetFrameCount()
+		}
 		if activeID == "" {
 			return c.JSON(fiber.Map{
 				"active":       false,
 				"device_id":    "",
 				"fps":          0.0,
-				"frames_total": camera_handler.GlobalCameraStore.GetFrameCount(),
+				"frames_total": framesTotal,
 				"message":      "No active camera device found",
 			})
 		}
 		fps := camera_handler.GlobalCameraStore.GetActiveFPS()
-		framesTotal := camera_handler.GlobalCameraStore.GetFrameCount()
 		if isMockDeviceOrHeader(nil, activeID) {
 			c.Set("X-Stream-Source", "MOCK_VIDEO")
 			c.Set("X-Telemetry-Struct", "MockTelemetryPayload")
@@ -458,14 +463,18 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		c.Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
 		c.Set("Cache-Control", "no-cache, no-store, must-revalidate, pre-check=0, post-check=0, max-age=0")
 		c.Set("Pragma", "no-cache")
+		c.Set("X-Accel-Buffering", "no")
 		c.Set("Connection", "close")
 
 		c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
-			frameChan, unsubscribe := camera_handler.GlobalCameraStore.Subscribe(deviceID)
+			notifyChan, unsubscribe := camera_handler.GlobalCameraStore.Subscribe(deviceID)
 			defer unsubscribe()
 
+			var lastSentVersion uint64 = 0
+
 			// Send current frame immediately if available
-			if initialFrame, ok := camera_handler.GlobalCameraStore.GetStreamFrame(deviceID); ok && len(initialFrame) > 0 {
+			if initialFrame, ver, ok := camera_handler.GlobalCameraStore.GetLatestStreamFrameMeta(deviceID); ok && len(initialFrame) > 0 {
+				lastSentVersion = ver
 				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(initialFrame)); err == nil {
 					_, _ = w.Write(initialFrame)
 					_, _ = w.WriteString("\r\n")
@@ -473,14 +482,42 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 				}
 			}
 
-			for frame := range frameChan {
-				if len(frame) == 0 {
+			ticker := time.NewTicker(30 * time.Millisecond) // up to ~33 FPS
+			defer ticker.Stop()
+
+			for {
+				select {
+				case _, ok := <-notifyChan:
+					if !ok {
+						return
+					}
+				case <-ticker.C:
+				}
+
+				// Drain any pending notifications so stale signals are discarded
+				for {
+					select {
+					case _, ok := <-notifyChan:
+						if !ok {
+							return
+						}
+					default:
+						goto drained
+					}
+				}
+			drained:
+
+				// Zero-Queue Drop: Always fetch latest frame pointer directly from memory
+				frameBytes, ver, ok := camera_handler.GlobalCameraStore.GetLatestStreamFrameMeta(deviceID)
+				if !ok || len(frameBytes) == 0 || ver <= lastSentVersion {
 					continue
 				}
-				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame)); err != nil {
+				lastSentVersion = ver
+
+				if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frameBytes)); err != nil {
 					break
 				}
-				if _, err := w.Write(frame); err != nil {
+				if _, err := w.Write(frameBytes); err != nil {
 					break
 				}
 				if _, err := w.WriteString("\r\n"); err != nil {
