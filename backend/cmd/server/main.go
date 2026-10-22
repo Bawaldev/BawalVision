@@ -114,6 +114,11 @@ END $$;`).Error; err != nil {
 	app := fiber.New(fiber.Config{
 		AppName:      fmt.Sprintf("BawalVision Gateway v%s", version),
 		ServerHeader: "Bawal-Vision-Backend",
+		// Reap keep-alive sockets left behind by ESP32 nodes that lose power.
+		// WriteTimeout is deliberately unset: fasthttp applies it as a single
+		// deadline for the whole response, which would cut MJPEG streams.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 30 * time.Second,
 	})
 
 	app.Use(recover.New())

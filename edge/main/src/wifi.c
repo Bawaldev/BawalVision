@@ -19,6 +19,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -41,6 +42,10 @@ static const char *TAG = "WIFI";
 // Prevents a dead backend from triggering one broadcast per failed frame.
 #define DISCOVERY_BACKOFF_MIN_MS 1000
 #define DISCOVERY_BACKOFF_MAX_MS 30000
+// Last-resort recovery: reboot if the node stays Wi-Fi-connected but cannot
+// deliver a single frame for this long (stuck Wi-Fi/LwIP state after a power
+// glitch). Standby (camera not streaming) never counts toward the timeout.
+#define STREAM_WATCHDOG_TIMEOUT_US ((int64_t)30 * 1000 * 1000)
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -714,21 +719,35 @@ void http_stream_sender_task(void *pvParameters) {
     telemetry_data_t meta;
     init_device_metadata(&meta);
     const TickType_t target_interval = pdMS_TO_TICKS(STREAM_TARGET_INTERVAL_MS);
+    int64_t last_success_us = esp_timer_get_time();
 
     for (;;) {
         TickType_t start_time = xTaskGetTickCount();
 
         if (!(g_wifi_event_group && (xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT))) {
+            last_success_us = esp_timer_get_time();
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
 
         if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
+            last_success_us = esp_timer_get_time();
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
 
+        if (!is_camera_streaming()) {
+            last_success_us = esp_timer_get_time();
+        }
+
         esp_err_t res = send_camera_frame_to_backend(backend_ip, get_backend_port(), meta.device_id);
+        if (res == ESP_OK) {
+            last_success_us = esp_timer_get_time();
+        } else if (esp_timer_get_time() - last_success_us > STREAM_WATCHDOG_TIMEOUT_US) {
+            ESP_LOGE(TAG, "No frame delivered for %d s, restarting ESP32-S3", (int)(STREAM_WATCHDOG_TIMEOUT_US / 1000000));
+            esp_restart();
+        }
+
         if (res == ESP_ERR_NOT_FOUND) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
