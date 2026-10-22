@@ -1,11 +1,20 @@
 #include "bawal/backend/app.hpp"
 
+#include "bawal/backend/database.hpp"
+
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <optional>
+#include <sstream>
 #include <string_view>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace bawal::backend {
@@ -200,10 +209,208 @@ std::optional<FrameIngressRequest> parseFrameIngress(const crow::request& req) {
     return parsed;
 }
 
+std::string toLowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+std::vector<std::filesystem::path> exampleRoots() {
+    std::vector<std::filesystem::path> roots;
+    const auto add = [&roots](const std::filesystem::path& candidate) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(candidate, ec)) {
+            return;
+        }
+        const std::filesystem::path canonical = std::filesystem::weakly_canonical(candidate, ec);
+        const std::filesystem::path root = ec ? candidate : canonical;
+        if (std::find(roots.begin(), roots.end(), root) == roots.end()) {
+            roots.push_back(root);
+        }
+    };
+
+    if (const char* configured = std::getenv("EXAMPLES_DIR"); configured != nullptr && *configured != '\0') {
+        add(configured);
+    }
+    add("./examples");
+    add("../examples");
+    add("../../examples");
+    add("/app/examples");
+    add("./frontend/static/examples");
+    add("../frontend/static/examples");
+    return roots;
+}
+
+std::optional<std::filesystem::path> safeExampleRelative(std::string_view raw) {
+    std::string cleaned(raw);
+    while (!cleaned.empty() && (cleaned.front() == '/' || cleaned.front() == '\\')) {
+        cleaned.erase(cleaned.begin());
+    }
+    if (cleaned.empty()) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path relative(cleaned);
+    if (relative.is_absolute()) {
+        return std::nullopt;
+    }
+    for (const auto& part : relative) {
+        if (part == "..") {
+            return std::nullopt;
+        }
+    }
+    return relative.lexically_normal();
+}
+
+std::string deterministicVideoUuid(std::string_view key) {
+    const auto fnv = [](std::string_view value, uint64_t seed) {
+        uint64_t hash = seed;
+        for (const unsigned char c : value) {
+            hash ^= c;
+            hash *= 1099511628211ULL;
+        }
+        return hash;
+    };
+
+    const uint64_t first = fnv(key, 1469598103934665603ULL);
+    const uint64_t second = fnv(key, 1099511628211ULL);
+
+    std::ostringstream out;
+    out << std::hex << std::setfill('0')
+        << std::setw(8) << static_cast<uint32_t>(first >> 32) << '-'
+        << std::setw(4) << static_cast<uint16_t>(first >> 16) << '-'
+        << std::setw(4) << static_cast<uint16_t>(first) << '-'
+        << std::setw(4) << static_cast<uint16_t>(second >> 48) << '-'
+        << std::setw(12) << (second & 0xFFFFFFFFFFFFULL);
+    return out.str();
+}
+
+struct ByteRange {
+    uint64_t start{0};
+    uint64_t end{0};
+};
+
+std::optional<ByteRange> parseByteRange(std::string_view header, uint64_t size) {
+    if (size == 0 || header.rfind("bytes=", 0) != 0) {
+        return std::nullopt;
+    }
+
+    const std::string spec(header.substr(6));
+    const std::size_t dash = spec.find('-');
+    if (dash == std::string::npos) {
+        return std::nullopt;
+    }
+
+    try {
+        const std::string first = spec.substr(0, dash);
+        const std::string last = spec.substr(dash + 1);
+        uint64_t start = 0;
+        uint64_t end = 0;
+
+        if (first.empty()) {
+            const uint64_t suffix = std::stoull(last);
+            if (suffix == 0) {
+                return std::nullopt;
+            }
+            start = suffix >= size ? 0 : size - suffix;
+            end = size - 1;
+        } else {
+            start = std::stoull(first);
+            end = last.empty() ? size - 1 : std::stoull(last);
+        }
+
+        if (start >= size) {
+            return std::nullopt;
+        }
+        end = std::min(end, size - 1);
+        if (end < start) {
+            return std::nullopt;
+        }
+        return ByteRange{start, end};
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+std::string videoMimeType(const std::filesystem::path& path) {
+    return toLowerAscii(path.extension().string()) == ".webm" ? "video/webm" : "video/mp4";
+}
+
+crow::json::wvalue buildExamplesJson() {
+    std::vector<std::string> videos;
+    std::unordered_set<std::string> seen;
+
+    for (const auto& root : exampleRoots()) {
+        std::error_code ec;
+        std::filesystem::recursive_directory_iterator it(
+            root, std::filesystem::directory_options::skip_permission_denied, ec);
+        const std::filesystem::recursive_directory_iterator end;
+        if (ec) {
+            continue;
+        }
+
+        for (; it != end; it.increment(ec)) {
+            if (ec) {
+                ec.clear();
+                continue;
+            }
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec)) {
+                continue;
+            }
+
+            const std::string extension = toLowerAscii(it->path().extension().string());
+            if (extension != ".mp4" && extension != ".webm") {
+                continue;
+            }
+
+            std::error_code relative_ec;
+            const std::filesystem::path relative =
+                std::filesystem::relative(it->path(), root, relative_ec);
+            if (relative_ec) {
+                continue;
+            }
+
+            const std::string key = relative.generic_string();
+            if (key.empty() || !seen.insert(key).second) {
+                continue;
+            }
+            videos.push_back(key);
+        }
+    }
+
+    std::sort(videos.begin(), videos.end());
+
+    crow::json::wvalue::list list;
+    crow::json::wvalue uuid_map;
+    crow::json::wvalue::list items;
+    for (const auto& video : videos) {
+        const std::string uuid = deterministicVideoUuid(video);
+        list.emplace_back(video);
+        uuid_map[video] = uuid;
+
+        crow::json::wvalue item;
+        item["path"] = video;
+        item["video_uuid"] = uuid;
+        items.emplace_back(std::move(item));
+    }
+
+    crow::json::wvalue body;
+    body["status"] = "success";
+    body["videos"] = std::move(list);
+    body["video_uuids"] = std::move(uuid_map);
+    body["video_items"] = std::move(items);
+    return body;
+}
+
 } // namespace
 
-BackendApp::BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerConfig config)
-    : m_state(state), m_producer(producer), m_config(std::move(config)) {}
+BackendApp::BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerConfig config,
+                       Database* database)
+    : m_state(state),
+      m_producer(producer),
+      m_config(std::move(config)),
+      m_database(database) {}
 
 void BackendApp::configure() {
     auto& cors = m_app.get_middleware<crow::CORSHandler>();
@@ -235,12 +442,24 @@ void BackendApp::registerRoutes() {
         body["version"] = "1.0.0";
         body["vision_ready"] = m_state.visionReady();
         body["shm_write_sequence"] = m_producer.writeSequence();
+        body["database_connected"] = m_database != nullptr && m_database->ready();
+        body["database_engine"] = m_database != nullptr ? "postgresql" : "none";
+        return crow::response(body);
+    });
+
+    CROW_ROUTE(m_app, "/api/v1/database/stats")([this]() {
+        crow::json::wvalue body;
+        body["engine"] = m_database != nullptr ? "postgresql" : "none";
+        body["connected"] = m_database != nullptr && m_database->ready();
+        body["inspections"] = m_database != nullptr ? m_database->inspectionCount() : -1LL;
         return crow::response(body);
     });
 
     registerCameraRoutes();
     registerTelemetryRoutes();
     registerInspectionRoutes();
+    registerExampleRoutes();
+    registerCompatibilityRoutes();
 }
 
 void BackendApp::registerCameraRoutes() {
@@ -422,6 +641,27 @@ void BackendApp::registerTelemetryRoutes() {
 
         return crow::response(body);
     });
+
+    CROW_ROUTE(m_app, "/api/v1/telemetry")
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            const auto doc = crow::json::load(req.body);
+            if (!doc) {
+                return jsonError(400, "Invalid JSON telemetry payload");
+            }
+
+            std::string device_id = req.get_header_value("X-Device-ID");
+            if (doc.has("device_id") && doc["device_id"].t() == crow::json::type::String) {
+                device_id = static_cast<std::string>(doc["device_id"].s());
+            }
+            device_id = sanitizeDeviceId(std::move(device_id));
+
+            crow::json::wvalue body;
+            body["status"] = "success";
+            body["telemetry_struct"] = "TelemetryIngressPayload";
+            body["device_id"] = device_id.empty() ? "DEFAULT_CAMERA" : device_id;
+            body["message"] = "Telemetry accepted by the C++ Crow backend";
+            return crow::response(body);
+        });
 }
 
 void BackendApp::registerInspectionRoutes() {
@@ -479,6 +719,207 @@ void BackendApp::registerInspectionRoutes() {
             body["message"] = "Live C++ YOLO detections read from in-process memory";
         }
 
+        return crow::response(body);
+    });
+}
+
+void BackendApp::registerExampleRoutes() {
+    CROW_ROUTE(m_app, "/api/v1/examples")([]() {
+        return crow::response(buildExamplesJson());
+    });
+    CROW_ROUTE(m_app, "/api/v1/examples/videos")([]() {
+        return crow::response(buildExamplesJson());
+    });
+
+    const auto serve_example = [](const crow::request& req,
+                                  const std::string& raw_path) -> crow::response {
+        const auto relative = safeExampleRelative(raw_path);
+        if (!relative) {
+            return jsonError(400, "Invalid file path");
+        }
+
+        std::filesystem::path file;
+        for (const auto& root : exampleRoots()) {
+            std::error_code ec;
+            const std::filesystem::path candidate = root / *relative;
+            if (std::filesystem::is_regular_file(candidate, ec)) {
+                file = candidate;
+                break;
+            }
+        }
+        if (file.empty()) {
+            return jsonError(404, "Video file not found");
+        }
+
+        std::ifstream input(file, std::ios::binary);
+        if (!input) {
+            return jsonError(500, "Unable to open video file");
+        }
+        std::string data((std::istreambuf_iterator<char>(input)),
+                         std::istreambuf_iterator<char>());
+        if (data.empty()) {
+            return jsonError(500, "Empty video file");
+        }
+
+        const std::string range_header = req.get_header_value("Range");
+        const auto range = parseByteRange(range_header, data.size());
+        if (!range_header.empty() && !range) {
+            crow::response res(416);
+            res.set_header("Accept-Ranges", "bytes");
+            res.set_header("Content-Range", "bytes */" + std::to_string(data.size()));
+            return res;
+        }
+
+        crow::response res;
+        res.set_header("Content-Type", videoMimeType(file));
+        res.set_header("Accept-Ranges", "bytes");
+        res.set_header("Cache-Control", "public, max-age=3600");
+        if (range) {
+            const uint64_t length = range->end - range->start + 1;
+            res.code = 206;
+            res.set_header("Content-Range",
+                           "bytes " + std::to_string(range->start) + "-" +
+                               std::to_string(range->end) + "/" +
+                               std::to_string(data.size()));
+            res.set_header("Content-Length", std::to_string(length));
+            res.body.assign(data.data() + range->start, static_cast<std::size_t>(length));
+        } else {
+            res.code = 200;
+            res.set_header("Content-Length", std::to_string(data.size()));
+            res.body = std::move(data);
+        }
+        return res;
+    };
+
+    CROW_ROUTE(m_app, "/api/v1/examples/file/<string>")
+        ([serve_example](const crow::request& req, const std::string& name) {
+            return serve_example(req, name);
+        });
+    CROW_ROUTE(m_app, "/api/v1/examples/file/<path>")
+        ([serve_example](const crow::request& req, const std::string& path) {
+            return serve_example(req, path);
+        });
+}
+
+void BackendApp::registerCompatibilityRoutes() {
+    const auto camera_mode = [](const crow::request& req) {
+        std::string mode = "live";
+        try {
+            const auto doc = crow::json::load(req.body);
+            if (doc && doc.has("mode") && doc["mode"].t() == crow::json::type::String) {
+                mode = static_cast<std::string>(doc["mode"].s());
+            }
+        } catch (const std::exception&) {
+            // Keep the default; the mock frame payload still carries its own mode.
+        }
+
+        crow::json::wvalue body;
+        body["status"] = "success";
+        body["mode"] = mode;
+        body["message"] = "Stream mode accepted";
+        return crow::response(body);
+    };
+    CROW_ROUTE(m_app, "/api/v1/camera/mode")
+        .methods(crow::HTTPMethod::Post)(camera_mode);
+    CROW_ROUTE(m_app, "/api/v1/devices/mode")
+        .methods(crow::HTTPMethod::Post)(camera_mode);
+
+    CROW_ROUTE(m_app, "/api/v1/devices/mock/reset")
+        .methods(crow::HTTPMethod::Post)([]() {
+            crow::json::wvalue body;
+            body["success"] = true;
+            body["message"] = "Mock inspection and rewind state cleared.";
+            return crow::response(body);
+        });
+
+    const auto manual_inspection = [this](const crow::request&) {
+        const InspectionView inspection = m_state.inspection();
+        bool saved = false;
+        if (m_database != nullptr && inspection.valid) {
+            saved = m_database->saveInspection(
+                inspection.device_id, inspection.frame_id,
+                inspection.detections, inspection.optical,
+                inspection.engine_pipeline);
+        }
+
+        crow::json::wvalue body;
+        body["status"] = "success";
+        body["saved"] = saved;
+        body["device_id"] = inspection.device_id;
+        body["message"] = "Manual inspection snapshot persisted";
+        return crow::response(body);
+    };
+    CROW_ROUTE(m_app, "/api/v1/inspections")
+        .methods(crow::HTTPMethod::Post)(manual_inspection);
+    CROW_ROUTE(m_app, "/api/v1/inspections/mock")
+        .methods(crow::HTTPMethod::Post)(manual_inspection);
+
+    CROW_ROUTE(m_app, "/api/v1/system/engines")([]() {
+        const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
+        crow::json::wvalue body;
+        body["arch"] = "x86_64";
+        body["graviton_available"] = false;
+        body["local_engine_available"] = true;
+        body["parallel_cores"] = static_cast<uint32_t>(cores);
+        body["num_cpu"] = static_cast<uint32_t>(cores);
+        body["server_mem_sys_mb"] = 0;
+        body["server_mem_alloc_mb"] = 0;
+        return crow::response(body);
+    });
+
+    CROW_ROUTE(m_app, "/api/v1/records")([this]() {
+        crow::json::wvalue::list records;
+        if (m_database != nullptr) {
+            bool mock_record_included = false;
+            for (const auto& record : m_database->listInspections(100)) {
+                const bool is_mock =
+                    record.device_id == "MOCK_VIDEO_CAM" ||
+                    record.device_id.rfind("MOCK_", 0) == 0;
+                if (is_mock) {
+                    // The vision worker persists snapshots periodically; expose
+                    // one mock-video tray record instead of every sampled frame.
+                    if (mock_record_included) {
+                        continue;
+                    }
+                    mock_record_included = true;
+                }
+
+                crow::json::wvalue item;
+                item["id"] = record.id;
+                item["device_id"] = record.device_id;
+                item["firmware_version"] = record.firmware_version;
+                item["created_at"] = record.created_at;
+                item["image_s3_uri"] = record.image_s3_uri;
+                item["cpu_temperature"] = record.cpu_temperature;
+                item["temperature"] = record.temperature;
+                item["cpu_load"] = record.cpu_load;
+                item["is_spoiled"] = record.is_spoiled;
+                item["t_safe_hours"] = record.t_safe_hours;
+                item["frame_id"] = record.frame_id;
+                item["lux_luminance"] = record.lux_luminance;
+                item["white_balance_status"] = record.white_balance_status;
+                item["color_temperature"] = record.color_temperature;
+                item["engine_pipeline"] = record.engine_pipeline;
+
+                crow::json::wvalue::list foods;
+                for (const auto& food : record.foods) {
+                    crow::json::wvalue food_item;
+                    food_item["name"] = food.name;
+
+                    crow::json::wvalue entry;
+                    entry["food_item"] = std::move(food_item);
+                    entry["similarity_rate"] = food.similarity_rate;
+                    entry["spoilage_score"] = food.spoilage_score;
+                    entry["status"] = food.status;
+                    entry["temperature"] = record.temperature;
+                    foods.emplace_back(std::move(entry));
+                }
+                item["inspection_foods"] = std::move(foods);
+                records.emplace_back(std::move(item));
+            }
+        }
+
+        crow::json::wvalue body(std::move(records));
         return crow::response(body);
     });
 }

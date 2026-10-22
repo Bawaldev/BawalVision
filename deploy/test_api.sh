@@ -3,11 +3,11 @@
 # BawalVision Crow C++ Backend API Verification Suite
 # OpenCV AI Competition 2026 Validation Script
 #
-# Targets the unified C++ binary (services/build/bin/bawal_backend), NOT the
-# retired Go Fiber gateway. Run the server first, e.g.:
+# Targets the unified C++ binary (services/build/bin/bawal_backend). Run the
+# server first, e.g.:
 #   CROW_PORT=18081 MODEL_PATH=ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx \
 #     ./services/build/bin/bawal_backend
-#   BASE_URL=http://127.0.0.1:18081/api/v1 ./backend/scripts/test_api.sh
+#   BASE_URL=http://127.0.0.1:18081/api/v1 ./deploy/test_api.sh
 # ==============================================================================
 
 set -eo pipefail

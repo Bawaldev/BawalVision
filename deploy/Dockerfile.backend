@@ -1,42 +1,92 @@
-# --- Stage 1: Build Environment ---
-FROM golang:1.24-alpine AS builder
+# syntax=docker/dockerfile:1.7
 
-ARG VERSION=dev
+# ==============================================================================
+# BawalVision C++ Crow backend + in-process ONNX vision pipeline
+# Builder: Debian 12 bookworm-slim
+# Runtime: Debian 12 bookworm-slim (runtime libraries only)
+# ==============================================================================
 
-RUN apk add --no-cache git ca-certificates tzdata
+# ------------------------------------------------------------------------------
+# Stage 1: compile the unified bawal_backend binary
+# ------------------------------------------------------------------------------
+FROM debian:bookworm-slim AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        pkg-config \
+        ca-certificates \
+        curl \
+        libopencv-dev \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        libpq-dev \
+        libfmt-dev \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ONNX Runtime is not packaged by Debian; install the official CPU release.
+ARG ONNXRUNTIME_VERSION=1.19.2
+RUN mkdir -p /opt/onnxruntime && \
+    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz" \
+        | tar -xz -C /opt/onnxruntime --strip-components=1
 
 WORKDIR /src
 
-COPY backend/go.mod backend/go.sum ./
-RUN go mod download && go mod verify
+# Only the sources actually compiled into bawal_core are copied. The ML
+# generator implementation is omitted because it needs std::format (GCC 13+);
+# CMake substitutes the no-op stub when BAWAL_ENABLE_NCNN_GENERATOR=OFF.
+COPY services/ /src/services/
+COPY ml/include/ /src/ml/include/
 
-COPY backend/ ./
+RUN cmake -S /src/services -B /src/services/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBAWAL_BUILD_VISION_VIEWER=OFF \
+        -DBAWAL_ENABLE_NCNN_GENERATOR=OFF \
+        -DONNXRUNTIME_INCLUDE_DIR=/opt/onnxruntime/include \
+        -DONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so \
+    && cmake --build /src/services/build --parallel "$(nproc)"
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -trimpath \
-    -ldflags="-w -s -X main.version=${VERSION} -extldflags '-static'" \
-    -o /bin/gateway ./cmd/server/main.go
+# ------------------------------------------------------------------------------
+# Stage 2: minimal runtime
+# ------------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
 
-# --- Stage 2: Minimal Alpine Runtime ---
-FROM alpine:3.20 AS runner
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Create application user/group locally (offline, zero-network)
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libcurl4 \
+        libssl3 \
+        libpq5 \
+        libgomp1 \
+        libfmt9 \
+        libopencv-core406 \
+        libopencv-imgproc406 \
+        libopencv-calib3d406 \
+        libopencv-imgcodecs406 \
+        libopencv-videoio406 \
+        libopencv-dnn406 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy CA certificates and time zone data directly from cached builder (zero network delay)
-COPY --from=builder /etc/ssl/certs /etc/ssl/certs
-COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=builder /opt/onnxruntime/lib/ /usr/local/lib/
+RUN ldconfig
 
 WORKDIR /app
 
-COPY --from=builder /bin/gateway /usr/local/bin/gateway
+COPY --from=builder /src/services/build/bin/bawal_backend /app/bawal_backend
 
-# Copy templates/migrations directory if present
-# (Use wildcard pattern to avoid build failures if directory is empty)
-# COPY --from=builder /src/01_schema.sql /app/01_schema.sql
-
-USER appuser:appgroup
+ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV OMP_WAIT_POLICY=PASSIVE \
+    OMP_SCHEDULE=static \
+    OMP_PROC_BIND=true
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/gateway"]
+CMD ["./bawal_backend"]

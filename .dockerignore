@@ -1,53 +1,50 @@
 # ==============================================================================
-# BawalVision Centralized Docker Build Ignore Specifications
+# BawalVision centralized Docker build context exclusions
+#
+# Used by builds with `context: ..` (see deploy/docker-compose.yml), so paths
+# below are relative to the repository root. Only what the target Dockerfile
+# actually copies should be sent to the builder.
 # ==============================================================================
 
-# Git & CI/CD
-.git
+# Git, CI and repository metadata
+.git/
+.github/
 .gitignore
 .gitattributes
-.github
+.gitleaks.toml
+LICENSE
+NOTICE
+SECURITY.md
 
-# DVC (Data Version Control) Local Cache & Datasets
-.dvc/cache/
-.dvc/tmp/
-ml/dataset/
-ml/**/dataset/
-ml/**/dataset*/
-ml/**/yolo_dataset/
-ml/**/runs/
-
-# Python, Bytecode & Virtual Environments
-__pycache__/
-*.py[cod]
-*$py.class
+# Large directories not needed by the backend image
+logs/
+assets/
 .venv/
-env/
-venv/
-*.egg-info/
-.pytest_cache/
-.coverage
-htmlcov/
-.mypy_cache/
+frontend/
+edge/
+docs/
+hardware/
+examples/
+aws-infra/
+scripts/
 
-# Node.js & SvelteKit Web Artifacts
-node_modules/
-frontend/node_modules/
-frontend/.svelte-kit/
-frontend/build/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
+# ML models/datasets are mounted at runtime, not baked into the image.
+# Keep only the headers compiled by services/.
+ml/
+!ml/include/
+!ml/include/**
 
-# C++, CMake & Embedded Edge Build Artifacts
+# Documentation and media
+*.md
+*.png
+
+# Build artifacts and binaries
+a.out
 build/
-bin/
 services/build/
 services/build-tsan/
 edge/build/
-edge/managed_components/
-edge/dependencies.lock
+**/bin/
 *.o
 *.a
 *.so
@@ -56,22 +53,47 @@ edge/dependencies.lock
 *.bin
 *.map
 compile_commands.json
-
-# Go Build Artifacts & Binaries
-backend/bin/
-backend/server
 *.exe
 *.test
 
-# IDE, OS & Editor Configuration
+# Python and Node artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+node_modules/
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+*.log
+
+# Datasets, weights and model caches
+weights/
+*.pt
+ml/dataset/
+ml/**/dataset/
+ml/**/dataset*/
+ml/**/runs/
+ml/**/yolo_dataset/
+.dvc/cache/
+.dvc/tmp/
+
+# Local env, caches, temp files and test harness
+.env
+.env.*
+!.env.example
+.cache_trash/
+tmp/
+OUTPUT.md
+deploy/test_api.sh
+
+# IDE and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
 .DS_Store
 Thumbs.db
-
-# Logs, Cache & Temporary Directories
-.cache_trash/
-tmp/
-*.log

@@ -12,7 +12,8 @@ DEV_ID := env_var_or_default("DEVICE_ID", "")
 setup-deps:
     sudo apt update
     sudo apt install -y build-essential cmake ninja-build pkg-config \
-        libopencv-dev libomp-dev libfmt-dev libcpp-httplib-dev nlohmann-json3-dev
+        libopencv-dev libomp-dev libfmt-dev libcpp-httplib-dev nlohmann-json3-dev \
+        libcurl4-openssl-dev libssl-dev libpq-dev
 
 # Configure C++ vision service with CMake
 [group('Vision')]
@@ -60,41 +61,38 @@ run-vision-tsan device_id=DEV_ID:
         -ex "run" \
         --args ./services/build-tsan/bin/vision_service "{{ device_id }}"
 
-# --- BACKEND (Go Fiber & PostgreSQL) ---
+# --- BACKEND (C++20 Crow + PostgreSQL) ---
 
-# Build Go API gateway binary
+# Build the unified C++ backend (Crow HTTP + in-process ONNX vision)
 [group('Backend')]
-build-gateway:
-    cd {{ justfile_directory() }}/backend && go build -o bin/gateway cmd/server/main.go
+build-backend:
+    cd {{ justfile_directory() }} && if [ ! -f "services/build/Makefile" ] && [ ! -f "services/build/build.ninja" ]; then just configure-vision; fi
+    cd {{ justfile_directory() }} && cmake --build services/build --target bawal_backend --parallel $(nproc)
 
-# Run Go API gateway on host
+# Run the C++ backend on the host against the Docker PostgreSQL instance
 [group('Backend')]
-run-gateway:
-    @just allow-firewall
-    cd {{ justfile_directory() }}/backend && \
+run-backend:
+    @just compose-up postgres
+    cd {{ justfile_directory() }} && \
+        CROW_PORT={{ BACKEND_PORT }} \
         DB_HOST={{ env_var_or_default("DB_HOST", "localhost") }} \
         DB_PORT={{ POSTGRES_PORT }} \
-        go run cmd/server/main.go
+        ./services/build/bin/bawal_backend
 
-# Run Postgres in Docker + Go gateway on host (for ESP32)
+# Start PostgreSQL and the C++ backend in Docker
 [group('Backend')]
 edge-stack:
-    @just compose-up postgres
-    @docker compose -f {{ COMPOSE_FILE }} stop backend >/dev/null 2>&1 || true
-    cd {{ justfile_directory() }}/backend && \
-        DB_HOST={{ env_var_or_default("DB_HOST", "localhost") }} \
-        DB_PORT={{ POSTGRES_PORT }} \
-        go run cmd/server/main.go
+    @just compose-up
 
-# Run API endpoint integration tests
+# Run the Crow C++ API integration suite against a live backend
 [group('Backend')]
 test-api base_url=API_URL:
-    cd {{ justfile_directory() }} && BASE_URL="{{ base_url }}" ./backend/scripts/test_api.sh
+    cd {{ justfile_directory() }} && BASE_URL="{{ base_url }}" ./deploy/test_api.sh
 
-# Run Go backend unit tests
+# Legacy alias: the Go test suite was removed with backend/
 [group('Backend')]
 test-backend:
-    cd {{ justfile_directory() }}/backend && go test -v ./...
+    @echo "Go backend removed. Run 'just test-api' against a live C++ backend instead."
 
 # --- FRONTEND (Svelte 5 + TypeScript) ---
 
@@ -215,4 +213,4 @@ deny-firewall port=BACKEND_PORT proto="tcp":
 # Clean build artifacts across all services
 [group('General')]
 clean:
-    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/services/build-tsan {{ justfile_directory() }}/backend/bin {{ justfile_directory() }}/frontend/.svelte-kit/output
+    rm -rf {{ justfile_directory() }}/services/build {{ justfile_directory() }}/services/build-tsan {{ justfile_directory() }}/frontend/.svelte-kit/output

@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "bawal/backend/app.hpp"
+#include "bawal/backend/database.hpp"
 #include "bawal/backend/state.hpp"
 #include "bawal/backend/vision_worker.hpp"
 #include "bawal/ipc/shm_producer.hpp"
@@ -49,7 +50,17 @@ int main() {
 
     bawal::backend::BackendState state;
 
-    bawal::backend::VisionWorker vision(state, bawal::backend::resolveModelPath());
+    bawal::backend::DatabaseConfig db_config =
+        bawal::backend::DatabaseConfig::fromEnvironment();
+    bawal::backend::Database database(db_config);
+    if (!database.connect()) {
+        std::cerr << "[WARN] PostgreSQL unavailable at " << db_config.host << ':'
+                  << db_config.port << '/' << db_config.dbname
+                  << "; continuing with in-memory inspection snapshots only\n";
+    }
+
+    bawal::backend::VisionWorker vision(state, bawal::backend::resolveModelPath(),
+                                        &database);
     vision.start();
 
     // Bind the UDS notifier only after the consumer is listening. This keeps a
@@ -62,7 +73,7 @@ int main() {
     }
     producer.startNotify();
 
-    bawal::backend::BackendApp app(state, producer, config);
+    bawal::backend::BackendApp app(state, producer, config, &database);
     app.configure();
 
     std::cout << "[INFO] bawal::backend C++ Crow server on http://"

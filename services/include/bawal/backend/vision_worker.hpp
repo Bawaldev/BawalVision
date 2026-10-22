@@ -4,6 +4,7 @@
 #include <string>
 #include <thread>
 
+#include "bawal/backend/database.hpp"
 #include "bawal/backend/state.hpp"
 
 namespace bawal::backend {
@@ -19,7 +20,7 @@ namespace bawal::backend {
  */
 class VisionWorker {
 public:
-    VisionWorker(BackendState& state, std::string model_path);
+    VisionWorker(BackendState& state, std::string model_path, Database* database = nullptr);
     ~VisionWorker();
 
     VisionWorker(const VisionWorker&) = delete;
@@ -39,6 +40,7 @@ private:
     void run();
 
     BackendState& m_state;
+    Database* m_database{nullptr};
     std::string m_model_path;
     std::thread m_thread;
     std::atomic<bool> m_running{false};

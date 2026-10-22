@@ -10,6 +10,8 @@
 
 namespace bawal::backend {
 
+class Database;
+
 struct ServerConfig {
     std::string bind_address{"0.0.0.0"};
     uint16_t port{8080};
@@ -24,7 +26,8 @@ struct ServerConfig {
  */
 class BackendApp {
 public:
-    BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerConfig config);
+    BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerConfig config,
+               Database* database = nullptr);
 
     void configure();
     int run();
@@ -37,10 +40,13 @@ private:
     void registerCameraRoutes();
     void registerTelemetryRoutes();
     void registerInspectionRoutes();
+    void registerExampleRoutes();
+    void registerCompatibilityRoutes();
 
     BackendState& m_state;
     ipc::ShmProducer& m_producer;
     ServerConfig m_config;
+    Database* m_database{nullptr};
     crow::App<crow::CORSHandler> m_app;
 };
 

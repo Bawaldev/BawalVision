@@ -8,8 +8,8 @@
 # Machine Learning, YOLO Model & Dataset Pipeline
 /ml/                                @OurangIlang @fariswirakusuma
 
-# Database Migrations & SQL Templates
-/backend/internal/data/templates/   @OurangIlang @fariswirakusuma
+# Database Schema & SQL Templates
+/deploy/postgres/                   @OurangIlang @fariswirakusuma
 
 # Frontend Web Application (SvelteKit 5 Dashboard)
 /frontend/                          @OurangIlang @fariswirakusuma
@@ -20,11 +20,8 @@
 # Hardware Schematic & Wiring Pin Mapping
 /edge/main/include/pins.h           @pondwatr @fariswirakusuma
 
-# C++20 Vision Microservice & Inference Engine
+# C++20 Crow Backend, Vision Microservice & Inference Engine
 /services/                          @fariswirakusuma
-
-# Go Backend Ingress Gateway & REST API
-/backend/                           @fariswirakusuma
 
 # DevOps, Docker & CI/CD Workflows
 /deploy/                            @fariswirakusuma

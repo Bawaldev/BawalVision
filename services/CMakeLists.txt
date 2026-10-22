@@ -87,6 +87,7 @@ find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui dnn)
 find_package(CURL REQUIRED)
+find_package(PostgreSQL QUIET)
 find_package(fmt QUIET)
 find_package(httplib QUIET)
 find_package(nlohmann_json QUIET)
@@ -145,6 +146,12 @@ endif()
 set(ML_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ml/include)
 set(ML_GENERATOR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../ml/src/ncnn_generator.cpp)
 
+# The upstream generator uses std::format, which requires GCC 13+ / Clang 17+
+# with a matching libstdc++. Debian bookworm ships GCC 12, so container builds
+# substitute a no-op stub and rely on pre-converted NCNN weights instead.
+option(BAWAL_ENABLE_NCNN_GENERATOR
+    "Compile the std::format-based NCNN generator (requires GCC 13+)" ON)
+
 # ---------------------------------------------------------------------------
 # Third-party web stack (Crow + standalone Asio)
 # ---------------------------------------------------------------------------
@@ -165,8 +172,11 @@ target_link_libraries(bawal_crow INTERFACE Threads::Threads)
 file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/main\\.cpp$")
 list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/backend/main_backend\\.cpp$")
-if(EXISTS ${ML_GENERATOR_SRC})
+if(BAWAL_ENABLE_NCNN_GENERATOR AND EXISTS ${ML_GENERATOR_SRC})
     list(APPEND SERVICE_SOURCES ${ML_GENERATOR_SRC})
+else()
+    list(APPEND SERVICE_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vision/ncnn_generator_stub.cpp)
 endif()
 
 add_library(bawal_core STATIC ${SERVICE_SOURCES})
@@ -214,6 +224,14 @@ if(TARGET CURL::libcurl)
     target_link_libraries(bawal_core PUBLIC CURL::libcurl)
 else()
     target_link_libraries(bawal_core PUBLIC ${CURL_LIBRARIES})
+endif()
+
+if(PostgreSQL_FOUND)
+    target_link_libraries(bawal_core PUBLIC PostgreSQL::PostgreSQL)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_HAVE_POSTGRES=1)
+    message(STATUS "PostgreSQL/libpq found - inspection persistence enabled")
+else()
+    message(STATUS "PostgreSQL/libpq not found - inspection persistence disabled")
 endif()
 
 if(TARGET nlohmann_json::nlohmann_json)

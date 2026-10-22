@@ -2,8 +2,7 @@
 <!-- Provide a concise summary of changes and the problem being solved. -->
 
 ### Subsystem Affected:
-- [ ] `services/` (C++20 Machine Vision & Inference Pipeline)
-- [ ] `backend/` (Go Fiber Gateway & Data Orchestrator)
+- [ ] `services/` (C++20 Crow Backend, Machine Vision & Inference Pipeline)
 - [ ] `edge/` (ESP32-S3 Firmware & Sensor Drivers)
 - [ ] `frontend/` (SvelteKit 5 Dashboard & Telemetry UI)
 - [ ] `ml/` (Dataset Scripts & Neural Network Models)

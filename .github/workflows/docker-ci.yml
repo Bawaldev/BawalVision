@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
     paths:
       - 'deploy/**'
-      - 'backend/**'
+      - 'Dockerfile'
       - 'services/**'
       - 'ml/**'
       - '.github/workflows/docker-ci.yml'
@@ -13,7 +13,7 @@ on:
     branches: [ "main", "master" ]
     paths:
       - 'deploy/**'
-      - 'backend/**'
+      - 'Dockerfile'
       - 'services/**'
       - 'ml/**'
       - '.github/workflows/docker-ci.yml'
@@ -32,7 +32,7 @@ jobs:
       matrix:
         target:
           - name: bawal-backend
-            dockerfile: deploy/Dockerfile.backend
+            dockerfile: Dockerfile
           - name: bawal-vision
             dockerfile: deploy/Dockerfile.vision
     steps:
