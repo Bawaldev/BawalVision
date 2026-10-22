@@ -71,26 +71,33 @@ bool ShmFrameConsumer::waitForNextFrame(cv::Mat& out_bgr_frame, uint32_t& out_fr
     ssize_t n = read(m_client_sock, &latest_seq, sizeof(latest_seq));
     if (n <= 0) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            // A notification may have been dropped (producer restart or a
+            // full socket buffer). Fall back to the authoritative global
+            // sequence so the freshest frame is still picked up.
+            latest_seq = m_global_hdr->write_seq.load(std::memory_order_acquire);
+            if (latest_seq == 0 || latest_seq <= m_last_seq) {
+                return false;
+            }
+        } else {
+            close(m_client_sock);
+            m_client_sock = -1;
             return false;
         }
-        close(m_client_sock);
-        m_client_sock = -1;
-        return false;
-    }
+    } else {
+        // Drain every queued notification and process only the freshest sequence.
+        // Without this, a slow consumer would replay old tokens and build latency.
+        uint64_t queued_seq = 0;
+        while (recv(m_client_sock, &queued_seq, sizeof(queued_seq), MSG_DONTWAIT) == sizeof(queued_seq)) {
+            latest_seq = queued_seq;
+        }
 
-    // Drain every queued notification and process only the freshest sequence.
-    // Without this, a slow consumer would replay old tokens and build latency.
-    uint64_t queued_seq = 0;
-    while (recv(m_client_sock, &queued_seq, sizeof(queued_seq), MSG_DONTWAIT) == sizeof(queued_seq)) {
-        latest_seq = queued_seq;
-    }
-
-    uint64_t global_seq = m_global_hdr->write_seq.load(std::memory_order_acquire);
-    if (global_seq > latest_seq) {
-        latest_seq = global_seq;
-    }
-    if (latest_seq == 0) {
-        return false;
+        uint64_t global_seq = m_global_hdr->write_seq.load(std::memory_order_acquire);
+        if (global_seq > latest_seq) {
+            latest_seq = global_seq;
+        }
+        if (latest_seq == 0 || latest_seq <= m_last_seq) {
+            return false;
+        }
     }
 
     uint32_t slot_idx = (latest_seq - 1) & (SHM_NUM_SLOTS - 1);
@@ -122,7 +129,12 @@ bool ShmFrameConsumer::waitForNextFrame(cv::Mat& out_bgr_frame, uint32_t& out_fr
         return false;
     }
 
-    return !out_bgr_frame.empty();
+    if (out_bgr_frame.empty()) {
+        return false;
+    }
+
+    m_last_seq = latest_seq;
+    return true;
 }
 
 void ShmFrameConsumer::cleanup() {

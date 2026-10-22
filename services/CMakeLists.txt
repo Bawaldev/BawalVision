@@ -241,13 +241,20 @@ endif()
 # ---------------------------------------------------------------------------
 # Executables
 # ---------------------------------------------------------------------------
+option(BAWAL_BUILD_BACKEND "Build the unified Crow C++ web service" ON)
+option(BAWAL_BUILD_VISION_VIEWER "Build the legacy standalone vision viewer" ON)
+
 # Unified C++ web service: Crow HTTP + in-process SHM vision consumer.
-add_executable(bawal_backend src/backend/main_backend.cpp)
-target_link_libraries(bawal_backend PRIVATE bawal_core)
+if(BAWAL_BUILD_BACKEND)
+    add_executable(bawal_backend src/backend/main_backend.cpp)
+    target_link_libraries(bawal_backend PRIVATE bawal_core)
+    install(TARGETS bawal_backend DESTINATION bin)
+endif()
 
 # Legacy standalone vision viewer kept for the existing `just run-vision`
 # workflow while the Crow backend becomes the primary deployment target.
-add_executable(vision_service src/main.cpp)
-target_link_libraries(vision_service PRIVATE bawal_core)
-
-install(TARGETS bawal_backend vision_service DESTINATION bin)
+if(BAWAL_BUILD_VISION_VIEWER)
+    add_executable(vision_service src/main.cpp)
+    target_link_libraries(vision_service PRIVATE bawal_core)
+    install(TARGETS vision_service DESTINATION bin)
+endif()

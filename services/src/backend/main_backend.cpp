@@ -1,10 +1,13 @@
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <thread>
 
 #include "bawal/backend/app.hpp"
 #include "bawal/backend/state.hpp"
+#include "bawal/backend/vision_worker.hpp"
 #include "bawal/ipc/shm_producer.hpp"
 
 namespace {
@@ -45,6 +48,18 @@ int main() {
     }
 
     bawal::backend::BackendState state;
+
+    bawal::backend::VisionWorker vision(state, bawal::backend::resolveModelPath());
+    vision.start();
+
+    // Bind the UDS notifier only after the consumer is listening. This keeps a
+    // restarted process from reusing a socket left by a previous run.
+    for (int i = 0; i < 40 && !vision.consumerReady(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (!vision.consumerReady()) {
+        std::cerr << "[WARN] SHM consumer not ready yet; notifier will retry\n";
+    }
     producer.startNotify();
 
     bawal::backend::BackendApp app(state, producer, config);
@@ -55,6 +70,7 @@ int main() {
               << " (SHM: " << bawal::ipc::SHM_NAME << ")\n";
 
     const int rc = app.run();
+    vision.stop();
     producer.stopNotify();
     return rc;
 }

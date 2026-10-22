@@ -1,144 +1,154 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# BawalVision Backend API & Session Automated Verification Suite
+# BawalVision Crow C++ Backend API Verification Suite
 # OpenCV AI Competition 2026 Validation Script
+#
+# Targets the unified C++ binary (services/build/bin/bawal_backend), NOT the
+# retired Go Fiber gateway. Run the server first, e.g.:
+#   CROW_PORT=18081 MODEL_PATH=ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx \
+#     ./services/build/bin/bawal_backend
+#   BASE_URL=http://127.0.0.1:18081/api/v1 ./backend/scripts/test_api.sh
 # ==============================================================================
 
 set -eo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080/api/v1}"
-CACHE_DIR=".cache_trash"
+CACHE_DIR="${CACHE_DIR:-.cache_trash}"
+DEVICE_ID="ESP32-S3-CURL-TEST"
+FRAME_FILE="${CACHE_DIR}/crow_test_frame.jpg"
 
-# Color Codes for Competition Logging
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 mkdir -p "${CACHE_DIR}"
 
+curl_json() {
+  local method="$1"
+  local url="$2"
+  shift 2
+  curl -sS --max-time 15 -X "${method}" "${url}" "$@"
+}
+
+assert_contains() {
+  local payload="$1"
+  local needle="$2"
+  local label="$3"
+  if [[ "${payload}" != *"${needle}"* ]]; then
+    echo -e "${RED}✗ ${label}${NC}"
+    echo "  Missing: ${needle}"
+    echo "  Body: ${payload:0:600}"
+    exit 1
+  fi
+  echo -e "${GREEN}✓ ${label}${NC}"
+}
+
 echo -e "${BLUE}======================================================${NC}"
-echo -e "${BLUE}  BawalVision Backend Open Web API Test Runner        ${NC}"
+echo -e "${BLUE}  BawalVision Crow C++ API Test Runner               ${NC}"
 echo -e "${BLUE}  Target: ${BASE_URL}                                 ${NC}"
 echo -e "${BLUE}======================================================${NC}\n"
 
 # ------------------------------------------------------------------------------
-# STEP 1: EDGE TELEMETRY INGRESS (ESP32-S3 SIMULATION)
+# Test frame: prefer a real video frame so YOLO actually runs; fall back to a
+# tiny embedded JPEG when the example asset/ffmpeg is unavailable.
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[1/3] Testing ESP32-S3 Edge Telemetry Ingress...${NC}"
-TELEMETRY_RESP=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/telemetry" \
+EXAMPLE_VIDEO="examples/banana/banana_sample_one.mp4"
+if command -v ffmpeg >/dev/null 2>&1 && [[ -f "${EXAMPLE_VIDEO}" ]]; then
+  ffmpeg -v error -y -ss 2 -i "${EXAMPLE_VIDEO}" -frames:v 1 -q:v 2 "${FRAME_FILE}"
+else
+  echo '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAAPAA8BAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPx8Af//Z' \
+    | base64 -d > "${FRAME_FILE}"
+fi
+echo -e "[INFO] Test frame: ${FRAME_FILE} ($(wc -c < "${FRAME_FILE}") bytes)\n"
+
+# ------------------------------------------------------------------------------
+# STEP 1: HEALTH
+# ------------------------------------------------------------------------------
+echo -e "${YELLOW}[1/7] GET /health${NC}"
+HEALTH=$(curl_json GET "${BASE_URL}/health")
+assert_contains "${HEALTH}" '"status":"ok"' "Crow health endpoint"
+assert_contains "${HEALTH}" '"service":"bawal-crow-backend"' "Crow service identity"
+
+# ------------------------------------------------------------------------------
+# STEP 2: CAMERA ACTIVE (before ingress)
+# ------------------------------------------------------------------------------
+echo -e "\n${YELLOW}[2/7] GET /camera/active${NC}"
+ACTIVE_BEFORE=$(curl_json GET "${BASE_URL}/camera/active")
+assert_contains "${ACTIVE_BEFORE}" '"active"' "Camera active snapshot"
+
+# ------------------------------------------------------------------------------
+# STEP 3: FRAME INGRESS (raw JPEG bytes + JSON/base64 compatibility)
+# ------------------------------------------------------------------------------
+echo -e "\n${YELLOW}[3/7] POST /camera/frame (raw JPEG -> POSIX SHM)${NC}"
+FRAME_RESP=$(curl_json POST "${BASE_URL}/camera/frame" \
+  -H "Content-Type: image/jpeg" \
+  -H "X-Device-ID: ${DEVICE_ID}" \
+  -H "X-Frame-ID: 1001" \
+  --data-binary "@${FRAME_FILE}")
+assert_contains "${FRAME_RESP}" '"status":"success"' "Raw JPEG frame accepted"
+assert_contains "${FRAME_RESP}" '"shm_write_sequence"' "Frame published to POSIX SHM"
+
+FRAME_B64=$(base64 -w0 "${FRAME_FILE}")
+JSON_RESP=$(curl_json POST "${BASE_URL}/camera/frame" \
   -H "Content-Type: application/json" \
-  -d '{
-    "device_id": "ESP32-S3-BENCH-01",
-    "device_name": "Automated Benchmark Pod",
-    "firmware_version": "1.0.4-bench",
-    "device_core": 2,
-    "cpu_temperature": 39.20,
-    "temperature": 28.50,
-    "cpu_load": 15,
-    "timestamp": 1758412800
-  }')
+  -d "{\"device_id\":\"${DEVICE_ID}\",\"frame_id\":1002,\"width\":640,\"height\":480,\"format\":0,\"image_base64\":\"${FRAME_B64}\"}")
+assert_contains "${JSON_RESP}" '"status":"success"' "JSON/base64 frame accepted"
 
-TELEMETRY_BODY=$(echo "${TELEMETRY_RESP}" | head -n -1)
-TELEMETRY_CODE=$(echo "${TELEMETRY_RESP}" | tail -n 1)
+# Give the vision thread time to consume the newest SHM frame.
+sleep 2
 
-if [ "${TELEMETRY_CODE}" -eq 201 ]; then
-  echo -e "${GREEN}✓ Ingress Successful (HTTP 201)${NC}: ${TELEMETRY_BODY}"
-else
-  echo -e "${RED}✗ Ingress Failed (HTTP ${TELEMETRY_CODE})${NC}: ${TELEMETRY_BODY}"
+# ------------------------------------------------------------------------------
+# STEP 4: CAMERA ACTIVE (after ingress)
+# ------------------------------------------------------------------------------
+echo -e "\n${YELLOW}[4/7] GET /camera/active (after ingress)${NC}"
+ACTIVE_AFTER=$(curl_json GET "${BASE_URL}/camera/active")
+assert_contains "${ACTIVE_AFTER}" '"active":true' "Camera marked active"
+assert_contains "${ACTIVE_AFTER}" "\"device_id\":\"${DEVICE_ID}\"" "Device id propagated"
+
+# ------------------------------------------------------------------------------
+# STEP 5: MJPEG STREAM + RAW FRAME
+# ------------------------------------------------------------------------------
+echo -e "\n${YELLOW}[5/7] GET /camera/stream + /camera/latest/<device>/raw${NC}"
+STREAM_HEADERS="${CACHE_DIR}/crow_stream_headers.txt"
+STREAM_CODE=$(curl -sS --max-time 15 -D "${STREAM_HEADERS}" -o "${CACHE_DIR}/crow_stream_body.bin" \
+  -w '%{http_code}' "${BASE_URL}/camera/stream")
+if [[ "${STREAM_CODE}" != "200" ]] || ! grep -qi 'multipart/x-mixed-replace' "${STREAM_HEADERS}"; then
+  echo -e "${RED}✗ MJPEG stream endpoint${NC} (HTTP ${STREAM_CODE})"
   exit 1
 fi
+echo -e "${GREEN}✓ MJPEG stream endpoint (HTTP 200, multipart boundary)${NC}"
 
-# ------------------------------------------------------------------------------
-# STEP 2: FETCH INSPECTION RECORDS (OPEN SOURCE WEB ACCESS)
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[2/3] Testing Query Records (Open Web Access)...${NC}"
-RECORDS_RESP=$(curl -s -w "\n%{http_code}" -X GET "${BASE_URL}/records")
-
-RECORDS_BODY=$(echo "${RECORDS_RESP}" | head -n -1)
-RECORDS_CODE=$(echo "${RECORDS_RESP}" | tail -n 1)
-
-if [ "${RECORDS_CODE}" -eq 200 ]; then
-  echo -e "${GREEN}✓ Records Query Successful (HTTP 200)${NC}"
-  echo -e "  Sample Output: ${RECORDS_BODY:0:160}..."
-else
-  echo -e "${RED}✗ Records Query Failed (HTTP ${RECORDS_CODE})${NC}: ${RECORDS_BODY}"
+RAW_HEADERS="${CACHE_DIR}/crow_raw_headers.txt"
+RAW_CODE=$(curl -sS --max-time 15 -D "${RAW_HEADERS}" -o "${CACHE_DIR}/crow_raw_frame.jpg" \
+  -w '%{http_code}' "${BASE_URL}/camera/latest/${DEVICE_ID}/raw")
+if [[ "${RAW_CODE}" != "200" ]] || ! grep -qi 'content-type: image/jpeg' "${RAW_HEADERS}"; then
+  echo -e "${RED}✗ Raw frame endpoint${NC} (HTTP ${RAW_CODE})"
   exit 1
 fi
+echo -e "${GREEN}✓ Raw frame endpoint (HTTP 200, image/jpeg)${NC}"
 
 # ------------------------------------------------------------------------------
-# STEP 5: CAMERA FRAME INGRESS & FAST OPENCV RETRIEVAL
+# STEP 6: TELEMETRY (in-memory, no Postgres)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[5/5] Testing Camera Frame Ingress & In-Memory Retrieval...${NC}"
-CAM_RESP=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/camera/frame" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "device_id": "ESP32-S3-BENCH-01",
-    "frame_id": 1,
-    "width": 320,
-    "height": 240,
-    "format": 0,
-    "buffer_len": 94,
-    "timestamp_ms": 1789958045000,
-    "image_base64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAAPAA8BAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPx8Af//Z"
-  }')
-
-CAM_BODY=$(echo "${CAM_RESP}" | head -n -1)
-CAM_CODE=$(echo "${CAM_RESP}" | tail -n 1)
-
-if [ "${CAM_CODE}" -eq 200 ] || [ "${CAM_CODE}" -eq 201 ]; then
-  echo -e "${GREEN}✓ Camera Frame Ingested (HTTP ${CAM_CODE})${NC}: ${CAM_BODY}"
-else
-  echo -e "${RED}✗ Camera Frame Ingest Failed (HTTP ${CAM_CODE})${NC}: ${CAM_BODY}"
-  exit 1
-fi
-
-CAM_GET_RESP=$(curl -s -w "\n%{http_code}" -X GET "${BASE_URL}/camera/latest/ESP32-S3-BENCH-01")
-CAM_GET_BODY=$(echo "${CAM_GET_RESP}" | head -n -1)
-CAM_GET_CODE=$(echo "${CAM_GET_RESP}" | tail -n 1)
-
-if [ "${CAM_GET_CODE}" -eq 200 ]; then
-  echo -e "${GREEN}✓ Latest Camera Frame Retrieved (HTTP 200)${NC}: ${CAM_GET_BODY:0:120}..."
-else
-  echo -e "${RED}✗ Camera Frame Query Failed (HTTP ${CAM_GET_CODE})${NC}: ${CAM_GET_BODY}"
-  exit 1
-fi
+echo -e "\n${YELLOW}[6/7] GET /telemetry/latest${NC}"
+TELEMETRY=$(curl_json GET "${BASE_URL}/telemetry/latest")
+assert_contains "${TELEMETRY}" '"telemetry_struct":"TelemetryIngressPayload"' "Telemetry payload shape"
+assert_contains "${TELEMETRY}" '"vision_ready":true' "Vision thread ready"
 
 # ------------------------------------------------------------------------------
-# STEP 6: INSPECTION INGRESS WITH FOOD DETECTIONS & PRELOAD VERIFICATION
+# STEP 7: LATEST INSPECTION (YOLO detections from memory)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[6/6] Testing Vision Inspection Ingress & Food Item Persistence...${NC}"
-INSP_RESP=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/inspections" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "device_id": "ESP32-S3-BENCH-01",
-    "detections": [
-      {
-        "food_name": "nasi",
-        "similarity_rate": 0.88,
-        "weight_grams": 150.0
-      },
-      {
-        "food_name": "ayam",
-        "similarity_rate": 0.92,
-        "weight_grams": 110.0
-      }
-    ]
-  }')
+echo -e "\n${YELLOW}[7/7] GET /inspections/latest${NC}"
+INSPECTION=$(curl_json GET "${BASE_URL}/inspections/latest")
+assert_contains "${INSPECTION}" '"inspection_struct":"InspectionRecord"' "Inspection payload shape"
+assert_contains "${INSPECTION}" '"detections":[' "Detection SoA serialized"
+assert_contains "${INSPECTION}" '"engine_pipeline"' "YOLO engine metadata"
 
-INSP_BODY=$(echo "${INSP_RESP}" | head -n -1)
-INSP_CODE=$(echo "${INSP_RESP}" | tail -n 1)
-
-if [ "${INSP_CODE}" -eq 201 ]; then
-  echo -e "${GREEN}✓ Inspection Ingress Successful (HTTP 201)${NC}: ${INSP_BODY}"
-else
-  echo -e "${RED}✗ Inspection Ingress Failed (HTTP ${INSP_CODE})${NC}: ${INSP_BODY}"
-  exit 1
-fi
+echo -e "\n${BLUE}Inspection snapshot:${NC}"
+echo "${INSPECTION:0:900}"
 
 echo -e "\n${GREEN}======================================================${NC}"
-echo -e "${GREEN}  All Backend, Camera & Inspection Tests Passed!     ${NC}"
+echo -e "${GREEN}  All Crow C++ Backend API Tests Passed!             ${NC}"
 echo -e "${GREEN}======================================================${NC}"
-
-
