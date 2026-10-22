@@ -159,9 +159,9 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 	ver := s.frameVersion.Add(1)
 	GlobalFramesTotal.Add(1)
 
-	// Rolling 1.5 - 2.0s real FPS calculation
+	// Rolling 1.5s real FPS calculation
 	s.fpsTimestamps = append(s.fpsTimestamps, now)
-	cutoff := now - 2000
+	cutoff := now - 1500
 	idx := 0
 	for idx < len(s.fpsTimestamps) && s.fpsTimestamps[idx] < cutoff {
 		idx++
@@ -171,7 +171,7 @@ func (s *CameraStore) StoreRawFrameWithMockMeta(deviceID string, frameID uint32,
 	}
 	if len(s.fpsTimestamps) >= 2 {
 		dt := float64(now-s.fpsTimestamps[0]) / 1000.0
-		if dt > 0.05 {
+		if dt > 0.02 {
 			s.fps = float64(len(s.fpsTimestamps)-1) / dt
 		}
 	} else if len(s.fpsTimestamps) == 1 {
