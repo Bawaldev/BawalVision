@@ -517,45 +517,76 @@ func detectLocalLANIPv4() string {
 		return "127.0.0.1"
 	}
 
-	var fallbackIP string
+	// Pass 1: prefer the active wireless LAN interface (e.g. wlp9s0), which is
+	// the address the untethered ESP32 must target on the shared Wi-Fi subnet.
+	for _, iface := range ifaces {
+		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
+			continue
+		}
+		if !strings.HasPrefix(strings.ToLower(iface.Name), "wl") {
+			continue
+		}
+		if ip := interfaceIPv4(iface); ip != "" {
+			return ip
+		}
+	}
+
+	// Pass 2: wired NICs, excluding virtual Docker/bridge/libvirt interfaces.
 	for _, iface := range ifaces {
 		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
 			continue
 		}
 		nameLower := strings.ToLower(iface.Name)
-		isVirtual := strings.HasPrefix(nameLower, "docker") || strings.HasPrefix(nameLower, "br-") || strings.HasPrefix(nameLower, "veth")
-
-		addrs, err := iface.Addrs()
-		if err != nil {
+		if strings.HasPrefix(nameLower, "docker") || strings.HasPrefix(nameLower, "br-") ||
+			strings.HasPrefix(nameLower, "veth") || strings.HasPrefix(nameLower, "virbr") {
 			continue
 		}
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip == nil || ip.IsLoopback() {
-				continue
-			}
-			ip4 := ip.To4()
-			if ip4 == nil {
-				continue
-			}
-			if !isVirtual && (strings.HasPrefix(nameLower, "wl") || strings.HasPrefix(nameLower, "en") || strings.HasPrefix(nameLower, "eth")) {
-				return ip4.String()
-			}
-			if fallbackIP == "" {
-				fallbackIP = ip4.String()
-			}
+		if !strings.HasPrefix(nameLower, "en") && !strings.HasPrefix(nameLower, "eth") {
+			continue
+		}
+		if ip := interfaceIPv4(iface); ip != "" {
+			return ip
 		}
 	}
-	if fallbackIP != "" {
-		return fallbackIP
-	}
+
 	return "127.0.0.1"
+}
+
+// interfaceIPv4 returns the first usable IPv4 on an interface, skipping
+// loopback and Docker bridge ranges (172.17-172.19.x) that would never be
+// reachable from the ESP32's Wi-Fi subnet.
+func interfaceIPv4(iface net.Interface) string {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		ip4 := ip.To4()
+		if ip4 == nil || isDockerRange(ip4) {
+			continue
+		}
+		return ip4.String()
+	}
+	return ""
+}
+
+func isDockerRange(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	// Docker Desktop / compose default bridge networks.
+	return ip4[0] == 172 && (ip4[1] == 17 || ip4[1] == 18 || ip4[1] == 19)
 }
 
 // configureSerial115200 configures an open file descriptor for 115200 8N1 raw serial communication on Linux.
@@ -676,8 +707,8 @@ func ProvisionESP32ViaUSB(portPath, ssid, password, backendIP, backendPort strin
 		return nil, fmt.Errorf("failed to write Wi-Fi provisioning command to %s: %w", validPort, err)
 	}
 
-	// BAWAL_ACK must arrive within 3.5 s or the provisioning is reported failed.
-	deadline := time.Now().Add(3500 * time.Millisecond)
+	// BAWAL_ACK must arrive within 4 s or the provisioning is reported failed.
+	deadline := time.Now().Add(4000 * time.Millisecond)
 	parsedAck := readSerialAck(f, deadline, validPort, func(ack *ESPSerialAck) bool {
 		return ack.Status == "wifi_provisioned" || ack.Status == "error"
 	})
