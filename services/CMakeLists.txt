@@ -145,14 +145,33 @@ endif()
 set(ML_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ml/include)
 set(ML_GENERATOR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../ml/src/ncnn_generator.cpp)
 
+# ---------------------------------------------------------------------------
+# Third-party web stack (Crow + standalone Asio)
+# ---------------------------------------------------------------------------
+# Both are vendored so the Docker image can build without network access.
+set(BAWAL_THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+
+add_library(bawal_crow INTERFACE)
+target_include_directories(bawal_crow SYSTEM INTERFACE
+    ${BAWAL_THIRD_PARTY_DIR}/crow
+    ${BAWAL_THIRD_PARTY_DIR}/asio/include
+)
+target_compile_definitions(bawal_crow INTERFACE ASIO_STANDALONE)
+target_link_libraries(bawal_crow INTERFACE Threads::Threads)
+
+# ---------------------------------------------------------------------------
+# Shared core: vision pipeline + IPC + Crow routes
+# ---------------------------------------------------------------------------
 file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/main\\.cpp$")
+list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/backend/main_backend\\.cpp$")
 if(EXISTS ${ML_GENERATOR_SRC})
     list(APPEND SERVICE_SOURCES ${ML_GENERATOR_SRC})
 endif()
 
-add_executable(vision_service ${SERVICE_SOURCES})
+add_library(bawal_core STATIC ${SERVICE_SOURCES})
 
-target_include_directories(vision_service PRIVATE
+target_include_directories(bawal_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${ML_INCLUDE_DIR}
@@ -165,58 +184,70 @@ target_include_directories(vision_service PRIVATE
 
 # Add NCNN include directory if not using imported target
 if(NCNN_INCLUDE_DIR)
-    target_include_directories(vision_service PRIVATE ${NCNN_INCLUDE_DIR})
+    target_include_directories(bawal_core PRIVATE ${NCNN_INCLUDE_DIR})
 endif()
 
-target_link_libraries(vision_service PRIVATE
+target_link_libraries(bawal_core PUBLIC
     Threads::Threads
     OpenMP::OpenMP_CXX
     ${OpenCV_LIBS}
     ${ONNXRUNTIME_LIB}
+    bawal_crow
 )
 
 # Link NCNN library if available
 if(TARGET ncnn)
-    target_link_libraries(vision_service PRIVATE ncnn)
-    target_compile_definitions(vision_service PRIVATE HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
+    target_link_libraries(bawal_core PUBLIC ncnn)
+    target_compile_definitions(bawal_core PUBLIC HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
 elseif(NCNN_LIB)
-    target_link_libraries(vision_service PRIVATE ${NCNN_LIB})
-    target_compile_definitions(vision_service PRIVATE HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
+    target_link_libraries(bawal_core PUBLIC ${NCNN_LIB})
+    target_compile_definitions(bawal_core PUBLIC HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
 endif()
 
 # Link Vulkan if NCNN GPU acceleration is enabled
 if(Vulkan_FOUND AND (TARGET ncnn OR NCNN_LIB))
-    target_link_libraries(vision_service PRIVATE Vulkan::Vulkan)
-    target_compile_definitions(vision_service PRIVATE USE_NCNN_VULKAN=1)
+    target_link_libraries(bawal_core PUBLIC Vulkan::Vulkan)
+    target_compile_definitions(bawal_core PUBLIC USE_NCNN_VULKAN=1)
 endif()
 
 if(TARGET CURL::libcurl)
-    target_link_libraries(vision_service PRIVATE CURL::libcurl)
+    target_link_libraries(bawal_core PUBLIC CURL::libcurl)
 else()
-    target_link_libraries(vision_service PRIVATE ${CURL_LIBRARIES})
+    target_link_libraries(bawal_core PUBLIC ${CURL_LIBRARIES})
 endif()
 
 if(TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(vision_service PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(bawal_core PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
 if(TARGET fmt::fmt)
-    target_link_libraries(vision_service PRIVATE fmt::fmt)
-    target_compile_definitions(vision_service PRIVATE BAWAL_USE_SYSTEM_FMT=1)
+    target_link_libraries(bawal_core PUBLIC fmt::fmt)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_SYSTEM_FMT=1)
 endif()
 
 if(TARGET httplib::httplib)
-    target_link_libraries(vision_service PRIVATE httplib::httplib)
-    target_compile_definitions(vision_service PRIVATE BAWAL_USE_SYSTEM_HTTPLIB=1)
+    target_link_libraries(bawal_core PUBLIC httplib::httplib)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_SYSTEM_HTTPLIB=1)
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
-    target_compile_definitions(vision_service PRIVATE BAWAL_USE_INTEL_ICPX=1)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_INTEL_ICPX=1)
 endif()
 
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_compile_definitions(vision_service PRIVATE BAWAL_RELEASE_BUILD=1)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_RELEASE_BUILD=1)
 endif()
 
+# ---------------------------------------------------------------------------
+# Executables
+# ---------------------------------------------------------------------------
+# Unified C++ web service: Crow HTTP + in-process SHM vision consumer.
+add_executable(bawal_backend src/backend/main_backend.cpp)
+target_link_libraries(bawal_backend PRIVATE bawal_core)
 
-install(TARGETS vision_service DESTINATION bin)
+# Legacy standalone vision viewer kept for the existing `just run-vision`
+# workflow while the Crow backend becomes the primary deployment target.
+add_executable(vision_service src/main.cpp)
+target_link_libraries(vision_service PRIVATE bawal_core)
+
+install(TARGETS bawal_backend vision_service DESTINATION bin)

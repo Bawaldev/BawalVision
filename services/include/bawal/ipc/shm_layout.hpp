@@ -1,6 +1,8 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <atomic>
+#include <type_traits>
 
 namespace bawal::ipc {
 
@@ -38,7 +40,33 @@ struct alignas(64) ShmSlotHeader {
 };
 static_assert(sizeof(ShmSlotHeader) == 64, "SlotHeader must be 64 bytes");
 
+// The payload of every slot must start on a cache-line boundary. Keeping the
+// ring stride a multiple of 64 also means the slot headers are never split
+// across cache lines, which matters for the producer/consumer seqlock.
 constexpr size_t SLOT_STRIDE = sizeof(ShmSlotHeader) + SHM_SLOT_CAPACITY;
 constexpr size_t TOTAL_SHM_SIZE = sizeof(ShmGlobalHeader) + (SHM_NUM_SLOTS * SLOT_STRIDE);
+
+// Layout checks shared with backend/internal/shm/producer.go. The Go producer
+// writes these fields at hard-coded byte offsets, so any layout drift must be
+// caught at compile time rather than silently corrupting frames at runtime.
+static_assert(std::is_standard_layout_v<ShmGlobalHeader>);
+static_assert(std::is_standard_layout_v<ShmSlotHeader>);
+static_assert(offsetof(ShmGlobalHeader, magic) == 0);
+static_assert(offsetof(ShmGlobalHeader, version) == 4);
+static_assert(offsetof(ShmGlobalHeader, num_slots) == 8);
+static_assert(offsetof(ShmGlobalHeader, slot_capacity) == 12);
+static_assert(offsetof(ShmGlobalHeader, write_seq) == 16);
+static_assert(offsetof(ShmSlotHeader, ready) == 0);
+static_assert(offsetof(ShmSlotHeader, frame_id) == 4);
+static_assert(offsetof(ShmSlotHeader, timestamp_ns) == 8);
+static_assert(offsetof(ShmSlotHeader, payload_size) == 16);
+static_assert(offsetof(ShmSlotHeader, width) == 20);
+static_assert(offsetof(ShmSlotHeader, height) == 22);
+static_assert(offsetof(ShmSlotHeader, format) == 24);
+static_assert(SLOT_STRIDE % 64 == 0, "Slot payload must start on a 64-byte boundary");
+static_assert(SHM_NUM_SLOTS == 4 && (SHM_NUM_SLOTS & (SHM_NUM_SLOTS - 1)) == 0,
+              "Ring size must be a power of two");
+static_assert(std::atomic<uint32_t>::is_always_lock_free);
+static_assert(std::atomic<uint64_t>::is_always_lock_free);
 
 } // namespace bawal::ipc
