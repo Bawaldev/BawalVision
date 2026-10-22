@@ -106,6 +106,7 @@
     let mockPushedFrames = $state(0);
     let isPushingFrame = false;
     let pushInterval: any = null;
+    let liveRefreshTimer: any = null;
     let mockFrameSeq = 0;
     let isRewound = $state(false);
     let lastVideoTime = 0;
@@ -177,6 +178,14 @@
             .catch(() => {
                 // Fallback to presets if backend is unavailable
             });
+
+        // Crow materialises one bounded MJPEG snapshot per request, so the
+        // live <img> must be re-armed to show new ESP32-S3 frames.
+        liveRefreshTimer = setInterval(() => {
+            if (sourceMode === 'live' && isTabVisible) {
+                streamEpoch = Date.now();
+            }
+        }, 1200);
     });
 
     function formatExampleLabel(path: string): string {
@@ -529,6 +538,10 @@
     onDestroy(() => {
         if (typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', handleVisibilityChange);
+        }
+        if (liveRefreshTimer !== null) {
+            clearInterval(liveRefreshTimer);
+            liveRefreshTimer = null;
         }
         stopMockPushing();
         if (mockVideoSrc.startsWith('blob:')) {
