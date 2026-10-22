@@ -37,6 +37,10 @@ static const char *TAG = "WIFI";
 // Adaptive pacing window: send immediately when slower than this interval,
 // otherwise yield the remaining time back to the scheduler.
 #define STREAM_TARGET_INTERVAL_MS 60
+// Retry cadence for UDP backend discovery while the backend is unreachable.
+// Prevents a dead backend from triggering one broadcast per failed frame.
+#define DISCOVERY_BACKOFF_MIN_MS 1000
+#define DISCOVERY_BACKOFF_MAX_MS 30000
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -371,11 +375,11 @@ static void wifi_reconnect_timer_cb(void *arg) {
 // Broadcast discovery: the backend replies from its LAN socket, so the reply's
 // source address is the host's real Wi-Fi IP (even when the backend runs in
 // Docker and its container IP is 172.x).
-static void wifi_discover_backend(void) {
+static bool wifi_discover_backend(void) {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0) {
         ESP_LOGW(TAG, "Discovery: socket() failed (%d)", errno);
-        return;
+        return false;
     }
 
     int broadcast = 1;
@@ -392,7 +396,7 @@ static void wifi_discover_backend(void) {
     if (sendto(sock, probe, strlen(probe), 0, (struct sockaddr *)&dest, sizeof(dest)) < 0) {
         ESP_LOGW(TAG, "Discovery: broadcast failed (%d)", errno);
         close(sock);
-        return;
+        return false;
     }
 
     char buf[256];
@@ -401,19 +405,19 @@ static void wifi_discover_backend(void) {
     int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&src, &src_len);
     if (n <= 0) {
         close(sock);
-        return;
+        return false;
     }
     buf[n] = '\0';
 
     char ip[INET_ADDRSTRLEN] = {0};
     if (!inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip))) {
         close(sock);
-        return;
+        return false;
     }
     if (!is_same_subnet_ip(ip)) {
         ESP_LOGW(TAG, "Discovery: ignoring reply from %s (not on ESP subnet)", ip);
         close(sock);
-        return;
+        return false;
     }
 
     bool changed = strcmp(g_backend_ip, ip) != 0;
@@ -435,13 +439,29 @@ static void wifi_discover_backend(void) {
         // HTTP client when the IP changes; do not touch s_stream_client here.
     }
     close(sock);
+    return true;
 }
 
 static void wifi_discovery_task(void *pvParameters) {
     (void)pvParameters;
+    uint32_t backoff_ms = DISCOVERY_BACKOFF_MIN_MS;
+
     for (;;) {
         xEventGroupWaitBits(g_wifi_event_group, WIFI_DISCOVERY_BIT, pdTRUE, pdFALSE, portMAX_DELAY);
-        wifi_discover_backend();
+
+        if (wifi_discover_backend()) {
+            backoff_ms = DISCOVERY_BACKOFF_MIN_MS;
+            continue;
+        }
+
+        ESP_LOGW(TAG, "Discovery failed, retrying in %u ms", (unsigned)backoff_ms);
+        vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+
+        backoff_ms *= 2;
+        if (backoff_ms > DISCOVERY_BACKOFF_MAX_MS) {
+            backoff_ms = DISCOVERY_BACKOFF_MAX_MS;
+        }
+        xEventGroupSetBits(g_wifi_event_group, WIFI_DISCOVERY_BIT);
     }
 }
 
