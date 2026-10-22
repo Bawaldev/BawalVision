@@ -52,6 +52,16 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
   serving in-memory snapshots when the DB is unreachable. Defaults are
   `DB_HOST=postgres` (Docker DNS), `DB_PORT=5432`; for a host-side run use
   `just run-backend` (starts compose Postgres and sets `DB_HOST=localhost DB_PORT=5433`).
+- **ESP32 nodes find the backend through UDP discovery on port 8765.** When the IP baked
+  into NVS/firmware is stale, the board broadcasts `BAWAL_DISCOVER_V1` and adopts the
+  reply's source address. The C++ backend answers from `services/src/backend/discovery.cpp`
+  (`DISCOVERY_PORT`, default 8765); compose publishes `8765:8765/udp`. Without the
+  responder the board retries forever and `/api/v1/telemetry/latest` stays offline.
+- **Live ESP32 telemetry comes from frame headers while streaming.** The firmware skips
+  the JSON heartbeat (`POST /api/v1/telemetry`) whenever the camera stream is active and
+  instead sends `X-ESP-Temp` / `X-ESP-CPU-Load` / `X-Camera-Model` on every frame, which
+  the backend folds into the telemetry cache. Expect `rssi`/`firmware_version` to be absent
+  during live streaming (they only arrive in idle heartbeats).
 - **Schema lives in `deploy/postgres/shema.sql`** (misspelled on purpose) and is only the
   compose initdb seed. The C++ backend does not run migrations; append `ALTER TABLE
   ... IF NOT EXISTS` blocks there for schema changes, and recreate the volume (or apply

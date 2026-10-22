@@ -80,6 +80,55 @@ struct InspectionView {
     SceneOpticalSoA optical;
 };
 
+struct TelemetryView {
+    bool valid{false};
+    std::string device_id;
+    std::string firmware_version;
+    std::string camera_model;
+    std::string connection_mode;
+    std::string ip_address;
+    uint64_t timestamp{0};
+    uint64_t age_ms{0};
+    float temperature{0.0f};
+    float cpu_temperature{0.0f};
+    uint8_t cpu_load{0};
+    int8_t cpu_core0_load{-1};
+    int8_t cpu_core1_load{-1};
+    uint64_t heap_free{0};
+    int16_t rssi{0};
+    bool has_temperature{false};
+    bool has_cpu_temperature{false};
+    bool has_cpu_load{false};
+    bool has_heap_free{false};
+    bool has_rssi{false};
+};
+
+/**
+ * @brief Partial telemetry update. Only fields with their `has_*` flag set (or
+ * non-empty strings) overwrite the cached values, so a frame-header sample and
+ * a full JSON heartbeat can merge into one view.
+ */
+struct TelemetrySample {
+    std::string device_id;
+    std::string firmware_version;
+    std::string camera_model;
+    std::string connection_mode;
+    std::string ip_address;
+    uint64_t timestamp{0};
+    float temperature{0.0f};
+    float cpu_temperature{0.0f};
+    int cpu_load{-1};
+    int cpu_core0_load{-1};
+    int cpu_core1_load{-1};
+    uint64_t heap_free{0};
+    int rssi{0};
+    bool has_temperature{false};
+    bool has_cpu_temperature{false};
+    bool has_cpu_load{false};
+    bool has_heap_free{false};
+    bool has_rssi{false};
+};
+
 /**
  * @brief Process-local state shared by Crow worker threads and the vision
  * thread. POSIX SHM carries the frame bytes; this object only carries small
@@ -101,8 +150,13 @@ public:
                           const SceneOpticalSoA& optical,
                           std::string_view engine_pipeline);
 
+    void updateTelemetry(const TelemetrySample& sample);
+    void updatePeerIp(std::string ip);
+    void disconnectDevice(std::string_view device_id);
+
     [[nodiscard]] CameraView camera() const;
     [[nodiscard]] InspectionView inspection() const;
+    [[nodiscard]] TelemetryView telemetry() const;
     [[nodiscard]] std::vector<uint8_t> latestJpeg(std::string_view device_id = {}) const;
 
     void setVisionReady(bool ready) noexcept {
@@ -135,6 +189,27 @@ private:
     std::string m_engine_pipeline;
     DetectionSoA m_detections;
     SceneOpticalSoA m_optical;
+
+    uint64_t m_telemetry_received_ns{0};
+    std::string m_telemetry_device_id;
+    std::string m_telemetry_firmware;
+    std::string m_telemetry_camera_model;
+    std::string m_telemetry_connection_mode;
+    std::string m_telemetry_ip;
+    uint64_t m_telemetry_timestamp{0};
+    float m_telemetry_temperature{0.0f};
+    float m_telemetry_cpu_temperature{0.0f};
+    uint8_t m_telemetry_cpu_load{0};
+    int8_t m_telemetry_core0_load{-1};
+    int8_t m_telemetry_core1_load{-1};
+    uint64_t m_telemetry_heap_free{0};
+    int16_t m_telemetry_rssi{0};
+    std::string m_peer_ip;
+    bool m_telemetry_has_temperature{false};
+    bool m_telemetry_has_cpu_temperature{false};
+    bool m_telemetry_has_cpu_load{false};
+    bool m_telemetry_has_heap_free{false};
+    bool m_telemetry_has_rssi{false};
 
     std::atomic<bool> m_vision_ready{false};
 };

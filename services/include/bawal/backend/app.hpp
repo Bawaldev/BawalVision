@@ -2,6 +2,7 @@
 
 #include <crow_all.h>
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -42,12 +43,15 @@ private:
     void registerInspectionRoutes();
     void registerExampleRoutes();
     void registerCompatibilityRoutes();
+    void registerDeviceRoutes();
+    void registerSystemRoutes();
 
     BackendState& m_state;
     ipc::ShmProducer& m_producer;
     ServerConfig m_config;
     Database* m_database{nullptr};
     crow::App<crow::CORSHandler> m_app;
+    std::atomic<double> m_confidence_threshold{0.35};
 };
 
 } // namespace bawal::backend

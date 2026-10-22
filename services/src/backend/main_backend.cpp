@@ -7,6 +7,7 @@
 
 #include "bawal/backend/app.hpp"
 #include "bawal/backend/database.hpp"
+#include "bawal/backend/discovery.hpp"
 #include "bawal/backend/state.hpp"
 #include "bawal/backend/vision_worker.hpp"
 #include "bawal/ipc/shm_producer.hpp"
@@ -27,6 +28,19 @@ uint16_t envPort() {
     const unsigned long port = std::strtoul(value.c_str(), &end, 10);
     if (end == value.c_str() || port == 0 || port > 65535) {
         return 8080;
+    }
+    return static_cast<uint16_t>(port);
+}
+
+uint16_t envPortOrDefault(const char* key, uint16_t fallback) {
+    const char* value = std::getenv(key);
+    if (value == nullptr || *value == '\0') {
+        return fallback;
+    }
+    char* end = nullptr;
+    const unsigned long port = std::strtoul(value, &end, 10);
+    if (end == value || port == 0 || port > 65535) {
+        return fallback;
     }
     return static_cast<uint16_t>(port);
 }
@@ -76,11 +90,26 @@ int main() {
     bawal::backend::BackendApp app(state, producer, config, &database);
     app.configure();
 
+    // ESP32-S3 nodes locate the backend through this UDP responder when their
+    // cached/compiled IP is stale (DHCP change, Docker bridge IP, etc.).
+    bawal::backend::DiscoveryResponder discovery;
+    discovery.setPeerCallback(
+        [&state](const std::string& ip) { state.updatePeerIp(ip); });
+    const uint16_t discovery_port = envPortOrDefault("DISCOVERY_PORT", 8765);
+    if (discovery.start(discovery_port, config.port)) {
+        std::cout << "[INFO] UDP backend discovery responder on :" << discovery_port
+                  << " (HTTP port " << config.port << ")\n";
+    } else {
+        std::cerr << "[WARN] UDP discovery responder disabled (port " << discovery_port
+                  << " unavailable)\n";
+    }
+
     std::cout << "[INFO] bawal::backend C++ Crow server on http://"
               << config.bind_address << ':' << config.port
               << " (SHM: " << bawal::ipc::SHM_NAME << ")\n";
 
     const int rc = app.run();
+    discovery.stop();
     vision.stop();
     producer.stopNotify();
     return rc;
