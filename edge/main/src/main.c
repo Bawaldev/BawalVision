@@ -1,25 +1,30 @@
 #include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/portmacro.h"          /* portMUX_TYPE */
+
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
 
-// Peripheral and low-level hardware control drivers
-#include "driver/gpio.h"
+/* Peripheral and low-level hardware control drivers */
+#include "driver/gpio.h"                 /* gpio_num_t, gpio_config_t, GPIO_MODE_* */
 #include "driver/usb_serial_jtag.h"
-#include "esp_cpu.h"
-#include "esp_rom_sys.h"
-#include "soc/gpio_struct.h"
+#include "esp_cpu.h"                     /* esp_cpu_get_cycle_count */
+#include "esp_rom_sys.h"                 /* esp_rom_delay_us */
+#include "soc/gpio_struct.h"             /* GPIO.out_w1ts / out1_w1ts */
 
 #include "data.h"
 #include "lcd_task.h"
 #include "camera_task.h"
 #include "wifi.h"
 #include "led_strip.h"
-#include "pins.h"
+#include "pins.h"                        /* PIN_BTN_TRIGGER, PIN_LED_FLASH, CAM_PIN_* */
 
 static const char *TAG = "MAIN";
 
@@ -32,8 +37,8 @@ static const char *TAG = "MAIN";
 #define WS2812_LED_GPIO      GPIO_NUM_48
 
 static const int s_candidate_indicator_pins[] = {
-    21,  // Secondary indicator / flash LED on S3 CAM
-    38,  // Auxiliary indicator / backlight pin
+    21,  /* Secondary indicator / flash LED on S3 CAM */
+    38,  /* Auxiliary indicator / backlight pin */
 };
 
 static StaticTask_t s_lcd_task_buffer;
@@ -55,12 +60,13 @@ static StaticTask_t s_button_led_task_buffer;
 static StackType_t s_button_led_task_stack[BUTTON_LED_TASK_STACK_SIZE];
 static TaskHandle_t s_button_led_task_handle = NULL;
 
-
 /* ============================================================
- *  Helper: Send WS2812 0-pulse stream (240 MHz cycle timing)
+ *  WS2812 zero-stream fallback (240 MHz cycle timing)
  *  T0H: ~300 ns (72 cycles @ 240MHz)
  *  T0L: ~900 ns (216 cycles @ 240MHz)
  * ============================================================ */
+static portMUX_TYPE s_ws2812_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static void send_ws2812_zero_stream(gpio_num_t gpio_num) {
     if (gpio_num < 0 || gpio_num >= GPIO_NUM_MAX) return;
 
@@ -72,15 +78,12 @@ static void send_ws2812_zero_stream(gpio_num_t gpio_num) {
     const bool is_high_reg = (gpio_num >= 32);
     const uint32_t mask = is_high_reg ? (1UL << (gpio_num - 32)) : (1UL << gpio_num);
 
-    portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
-    portENTER_CRITICAL(&mux);
-
+    portENTER_CRITICAL(&s_ws2812_mux);
     for (int i = 0; i < 48; ++i) {
         if (is_high_reg) {
             GPIO.out1_w1ts.val = mask;
             uint32_t start = esp_cpu_get_cycle_count();
             while ((esp_cpu_get_cycle_count() - start) < 72) {}
-
             GPIO.out1_w1tc.val = mask;
             start = esp_cpu_get_cycle_count();
             while ((esp_cpu_get_cycle_count() - start) < 216) {}
@@ -88,25 +91,20 @@ static void send_ws2812_zero_stream(gpio_num_t gpio_num) {
             GPIO.out_w1ts = mask;
             uint32_t start = esp_cpu_get_cycle_count();
             while ((esp_cpu_get_cycle_count() - start) < 72) {}
-
             GPIO.out_w1tc = mask;
             start = esp_cpu_get_cycle_count();
             while ((esp_cpu_get_cycle_count() - start) < 216) {}
         }
     }
+    if (is_high_reg) GPIO.out1_w1tc.val = mask;
+    else             GPIO.out_w1tc = mask;
+    portEXIT_CRITICAL(&s_ws2812_mux);
 
-    if (is_high_reg) {
-        GPIO.out1_w1tc.val = mask;
-    } else {
-        GPIO.out_w1tc = mask;
-    }
-
-    portEXIT_CRITICAL(&mux);
     esp_rom_delay_us(350);
 }
 
 /* ============================================================
- *  Helper: Official Espressif RMT WS2812 LED Extinguish
+ *  Official Espressif RMT WS2812 LED extinguish
  * ============================================================ */
 static void turn_off_ws2812_rmt(gpio_num_t gpio_num) {
     if (gpio_num < 0 || gpio_num >= GPIO_NUM_MAX) return;
@@ -137,7 +135,7 @@ static void turn_off_ws2812_rmt(gpio_num_t gpio_num) {
         send_ws2812_zero_stream(gpio_num);
     }
 
-    // Actively clamp the data line to GND (0V) with pulldown to prevent RF noise / floating re-trigger
+    /* Actively clamp the data line to GND (0V) to prevent floating re-trigger */
     gpio_reset_pin(gpio_num);
     gpio_set_direction(gpio_num, GPIO_MODE_OUTPUT);
     gpio_set_level(gpio_num, 0);
@@ -145,8 +143,7 @@ static void turn_off_ws2812_rmt(gpio_num_t gpio_num) {
 }
 
 /* ============================================================
- *  Helper: Disable discrete indicator pins (Active-LOW and Active-HIGH)
- *  Configuring as High-Z Input with NO pullups/pulldowns cuts all current
+ *  Disable discrete indicator pins (High-Z isolation)
  * ============================================================ */
 static void disable_discrete_led_pin(int pin) {
     if (pin < 0 || pin >= GPIO_NUM_MAX) return;
@@ -157,11 +154,9 @@ static void disable_discrete_led_pin(int pin) {
 }
 
 static void disable_all_indicator_leds(void) {
-    // 1. Clear addressable WS2812 RGB LEDs on candidate pins using official RMT driver
     turn_off_ws2812_rmt(GPIO_NUM_48);
     turn_off_ws2812_rmt(GPIO_NUM_38);
 
-    // 2. Disable discrete indicator LEDs via High-Z isolation
     const size_t num_pins = sizeof(s_candidate_indicator_pins) / sizeof(s_candidate_indicator_pins[0]);
     for (size_t i = 0; i < num_pins; ++i) {
         disable_discrete_led_pin(s_candidate_indicator_pins[i]);
@@ -170,11 +165,30 @@ static void disable_all_indicator_leds(void) {
 }
 
 /* ============================================================
- *  Button-LED Monitor Task (Momentary control)
- *  Button: PIN_BTN_TRIGGER (GPIO 48, Active LOW, internal pull-up)
- *  LED:    PIN_LED_FLASH (GPIO 2, Active HIGH)
+ *  Guard: pastikan pin LED tidak menabrak pin kamera
+ * ============================================================ */
+static bool pin_conflicts_with_camera(int pin) {
+    const int cam_pins[] = {
+        CAM_PIN_PWDN, CAM_PIN_RESET, CAM_PIN_XCLK,
+        CAM_PIN_SIOD, CAM_PIN_SIOC,
+        CAM_PIN_D0, CAM_PIN_D1, CAM_PIN_D2, CAM_PIN_D3,
+        CAM_PIN_D4, CAM_PIN_D5, CAM_PIN_D6, CAM_PIN_D7,
+        CAM_PIN_VSYNC, CAM_PIN_HREF, CAM_PIN_PCLK,
+    };
+    for (size_t i = 0; i < sizeof(cam_pins) / sizeof(cam_pins[0]); i++) {
+        if (cam_pins[i] >= 0 && cam_pins[i] == pin) return true;
+    }
+    return false;
+}
+
+/* ============================================================
+ *  Button-LED Monitor Task (with 3-sample debounce)
+ *  Button: PIN_BTN_TRIGGER (Active LOW, internal pull-up)
+ *  LED:    PIN_LED_FLASH   (Active HIGH)
  * ============================================================ */
 static void button_led_task(void *pvParameters) {
+    (void)pvParameters;
+
     gpio_config_t btn_cfg = {
         .pin_bit_mask = (1ULL << PIN_BTN_TRIGGER),
         .mode = GPIO_MODE_INPUT,
@@ -197,11 +211,20 @@ static void button_led_task(void *pvParameters) {
     ESP_LOGI(TAG, "Button-LED task active: GPIO %d (btn) -> GPIO %d (LED)",
              PIN_BTN_TRIGGER, PIN_LED_FLASH);
 
+    int stable = 1, last = 1, count = 0;
     for (;;) {
-        // Active LOW button: 0 when pressed -> turn LED ON (1); 1 when released -> turn LED OFF (0)
-        int btn_state = gpio_get_level(PIN_BTN_TRIGGER);
-        gpio_set_level(PIN_LED_FLASH, (btn_state == 0) ? 1 : 0);
-        vTaskDelay(pdMS_TO_TICKS(20));
+        int raw = gpio_get_level(PIN_BTN_TRIGGER);
+        if (raw == last) {
+            if (count < 3) count++;
+            if (count == 3 && raw != stable) {
+                stable = raw;
+                gpio_set_level(PIN_LED_FLASH, (stable == 0) ? 1 : 0);
+            }
+        } else {
+            last = raw;
+            count = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -209,22 +232,23 @@ static void button_led_task(void *pvParameters) {
  *  app_main
  * ============================================================ */
 void app_main(void) {
-    /* Install USB-Serial-JTAG interrupt driver so native-USB provisioning
-     * commands are readable in addition to the UART0 console. The primary
-     * STDIO console is UART0 (CH343 bridge -> /dev/ttyACM0). */
     usb_serial_jtag_driver_config_t usbjtag_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     usbjtag_cfg.rx_buffer_size = 1024;
     usbjtag_cfg.tx_buffer_size = 1024;
     (void)usb_serial_jtag_driver_install(&usbjtag_cfg);
 
-    /* Disable all indicator and WS2812 LEDs */
     disable_all_indicator_leds();
 
-    /* Set camera log verbosity */
+    if (pin_conflicts_with_camera(PIN_LED_FLASH)) {
+        ESP_LOGE(TAG, "PIN_LED_FLASH (%d) konflik dengan pin kamera!", PIN_LED_FLASH);
+    }
+    if (pin_conflicts_with_camera(PIN_BTN_TRIGGER)) {
+        ESP_LOGE(TAG, "PIN_BTN_TRIGGER (%d) konflik dengan pin kamera!", PIN_BTN_TRIGGER);
+    }
+
     esp_log_level_set("camera", ESP_LOG_INFO);
     esp_log_level_set("esp_camera", ESP_LOG_INFO);
 
-    /* Initialize NVS storage */
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
         ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -233,12 +257,10 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(ret);
 
-    /* Initialize network interface and default event loop */
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* Initialize OV5640 CSP camera driver and start capture task on Core 1 */
-    ESP_LOGI(TAG, "Initializing OV5640 CSP Camera Driver (esp_camera)...");
+    ESP_LOGI(TAG, "Initializing Camera Driver (esp_camera)...");
     ret = camera_task_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize Camera Driver: %s", esp_err_to_name(ret));
@@ -250,11 +272,9 @@ void app_main(void) {
         }
     }
 
-    /* Connect to Wi-Fi station */
     ESP_LOGI(TAG, "Connecting to Wi-Fi Network...");
     wifi_init_sta();
 
-    /* Start ST7789/ST7735 128x160 SPI TFT LVGL Dashboard Task pinned to Core 0 */
     ESP_LOGI(TAG, "Starting 128x160 SPI TFT LVGL Task (Static)...");
     TaskHandle_t lcd_task_handle = xTaskCreateStaticPinnedToCore(
         lcd_task, "lcd_task", LCD_TASK_STACK_SIZE, NULL, 5,
@@ -264,7 +284,6 @@ void app_main(void) {
         return;
     }
 
-    /* Standby telemetry heartbeat task pinned to Core 0 */
     s_wifi_task_handle = xTaskCreateStaticPinnedToCore(
         WiFi_Server_Task, "WiFi_Server_Task", WIFI_TASK_STACK_SIZE,
         NULL, 5, s_wifi_task_stack, &s_wifi_task_buffer, 0);
@@ -273,7 +292,6 @@ void app_main(void) {
         return;
     }
 
-    /* Dedicated HTTP video streamer task pinned to Core 0 (alongside Wi-Fi/LwIP networking stack) */
     s_http_sender_task_handle = xTaskCreateStaticPinnedToCore(
         http_stream_sender_task, "HTTP_Stream_Task", HTTP_STREAM_STACK_SIZE,
         NULL, 4, s_http_stream_task_stack, &s_http_stream_task_buffer, 0);
@@ -282,7 +300,6 @@ void app_main(void) {
         return;
     }
 
-    /* USB Serial / UART Wi-Fi Provisioning task pinned to Core 0 */
     s_usb_prov_task_handle = xTaskCreateStaticPinnedToCore(
         usb_serial_provisioning_task, "USB_Prov_Task", USB_PROV_STACK_SIZE,
         NULL, 3, s_usb_prov_task_stack, &s_usb_prov_task_buffer, 0);
@@ -291,7 +308,6 @@ void app_main(void) {
         return;
     }
 
-    /* Button-controlled LED task pinned to Core 0 */
     s_button_led_task_handle = xTaskCreateStaticPinnedToCore(
         button_led_task, "Button_LED_Task", BUTTON_LED_TASK_STACK_SIZE,
         NULL, 2, s_button_led_task_stack, &s_button_led_task_buffer, 0);
