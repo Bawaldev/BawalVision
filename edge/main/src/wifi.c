@@ -29,8 +29,12 @@
 
 static const char *TAG = "WIFI";
 
-#define STREAM_TX_BUFFER_SIZE 8192
-#define HTTP_TIMEOUT_MS 350
+#define STREAM_TX_BUFFER_SIZE 24576
+// Aggressive send timeout: never let one stalled Wi-Fi packet freeze capture.
+#define HTTP_TIMEOUT_MS 400
+// Adaptive pacing window: send immediately when slower than this interval,
+// otherwise yield the remaining time back to the scheduler.
+#define STREAM_TARGET_INTERVAL_MS 50
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -425,10 +429,10 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
             return ESP_OK;
         }
     }
+    // Jika transmisi HTTP gagal atau timeout, tutup soket TCP agar tidak mengirim payload ke soket yang korup/setengah-jalan
+    esp_http_client_close(s_stream_client);
     s_err_count++;
-    // HANYA tutup soket jika error 3x berturut-turut (mencegah death spiral TCP handshake)
-    if (s_err_count >= 3) {
-        esp_http_client_close(s_stream_client);
+    if (s_err_count >= 5) {
         wifi_notify_backend_failure();
         s_err_count = 0;
     }
@@ -484,12 +488,12 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
 void http_stream_sender_task(void *pvParameters) {
     (void)pvParameters;
     s_stream_task_handle = xTaskGetCurrentTaskHandle();
-    ESP_LOGI(TAG, "Stream sender task started (target ~20-25 FPS, 45ms adaptive pacing)");
+    ESP_LOGI(TAG, "Stream sender task started (target ~20 FPS, %dms adaptive pacing)", STREAM_TARGET_INTERVAL_MS);
 
     char backend_ip[32];
     telemetry_data_t meta;
     init_device_metadata(&meta);
-    const TickType_t target_interval = pdMS_TO_TICKS(45);
+    const TickType_t target_interval = pdMS_TO_TICKS(STREAM_TARGET_INTERVAL_MS);
 
     for (;;) {
         TickType_t start_time = xTaskGetTickCount();
@@ -507,6 +511,9 @@ void http_stream_sender_task(void *pvParameters) {
         esp_err_t res = send_camera_frame_to_backend(backend_ip, get_backend_port(), meta.device_id);
         if (res == ESP_ERR_NOT_FOUND) {
             vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        } else if (res != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 

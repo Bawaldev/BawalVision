@@ -20,6 +20,7 @@
 static const char *TAG = "CAMERA_OV5640";
 
 #define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY /* 64 KB or 128 KB */
+#define STREAM_JPEG_QUALITY 20 /* Keep crisp VGA within the 16-20 range */
 
 typedef struct {
   camera_frame_header_t header;
@@ -90,11 +91,11 @@ esp_err_t camera_task_init(void) {
       .ledc_channel = LEDC_CHANNEL_0,
 
       .pixel_format = PIXFORMAT_JPEG,
-      .frame_size = FRAMESIZE_VGA, // 640x480 resolution
-      .jpeg_quality = 21,          // 20-25 FPS throughput target (~13 KB payload)
-      .fb_count = 2,
+      .frame_size = FRAMESIZE_VGA, // 640x480 resolution (never downscale)
+      .jpeg_quality = STREAM_JPEG_QUALITY,
+      .fb_count = 2,               // Double buffer; drop stale DMA frames
       .fb_location = CAMERA_FB_IN_PSRAM,
-      .grab_mode = CAMERA_GRAB_LATEST,
+      .grab_mode = CAMERA_GRAB_LATEST, // Always deliver the newest sensor frame
   };
 
   ESP_LOGI(TAG, "Initializing OV5640 CSP via esp_camera_init...");
@@ -125,7 +126,7 @@ esp_err_t camera_task_init(void) {
     s->set_vflip(s, 1);                  // Kunci vertikal (tegak)
     s->set_hmirror(s, 0);                // Kunci horizontal (tanpa mirror)
     s->set_framesize(s, FRAMESIZE_VGA);  // 640x480 resolution
-    s->set_quality(s, 21);               // Quality 21: High-throughput 20-25 FPS (~13 KB)
+    s->set_quality(s, STREAM_JPEG_QUALITY); // Crisp VGA JPEG (16-20 range)
 
     // =========================================================================
     // 2. AUTOMATIC WHITE BALANCE (AWB) ENGINE

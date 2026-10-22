@@ -19,7 +19,7 @@ extern "C" {
 #define INITIAL_BUF_CAPACITY (256 * 1024)
 
 /**
- * @brief Initialize the OV5640-compatible camera in JPEG QVGA mode.
+ * @brief Initialize the OV5640-compatible camera in crisp JPEG VGA mode (640x480).
  *
  * @return esp_err_t ESP_OK on success, or the esp_camera error code.
  */
