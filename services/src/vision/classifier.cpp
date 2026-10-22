@@ -552,8 +552,11 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         nms_indices.clear();
         cv::dnn::NMSBoxes(boxes, confidences, conf_threshold, nms_threshold, nms_indices);
 
-        // If YOLO detects no candidates this frame, age existing tracks instead of clearing immediately
-        if (nms_indices.empty()) {
+        // Age existing tracks for one frame and emit the still-visible ones.
+        // Used both when YOLO has no candidates and when all candidates are
+        // filtered out (flat texture/size), so a single bad frame does not
+        // wipe a stable track.
+        auto age_tracks_and_emit = [&]() {
             for (auto& item : m_tracked_items) {
                 item.lost_frames++;
                 item.result.confidence *= 0.90f;
@@ -575,6 +578,11 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 }
             }
             return true;
+        };
+
+        // If YOLO detects no candidates this frame, age existing tracks instead of clearing immediately
+        if (nms_indices.empty()) {
+            return age_tracks_and_emit();
         }
 
         std::vector<DetectionResult>& current_detections = m_scratch_detections;
@@ -618,9 +626,7 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         }
 
         if (current_detections.empty()) {
-            m_tracked_items.clear();
-            out_count = 0;
-            return true;
+            return age_tracks_and_emit();
         }
 
         // 8. Temporal Tracking & Smoothing (Stabilizes Bounding Boxes & Suppresses Flicker)

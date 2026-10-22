@@ -183,13 +183,23 @@ int main(int argc, char** argv) {
                 cv::Mat decoded;
                 uint32_t fid = 0;
                 while (shm_worker_running.load(std::memory_order_acquire)) {
-                    if (shm_consumer.waitForNextFrame(decoded, fid)) {
-                        if (!decoded.empty()) {
-                            shm_latest_frame_id.store(fid, std::memory_order_relaxed);
-                            shm_mailbox.publish(decoded);
+                    try {
+                        if (shm_consumer.waitForNextFrame(decoded, fid)) {
+                            if (!decoded.empty()) {
+                                shm_latest_frame_id.store(fid, std::memory_order_relaxed);
+                                shm_mailbox.publish(decoded);
+                            }
+                        } else {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(2));
                         }
-                    } else {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    } catch (const std::exception& e) {
+                        // A corrupt/torn SHM frame (or allocation failure) must
+                        // not take down the whole vision service.
+                        fmt::print(stderr, "[SHM] frame decode failed: {}\n", e.what());
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    } catch (...) {
+                        fmt::print(stderr, "[SHM] frame decode failed with unknown error\n");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     }
                 }
             });

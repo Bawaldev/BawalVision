@@ -493,13 +493,13 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		c.Set("Connection", "close")
 
 		// Bound the kernel send queue so a slow browser cannot accumulate
-		// seconds worth of old VGA frames. With a ~20 KB frame, 64 KB keeps
-		// at most a couple of frames in flight; the writer always serves the
-		// freshest frame from the store on the next tick.
+		// seconds worth of old VGA frames. Frames can reach ~50 KB in
+		// low-light/noisy scenes, so keep a full frame (64 KB) in flight
+		// instead of splitting it across two kernel buffers.
 		conn := c.Context().Conn()
 		if tcpConn, ok := conn.(*net.TCPConn); ok {
 			_ = tcpConn.SetNoDelay(true)
-			_ = tcpConn.SetWriteBuffer(32 * 1024)
+			_ = tcpConn.SetWriteBuffer(64 * 1024)
 		}
 
 		c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
