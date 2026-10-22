@@ -26,6 +26,25 @@ var (
 	globalMockReinspectAllowed = make(map[string]bool)
 )
 
+// usbProvisionErrorMessage turns low-level serial errors into an actionable
+// message. Docker Desktop for Linux runs the daemon in a VM, so host USB
+// devices (/dev/ttyACM*) are never visible to the backend container.
+func usbProvisionErrorMessage(err error, port string) string {
+	msg := err.Error()
+	if strings.Contains(msg, "is not accessible") || strings.Contains(msg, "no USB serial device") {
+		if strings.TrimSpace(port) == "" {
+			port = "/dev/ttyACM0"
+		}
+		return fmt.Sprintf(
+			"USB serial port %q is not visible to the backend server. "+
+				"Under Docker Desktop the daemon VM cannot access host USB; run the backend on the host "+
+				"(just edge-stack) or use Direct Browser Connect in Chrome/Edge on localhost.",
+			port,
+		)
+	}
+	return msg
+}
+
 // ESP32-S3 nodes send a telemetry heartbeat every 5 s. Allow two missed
 // heartbeats before flipping the dashboard to "disconnected".
 const liveDeviceWindowSeconds int64 = 10
@@ -1405,7 +1424,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			if err != nil {
 				return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
 					"success": false,
-					"message": fmt.Sprintf("Detected USB port %s, but serial provisioning failed: %v", targetPort, err),
+					"message": fmt.Sprintf("Detected USB port %s, but serial provisioning failed: %s", targetPort, usbProvisionErrorMessage(err, targetPort)),
 				})
 			}
 
@@ -1501,7 +1520,7 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 		if err != nil {
 			return c.Status(400).JSON(fiber.Map{
 				"success": false,
-				"message": err.Error(),
+				"message": usbProvisionErrorMessage(err, req.USBPort),
 			})
 		}
 
