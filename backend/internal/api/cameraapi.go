@@ -220,7 +220,6 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 					videoUUID = inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, devID)
 				}
 				if len(imageBytes) > 0 {
-					camera_handler.GlobalFramesTotal.Add(1)
 					ipStr := strings.Clone(requestClientIP(c))
 					isRewind := c.Get("X-Is-Rewind") == "1" || c.Get("X-Video-Rewind") == "1"
 					camera_handler.GlobalCameraStore.StoreRawFrameWithMockMeta(devID, payload.FrameID, imageBytes, ipStr, isRewind, videoSrc, videoUUID)
@@ -274,7 +273,6 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 		if isMock {
 			videoUUID = inspection.ResolveMockVideoUUID(videoSrc, hdrUUID, deviceID)
 		}
-		camera_handler.GlobalFramesTotal.Add(1)
 		camera_handler.GlobalCameraStore.StoreRawFrameWithMockMeta(deviceID, uint32(frameID), imageBytes, ipStr, isRewind, videoSrc, videoUUID)
 		syncTelemetryFromCameraIngress(c, deviceID, uint32(frameID))
 
@@ -482,7 +480,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 				}
 			}
 
-			ticker := time.NewTicker(30 * time.Millisecond) // up to ~33 FPS
+			ticker := time.NewTicker(35 * time.Millisecond) // up to ~28 FPS
 			defer ticker.Stop()
 
 			for {
@@ -526,6 +524,7 @@ func RegisterCameraRoutes(router fiber.Router, db *gorm.DB) {
 				if err := w.Flush(); err != nil {
 					break
 				}
+				time.Sleep(35 * time.Millisecond)
 			}
 		})
 

@@ -392,9 +392,19 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
         strncpy(s_stream_url, url, sizeof(s_stream_url) - 1);
     }
 
+    static uint32_t s_last_telemetry_check = 0;
+    static float s_cached_temp = 50.0f;
+    static uint8_t s_cached_load = 5;
+    uint32_t now_ticks = (uint32_t)xTaskGetTickCount();
+    if (now_ticks - s_last_telemetry_check > pdMS_TO_TICKS(1000) || s_last_telemetry_check == 0) {
+        s_cached_temp = get_esp32_cpu_temperature();
+        s_cached_load = get_cpu_usage_percentage();
+        s_last_telemetry_check = now_ticks;
+    }
+
     snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)tx_frame.header.frame_id);
-    snprintf(temp_str, sizeof(temp_str), "%.2f", get_esp32_cpu_temperature());
-    snprintf(load_str, sizeof(load_str), "%u", (unsigned)get_cpu_usage_percentage());
+    snprintf(temp_str, sizeof(temp_str), "%.2f", s_cached_temp);
+    snprintf(load_str, sizeof(load_str), "%u", (unsigned)s_cached_load);
 
     esp_http_client_set_header(s_stream_client, "Content-Type", "image/jpeg");
     esp_http_client_set_header(s_stream_client, "Connection", "keep-alive");
@@ -474,12 +484,12 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
 void http_stream_sender_task(void *pvParameters) {
     (void)pvParameters;
     s_stream_task_handle = xTaskGetCurrentTaskHandle();
-    ESP_LOGI(TAG, "Stream sender task started (target ~12 FPS, 80ms adaptive pacing)");
+    ESP_LOGI(TAG, "Stream sender task started (target ~20-25 FPS, 45ms adaptive pacing)");
 
     char backend_ip[32];
     telemetry_data_t meta;
     init_device_metadata(&meta);
-    const TickType_t target_interval = pdMS_TO_TICKS(80);
+    const TickType_t target_interval = pdMS_TO_TICKS(45);
 
     for (;;) {
         TickType_t start_time = xTaskGetTickCount();
@@ -494,12 +504,14 @@ void http_stream_sender_task(void *pvParameters) {
             continue;
         }
 
-        send_camera_frame_to_backend(backend_ip, get_backend_port(), meta.device_id);
+        esp_err_t res = send_camera_frame_to_backend(backend_ip, get_backend_port(), meta.device_id);
+        if (res == ESP_ERR_NOT_FOUND) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
 
         TickType_t elapsed = xTaskGetTickCount() - start_time;
-        if (elapsed > pdMS_TO_TICKS(65)) {
-            taskYIELD(); // Payload membesar saat gerak ekstrem (>65ms): langsung yield & ambil frame mutakhir (drop-at-source anti-stutter)
-        } else if (elapsed < target_interval) {
+        if (elapsed < target_interval) {
             vTaskDelay(target_interval - elapsed);
         } else {
             taskYIELD();

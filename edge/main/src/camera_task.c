@@ -91,7 +91,7 @@ esp_err_t camera_task_init(void) {
 
       .pixel_format = PIXFORMAT_JPEG,
       .frame_size = FRAMESIZE_VGA, // 640x480 resolution
-      .jpeg_quality = 18,          // Sharp, artifact-free VGA quality
+      .jpeg_quality = 21,          // 20-25 FPS throughput target (~13 KB payload)
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -125,7 +125,7 @@ esp_err_t camera_task_init(void) {
     s->set_vflip(s, 1);                  // Kunci vertikal (tegak)
     s->set_hmirror(s, 0);                // Kunci horizontal (tanpa mirror)
     s->set_framesize(s, FRAMESIZE_VGA);  // 640x480 resolution
-    s->set_quality(s, 18);               // Quality 18: Crisp VGA image
+    s->set_quality(s, 21);               // Quality 21: High-throughput 20-25 FPS (~13 KB)
 
     // =========================================================================
     // 2. AUTOMATIC WHITE BALANCE (AWB) ENGINE
@@ -205,11 +205,7 @@ void Camera_Capture_Task(void *pvParameters) {
   (void)pvParameters;
   ESP_LOGI(TAG, "OV5640 CSP Frame Ingestion Task running");
 
-  const TickType_t frame_interval_ticks = pdMS_TO_TICKS(1000 / STREAM_FPS);
-
   for (;;) {
-    TickType_t start_tick = xTaskGetTickCount();
-
     camera_fb_t *fb = esp_camera_fb_get();
     if (fb == NULL) {
       ESP_LOGW(TAG, "Frame grab failed: esp_camera_fb_get returned NULL");
@@ -263,12 +259,7 @@ void Camera_Capture_Task(void *pvParameters) {
       ESP_LOGD(TAG, "HTTP task sedang membaca, frame ditimpa tanpa blocking");
     }
 
-    TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
-    if (elapsed_ticks < frame_interval_ticks) {
-      vTaskDelay(frame_interval_ticks - elapsed_ticks);
-    } else {
-      taskYIELD();
-    }
+    taskYIELD();
   }
 }
 
