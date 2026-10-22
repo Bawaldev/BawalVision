@@ -81,6 +81,7 @@ services:
       - CAMERA_VFLIP=${CAMERA_VFLIP:-1}
       - CAMERA_HFLIP=${CAMERA_HFLIP:-0}
       - CONF_THRESHOLD=${CONF_THRESHOLD:-0.35}
+      - ENABLE_SR=0
     volumes:
       - ../weights:/app/weights:rw
       - ../ml/AI1/model:/app/ml/AI1/model:ro
