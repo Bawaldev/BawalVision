@@ -1395,6 +1395,14 @@ func RegisterDeviceRoutes(router fiber.Router, db *gorm.DB) {
 			}
 		}
 
+		// No live node matched the request: drop cached telemetry/frames left
+		// behind by a crashed or power-cycled board before starting a new session.
+		if requestedID != "" {
+			inspection.GlobalInspectionStore.DisconnectDevice(requestedID)
+			camera_handler.GlobalCameraStore.DisconnectDevice(requestedID)
+			camera_handler.GlobalCameraStore.ResetDeviceRewind(requestedID)
+		}
+
 		// Step C: ESP32-S3 Wi-Fi not applied yet — scan USB serial slots (/dev/ttyACM* & /dev/ttyUSB*) and provision server's Wi-Fi
 		usbPorts := device.ScanUSBSerialPorts()
 		if len(usbPorts) > 0 || req.USBPort != "" {
