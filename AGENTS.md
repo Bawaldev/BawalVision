@@ -70,6 +70,10 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
   8765 does work). The compose backend is published on `127.0.0.1:${BACKEND_HOST_PORT:-18080}`;
   run `just edge-proxy` to bridge `:8080 -> 18080` for ESP32-S3, or use
   `just edge-stack` (Postgres in compose, backend on the host).
+- **lwIP TCP buffers cap at 65535** (`CONFIG_LWIP_TCP_SND_BUF_DEFAULT` /
+  `CONFIG_LWIP_TCP_WND_DEFAULT`). `65536` is outside the Kconfig range when
+  `LWIP_WND_SCALE=off`, so Kconfig silently falls back to 5760. Check the generated
+  `edge/build/config/sdkconfig.h`, not just `sdkconfig.defaults`.
 - **Host-side USB auto-provisioning is opt-in** (`USB_AUTO_PROVISION=1`). It otherwise
   opens `/dev/ttyACM*` every 4 s and conflicts with `just run-edge`/`idf.py monitor`,
   and can reset the board. USB status/provision HTTP endpoints still work on demand.
