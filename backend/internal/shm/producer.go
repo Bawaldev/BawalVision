@@ -3,6 +3,7 @@ package shm
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"sync"
@@ -13,11 +14,14 @@ import (
 )
 
 const (
-	shmPath      = "/dev/shm/bawal_frame_shm"
-	sockPath     = "/dev/shm/bawal_shm.sock"
-	magicBAWL    = 0x4241574C
-	numSlots     = 4
-	slotCapacity = 1024 * 1024 // 1 MB
+	shmPath   = "/dev/shm/bawal_frame_shm"
+	sockPath  = "/dev/shm/bawal_shm.sock"
+	magicBAWL = 0x4241574C
+	numSlots  = 4
+	// The ESP32-S3 firmware caps JPEG frames at 256 KB, so 512 KB leaves
+	// headroom without pinning an unnecessary 1 MB per slot in /dev/shm.
+	// Keep this in sync with SHM_SLOT_CAPACITY in services/include/bawal/ipc/shm_layout.hpp.
+	slotCapacity = 512 * 1024
 	slotHeaderSz = 64
 	slotStride   = slotHeaderSz + slotCapacity
 	globalHdrSz  = 64
@@ -71,6 +75,11 @@ func NewShmProducer() (*ShmProducer, error) {
 // consumer. It reconnects automatically when the vision service restarts.
 func (p *ShmProducer) ConnectNotifyListener() {
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[SHM] notify listener stopped after panic: %v", r)
+			}
+		}()
 		for {
 			p.mu.Lock()
 			connected := p.notifyConn != nil

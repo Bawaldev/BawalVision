@@ -6,7 +6,9 @@ namespace bawal::ipc {
 
 constexpr uint32_t SHM_MAGIC = 0x4241574C; // 'BAWL'
 constexpr uint32_t SHM_NUM_SLOTS = 4;
-constexpr uint32_t SHM_SLOT_CAPACITY = 1024 * 1024; // 1 MB per frame slot
+// ESP32-S3 frames are capped at 256 KB; 512 KB gives headroom while keeping
+// the shared mapping small. Must match slotCapacity in backend/internal/shm/producer.go.
+constexpr uint32_t SHM_SLOT_CAPACITY = 512 * 1024; // 512 KB per frame slot
 constexpr const char* SHM_NAME = "/bawal_frame_shm";
 // Keep the notify socket in /dev/shm so the backend and vision containers can
 // share it when both run with `ipc: host`.

@@ -90,9 +90,19 @@ bool ShmFrameConsumer::waitForNextFrame(cv::Mat& out_bgr_frame, uint32_t& out_fr
         return false;
     }
 
-    out_frame_id = slot_hdr->frame_id;
+    const uint32_t frame_id_before = slot_hdr->frame_id;
+    out_frame_id = frame_id_before;
     cv::Mat raw_jpeg_view(1, static_cast<int>(size), CV_8UC1, const_cast<uint8_t*>(payload_ptr));
     cv::imdecode(raw_jpeg_view, cv::IMREAD_COLOR, &out_bgr_frame);
+
+    // Seqlock-style revalidation: if the producer wrapped onto this slot while
+    // we were decoding it, discard the (possibly torn) result instead of
+    // feeding corrupt pixels to the pipeline.
+    if (slot_hdr->ready.load(std::memory_order_acquire) != 1 ||
+        slot_hdr->frame_id != frame_id_before) {
+        out_bgr_frame.release();
+        return false;
+    }
 
     return !out_bgr_frame.empty();
 }
