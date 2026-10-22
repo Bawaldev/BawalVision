@@ -1,6 +1,17 @@
 # ML & Dataset Management Recipes (Cross-Platform: Linux, macOS, Windows)
 
-# Setup virtual environment and install ML requirements
+YOLO_MODEL := "yolov8n.pt"
+YOLO_BEST := "ml/AI1/model/yolov8n/best.pt"
+YOLO_DATA := "ml/AI1/yolo_dataset/dataset.yaml"
+RAW_DATASET := "ml/dataset/dataset_mbg_matang"
+SPLIT_DATASET := "ml/AI1/dataset"
+TRAIN_DIR := "ml/AI1/dataset/train"
+TEST_IMG_DIR := "ml/AI1/yolo_dataset/images/test"
+AI1_ONNX := "ml/AI1/model/yolov8n/ai1_vision.onnx"
+AI1_INT8_ONNX := "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx"
+
+# Set up Python virtual environment and ML dependencies
+[group('ML')]
 setup-ml:
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
@@ -20,7 +31,8 @@ setup-ml:
     fi
     echo "[✓] ML environment configured successfully."
 
-# Multi-engine high-volume web image scraper with dHash deduplication (workers=0: auto-detect max cores)
+# Scrape web images for dataset with deduplication
+[group('ML')]
 scrap-dataset category="all" target="1000" engine="all" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
@@ -32,8 +44,9 @@ scrap-dataset category="all" target="1000" engine="all" workers="0":
         python3 ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset --threads {{ workers }} || python ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset --threads {{ workers }}
     fi
 
-# Stratified Train/Val/Test dataset splitter with multi-core parallel hashing & deduplication (workers=0: auto-detect max cores)
-split-dataset source="ml/dataset/dataset_mbg_matang" output="ml/AI1/dataset" workers="0":
+# Split dataset into train/val/test subsets
+[group('ML')]
+split-dataset source=RAW_DATASET output=SPLIT_DATASET workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     if [ -f .venv/bin/python3 ]; then
@@ -44,8 +57,9 @@ split-dataset source="ml/dataset/dataset_mbg_matang" output="ml/AI1/dataset" wor
         python3 ml/split_dataset.py --source-dir {{ source }} --output-dir {{ output }} --workers {{ workers }} || python ml/split_dataset.py --source-dir {{ source }} --output-dir {{ output }} --workers {{ workers }}
     fi
 
-# Multi-threaded parallel domain-specific image augmentation applied exclusively to train set (workers=0: auto-detect max cores)
-augment-train target="500" dir="ml/AI1/dataset/train" workers="0":
+# Run domain augmentations on train set
+[group('ML')]
+augment-train target="500" dir=TRAIN_DIR workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     if [ -f .venv/bin/python3 ]; then
@@ -56,7 +70,8 @@ augment-train target="500" dir="ml/AI1/dataset/train" workers="0":
         python3 ml/augment_data.py --train-dir {{ dir }} --target-count {{ target }} --workers {{ workers }} || python ml/augment_data.py --train-dir {{ dir }} --target-count {{ target }} --workers {{ workers }}
     fi
 
-# Batched zero-shot YOLO annotation generator with parallel file I/O (workers=0: auto-detect max cores)
+# Generate YOLO annotations using zero-shot inference
+[group('ML')]
 prepare-yolo-ai1 batch="16" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
@@ -68,7 +83,8 @@ prepare-yolo-ai1 batch="16" workers="0":
         python3 ml/AI1/prepare_yolo_dataset.py --batch-size {{ batch }} --workers {{ workers }} || python ml/AI1/prepare_yolo_dataset.py --batch-size {{ batch }} --workers {{ workers }}
     fi
 
-# Train YOLOv8n detector with multi-core DataLoader workers & multi-threaded ONNX parity verification (workers=0: auto-detect max cores)
+# Train YOLOv8n detector and export ONNX model
+[group('ML')]
 train-ai1 epochs="100" batch="8" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
@@ -84,8 +100,9 @@ train-ai1 epochs="100" batch="8" workers="0":
 # DIRECT ULTRALYTICS YOLO CLI COMMANDS
 # ------------------------------------------------------------------------------
 
-# Train any YOLO model backbone via Ultralytics CLI / Module
-yolo-train model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="50" batch="16" imgsz="640" device="0" workers="0":
+# Train YOLO backbone via Ultralytics CLI
+[group('ML')]
+yolo-train model=YOLO_MODEL data=YOLO_DATA epochs="50" batch="16" imgsz="640" device="0" workers="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Starting Ultralytics YOLO Training: model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }}"
@@ -103,8 +120,9 @@ yolo-train model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="50
         yolo detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers=$W_ARG project=ml/AI1/runs name=yolo_train exist_ok=True || python3 -m ultralytics detect train model={{ model }} data={{ data }} epochs={{ epochs }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} workers=$W_ARG project=ml/AI1/runs name=yolo_train exist_ok=True
     fi
 
-# Validate and compute mAP50 / mAP50-95 metrics on validation set
-yolo-val model="ml/AI1/model/yolov8n/best.pt" data="ml/AI1/yolo_dataset/dataset.yaml" batch="16" imgsz="640" device="0":
+# Validate YOLO checkpoint metrics
+[group('ML')]
+yolo-val model=YOLO_BEST data=YOLO_DATA batch="16" imgsz="640" device="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Validating YOLO checkpoint: {{ model }} on dataset: {{ data }}"
@@ -118,8 +136,9 @@ yolo-val model="ml/AI1/model/yolov8n/best.pt" data="ml/AI1/yolo_dataset/dataset.
         yolo detect val model={{ model }} data={{ data }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }} || python3 -m ultralytics detect val model={{ model }} data={{ data }} batch={{ batch }} imgsz={{ imgsz }} device={{ device }}
     fi
 
-# Export PyTorch weights to dynamic ONNX binary (Ultralytics Dynamic Detection)
-yolo-export model="ml/AI1/model/yolov8n/best.pt" format="onnx" imgsz="640" opset="12" dynamic="True":
+# Export PyTorch weights to dynamic ONNX
+[group('ML')]
+yolo-export model=YOLO_BEST format="onnx" imgsz="640" opset="12" dynamic="True":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Exporting YOLO checkpoint: {{ model }} to {{ format }} format (Dynamic: {{ dynamic }}, Opset: {{ opset }})"
@@ -140,8 +159,9 @@ yolo-export model="ml/AI1/model/yolov8n/best.pt" format="onnx" imgsz="640" opset
         echo "[✓] Synced dynamic ONNX binary to ml/AI1/model/yolov8n/yolo8n.onnx and ml/AI1/model/yolov8n/ai1_vision.onnx"
     fi
 
-# Run inference / prediction on test images
-yolo-predict model="ml/AI1/model/yolov8n/best.pt" source="ml/AI1/yolo_dataset/images/test" conf="0.25" device="0":
+# Run YOLO inference on test images
+[group('ML')]
+yolo-predict model=YOLO_BEST source=TEST_IMG_DIR conf="0.25" device="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Running YOLO Inference: model={{ model }} source={{ source }} (Conf: {{ conf }})"
@@ -155,8 +175,9 @@ yolo-predict model="ml/AI1/model/yolov8n/best.pt" source="ml/AI1/yolo_dataset/im
         yolo detect predict model={{ model }} source={{ source }} conf={{ conf }} device={{ device }} save=True project=ml/AI1/runs name=predict exist_ok=True || python3 -m ultralytics detect predict model={{ model }} source={{ source }} conf={{ conf }} device={{ device }} save=True project=ml/AI1/runs name=predict exist_ok=True
     fi
 
-# Hyperparameter search and auto-tuning
-yolo-tune model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="30" iterations="50" device="0":
+# Tune YOLO hyperparameters
+[group('ML')]
+yolo-tune model=YOLO_MODEL data=YOLO_DATA epochs="30" iterations="50" device="0":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     echo "[+] Tuning YOLO Hyperparameters: model={{ model }} data={{ data }} (Iterations: {{ iterations }})"
@@ -170,7 +191,8 @@ yolo-tune model="yolov8n.pt" data="ml/AI1/yolo_dataset/dataset.yaml" epochs="30"
         yolo detect tune model={{ model }} data={{ data }} epochs={{ epochs }} iterations={{ iterations }} device={{ device }} || python3 -m ultralytics detect tune model={{ model }} data={{ data }} epochs={{ epochs }} iterations={{ iterations }} device={{ device }}
     fi
 
-# Rebuild and reload the vision inspection container
+# Rebuild and deploy vision inspection container
+[group('Docker')]
 deploy-vision:
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
@@ -178,7 +200,8 @@ deploy-vision:
     docker compose -f deploy/docker-compose.yml up -d --build vision
     echo "[✓] Vision container deployed successfully."
 
-# End-to-end autonomous parallel pipeline: data gathering -> split -> augment -> annotate -> train & export ONNX -> deploy vision (workers=0: auto-detect max cores)
+# Run end-to-end ML pipeline to deployment
+[group('ML')]
 pipeline-ai1 workers="0" batch="16" epochs="50" target="300":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
@@ -210,7 +233,8 @@ pipeline-ai1 workers="0" batch="16" epochs="50" target="300":
     just deploy-vision
     echo "[✓] End-to-end ML Pipeline to Vision Deployment completed successfully!"
 
-# Compile and run high-speed C++ NCNN model generator (.param and .bin)
+# Compile and run C++ NCNN model generator
+[group('ML')]
 generate-ncnn-cpp model="realesr-animevideov3-x2" scale="2" out="weights":
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
@@ -219,9 +243,9 @@ generate-ncnn-cpp model="realesr-animevideov3-x2" scale="2" out="weights":
     ./ml/ncnn_generator "{{ model }}" "{{ scale }}" "{{ out }}"
     echo "[✓] NCNN models successfully created and synced to {{ out }}/"
 
-
-# Sanity check and inspect ONNX model tensors and execution provider (FP32)
-test-model-ai1 model="ml/AI1/model/yolov8n/ai1_vision.onnx":
+# Verify FP32 ONNX model tensor shapes
+[group('ML')]
+test-model-ai1 model=AI1_ONNX:
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     PY_BIN="python3"
@@ -232,9 +256,9 @@ test-model-ai1 model="ml/AI1/model/yolov8n/ai1_vision.onnx":
     fi
     $PY_BIN -c "import onnxruntime as ort, numpy as np; sess = ort.InferenceSession('{{ model }}', providers=['CPUExecutionProvider']); in_meta = sess.get_inputs()[0]; print(f'[✓] ONNX Model Verified: {{ model }}'); print(f'    Input : {in_meta.name} {in_meta.shape} {in_meta.type}'); dummy = np.zeros([1, 3, 640, 640], dtype=np.float32); out = sess.run(None, {in_meta.name: dummy}); print(f'    Output Shape: {out[0].shape}'); print('[✓] Model forward pass successful via ONNX Runtime CPU.')"
 
-
-# Sanity check and inspect Quantized INT8 ONNX model tensors and execution provider
-test-model-ai1-int8 model="ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx":
+# Verify Quantized INT8 ONNX model tensors
+[group('ML')]
+test-model-ai1-int8 model=AI1_INT8_ONNX:
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     PY_BIN="python3"
@@ -245,16 +269,16 @@ test-model-ai1-int8 model="ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx":
     fi
     $PY_BIN -c "import onnxruntime as ort, numpy as np; sess = ort.InferenceSession('{{ model }}', providers=['CPUExecutionProvider']); in_meta = sess.get_inputs()[0]; print(f'[✓] ONNX INT8 Model Verified: {{ model }}'); print(f'    Input : {in_meta.name} {in_meta.shape} {in_meta.type}'); dummy = np.zeros([1, 3, 640, 640], dtype=np.float32); out = sess.run(None, {in_meta.name: dummy}); print(f'    Output Shape: {out[0].shape}'); print('[✓] INT8 Model forward pass successful via ONNX Runtime CPU.')"
 
-
-# Clean training run caches, temporary weights, and intermediate predictions
+# Clean ML training run caches and intermediate weights
+[group('ML')]
 clean-ml:
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
     rm -rf ml/AI1/runs ml/AI1/yolo_dataset/__pycache__ ml/__pycache__
     echo "[✓] ML training runs and caches cleaned."
 
-
-# Running MLflow tracking local server via PostgreSQL
+# Run local MLflow tracking server backed by PostgreSQL
+[group('ML')]
 mlflow-ui:
     mlflow server \
       --backend-store-uri postgresql://postgres:1234@127.0.0.1:5433/mlflow_db \
@@ -262,8 +286,8 @@ mlflow-ui:
       --host 127.0.0.1 \
       --port 5000
 
-
 # Run INT8 Post-Training Quantization for YOLOv8
+[group('ML')]
 quantize-ai1:
     #!/usr/bin/env bash
     cd {{ justfile_directory() }}
