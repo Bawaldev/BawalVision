@@ -49,7 +49,7 @@ esp_err_t camera_task_init(void) {
 
       .pixel_format = PIXFORMAT_JPEG,
       .frame_size = FRAMESIZE_QVGA,
-      .jpeg_quality = 22,
+      .jpeg_quality = 24,
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
@@ -82,7 +82,7 @@ esp_err_t camera_task_init(void) {
     s->set_vflip(s, 0);
     s->set_hmirror(s, 0);
     s->set_framesize(s, FRAMESIZE_QVGA);
-    s->set_quality(s, 22);
+    s->set_quality(s, 24);
 
     s->set_whitebal(s, 1);
     s->set_awb_gain(s, 1);
