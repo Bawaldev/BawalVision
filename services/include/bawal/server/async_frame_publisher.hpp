@@ -9,18 +9,21 @@
 #include <thread>
 #include <vector>
 
+#include <opencv2/core.hpp>
+
 namespace bawal::server {
 
 /**
  * @brief Non-blocking, drop-oldest uploader for annotated MJPEG frames.
  *
- * The video/stream thread only hands over the already encoded JPEG bytes; the
- * worker performs the blocking HTTP POST. If the network cannot keep up with
- * the camera, the producer overwrites the pending frame, so latency never grows
- * without bound and a slow backend cannot stall frame capture or inference.
+ * The video/stream thread only hands over a deep copy of the annotated image;
+ * the worker performs JPEG encoding and the blocking HTTP POST. If the network
+ * cannot keep up with the camera, the producer overwrites the pending frame,
+ * so latency never grows without bound and a slow backend cannot stall frame
+ * capture or inference.
  *
- * publish() recycles buffers with the worker, so steady-state operation does
- * not allocate a new JPEG buffer for every frame.
+ * publish() recycles cv::Mat buffers with the worker, so steady-state operation
+ * does not allocate a new frame buffer for every encode.
  */
 class AsyncAnnotatedFramePublisher {
 public:
@@ -34,13 +37,14 @@ public:
     void stop();
 
     /**
-     * @brief Queue the latest frame. Never blocks on network I/O.
+     * @brief Queue the latest annotated frame. Never blocks on network I/O.
      *
-     * @param jpeg_bytes Buffer to swap with an internal spare. On return it may
-     *                   hold a recycled buffer for the next encode.
+     * Copies @p image into an internal buffer before returning, so the caller
+     * may immediately reuse its overlay buffer on the next frame.
+     *
      * @return true when the frame was accepted into the single-slot queue.
      */
-    bool publish(std::string device_id, uint32_t frame_id, std::vector<uint8_t>& jpeg_bytes);
+    bool publish(std::string device_id, uint32_t frame_id, const cv::Mat& image);
 
 private:
     void run();
@@ -51,8 +55,8 @@ private:
 
     std::mutex m_mutex;
     std::condition_variable m_cv;
-    std::vector<uint8_t> m_pending_bytes;
-    std::vector<uint8_t> m_spare_bytes;
+    cv::Mat m_pending_image;
+    cv::Mat m_spare_image;
     std::string m_pending_device;
     uint32_t m_pending_frame_id{0};
     bool m_has_pending{false};
