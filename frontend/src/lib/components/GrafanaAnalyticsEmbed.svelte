@@ -11,7 +11,7 @@
         grafanaHost = 'http://localhost:3002',
         panelId = null,
         height = '480px',
-        theme = 'dark',
+        theme = 'light',
         kiosk = true
     }: Props = $props();
 
@@ -38,7 +38,7 @@
     }
 
     function openFullGrafana() {
-        window.open(`${grafanaHost}/d/bawalvision_analytics/_`, '_blank');
+        window.open(`${grafanaHost}/d/bawalvision_analytics/_?theme=light`, '_blank');
     }
 </script>
 
@@ -86,14 +86,14 @@
 
 <style>
     .grafana-embed-card {
-        background: #111827;
-        border: 1px solid #1F2937;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
         border-radius: 12px;
         overflow: hidden;
         display: flex;
         flex-direction: column;
         margin-top: 0.5rem;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        box-shadow: var(--shadow-card);
     }
 
     .embed-header {
@@ -101,8 +101,8 @@
         align-items: center;
         justify-content: space-between;
         padding: 0.6rem 1rem;
-        background: #1F2937;
-        border-bottom: 1px solid #374151;
+        background: var(--bg-inset);
+        border-bottom: 1px solid var(--border-card);
     }
 
     .header-left {
@@ -117,7 +117,7 @@
         gap: 0.4rem;
         font-size: 0.82rem;
         font-weight: 600;
-        color: #10B981;
+        color: var(--text-primary);
     }
 
     .grafana-icon {
@@ -127,22 +127,22 @@
     }
 
     .live-pill {
-        background: rgba(16, 185, 129, 0.15);
-        color: #10B981;
+        background: rgba(16, 185, 129, 0.12);
+        color: #0f8a63;
         font-size: 0.7rem;
         padding: 0.15rem 0.5rem;
         border-radius: 9999px;
         font-weight: 500;
-        border: 1px solid rgba(16, 185, 129, 0.3);
+        border: 1px solid rgba(16, 185, 129, 0.35);
     }
 
     .action-btn {
         display: inline-flex;
         align-items: center;
         gap: 0.4rem;
-        background: #374151;
-        color: #E5E7EB;
-        border: 1px solid #4B5563;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        border: 1px solid var(--border-card);
         padding: 0.35rem 0.75rem;
         border-radius: 6px;
         font-size: 0.75rem;
@@ -151,9 +151,9 @@
     }
 
     .action-btn:hover {
-        background: #4B5563;
-        color: #FFFFFF;
-        border-color: #6B7280;
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
+        border-color: var(--accent-blue);
     }
 
     .btn-icon {
@@ -164,7 +164,7 @@
     .embed-canvas {
         position: relative;
         width: 100%;
-        background: #0B0F19;
+        background: #ffffff;
     }
 
     iframe {
@@ -177,13 +177,13 @@
     .loading-overlay {
         position: absolute;
         inset: 0;
-        background: rgba(11, 15, 25, 0.85);
+        background: rgba(255, 255, 255, 0.9);
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
         gap: 0.5rem;
-        color: #9CA3AF;
+        color: var(--text-muted);
         font-size: 0.85rem;
         z-index: 10;
     }
@@ -199,12 +199,12 @@
 
     .sub-hint {
         font-size: 0.72rem;
-        color: #6B7280;
+        color: var(--text-muted);
     }
 
     .sub-hint code {
-        background: #1F2937;
-        color: #10B981;
+        background: var(--bg-chip);
+        color: var(--accent-blue-num);
         padding: 0.1rem 0.3rem;
         border-radius: 4px;
     }
