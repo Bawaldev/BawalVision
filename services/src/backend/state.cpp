@@ -339,4 +339,12 @@ std::vector<uint8_t> BackendState::latestJpeg(std::string_view device_id) const 
     return m_latest_jpeg;
 }
 
+std::vector<uint8_t> BackendState::latestAnnotatedJpeg(std::string_view device_id) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!device_id.empty() && device_id != "*" && device_id != m_device_id) {
+        return {};
+    }
+    return m_latest_annotated_jpeg;
+}
+
 } // namespace bawal::backend

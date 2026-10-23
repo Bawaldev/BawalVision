@@ -189,10 +189,26 @@ public:
     [[nodiscard]] std::vector<InspectionHistoryEntry> inspectionHistory(
         std::size_t limit = 100) const;
 
+    // One-shot request consumed by the vision worker when a mock video loops
+    // or the operator asks for a fresh re-inspection.
+    void requestTrackerReset() noexcept {
+        m_tracker_reset_requested.store(true, std::memory_order_release);
+    }
+    [[nodiscard]] bool consumeTrackerReset() noexcept {
+        return m_tracker_reset_requested.exchange(false, std::memory_order_acq_rel);
+    }
+
+    void updateAnnotatedJpeg(std::vector<uint8_t> jpeg) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_latest_annotated_jpeg = std::move(jpeg);
+    }
+
     [[nodiscard]] CameraView camera() const;
     [[nodiscard]] InspectionView inspection() const;
     [[nodiscard]] TelemetryView telemetry() const;
     [[nodiscard]] std::vector<uint8_t> latestJpeg(std::string_view device_id = {}) const;
+    [[nodiscard]] std::vector<uint8_t> latestAnnotatedJpeg(
+        std::string_view device_id = {}) const;
 
     void setVisionReady(bool ready) noexcept {
         m_vision_ready.store(ready, std::memory_order_release);
@@ -210,6 +226,7 @@ private:
 
     std::string m_device_id;
     std::vector<uint8_t> m_latest_jpeg;
+    std::vector<uint8_t> m_latest_annotated_jpeg;
     uint16_t m_width{0};
     uint16_t m_height{0};
 
@@ -262,6 +279,7 @@ private:
     bool m_telemetry_has_rssi{false};
 
     std::atomic<bool> m_vision_ready{false};
+    std::atomic<bool> m_tracker_reset_requested{false};
 };
 
 } // namespace bawal::backend

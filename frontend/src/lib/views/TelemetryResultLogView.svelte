@@ -1,9 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { fetchRecords } from '../api';
-    import CameraStream from '../components/CameraStream.svelte';
     import GrafanaAnalyticsEmbed from '../components/GrafanaAnalyticsEmbed.svelte';
-    import InspectionAuditPanel from '../components/InspectionAuditPanel.svelte';
     import type { InspectionRecord, TelemetryPayload } from '../types';
 
     interface Props {
@@ -19,7 +17,6 @@
     let searchTerm = $state('');
     let statusFilter = $state<'ALL' | 'PASS' | 'REVIEW' | 'REJECT'>('ALL');
     let selectedRecord = $state<InspectionRecord | null>(null);
-    let showCameraInspection = $state(false);
 
     // Hover tooltip state for temperature chart
     let hoveredIdx = $state<number | null>(null);
@@ -875,45 +872,6 @@
     </section>
 
     <!-- ========================================================================= -->
-    <!-- CAMERA INSPECTION STRIP (Video & Camera Ingestion Switcher)               -->
-    <!-- ========================================================================= -->
-    <div class="card telemetry-camera-toggle-card">
-        <div class="toggle-header-row">
-            <div class="toggle-title-box">
-                <span class="cam-icon">📹</span>
-                <div>
-                    <strong>Telemetry Video & Camera Ingestion Monitor</strong>
-                    <p class="toggle-desc">Switch between ESP32 live stream, zero-lag /camera/frame snapshot polling, or mock MP4 test videos.</p>
-                </div>
-            </div>
-            <button
-                type="button"
-                class="cam-toggle-btn"
-                class:active={showCameraInspection}
-                onclick={() => (showCameraInspection = !showCameraInspection)}
-            >
-                {showCameraInspection ? '▲ Hide Camera Monitor' : '▼ Show Video / Camera Stream'}
-            </button>
-        </div>
-
-        {#if showCameraInspection}
-            <div class="telemetry-camera-body">
-                <CameraStream
-                    detections={[]}
-                    deviceId={currentTelemetry?.device_id}
-                    isLive={true}
-                    hasCamera={true}
-                />
-            </div>
-        {/if}
-    </div>
-
-    <!-- ========================================================================= -->
-    <!-- ROW 1B: LIVE INSPECTION AUDIT STREAM (Rolling FIFO Images)               -->
-    <!-- ========================================================================= -->
-    <InspectionAuditPanel />
-
-    <!-- ========================================================================= -->
     <!-- ROW 2: RESULT LOG (Full-Width Historical Database Table)                 -->
     <!-- ========================================================================= -->
     <section class="card result-log-section">
@@ -1185,74 +1143,6 @@
         text-transform: capitalize;
         color: var(--text-primary);
         letter-spacing: 0.02em;
-    }
-
-    /* Telemetry Camera Ingestion Card */
-    .telemetry-camera-toggle-card {
-        padding: 12px 18px;
-        background: var(--bg-card);
-        border: 1px solid var(--border-card);
-        border-radius: var(--radius-md);
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-
-    .toggle-header-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-    }
-
-    .toggle-title-box {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-
-    .toggle-title-box strong {
-        font-size: 0.92rem;
-        color: var(--text-primary);
-    }
-
-    .toggle-desc {
-        margin: 2px 0 0;
-        font-size: 0.75rem;
-        color: var(--text-muted);
-    }
-
-    .cam-icon {
-        font-size: 1.4rem;
-    }
-
-    .cam-toggle-btn {
-        background: var(--bg-chip, #1e293b);
-        color: var(--accent-blue, #60a5fa);
-        border: 1px solid var(--border-subtle, #334155);
-        border-radius: var(--radius-pill, 9999px);
-        padding: 6px 14px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        white-space: nowrap;
-    }
-
-    .cam-toggle-btn:hover {
-        background: var(--accent-blue, #3b82f6);
-        color: #ffffff;
-    }
-
-    .cam-toggle-btn.active {
-        background: var(--accent-blue, #3b82f6);
-        color: #ffffff;
-    }
-
-    .telemetry-camera-body {
-        margin-top: 4px;
-        padding-top: 12px;
-        border-top: 1px solid var(--border-subtle);
     }
 
     /* ------------------------------------------------------------------------- */
@@ -2193,17 +2083,6 @@
 
         .x-axis-row {
             padding-left: 0;
-        }
-
-        .toggle-header-row {
-            flex-direction: column;
-            align-items: stretch;
-            gap: 10px;
-        }
-
-        .cam-toggle-btn {
-            width: 100%;
-            text-align: center;
         }
 
         .result-log-header {

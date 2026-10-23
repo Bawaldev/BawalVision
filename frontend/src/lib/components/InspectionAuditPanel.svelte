@@ -124,7 +124,7 @@
                         {:else}
                             <div class="thumb-fallback">
                                 <span class="fallback-icon">🗂️</span>
-                                <span>Image rotated out of FIFO buffer</span>
+                                <span>Snapshot Rolled Out</span>
                             </div>
                         {/if}
                         <span class="verdict-badge" class:rejected={isVerdictRejected(record)}>
@@ -209,7 +209,7 @@
                     {:else}
                         <div class="thumb-fallback large">
                             <span class="fallback-icon">🗂️</span>
-                            <span>Image rotated out of the 50-slot FIFO buffer</span>
+                            <span>Snapshot Rolled Out of the 50-slot buffer</span>
                         </div>
                     {/if}
                 </div>

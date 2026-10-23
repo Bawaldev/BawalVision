@@ -286,6 +286,10 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     out_inspection.dewarped_image = dewarped;
     out_inspection.detections = active_detections;
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
+    // Publish the partial latency before rendering so the HUD bar can display
+    // the current frame's processing time.
+    out_inspection.processing_time_ms =
+        ((cv::getTickCount() - t_start) * 1000.0) / cv::getTickFrequency();
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
     const int64_t t_end = cv::getTickCount();
@@ -393,6 +397,11 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     }
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
 
+    // Publish the partial latency before rendering so the HUD bar can display
+    // the current frame's processing time.
+    out_inspection.processing_time_ms =
+        ((cv::getTickCount() - t_start) * 1000.0) / cv::getTickFrequency();
+
     // Single-pass render overlay at the very end (zero duplicate clone)
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
@@ -409,14 +418,6 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
 
     const float conf_threshold = m_conf_threshold.load(std::memory_order_relaxed);
 
-    // Fast path: nothing to draw. Return a shallow reference, never a clone.
-    if (inspection.detections.empty() &&
-        !inspection.dark_status.is_dark &&
-        !inspection.dark_status.has_hotspot_conflict) {
-        out_display = inspection.dewarped_image;
-        return;
-    }
-
     // Reuse one pre-allocated HUD buffer instead of cloning a full frame each time.
     if (m_overlay_buffer.size() != inspection.dewarped_image.size() ||
         m_overlay_buffer.type() != inspection.dewarped_image.type()) {
@@ -424,6 +425,29 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
     }
     inspection.dewarped_image.copyTo(m_overlay_buffer);
     out_display = m_overlay_buffer;
+
+    // Active detections are the ones that will actually be drawn.
+    std::size_t active_detections = 0;
+    for (const auto& det : inspection.detections) {
+        if (det.class_id >= 0 && det.confidence >= conf_threshold &&
+            det.class_name != "no_food" && det.class_name != "no_model") {
+            ++active_detections;
+        }
+    }
+
+    // Top HUD status bar: frame id, latency, and active detections.
+    {
+        char hud[128];
+        std::snprintf(hud, sizeof(hud), "FRAME #%u | %.1f ms | %zu DETECTIONS",
+                      inspection.frame_id,
+                      inspection.processing_time_ms,
+                      active_detections);
+        cv::rectangle(out_display, cv::Rect(0, 0, out_display.cols, 26),
+                      cv::Scalar(24, 24, 24), cv::FILLED);
+        cv::putText(out_display, hud, cv::Point(10, 18),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.46, cv::Scalar(235, 235, 235),
+                    1, cv::LINE_AA);
+    }
 
     // Low-light underexposure or backlight hotspot conflict banner
     if (inspection.dark_status.is_dark) {
