@@ -365,6 +365,10 @@
         }
         streamError = false;
         retryCount = 0;
+        if (typeof window !== 'undefined') {
+            // Wipe HUD boxes immediately; the backend also clears its snapshot.
+            window.dispatchEvent(new CustomEvent('bawal-clear-detections'));
+        }
 
         if (mode === 'mock') {
             // 1. Immediately request backend mode change and wipe frames/detections

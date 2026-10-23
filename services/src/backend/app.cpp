@@ -1495,9 +1495,12 @@ void BackendApp::registerCompatibilityRoutes() {
             // Keep the default; the mock frame payload still carries its own mode.
         }
 
-        // Switching between live and mock drains the previous tray state so a
-        // new sample is never suppressed by a stale lock.
-        m_state.requestTrackerReset();
+        // Switching between live and mock clears the current snapshot, overlay
+        // and tray state, then ignores in-flight frames from the old source for
+        // a short grace window so stale bounding boxes never reach the UI.
+        m_state.setMockMode(mode == "mock");
+        m_state.clearDetectionState();
+        m_state.requestSourceClear();
 
         crow::json::wvalue body;
         body["status"] = "success";

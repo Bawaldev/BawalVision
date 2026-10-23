@@ -70,7 +70,7 @@ size_t receiveMjpeg(char* data, size_t size, size_t count, void* user) {
 
 int transferProgress(void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
     auto& ctx = *static_cast<TransferContext*>(user);
-    if (ctx.ingress->shouldStop(ctx.generation)) return 1;
+    if (ctx.ingress->shouldStop(ctx.generation) || ctx.ingress->sourcePaused()) return 1;
 
     // A TCP connection can stay half-open after an ESP reboot while the
     // firmware stream task is stalled. Abort the pull when no complete JPEG
@@ -111,12 +111,17 @@ void MjpegIngress::setPeerIp(std::string ip) {
     m_cv.notify_all();
 }
 
+bool MjpegIngress::sourcePaused() const noexcept {
+    return m_state.mockMode();
+}
+
 bool MjpegIngress::shouldStop(uint64_t generation) const {
     return !m_running.load(std::memory_order_acquire) ||
            m_generation.load(std::memory_order_acquire) != generation;
 }
 
 void MjpegIngress::publishFrame(const uint8_t* data, size_t len) {
+    if (m_state.mockMode()) return;
     if (!data || len < 4 || len > 256 * 1024 ||
         data[0] != 0xFF || data[1] != 0xD8 ||
         data[len - 2] != 0xFF || data[len - 1] != 0xD9) return;
@@ -144,6 +149,14 @@ void MjpegIngress::run() {
         }
         if (peer.empty()) continue;
 
+        if (m_state.mockMode()) {
+            std::unique_lock lock(m_mutex);
+            m_cv.wait_for(lock, std::chrono::milliseconds(300), [this] {
+                return !m_running.load(std::memory_order_acquire) || !m_state.mockMode();
+            });
+            continue;
+        }
+
         CURL* curl = curl_easy_init();
         if (!curl) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -170,7 +183,7 @@ void MjpegIngress::run() {
         const CURLcode result = curl_easy_perform(curl);
         long http_status = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
-        if (!shouldStop(generation)) {
+        if (!shouldStop(generation) && !m_state.mockMode()) {
             if (result != CURLE_OK) {
                 std::cerr << "[WARN] MJPEG pull from " << peer << " stopped: "
                           << curl_easy_strerror(result) << '\n';

@@ -325,6 +325,7 @@
         if (typeof window !== 'undefined') {
             window.addEventListener('hashchange', syncTabFromLocation);
             window.addEventListener('popstate', syncTabFromLocation);
+            window.addEventListener('bawal-clear-detections', handleClearDetections);
         }
 
         // Initial sync of detection threshold from backend (or Docker env default)
@@ -344,11 +345,16 @@
         }, 600);
     });
 
+    function handleClearDetections() {
+        detections = [];
+    }
+
     onDestroy(() => {
         if (pollingTimer) clearInterval(pollingTimer);
         if (typeof window !== 'undefined') {
             window.removeEventListener('hashchange', syncTabFromLocation);
             window.removeEventListener('popstate', syncTabFromLocation);
+            window.removeEventListener('bawal-clear-detections', handleClearDetections);
         }
     });
 

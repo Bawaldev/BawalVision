@@ -32,6 +32,7 @@
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "Belum ada data",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -83,7 +84,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COALESCE(ROUND(AVG(similarity_rate) * 100, 1), 0.0) AS \"Avg Confidence\" FROM inspection_foods;",
+          "rawSql": "SELECT ROUND(AVG(similarity_rate) * 100, 1) AS \"Avg Confidence\" FROM inspection_foods;",
           "refId": "A"
         }
       ],
@@ -101,6 +102,7 @@
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "Belum ada data",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -152,7 +154,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COALESCE(ROUND((COUNT(*) FILTER (WHERE status = 'PASS')::numeric / NULLIF(COUNT(*), 0) * 100), 1), 100.0) AS \"Fresh Food Rate\" FROM inspection_foods;",
+          "rawSql": "SELECT ROUND((COUNT(*) FILTER (WHERE status = 'PASS'))::numeric / NULLIF(COUNT(*), 0) * 100, 1) AS \"Fresh Food Rate\" FROM inspection_foods;",
           "refId": "A"
         }
       ],
@@ -198,7 +200,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT i.created_at AS \"Waktu Inferensi\", fi.name AS \"Item Makanan (Class)\", CONCAT(ROUND(ifo.similarity_rate * 100, 1), '%') AS \"Confidence Score\", CONCAT(ifo.spoilage_score, '%') AS \"Tingkat Kebusukan\", ifo.status AS \"Status Deteksi\", i.device_id AS \"Camera Source\" FROM inspection_foods ifo JOIN inspections i ON ifo.inspection_id = i.id JOIN food_items fi ON ifo.food_item_id = fi.id ORDER BY i.created_at DESC LIMIT 50;",
+          "rawSql": "SELECT i.created_at AS \"Waktu Inferensi\", fi.name AS \"Item Makanan (Class)\", CONCAT(ROUND(ifo.similarity_rate * 100, 1), '%') AS \"Confidence Score\", CONCAT(ifo.spoilage_score, '%') AS \"Tingkat Kebusukan\", ifo.status AS \"Status Deteksi\", i.device_id AS \"Camera Source\" FROM inspection_foods ifo JOIN inspections i ON ifo.inspection_id = i.id JOIN food_items fi ON ifo.food_item_id = fi.id WHERE $__timeFilter(i.created_at) ORDER BY i.created_at DESC LIMIT 50;",
           "refId": "A"
         }
       ],
@@ -229,5 +231,5 @@
   "timezone": "browser",
   "title": "BawalVision Telemetry & Quality Analytics",
   "uid": "bawalvision_analytics",
-  "version": 4
+  "version": 5
 }

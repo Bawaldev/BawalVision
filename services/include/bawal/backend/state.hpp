@@ -198,6 +198,21 @@ public:
         return m_tracker_reset_requested.exchange(false, std::memory_order_acq_rel);
     }
 
+    // Mock/live switch: wipe the current snapshot and ignore frames that were
+    // produced before the switch so stale boxes never land on the new source.
+    void clearDetectionState();
+    void requestSourceClear() noexcept;
+    [[nodiscard]] bool sourceClearActive() const noexcept;
+
+    // While mock video drives the UI the backend must stop ingesting the live
+    // MJPEG pull, otherwise the two sources race for the same detection state.
+    void setMockMode(bool enabled) noexcept {
+        m_mock_mode.store(enabled, std::memory_order_release);
+    }
+    [[nodiscard]] bool mockMode() const noexcept {
+        return m_mock_mode.load(std::memory_order_acquire);
+    }
+
     void updateAnnotatedJpeg(std::vector<uint8_t> jpeg) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_latest_annotated_jpeg = std::move(jpeg);
@@ -284,6 +299,8 @@ private:
 
     std::atomic<bool> m_vision_ready{false};
     std::atomic<bool> m_tracker_reset_requested{false};
+    std::atomic<int64_t> m_source_clear_deadline_ns{0};
+    std::atomic<bool> m_mock_mode{false};
 };
 
 } // namespace bawal::backend
