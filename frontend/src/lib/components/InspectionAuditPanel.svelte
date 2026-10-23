@@ -349,6 +349,18 @@
         flex-wrap: wrap;
     }
 
+    .audit-card-actions {
+        margin-top: auto;
+        padding-top: 8px;
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .audit-card-actions .action-btn {
+        flex: 1 1 auto;
+        text-align: center;
+        justify-content: center;
+    }
+
     .action-btn {
         background: var(--bg-chip);
         border: 1px solid var(--border-subtle);

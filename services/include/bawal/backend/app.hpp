@@ -59,7 +59,6 @@ private:
     server::RollingImageStore* m_image_store{nullptr};
     crow::App<crow::CORSHandler> m_app;
     std::atomic<double> m_confidence_threshold{0.35};
-    std::atomic<bool> m_last_rewind{false};
 };
 
 } // namespace bawal::backend

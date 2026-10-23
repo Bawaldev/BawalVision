@@ -479,7 +479,6 @@ struct FrameIngressRequest {
     uint8_t cpu_load{0};
     uint32_t free_heap_internal{0};
     uint32_t free_heap_psram{0};
-    bool is_rewind{false};
     bool has_temperature{false};
     bool has_cpu_load{false};
     bool has_free_heap_internal{false};
@@ -548,14 +547,6 @@ std::optional<FrameIngressRequest> parseFrameIngress(const crow::request& req) {
     if (parsed.frame_id == 0) {
         parsed.frame_id = parseHeaderU32(req, "X-Frame-ID");
     }
-
-    const auto truthy_header = [&req](const char* name) {
-        const std::string value = req.get_header_value(name);
-        return value == "1" || value == "true" || value == "TRUE" ||
-               value == "yes" || value == "on";
-    };
-    parsed.is_rewind = truthy_header("X-Is-Rewind") ||
-                       truthy_header("X-Video-Rewind");
 
     const std::string temperature_header = req.get_header_value("X-ESP-Temp");
     if (!temperature_header.empty()) {
@@ -878,16 +869,6 @@ void BackendApp::registerCameraRoutes() {
             // thread observes the correct device id on the very first frame.
             m_state.updateFrame(parsed->device_id, parsed->frame_id, parsed->image,
                                 parsed->width, parsed->height);
-
-            // Mock video loop/seek: reset the tray state machine exactly once
-            // per rewind edge so the next tray can be audited again.
-            const bool rewind_now = parsed->is_rewind;
-            if (rewind_now != m_last_rewind.load(std::memory_order_acquire)) {
-                m_last_rewind.store(rewind_now, std::memory_order_release);
-                if (rewind_now) {
-                    m_state.requestTrackerReset();
-                }
-            }
 
             // Real ESP32-S3 nodes attach temperature, CPU load, and camera
             // model headers to every frame. Fold them into the telemetry cache
@@ -1492,7 +1473,6 @@ void BackendApp::registerCompatibilityRoutes() {
     CROW_ROUTE(m_app, "/api/v1/devices/mock/reset")
         .methods(crow::HTTPMethod::Post)([this]() {
             m_state.requestTrackerReset();
-            m_last_rewind.store(false, std::memory_order_release);
             crow::json::wvalue body;
             body["success"] = true;
             body["message"] = "Mock inspection and rewind state cleared.";

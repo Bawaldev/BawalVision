@@ -75,6 +75,7 @@ private:
     int m_empty_frames_count{0};
     TraySignature m_last_tray_signature;
     TraySignature m_candidate_signature;
+    std::chrono::steady_clock::time_point m_last_detection_time{};
     std::chrono::steady_clock::time_point m_last_annotated_encode{};
 
     BackendState& m_state;

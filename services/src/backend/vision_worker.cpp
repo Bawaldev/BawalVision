@@ -30,9 +30,13 @@ constexpr std::chrono::milliseconds kInitRetry{500};
 constexpr std::chrono::milliseconds kAnnotatedCacheInterval{250};
 
 // A tray must be seen consistently before it is written to the audit log, and
-// must stay empty for roughly one second before the state machine unlocks.
+// must stay empty for a long grace window before the state machine unlocks.
+// 18 frames (~1s) was too short: a transient missed detection could unlock the
+// tray and log the same plate again. Require both 45 consecutive empty frames
+// and 3 full seconds since the last detection.
 constexpr int kStableTrayFrames = 4;
-constexpr int kEmptyTrayFrames = 18;
+constexpr int kEmptyTrayFrames = 45;
+constexpr std::chrono::milliseconds kEmptyTrayHold{3000};
 
 std::string boundedName(std::string_view name) {
     std::string out(name);
@@ -232,7 +236,7 @@ VisionWorker::TraySignature VisionWorker::primarySignature(
 bool VisionWorker::sameSignature(const TraySignature& lhs,
                                  const TraySignature& rhs) {
     return lhs.valid && rhs.valid && lhs.class_name == rhs.class_name &&
-           intersectionOverUnion(lhs, rhs) > 0.50F;
+           intersectionOverUnion(lhs, rhs) > 0.40F;
 }
 
 void VisionWorker::resetTrayState() noexcept {
@@ -241,6 +245,7 @@ void VisionWorker::resetTrayState() noexcept {
     m_empty_frames_count = 0;
     m_last_tray_signature = TraySignature{};
     m_candidate_signature = TraySignature{};
+    m_last_detection_time = std::chrono::steady_clock::time_point{};
 }
 
 bool VisionWorker::updateTrayState(
@@ -249,7 +254,11 @@ bool VisionWorker::updateTrayState(
         m_stable_frames_count = 0;
         m_candidate_signature = TraySignature{};
         ++m_empty_frames_count;
-        if (m_empty_frames_count >= kEmptyTrayFrames) {
+
+        const auto now = std::chrono::steady_clock::now();
+        const bool hold_elapsed = m_last_detection_time.time_since_epoch().count() == 0 ||
+                                  now - m_last_detection_time >= kEmptyTrayHold;
+        if (m_empty_frames_count >= kEmptyTrayFrames && hold_elapsed) {
             m_current_tray_locked = false;
             m_last_tray_signature = TraySignature{};
             m_empty_frames_count = 0;
@@ -263,6 +272,7 @@ bool VisionWorker::updateTrayState(
     }
 
     m_empty_frames_count = 0;
+    m_last_detection_time = std::chrono::steady_clock::now();
 
     // A tray is locked from its first stable emit until the scene stays empty
     // long enough to be considered cleared. Bounding-box jitter or a second
