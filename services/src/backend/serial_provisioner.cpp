@@ -23,9 +23,12 @@ namespace {
 
 /**
  * One USB serial link is shared by probe and provision calls; Crow worker
- * threads must never interleave a transaction mid-ACK.
+ * threads must never interleave a transaction mid-ACK. The same mutex guards
+ * the last-ACK snapshot consumed by the status endpoint.
  */
 std::mutex g_serial_mutex;
+EspSerialAck g_last_ack;
+long long g_last_ack_ms = 0;
 
 #ifdef _WIN32
 
@@ -225,6 +228,8 @@ EspSerialResult runCommand(const std::string& port,
         return result;
     }
     result.success = true;
+    g_last_ack = result.ack;
+    g_last_ack_ms = steadyNowMs();
     return result;
 }
 
@@ -268,6 +273,24 @@ EspSerialResult provisionEspSerial(const std::string& port,
     }
     payload["backend_port"] = backend_port;
     return runCommand(port, payload.dump() + "\n", timeout_ms);
+#endif
+}
+
+bool lastEspSerialAck(EspSerialAck& out, long long* age_ms) {
+#ifdef _WIN32
+    (void)out;
+    (void)age_ms;
+    return false;
+#else
+    std::lock_guard<std::mutex> lock(g_serial_mutex);
+    if (!g_last_ack.received) {
+        return false;
+    }
+    out = g_last_ack;
+    if (age_ms != nullptr) {
+        *age_ms = steadyNowMs() - g_last_ack_ms;
+    }
+    return true;
 #endif
 }
 

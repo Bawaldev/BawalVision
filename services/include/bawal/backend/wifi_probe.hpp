@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bawal::backend {
@@ -29,5 +30,22 @@ struct alignas(8) WifiNetworkInfo {
     std::string* raw_output = nullptr,
     std::string* executed_command = nullptr,
     int* exit_status = nullptr);
+
+/**
+ * @brief SSID of the Wi-Fi network the host is currently associated with.
+ *
+ * Empty when the host is offline/wired or nmcli is unavailable. Used instead
+ * of the static WIFI_SSID env guess once the laptop roams to another network.
+ */
+[[nodiscard]] std::string detectActiveWifiSsid();
+
+/**
+ * @brief Reads the WPA PSK NetworkManager stored for `ssid` (best effort).
+ *
+ * Connection names normally equal the SSID. Returns empty when the secret is
+ * agent-owned or NetworkManager is unavailable. The value stays server-side
+ * and is never returned over the API.
+ */
+[[nodiscard]] std::string wifiPasswordForSsid(std::string_view ssid);
 
 } // namespace bawal::backend

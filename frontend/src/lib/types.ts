@@ -226,10 +226,14 @@ export interface DeviceHardwareStatus {
         current_ssid: string;
         wifi_connected: boolean;
         temperature: number;
+        /** 'serial' = recent BAWAL_ACK probe, 'telemetry' = fallback estimate. */
+        status_source?: string;
     };
     wifi_networks?: WiFiNetworkInfo[];
     server_wifi: {
         ssid: string;
+        /** SSID the host is actually associated with (live nmcli). */
+        active_ssid?: string;
         has_password: boolean;
         backend_ip: string;
         detected_host_ip?: string;
