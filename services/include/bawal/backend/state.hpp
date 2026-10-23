@@ -94,8 +94,15 @@ struct InspectionHistoryDetection {
 struct InspectionHistoryEntry {
     uint64_t frame_id{0};
     std::string timestamp;
+    std::string device_id;
+    std::string engine_pipeline;
     std::string verdict;
     double surface_temp{0.0};
+    double lux_luminance{0.0};
+    int32_t color_temperature{6500};
+    std::string white_balance_status{"BALANCED"};
+    double spoilage_risk{0.0};
+    double tray_coverage{0.0};
     std::string image_path;
     std::vector<InspectionHistoryDetection> detections;
     double t_safe_hours{0.0};

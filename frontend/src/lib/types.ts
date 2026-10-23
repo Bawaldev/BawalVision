@@ -128,8 +128,15 @@ export interface InspectionAuditDetection {
 export interface InspectionAuditRecord {
     frame_id: number;
     timestamp: string;
+    device_id?: string;
+    engine_pipeline?: string;
     verdict: 'ACCEPTED' | 'REJECTED' | string;
     surface_temp: number;
+    lux_luminance?: number;
+    color_temperature?: number;
+    white_balance_status?: string;
+    spoilage_risk?: number;
+    tray_coverage?: number;
     image_path: string;
     detections: InspectionAuditDetection[];
     t_safe_hours: number;

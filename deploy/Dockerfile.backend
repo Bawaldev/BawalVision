@@ -75,6 +75,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libopencv-videoio406t64 \
         libopencv-dnn406t64 \
         network-manager \
+        texlive-latex-base \
+        texlive-latex-recommended \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/onnxruntime/lib/ /usr/local/lib/
@@ -83,6 +85,9 @@ RUN ldconfig
 WORKDIR /app
 
 COPY --from=builder /src/services/build/bin/bawal_backend /app/bawal_backend
+
+# LaTeX audit templates resolved by LatexPdfGenerator (/app/services/templates).
+COPY --from=builder /src/services/templates/ /app/services/templates/
 
 ENV LD_LIBRARY_PATH=/usr/local/lib
 ENV OMP_WAIT_POLICY=PASSIVE \

@@ -11,6 +11,7 @@
 
     let records = $state<InspectionAuditRecord[]>([]);
     let isLoading = $state(true);
+    let isDownloadingPdf = $state<Record<number, boolean>>({});
     let selectedRecord = $state<InspectionAuditRecord | null>(null);
     let failedImages = $state<Record<string, boolean>>({});
     let toast = $state('');
@@ -86,6 +87,46 @@
     function reportSelected() {
         if (!selectedRecord) return;
         reportRecord(selectedRecord);
+    }
+
+    async function downloadBackendReport(frameId: number, format: 'pdf' | 'tex') {
+        try {
+            if (format === 'pdf') {
+                isDownloadingPdf = { ...isDownloadingPdf, [frameId]: true };
+                showToast(`Compiling LaTeX PDF for frame #${frameId}...`);
+            }
+
+            const endpoint = `/api/v1/inspections/${frameId}/report.${format}`;
+            const response = await fetch(endpoint);
+
+            if (!response.ok) {
+                throw new Error(`Server returned ${response.status}`);
+            }
+
+            // The backend falls back to the .tex source when pdflatex is not
+            // installed; X-Report-Format tells us which artifact we received.
+            const servedFormat = response.headers.get('X-Report-Format') === 'pdf' ? 'pdf' : 'tex';
+
+            const blob = await response.blob();
+            const blobUrl = window.URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = blobUrl;
+            anchor.download = `BawalVision-Report-${frameId}.${servedFormat}`;
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+            window.URL.revokeObjectURL(blobUrl);
+
+            showToast(servedFormat === 'pdf'
+                ? `PDF report #${frameId} ready`
+                : `TeX engine unavailable — LaTeX source #${frameId} downloaded`);
+        } catch (err) {
+            showToast(`Failed to export ${format.toUpperCase()} report`);
+        } finally {
+            if (format === 'pdf') {
+                isDownloadingPdf = { ...isDownloadingPdf, [frameId]: false };
+            }
+        }
     }
 </script>
 
@@ -163,8 +204,23 @@
                         </div>
 
                         <div class="audit-card-actions">
+                            <button
+                                type="button"
+                                class="action-btn pdf-btn"
+                                disabled={isDownloadingPdf[record.frame_id]}
+                                onclick={() => downloadBackendReport(record.frame_id, 'pdf')}
+                            >
+                                {isDownloadingPdf[record.frame_id] ? '⏳ Compiling...' : '📑 PDF (LaTeX)'}
+                            </button>
+                            <button
+                                type="button"
+                                class="action-btn"
+                                onclick={() => downloadBackendReport(record.frame_id, 'tex')}
+                            >
+                                Source (.tex)
+                            </button>
                             <button type="button" class="action-btn" onclick={() => reportRecord(record)}>
-                                📄 Download Report (.md)
+                                📄 Markdown (.md)
                             </button>
                             <button type="button" class="action-btn" onclick={() => copyRecord(record)}>
                                 📋 Copy Markdown
@@ -271,8 +327,23 @@
                 <code class="checksum">{selectedRecord.checksum_sha256 || 'N/A'}</code>
 
                 <div class="modal-actions">
+                    <button
+                        type="button"
+                        class="action-btn pdf-btn"
+                        disabled={isDownloadingPdf[selectedRecord.frame_id]}
+                        onclick={() => downloadBackendReport(selectedRecord?.frame_id ?? 0, 'pdf')}
+                    >
+                        {isDownloadingPdf[selectedRecord.frame_id] ? '⏳ Compiling PDF...' : '📑 Export PDF (LaTeX)'}
+                    </button>
+                    <button
+                        type="button"
+                        class="action-btn"
+                        onclick={() => downloadBackendReport(selectedRecord?.frame_id ?? 0, 'tex')}
+                    >
+                        LaTeX (.tex)
+                    </button>
                     <button type="button" class="action-btn primary" onclick={reportSelected}>
-                        📄 Download Report (.md)
+                        📄 Download Markdown (.md)
                     </button>
                     <button type="button" class="action-btn" onclick={copySelected}>
                         📋 Copy Markdown
@@ -365,18 +436,38 @@
         background: var(--bg-chip);
         border: 1px solid var(--border-subtle);
         color: var(--text-secondary);
-        font-size: 0.66rem;
+        font-size: 0.64rem;
         font-weight: 700;
-        padding: 5px 9px;
+        padding: 5px 8px;
         border-radius: var(--radius-sm);
         cursor: pointer;
         transition: all 0.12s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
     }
 
-    .action-btn:hover {
+    .action-btn:hover:not(:disabled) {
         background: var(--accent-blue-dim);
         border-color: var(--accent-blue-light);
         color: var(--accent-blue);
+    }
+
+    .action-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .action-btn.pdf-btn {
+        background: #047857;
+        border-color: #059669;
+        color: #ffffff;
+    }
+
+    .action-btn.pdf-btn:hover:not(:disabled) {
+        background: #059669;
+        border-color: #10b981;
+        color: #ffffff;
     }
 
     .action-btn.primary {
@@ -385,7 +476,7 @@
         color: var(--text-white);
     }
 
-    .action-btn.primary:hover {
+    .action-btn.primary:hover:not(:disabled) {
         background: var(--accent-blue-light);
     }
 
@@ -402,7 +493,7 @@
 
     .audit-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
         gap: 12px;
     }
 
