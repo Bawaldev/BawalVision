@@ -33,18 +33,12 @@
 static const char *TAG = "WIFI";
 
 #define STREAM_TX_BUFFER_SIZE 32768
-// Aggressive send timeout: never let one stalled Wi-Fi packet freeze capture.
+// Longgarkan timeout agar saat terjadi jitter/retransmisi soket tidak di-abort prematur
 #define HTTP_TIMEOUT_MS 1200
-// Adaptive pacing window: send immediately when slower than this interval,
-// otherwise yield the remaining time back to the scheduler.
+// Target pacing ~20 FPS (50 ms)
 #define STREAM_TARGET_INTERVAL_MS 50
-// Retry cadence for UDP backend discovery while the backend is unreachable.
-// Prevents a dead backend from triggering one broadcast per failed frame.
 #define DISCOVERY_BACKOFF_MIN_MS 1000
 #define DISCOVERY_BACKOFF_MAX_MS 30000
-// Last-resort recovery: reboot if the node stays Wi-Fi-connected but cannot
-// deliver a single frame for this long (stuck Wi-Fi/LwIP state after a power
-// glitch). Standby (camera not streaming) never counts toward the timeout.
 #define STREAM_WATCHDOG_TIMEOUT_US ((int64_t)30 * 1000 * 1000)
 
 EventGroupHandle_t g_wifi_event_group = NULL;
@@ -69,15 +63,17 @@ void wifi_notify_stream_frame_ready(void) {
 
 static void str_trim_copy(char *dst, size_t dst_sz, const char *src) {
     if (!dst || dst_sz == 0) return;
-    dst[0] = '\0';
-    if (!src) return;
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
     while (*src == ' ' || *src == '\t' || *src == '\r' || *src == '\n') src++;
     size_t len = strlen(src);
     while (len > 0 && (src[len - 1] == ' ' || src[len - 1] == '\t' || src[len - 1] == '\r' || src[len - 1] == '\n')) {
         len--;
     }
     if (len >= dst_sz) len = dst_sz - 1;
-    memcpy(dst, src, len);
+    memmove(dst, src, len);
     dst[len] = '\0';
 }
 
@@ -113,8 +109,6 @@ static bool is_docker_range(const char *ip) {
     return a == 172 && b >= 16 && b <= 31;
 }
 
-// Reject loopback/link-local and Docker bridge IPs, but keep legitimate 172.x
-// LANs working when the ESP and backend are on the same subnet.
 static bool is_valid_lan_ip(const char *ip) {
     if (!is_valid_ipv4(ip)) return false;
 
@@ -128,8 +122,6 @@ static bool is_valid_lan_ip(const char *ip) {
 
     if (is_same_subnet_ip(ip)) return true;
 
-    // No STA IP yet (first-time provisioning): accept and let UDP discovery
-    // validate the address after association.
     esp_netif_ip_info_t info;
     if (!get_sta_ip_info(&info)) return true;
 
@@ -140,7 +132,6 @@ bool wifi_nvs_load_credentials(void) {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
     if (err != ESP_OK) {
-        // Fallback to legacy namespace if bawal_cfg does not exist yet
         err = nvs_open("wifi_config", NVS_READONLY, &handle);
         if (err != ESP_OK) return false;
     }
@@ -160,7 +151,6 @@ bool wifi_nvs_load_credentials(void) {
     sz = sizeof(g_backend_ip);
     (void)nvs_get_str(handle, NVS_KEY_BACKEND_IP, g_backend_ip, &sz);
 
-    // Try reading backend_port as uint16 first, fallback to string
     uint16_t port_u16 = 8080;
     if (nvs_get_u16(handle, NVS_KEY_BACKEND_PORT, &port_u16) == ESP_OK && port_u16 > 0) {
         snprintf(g_backend_port, sizeof(g_backend_port), "%u", port_u16);
@@ -171,8 +161,6 @@ bool wifi_nvs_load_credentials(void) {
         }
     }
 
-    // Cross-namespace migration fallback: if bawal_cfg exists but was written
-    // without a new password, keep using the legacy wifi_config values.
     if (g_wifi_pass[0] == '\0' || g_wifi_ssid[0] == '\0' || g_backend_ip[0] == '\0') {
         nvs_handle_t legacy;
         if (nvs_open("wifi_config", NVS_READONLY, &legacy) == ESP_OK) {
@@ -215,12 +203,9 @@ bool wifi_nvs_save_full_config(const char *ssid, const char *pass,
     if (!ssid || ssid[0] == '\0') return false;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return false;
 
-    // Save SSID to wifi_ssid and legacy ssid
     (void)nvs_set_str(handle, NVS_KEY_WIFI_SSID, ssid);
     (void)nvs_set_str(handle, "ssid", ssid);
 
-    // JANGAN hapus/timpa password dengan string kosong jika parameter pass bernilai NULL/empty.
-    // Sebaliknya, pertahankan password yang ada (termasuk migrasi dari namespace lama).
     if (pass && pass[0] != '\0') {
         (void)nvs_set_str(handle, NVS_KEY_WIFI_PASS, pass);
         (void)nvs_set_str(handle, "pass", pass);
@@ -325,14 +310,12 @@ uint16_t get_backend_port(void) {
 bool get_backend_ip(char *out_ip, size_t max_len) {
     if (!out_ip || max_len == 0) return false;
 
-    // Prioritas 1 (NVS Custom Gateway): Jika g_backend_ip di NVS valid, gunakan ini mutlak!
     if (is_valid_ipv4(g_backend_ip)) {
         strncpy(out_ip, g_backend_ip, max_len - 1);
         out_ip[max_len - 1] = '\0';
         return true;
     }
 
-    // Prioritas 2 (Fallback DHCP Gateway): Hanya jika NVS kosong/invalid, fallback ke ip_info.gw
     esp_netif_ip_info_t ip_info;
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.gw.addr != 0) {
@@ -340,7 +323,6 @@ bool get_backend_ip(char *out_ip, size_t max_len) {
         return true;
     }
 
-    // Prioritas 3 (Fallback Kconfig/.env): Terakhir gunakan default compile-time
     if (is_valid_ipv4(CONFIG_BACKEND_IP)) {
         strncpy(out_ip, CONFIG_BACKEND_IP, max_len - 1);
         out_ip[max_len - 1] = '\0';
@@ -377,9 +359,6 @@ static void wifi_reconnect_timer_cb(void *arg) {
     }
 }
 
-// Broadcast discovery: the backend replies from its LAN socket, so the reply's
-// source address is the host's real Wi-Fi IP (even when the backend runs in
-// Docker and its container IP is 172.x).
 static bool wifi_discover_backend(void) {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0) {
@@ -440,8 +419,6 @@ static bool wifi_discover_backend(void) {
     if (changed) {
         ESP_LOGI(TAG, "Discovery: backend found at %s:%s", g_backend_ip, g_backend_port);
         (void)wifi_nvs_save_full_config(g_wifi_ssid, NULL, g_backend_ip, g_backend_port);
-        // The stream sender compares the URL each iteration and rebuilds its
-        // HTTP client when the IP changes; do not touch s_stream_client here.
     }
     close(sock);
     return true;
@@ -502,7 +479,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         char ip_str[24] = {0};
         snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
-        ESP_LOGI(TAG, "Obtained IP: %s", ip_str);
+        ESP_LOGI(TAG, "Obtained IP: %s gw: " IPSTR " mask: " IPSTR, ip_str,
+                 IP2STR(&event->ip_info.gw), IP2STR(&event->ip_info.netmask));
         g_wifi_retry_num = 0;
         (void)esp_wifi_set_ps(WIFI_PS_NONE);
         if (g_wifi_event_group) {
@@ -529,7 +507,6 @@ void wifi_init_sta(void) {
     if (xTaskCreate(wifi_discovery_task, "wifi_discovery", 4096, NULL, 3, NULL) != pdPASS) {
         ESP_LOGW(TAG, "Failed to start backend discovery task");
     }
-
     const esp_timer_create_args_t timer_args = {
         .callback = wifi_reconnect_timer_cb,
         .name = "wifi_reconnect_timer",
@@ -574,6 +551,7 @@ void wifi_init_sta(void) {
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     }
     ESP_ERROR_CHECK(esp_wifi_start());
+    // Radio Wi-Fi aktif terus tanpa sleep
     (void)esp_wifi_set_ps(WIFI_PS_NONE);
     s_wifi_initialized = true;
 }
@@ -582,6 +560,7 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     static camera_frame_buffer_t tx_frame = {0};
     char url[URL_BUFFER_SIZE];
     char frame_id_str[16], temp_str[16], load_str[16];
+    char heap_int_str[16], heap_psram_str[16];
 
     if (!backend_ip || !device_id || !is_camera_streaming()) {
         return ESP_ERR_INVALID_STATE;
@@ -629,9 +608,14 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
         s_last_telemetry_check = now_ticks;
     }
 
+    const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+
     snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)tx_frame.header.frame_id);
     snprintf(temp_str, sizeof(temp_str), "%.2f", s_cached_temp);
     snprintf(load_str, sizeof(load_str), "%u", (unsigned)s_cached_load);
+    snprintf(heap_int_str, sizeof(heap_int_str), "%u", (unsigned)free_internal);
+    snprintf(heap_psram_str, sizeof(heap_psram_str), "%u", (unsigned)free_psram);
 
     esp_http_client_set_header(s_stream_client, "Content-Type", "image/jpeg");
     esp_http_client_set_header(s_stream_client, "Connection", "keep-alive");
@@ -640,11 +624,33 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
     esp_http_client_set_header(s_stream_client, "X-Frame-ID", frame_id_str);
     esp_http_client_set_header(s_stream_client, "X-ESP-Temp", temp_str);
     esp_http_client_set_header(s_stream_client, "X-ESP-CPU-Load", load_str);
+    esp_http_client_set_header(s_stream_client, "X-ESP-Free-Heap-Int", heap_int_str);
+    esp_http_client_set_header(s_stream_client, "X-ESP-Free-Heap-PSRAM", heap_psram_str);
     esp_http_client_set_header(s_stream_client, "X-Camera-Model", camera_get_sensor_name());
     esp_http_client_set_post_field(s_stream_client, (const char *)tx_frame.data, (int)tx_frame.header.buffer_len);
 
     static int s_err_count = 0;
+    static uint32_t s_perf_samples = 0;
+    static uint64_t s_perf_total_us = 0;
+    static uint64_t s_perf_total_bytes = 0;
+    const int64_t send_start_us = esp_timer_get_time();
+    
     esp_err_t err = esp_http_client_perform(s_stream_client);
+    const uint64_t send_elapsed_us = (uint64_t)(esp_timer_get_time() - send_start_us);
+    s_perf_samples++;
+    s_perf_total_us += send_elapsed_us;
+    s_perf_total_bytes += tx_frame.header.buffer_len;
+
+    if (s_perf_samples >= 20) {
+        ESP_LOGI(TAG, "Frame POST avg=%llu ms payload_avg=%llu bytes over %u frames",
+                 (unsigned long long)(s_perf_total_us / s_perf_samples / 1000ULL),
+                 (unsigned long long)(s_perf_total_bytes / s_perf_samples),
+                 (unsigned)s_perf_samples);
+        s_perf_samples = 0;
+        s_perf_total_us = 0;
+        s_perf_total_bytes = 0;
+    }
+
     if (err == ESP_OK) {
         int status = esp_http_client_get_status_code(s_stream_client);
         if (status >= 200 && status < 300) {
@@ -652,14 +658,18 @@ esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, co
             return ESP_OK;
         }
     }
-    // Jika transmisi HTTP gagal atau timeout, tutup soket TCP agar tidak mengirim payload ke soket yang korup/setengah-jalan
+
+    ESP_LOGW(TAG, "Frame POST failed: %s after %llu ms, payload=%u bytes",
+             esp_err_to_name(err), (unsigned long long)(send_elapsed_us / 1000ULL),
+             (unsigned)tx_frame.header.buffer_len);
    
+    // Hanya tutup soket jika terjadi error berturut-turut minimal 3 kali
     s_err_count++;
     if (s_err_count >= 3) {
         esp_http_client_close(s_stream_client);
         wifi_notify_backend_failure();
         s_err_count = 0;
-        vTaskDelay(pdMS_TO_TICKS(40));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
     return ESP_FAIL;
 }
@@ -683,6 +693,10 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
     cJSON_AddNumberToObject(root, "temperature", (double)temp);
     cJSON_AddNumberToObject(root, "cpu_load", (double)load);
     cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
+    cJSON_AddNumberToObject(root, "free_heap_internal",
+                            (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(root, "free_heap_psram",
+                            (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddStringToObject(root, "camera_model", camera_get_sensor_name());
 
     char *json = cJSON_PrintUnformatted(root);
@@ -692,7 +706,7 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_POST,
-        .timeout_ms = 3000,
+        .timeout_ms = 1500,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
@@ -726,13 +740,13 @@ void http_stream_sender_task(void *pvParameters) {
 
         if (!(g_wifi_event_group && (xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT))) {
             last_success_us = esp_timer_get_time();
-            vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
         if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
             last_success_us = esp_timer_get_time();
-            vTaskDelay(pdMS_TO_TICKS(500));
+            vTaskDelay(pdMS_TO_TICKS(300));
             continue;
         }
 
@@ -749,13 +763,12 @@ void http_stream_sender_task(void *pvParameters) {
         }
 
         if (res == ESP_ERR_NOT_FOUND) {
+            // Buffer belum ada frame baru, beri jeda singkat untuk context switch
             vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        } else if (res != ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
+        // Non-blocking adaptive frame pacing: buang frame usang jika transmisi lambat
         TickType_t elapsed = xTaskGetTickCount() - start_time;
         if (elapsed < target_interval) {
             vTaskDelay(target_interval - elapsed);
@@ -769,8 +782,6 @@ void WiFi_Server_Task(void *pvParameters) {
     (void)pvParameters;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(3000));
-        // While camera is streaming, telemetry is embedded in every frame header (15 FPS).
-        // Only emit standalone telemetry if camera stream is idle/standby.
         if (is_camera_streaming()) continue;
         if (!(g_wifi_event_group && (xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT))) continue;
 
@@ -804,8 +815,6 @@ static void usb_send_ack(const char *status) {
         char ack_line[512];
         int n = snprintf(ack_line, sizeof(ack_line), "\nBAWAL_ACK:%s\n", str);
         if (n > 0) {
-            // printf goes to the UART0 console (/dev/ttyACM0); the native
-            // USB-Serial-JTAG port gets the same ACK when it is connected.
             printf("%s", ack_line);
             fflush(stdout);
             (void)usb_serial_jtag_write_bytes(ack_line, (size_t)n, pdMS_TO_TICKS(50));
@@ -883,14 +892,11 @@ void usb_serial_provisioning_task(void *pvParameters) {
     uint8_t buf[128];
 
     for (;;) {
-        // Native USB-Serial-JTAG (if connected).
         int n = usb_serial_jtag_read_bytes(buf, sizeof(buf), 0);
         if (n > 0) {
             provisioning_feed_bytes(buf, (size_t)n, line, sizeof(line), &idx);
         }
 
-        // UART0 console (/dev/ttyACM0 via CH343 bridge) through the console
-        // VFS. select() avoids blocking the task when no JSON is pending.
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(STDIN_FILENO, &rfds);
@@ -905,4 +911,3 @@ void usb_serial_provisioning_task(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
-

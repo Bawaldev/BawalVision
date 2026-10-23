@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
+#include <sys/wait.h>
 
 #include <algorithm>
 #include <chrono>
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -183,18 +185,36 @@ std::vector<UsbPortInfo> scanUsbSerialPorts() {
     return ports;
 }
 
-std::string runShellCommand(const std::string& command) {
+std::string runShellCommand(const std::string& command, int* exit_status = nullptr) {
     std::string output;
     FILE* pipe = popen(command.c_str(), "r");
     if (pipe == nullptr) {
+        if (exit_status != nullptr) {
+            *exit_status = -1;
+        }
         return output;
     }
     char buffer[512];
     while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
         output.append(buffer);
     }
-    pclose(pipe);
+    if (exit_status != nullptr) {
+        *exit_status = pclose(pipe);
+    } else {
+        pclose(pipe);
+    }
     return output;
+}
+
+std::string resolveHostExecutable(const std::vector<std::string>& absolute_candidates,
+                                  const std::string& fallback) {
+    for (const std::string& candidate : absolute_candidates) {
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec) && !ec) {
+            return candidate;
+        }
+    }
+    return fallback;
 }
 
 std::vector<std::string> splitNmcliTerseLine(const std::string& line) {
@@ -225,14 +245,8 @@ struct WifiNetworkInfo {
     bool is_saved{false};
 };
 
-std::vector<WifiNetworkInfo> scanWifiNetworks() {
+std::vector<WifiNetworkInfo> parseWifiNetworks(const std::string& output) {
     std::vector<WifiNetworkInfo> networks;
-    const std::string output = runShellCommand(
-        "timeout 8 nmcli -t -f SSID,SIGNAL,SECURITY device wifi list 2>/dev/null");
-    if (output.empty()) {
-        return networks;
-    }
-
     std::unordered_map<std::string, std::size_t> index_by_ssid;
     std::istringstream stream(output);
     std::string line;
@@ -277,6 +291,53 @@ std::vector<WifiNetworkInfo> scanWifiNetworks() {
               [](const WifiNetworkInfo& lhs, const WifiNetworkInfo& rhs) {
                   return lhs.signal > rhs.signal;
               });
+    return networks;
+}
+
+std::vector<WifiNetworkInfo> scanWifiNetworks(std::string* raw_output = nullptr,
+                                              std::string* executed_command = nullptr,
+                                              int* exit_status = nullptr) {
+    const std::string nmcli = resolveHostExecutable(
+        {"/usr/bin/nmcli", "/bin/nmcli", "/usr/local/bin/nmcli"}, "nmcli");
+    const std::string timeout = resolveHostExecutable(
+        {"/usr/bin/timeout", "/bin/timeout"}, "timeout");
+    const std::string rescan_command =
+        timeout + " 8 " + nmcli +
+        " -t -f SSID,SIGNAL,SECURITY device wifi list --rescan yes 2>&1";
+    const std::string cached_command =
+        timeout + " 8 " + nmcli +
+        " -t -f SSID,SIGNAL,SECURITY device wifi list 2>&1";
+
+    int status = -1;
+    std::string output = runShellCommand(rescan_command, &status);
+    std::string command = rescan_command;
+    std::vector<WifiNetworkInfo> networks = parseWifiNetworks(output);
+
+    // A forced rescan is rejected when NetworkManager is already scanning
+    // (or when the caller lacks permission). Fall back to the cached list so
+    // the settings page still shows the last known networks.
+    if (networks.empty()) {
+        int fallback_status = -1;
+        std::string fallback_output = runShellCommand(cached_command, &fallback_status);
+        std::vector<WifiNetworkInfo> fallback_networks =
+            parseWifiNetworks(fallback_output);
+        if (!fallback_networks.empty() || output.empty()) {
+            output = std::move(fallback_output);
+            status = fallback_status;
+            command = cached_command;
+            networks = std::move(fallback_networks);
+        }
+    }
+
+    if (raw_output != nullptr) {
+        *raw_output = output;
+    }
+    if (executed_command != nullptr) {
+        *executed_command = command;
+    }
+    if (exit_status != nullptr) {
+        *exit_status = status;
+    }
     return networks;
 }
 
@@ -408,8 +469,12 @@ struct FrameIngressRequest {
     std::string camera_model;
     float temperature{0.0f};
     uint8_t cpu_load{0};
+    uint32_t free_heap_internal{0};
+    uint32_t free_heap_psram{0};
     bool has_temperature{false};
     bool has_cpu_load{false};
+    bool has_free_heap_internal{false};
+    bool has_free_heap_psram{false};
     std::vector<uint8_t> image;
 };
 
@@ -492,6 +557,16 @@ std::optional<FrameIngressRequest> parseFrameIngress(const crow::request& req) {
             parsed.cpu_load = static_cast<uint8_t>(value);
             parsed.has_cpu_load = true;
         }
+    }
+    const std::string heap_internal_header = req.get_header_value("X-ESP-Free-Heap-Int");
+    if (!heap_internal_header.empty()) {
+        parsed.free_heap_internal = parseHeaderU32(req, "X-ESP-Free-Heap-Int");
+        parsed.has_free_heap_internal = true;
+    }
+    const std::string heap_psram_header = req.get_header_value("X-ESP-Free-Heap-PSRAM");
+    if (!heap_psram_header.empty()) {
+        parsed.free_heap_psram = parseHeaderU32(req, "X-ESP-Free-Heap-PSRAM");
+        parsed.has_free_heap_psram = true;
     }
     parsed.camera_model = req.get_header_value("X-Camera-Model");
 
@@ -785,6 +860,7 @@ void BackendApp::registerCameraRoutes() {
             // model headers to every frame. Fold them into the telemetry cache
             // so the UI stays live even between JSON heartbeat POSTs.
             if (parsed->has_temperature || parsed->has_cpu_load ||
+                parsed->has_free_heap_internal || parsed->has_free_heap_psram ||
                 !parsed->camera_model.empty()) {
                 TelemetrySample sample;
                 sample.device_id = parsed->device_id;
@@ -794,9 +870,13 @@ void BackendApp::registerCameraRoutes() {
                 sample.temperature = parsed->temperature;
                 sample.cpu_temperature = parsed->temperature;
                 sample.cpu_load = parsed->cpu_load;
+                sample.free_heap_internal = parsed->free_heap_internal;
+                sample.free_heap_psram = parsed->free_heap_psram;
                 sample.has_temperature = parsed->has_temperature;
                 sample.has_cpu_temperature = parsed->has_temperature;
                 sample.has_cpu_load = parsed->has_cpu_load;
+                sample.has_free_heap_internal = parsed->has_free_heap_internal;
+                sample.has_free_heap_psram = parsed->has_free_heap_psram;
                 m_state.updateTelemetry(sample);
             }
 
@@ -950,6 +1030,8 @@ void BackendApp::registerTelemetryRoutes() {
             body["cpu_core1_load"] = static_cast<uint32_t>(24);
             body["heap_free"] = static_cast<uint64_t>(4194304);
             body["free_heap"] = static_cast<uint64_t>(4194304);
+            body["free_heap_internal"] = static_cast<uint64_t>(262144);
+            body["free_heap_psram"] = static_cast<uint64_t>(7340032);
             body["rssi"] = static_cast<int32_t>(-55);
             body["firmware_version"] = "sim-v2.1";
             body["is_connected"] = true;
@@ -996,6 +1078,12 @@ void BackendApp::registerTelemetryRoutes() {
                 body["heap_free"] = telemetry.heap_free;
                 body["free_heap"] = telemetry.heap_free;
             }
+            if (telemetry.has_free_heap_internal) {
+                body["free_heap_internal"] = telemetry.free_heap_internal;
+            }
+            if (telemetry.has_free_heap_psram) {
+                body["free_heap_psram"] = telemetry.free_heap_psram;
+            }
             if (telemetry.has_rssi) {
                 body["rssi"] = static_cast<int32_t>(telemetry.rssi);
             }
@@ -1016,6 +1104,8 @@ void BackendApp::registerTelemetryRoutes() {
             body["cpu_temperature"] = nullptr;
             body["cpu_load"] = nullptr;
             body["heap_free"] = nullptr;
+            body["free_heap_internal"] = nullptr;
+            body["free_heap_psram"] = nullptr;
             body["rssi"] = nullptr;
             body["message"] = "ESP32-S3 hardware disconnected (Crow backend)";
         }
@@ -1084,6 +1174,14 @@ void BackendApp::registerTelemetryRoutes() {
                     sample.heap_free = static_cast<uint64_t>(number);
                     sample.has_heap_free = true;
                 }
+            }
+            if (read_number("free_heap_internal", number)) {
+                sample.free_heap_internal = static_cast<uint64_t>(number);
+                sample.has_free_heap_internal = true;
+            }
+            if (read_number("free_heap_psram", number)) {
+                sample.free_heap_psram = static_cast<uint64_t>(number);
+                sample.has_free_heap_psram = true;
             }
             if (read_number("rssi", number)) {
                 sample.rssi = static_cast<int>(number);
@@ -1464,8 +1562,31 @@ void BackendApp::registerDeviceRoutes() {
         return crow::response(body);
     });
 
-    CROW_ROUTE(m_app, "/api/v1/devices/wifi/networks")([]() {
-        const std::vector<WifiNetworkInfo> scanned = scanWifiNetworks();
+    auto wifi_networks_handler = []() {
+        std::string raw_output;
+        std::string executed_command;
+        int exit_status = -1;
+        const std::vector<WifiNetworkInfo> scanned =
+            scanWifiNetworks(&raw_output, &executed_command, &exit_status);
+
+        const char* path_env = std::getenv("PATH");
+        const int exit_code =
+            (exit_status >= 0 && WIFEXITED(exit_status))
+                ? WEXITSTATUS(exit_status)
+                : exit_status;
+        std::cerr << "[WIFI] PATH=" << (path_env != nullptr ? path_env : "<unset>")
+                  << '\n'
+                  << "[WIFI] command=" << executed_command << '\n'
+                  << "[WIFI] exit=" << exit_code
+                  << " raw_bytes=" << raw_output.size() << '\n'
+                  << "[WIFI] raw output:\n"
+                  << (raw_output.empty() ? "<empty>\n" : raw_output);
+        if (!raw_output.empty() && raw_output.back() != '\n') {
+            std::cerr << '\n';
+        }
+        std::cerr << "[WIFI] parsed " << scanned.size() << " network(s)\n"
+                  << std::flush;
+
         const char* server_ssid = std::getenv("WIFI_SSID");
 
         crow::json::wvalue::list networks;
@@ -1483,7 +1604,9 @@ void BackendApp::registerDeviceRoutes() {
         crow::json::wvalue body;
         body["networks"] = std::move(networks);
         return crow::response(body);
-    });
+    };
+    CROW_ROUTE(m_app, "/api/v1/devices/wifi/networks")(wifi_networks_handler);
+    CROW_ROUTE(m_app, "/api/v1/devices/wifi/scan")(wifi_networks_handler);
 
     CROW_ROUTE(m_app, "/api/v1/devices/usb/probe")
         .methods(crow::HTTPMethod::Post)([](const crow::request& req) {

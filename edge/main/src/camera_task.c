@@ -20,7 +20,8 @@
 static const char *TAG = "CAMERA";
 
 #define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY
-#define STREAM_JPEG_QUALITY 22
+// Quality 24 mengunci ukuran frame VGA 640x480 di ~10-14 KB (mencegah TCP bufferbloat di Wi-Fi)
+#define STREAM_JPEG_QUALITY 24
 
 typedef struct {
   camera_frame_header_t header;
@@ -41,7 +42,6 @@ static char s_detected_camera_model[32] = "UNKNOWN";
 
 bool is_camera_streaming(void) {
   if (!atomic_load(&s_is_streaming)) return false;
-  /* Health check: jika >5s tidak ada frame baru, anggap stream mati */
   uint64_t last = atomic_load(&s_last_frame_timestamp_ms);
   uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
   if (last == 0 || (now - last) > 5000ULL) {
@@ -55,11 +55,10 @@ const char *camera_get_sensor_name(void) {
   return s_detected_camera_model;
 }
 
-/* Helper: bebaskan semua slot yang sudah dialokasikan */
 static void free_slots(void) {
   for (int i = 0; i < 2; i++) {
     if (s_slots[i].data != NULL) {
-      free(s_slots[i].data); /* heap_caps_malloc & malloc sama-sama free() */
+      free(s_slots[i].data);
       s_slots[i].data = NULL;
     }
   }
@@ -78,7 +77,6 @@ esp_err_t camera_task_init(void) {
       s_slots[i].data = (uint8_t *)malloc(FIXED_FRAME_CAPACITY);
     }
     if (s_slots[i].data == NULL) {
-      /* Perbaikan #5: bersihkan slot sebelumnya */
       free_slots();
       vSemaphoreDelete(s_camera_mutex);
       s_camera_mutex = NULL;
@@ -146,6 +144,8 @@ esp_err_t camera_task_init(void) {
     s->set_whitebal(s, 1);
     s->set_awb_gain(s, 1);
     s->set_wb_mode(s, 0);
+    
+    // Matikan sharpness artifisial agar VBR tidak membengkak saat ada gerakan
     s->set_sharpness(s, 0);
 
     s->set_exposure_ctrl(s, 1);
@@ -163,8 +163,7 @@ esp_err_t camera_task_init(void) {
     s->set_brightness(s, 1);
     s->set_contrast(s, 1);
     s->set_saturation(s, 1);
-    s->set_sharpness(s, 1);
-    if (s->set_denoise) s->set_denoise(s, 2);
+    if (s->set_denoise) s->set_denoise(s, 1);
   }
 
   s_is_initialized = true;
@@ -176,7 +175,7 @@ esp_err_t camera_task_init(void) {
 esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
   if (out_frame == NULL || out_frame->data == NULL) return ESP_ERR_INVALID_ARG;
 
-  if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(25)) != pdTRUE) {
+  if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(15)) != pdTRUE) {
     return ESP_ERR_TIMEOUT;
   }
 
@@ -203,13 +202,13 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
 
 void Camera_Capture_Task(void *pvParameters) {
   (void)pvParameters;
-  ESP_LOGI(TAG, "Camera capture task running");
+  ESP_LOGI(TAG, "Camera capture task running on dedicated Core");
 
   for (;;) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (fb == NULL) {
       ESP_LOGW(TAG, "Frame grab failed: fb == NULL");
-      vTaskDelay(pdMS_TO_TICKS(50));
+      vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
 
@@ -217,13 +216,11 @@ void Camera_Capture_Task(void *pvParameters) {
       if (fb->len < 4 || fb->buf[0] != 0xFF || fb->buf[1] != 0xD8) {
         ESP_LOGW(TAG, "Dropping corrupted JPEG (len: %u)", (unsigned)fb->len);
         esp_camera_fb_return(fb);
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(10));
         continue;
       }
     }
 
-    /* Perbaikan #17: DROP frame yang melebihi kapasitas, jangan clamp —
-       clamp memotong JPEG marker EOI dan merusak frame di backend. */
     if (fb->len > FIXED_FRAME_CAPACITY) {
       ESP_LOGW(TAG, "Frame too large (%u > %d), dropped",
                (unsigned)fb->len, FIXED_FRAME_CAPACITY);
@@ -233,7 +230,6 @@ void Camera_Capture_Task(void *pvParameters) {
     }
 
     uint32_t payload_len = fb->len;
-
     frame_slot_t *slot = &s_slots[s_write_idx];
     memcpy(slot->data, fb->buf, payload_len);
 
@@ -253,16 +249,12 @@ void Camera_Capture_Task(void *pvParameters) {
       s_has_new_frame = true;
       xSemaphoreGive(s_camera_mutex);
 
-      /* Perbaikan #11: publish streaming setelah frame valid ter-swap */
       atomic_store(&s_last_frame_timestamp_ms,
                    (uint_fast64_t)(esp_timer_get_time() / 1000));
       atomic_store(&s_is_streaming, true);
 
       wifi_notify_stream_frame_ready();
     } else {
-      /* Perbaikan #2: consumer sedang pegang buffer >10ms — frame ini
-         tidak akan pernah ter-swap. Tandai supaya consumer berikutnya
-         tahu frame ready yang lama sudah basi. */
       ESP_LOGD(TAG, "Swap skipped, consumer busy — frame dropped");
     }
 

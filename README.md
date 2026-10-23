@@ -191,17 +191,30 @@ cp .env.example .env
 # Edit .env with your WIFI_SSID, WIFI_PASS, and BACKEND_IP
 ```
 
-### 2. Launch Stack with Docker
+### 2. Launch Stack
 ```bash
-# Build all container images via Docker Compose
-just compose-build
-
-# Start entire infrastructure in detached mode
+# Terminal 1: PostgreSQL + frontend + Grafana in Docker
 just compose-up
+
+# Terminal 2: backend on the host (required for Wi-Fi scanning)
+just run-backend
 ```
 - **Frontend HMI:** `http://localhost:3001`
 - **C++ Crow API:** `http://localhost:8080/api/v1`
-- **PostgreSQL:** `localhost:5432`
+- **PostgreSQL:** `localhost:5433`
+
+> **Wi-Fi scan:** `nmcli` needs the host's NetworkManager. On Docker Desktop the
+> backend runs in a VM that cannot see the host Wi-Fi interface or D-Bus socket,
+> so the compose backend is opt-in (`docker-backend` profile) and the default
+> stack leaves it to `just run-backend`.
+>
+> ```bash
+> curl -s http://127.0.0.1:8080/api/v1/devices/wifi/networks | jq .
+> ```
+>
+> A native Docker Engine (not Desktop) can still run the backend container:
+> `just compose-up "postgres bawal_backend"` (compose mounts
+> `/run/dbus/system_bus_socket` into it).
 
 ### 3. Train & Export Object Detection Model
 ```bash

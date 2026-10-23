@@ -5,32 +5,31 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "freertos/portmacro.h"          /* portMUX_TYPE */
+#include "freertos/portmacro.h"
 
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
 
-/* Peripheral and low-level hardware control drivers */
-#include "driver/gpio.h"                 /* gpio_num_t, gpio_config_t, GPIO_MODE_* */
+#include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
-#include "esp_cpu.h"                     /* esp_cpu_get_cycle_count */
-#include "esp_rom_sys.h"                 /* esp_rom_delay_us */
-#include "soc/gpio_struct.h"             /* GPIO.out_w1ts / out1_w1ts */
+#include "esp_cpu.h"
+#include "esp_rom_sys.h"
+#include "soc/gpio_struct.h"
 
 #include "data.h"
 #include "lcd_task.h"
 #include "camera_task.h"
 #include "wifi.h"
 #include "led_strip.h"
-#include "pins.h"                        /* PIN_BTN_TRIGGER, PIN_LED_FLASH, CAM_PIN_* */
+#include "pins.h"
 
 static const char *TAG = "MAIN";
 
 #define LCD_TASK_STACK_SIZE 4096
 #define WIFI_TASK_STACK_SIZE 4096
-#define HTTP_STREAM_STACK_SIZE 4096
+#define HTTP_STREAM_STACK_SIZE 6144  // Diperbesar agar aman menampung frame VGA & header HTTP
 #define USB_PROV_STACK_SIZE 4096
 #define BUTTON_LED_TASK_STACK_SIZE 4096
 
@@ -60,11 +59,6 @@ static StaticTask_t s_button_led_task_buffer;
 static StackType_t s_button_led_task_stack[BUTTON_LED_TASK_STACK_SIZE];
 static TaskHandle_t s_button_led_task_handle = NULL;
 
-/* ============================================================
- *  WS2812 zero-stream fallback (240 MHz cycle timing)
- *  T0H: ~300 ns (72 cycles @ 240MHz)
- *  T0L: ~900 ns (216 cycles @ 240MHz)
- * ============================================================ */
 static portMUX_TYPE s_ws2812_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static void send_ws2812_zero_stream(gpio_num_t gpio_num) {
@@ -103,9 +97,6 @@ static void send_ws2812_zero_stream(gpio_num_t gpio_num) {
     esp_rom_delay_us(350);
 }
 
-/* ============================================================
- *  Official Espressif RMT WS2812 LED extinguish
- * ============================================================ */
 static void turn_off_ws2812_rmt(gpio_num_t gpio_num) {
     if (gpio_num < 0 || gpio_num >= GPIO_NUM_MAX) return;
 
@@ -135,16 +126,12 @@ static void turn_off_ws2812_rmt(gpio_num_t gpio_num) {
         send_ws2812_zero_stream(gpio_num);
     }
 
-    /* Actively clamp the data line to GND (0V) to prevent floating re-trigger */
     gpio_reset_pin(gpio_num);
     gpio_set_direction(gpio_num, GPIO_MODE_OUTPUT);
     gpio_set_level(gpio_num, 0);
     gpio_pulldown_en(gpio_num);
 }
 
-/* ============================================================
- *  Disable discrete indicator pins (High-Z isolation)
- * ============================================================ */
 static void disable_discrete_led_pin(int pin) {
     if (pin < 0 || pin >= GPIO_NUM_MAX) return;
     gpio_reset_pin((gpio_num_t)pin);
@@ -164,9 +151,6 @@ static void disable_all_indicator_leds(void) {
     ESP_LOGI(TAG, "All indicator LEDs and WS2812 RGB LEDs completely extinguished.");
 }
 
-/* ============================================================
- *  Guard: pastikan pin LED tidak menabrak pin kamera
- * ============================================================ */
 static bool pin_conflicts_with_camera(int pin) {
     const int cam_pins[] = {
         CAM_PIN_PWDN, CAM_PIN_RESET, CAM_PIN_XCLK,
@@ -181,11 +165,6 @@ static bool pin_conflicts_with_camera(int pin) {
     return false;
 }
 
-/* ============================================================
- *  Button-LED Monitor Task (with 3-sample debounce)
- *  Button: PIN_BTN_TRIGGER (Active LOW, internal pull-up)
- *  LED:    PIN_LED_FLASH   (Active HIGH)
- * ============================================================ */
 static void button_led_task(void *pvParameters) {
     (void)pvParameters;
 
@@ -228,9 +207,6 @@ static void button_led_task(void *pvParameters) {
     }
 }
 
-/* ============================================================
- *  app_main
- * ============================================================ */
 void app_main(void) {
     usb_serial_jtag_driver_config_t usbjtag_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     usbjtag_cfg.rx_buffer_size = 1024;
@@ -265,6 +241,7 @@ void app_main(void) {
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize Camera Driver: %s", esp_err_to_name(ret));
     } else {
+        // Core 1 didedikasikan murni untuk Camera Capture DMA (Prioritas 5)
         if (camera_task_start(5, 1) == NULL) {
             ESP_LOGE(TAG, "Failed to start camera_task on Core 1");
         } else {
@@ -286,15 +263,16 @@ void app_main(void) {
 
     s_wifi_task_handle = xTaskCreateStaticPinnedToCore(
         WiFi_Server_Task, "WiFi_Server_Task", WIFI_TASK_STACK_SIZE,
-        NULL, 5, s_wifi_task_stack, &s_wifi_task_buffer, 0);
+        NULL, 4, s_wifi_task_stack, &s_wifi_task_buffer, 0);
     if (s_wifi_task_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create WiFi_Server_Task");
         return;
     }
 
+    // Core 0 menangani HTTP Streaming Task (Prioritas 5)
     s_http_sender_task_handle = xTaskCreateStaticPinnedToCore(
         http_stream_sender_task, "HTTP_Stream_Task", HTTP_STREAM_STACK_SIZE,
-        NULL, 4, s_http_stream_task_stack, &s_http_stream_task_buffer, 0);
+        NULL, 5, s_http_stream_task_stack, &s_http_stream_task_buffer, 0);
     if (s_http_sender_task_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create HTTP_Stream_Task");
         return;

@@ -69,6 +69,8 @@ export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<Telemetr
                 cpu_load: isConnected && data.cpu_load != null ? Number(data.cpu_load) : null,
                 heap_free: isConnected && (data.heap_free != null || data.free_heap != null) ? Number(data.heap_free ?? data.free_heap) : null,
                 free_heap: isConnected && (data.heap_free != null || data.free_heap != null) ? Number(data.heap_free ?? data.free_heap) : null,
+                free_heap_internal: isConnected && data.free_heap_internal != null ? Number(data.free_heap_internal) : null,
+                free_heap_psram: isConnected && data.free_heap_psram != null ? Number(data.free_heap_psram) : null,
                 rssi: isConnected && data.rssi != null ? Number(data.rssi) : null,
                 timestamp: data.timestamp
                     ? Number(data.timestamp)
