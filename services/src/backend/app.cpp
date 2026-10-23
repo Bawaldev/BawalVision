@@ -7,6 +7,7 @@
 #include "bawal/backend/usb_probe.hpp"
 #include "bawal/backend/wifi_probe.hpp"
 #include "bawal/server/rolling_image_store.hpp"
+#include "bawal/report/latex_generator.hpp"
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -447,7 +448,8 @@ void BackendApp::configure() {
                  "X-Stream-Source", "X-Telemetry-Struct", "X-Inspection-Source",
                  "X-Inspection-Struct", "X-Mock-Video-Source", "X-Mock-Video-UUID",
                  "X-Is-Rewind", "X-Video-Rewind")
-        .expose("X-Stream-Source", "X-Telemetry-Struct", "X-Mock-Video-UUID");
+        .expose("X-Stream-Source", "X-Telemetry-Struct", "X-Mock-Video-UUID",
+                "X-Report-Format");
 
     if (const char* configured = std::getenv("CONF_THRESHOLD");
         configured != nullptr && *configured != '\0') {
@@ -990,8 +992,15 @@ void BackendApp::registerInspectionRoutes() {
             crow::json::wvalue item;
             item["frame_id"] = entry.frame_id;
             item["timestamp"] = entry.timestamp;
+            item["device_id"] = entry.device_id;
+            item["engine_pipeline"] = entry.engine_pipeline;
             item["verdict"] = entry.verdict;
             item["surface_temp"] = entry.surface_temp;
+            item["lux_luminance"] = entry.lux_luminance;
+            item["color_temperature"] = entry.color_temperature;
+            item["white_balance_status"] = entry.white_balance_status;
+            item["spoilage_risk"] = entry.spoilage_risk;
+            item["tray_coverage"] = entry.tray_coverage;
             item["image_path"] = entry.image_path;
             item["t_safe_hours"] = entry.t_safe_hours;
 
@@ -1018,6 +1027,86 @@ void BackendApp::registerInspectionRoutes() {
 
         crow::json::wvalue body(std::move(records));
         return crow::response(body);
+    });
+
+    CROW_ROUTE(m_app, "/api/v1/inspections/<uint>/report.pdf")
+    ([this](const crow::request&, crow::response& res, uint32_t frame_id) {
+        const std::vector<InspectionHistoryEntry> entries = m_state.inspectionHistory(100);
+        auto it = std::find_if(entries.begin(), entries.end(), [frame_id](const auto& e) {
+            return e.frame_id == frame_id;
+        });
+
+        if (it == entries.end()) {
+            res.code = 404;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Inspection frame record not found in rolling buffer\"}");
+            res.end();
+            return;
+        }
+
+        const std::string compiled_path =
+            bawal::report::LatexPdfGenerator::generateReportPdf(*it);
+
+        if (compiled_path.empty() || !std::filesystem::exists(compiled_path)) {
+            res.code = 500;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Failed to generate or compile LaTeX PDF report\"}");
+            res.end();
+            return;
+        }
+
+        // pdflatex may be absent on the host; in that case serve the .tex
+        // source and tell the client which artifact it actually received.
+        const bool is_pdf = compiled_path.ends_with(".pdf");
+        if (is_pdf) {
+            res.set_static_file_info_unsafe(compiled_path, "application/pdf");
+            res.add_header(
+                "Content-Disposition",
+                "attachment; filename=\"BawalVision-Report-" + std::to_string(frame_id) + ".pdf\"");
+            res.add_header("X-Report-Format", "pdf");
+        } else {
+            res.set_static_file_info_unsafe(compiled_path, "text/x-tex");
+            res.add_header(
+                "Content-Disposition",
+                "attachment; filename=\"BawalVision-Report-" + std::to_string(frame_id) + ".tex\"");
+            res.add_header("X-Report-Format", "tex");
+        }
+        res.end();
+    });
+
+    // Raw LaTeX source download (works without a pdflatex installation).
+    CROW_ROUTE(m_app, "/api/v1/inspections/<uint>/report.tex")
+    ([this](const crow::request&, crow::response& res, uint32_t frame_id) {
+        const std::vector<InspectionHistoryEntry> entries = m_state.inspectionHistory(100);
+        auto it = std::find_if(entries.begin(), entries.end(), [frame_id](const auto& e) {
+            return e.frame_id == frame_id;
+        });
+
+        if (it == entries.end()) {
+            res.code = 404;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Inspection frame record not found in rolling buffer\"}");
+            res.end();
+            return;
+        }
+
+        const std::string tex_path =
+            bawal::report::LatexPdfGenerator::generateReportTex(*it);
+
+        if (tex_path.empty() || !std::filesystem::exists(tex_path)) {
+            res.code = 500;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Failed to generate LaTeX source template\"}");
+            res.end();
+            return;
+        }
+
+        res.set_static_file_info_unsafe(tex_path, "text/x-tex");
+        res.add_header(
+            "Content-Disposition",
+            "attachment; filename=\"BawalVision-Report-" + std::to_string(frame_id) + ".tex\"");
+        res.add_header("X-Report-Format", "tex");
+        res.end();
     });
 }
 

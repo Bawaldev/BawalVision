@@ -131,8 +131,15 @@ std::string canonicalAuditPayload(const InspectionHistoryEntry& entry) {
     out << std::fixed << std::setprecision(4);
     out << "frame_id=" << entry.frame_id
         << "|timestamp=" << entry.timestamp
+        << "|device_id=" << entry.device_id
+        << "|engine_pipeline=" << entry.engine_pipeline
         << "|verdict=" << entry.verdict
         << "|surface_temp=" << entry.surface_temp
+        << "|lux_luminance=" << entry.lux_luminance
+        << "|color_temperature=" << entry.color_temperature
+        << "|white_balance_status=" << entry.white_balance_status
+        << "|spoilage_risk=" << entry.spoilage_risk
+        << "|tray_coverage=" << entry.tray_coverage
         << "|image_path=" << entry.image_path
         << "|t_safe_hours=" << entry.t_safe_hours;
     for (const auto& detection : entry.detections) {
@@ -445,6 +452,8 @@ void VisionWorker::run() {
             const float frame_area = static_cast<float>(
                 std::max(1, frame.cols) * std::max(1, frame.rows));
             bool rejected = false;
+            double max_spoilage = 0.0;
+            double coverage_sum = 0.0;
             const uint32_t detection_count = std::min<uint32_t>(
                 soa.count, DetectionSoA::kMaxDetections);
             history.detections.reserve(detection_count);
@@ -466,10 +475,22 @@ void VisionWorker::run() {
                 if (soa.status[i] == static_cast<uint8_t>(FoodStatus::Reject)) {
                     rejected = true;
                 }
+                max_spoilage = std::max(
+                    max_spoilage, static_cast<double>(soa.spoilage_score[i]));
+                coverage_sum += detection.portion_ratio;
                 history.detections.push_back(std::move(detection));
             }
 
             history.verdict = rejected ? "REJECTED" : "ACCEPTED";
+            history.device_id = device_id;
+            history.engine_pipeline = engine_pipeline;
+            history.lux_luminance = static_cast<double>(optical.lux_luminance);
+            history.color_temperature = optical.color_temperature;
+            history.white_balance_status = optical.white_balance_status[0] != '\0'
+                ? std::string(optical.white_balance_status)
+                : "BALANCED";
+            history.spoilage_risk = max_spoilage;
+            history.tray_coverage = std::min(100.0, coverage_sum * 100.0);
             const TelemetryView telemetry = m_state.telemetry();
             history.surface_temp = telemetry.has_temperature
                 ? static_cast<double>(telemetry.temperature)

@@ -36,6 +36,25 @@ clangd-db:
         --include ml/include \
         --representative src/backend/app.cpp
 
+# Install a lightweight TeX engine for audit PDF reports (no sudo required)
+[group('Vision')]
+setup-report:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v pdflatex >/dev/null 2>&1 || command -v tectonic >/dev/null 2>&1; then
+        echo "[report] TeX engine already available"
+        exit 0
+    fi
+    echo "[report] Installing tectonic into ~/.local/bin ..."
+    mkdir -p "$HOME/.local/bin"
+    url="$(curl -fsSL https://api.github.com/repos/tectonic-typesetting/tectonic/releases/latest | python3 -c 'import sys,json; print(next(a["browser_download_url"] for a in json.load(sys.stdin)["assets"] if "x86_64-unknown-linux-musl" in a["name"] and a["name"].endswith(".tar.gz")))')"
+    tmp="$(mktemp -d)"
+    curl -fsSL "$url" -o "$tmp/tectonic.tar.gz"
+    tar -xzf "$tmp/tectonic.tar.gz" -C "$tmp"
+    install -m 0755 "$tmp/tectonic" "$HOME/.local/bin/tectonic"
+    rm -rf "$tmp"
+    echo "[report] tectonic installed; make sure ~/.local/bin is on PATH"
+
 # Build C++ vision service
 [group('Vision')]
 build-vision target="Release":
