@@ -520,21 +520,21 @@
                 <button
                     type="button"
                     class="action-pill-btn primary"
-                    onclick={() => onNavigateTab('Dashboard')}
+                    onclick={() => onNavigateTab('Live Inspection')}
                 >
                     📹 Open Live Inspection
                 </button>
                 <button
                     type="button"
                     class="action-pill-btn secondary"
-                    onclick={() => onNavigateTab('Telemetry Analytics & Result Log')}
+                    onclick={() => onNavigateTab('Telemetry & Hardware')}
                 >
                     📈 Full Analytics & Logs
                 </button>
                 <button
                     type="button"
                     class="action-pill-btn secondary"
-                    onclick={() => onNavigateTab('System & Cloud Settings')}
+                    onclick={() => onNavigateTab('Settings')}
                 >
                     ⚙️ Calibrate Confidence Gate
                 </button>
@@ -554,7 +554,7 @@
                 <button
                     type="button"
                     class="view-all-link"
-                    onclick={() => onNavigateTab('Telemetry Analytics & Result Log')}
+                    onclick={() => onNavigateTab('Telemetry & Hardware')}
                 >
                     View All Logs ↗
                 </button>
@@ -606,7 +606,7 @@
                                     <button
                                         type="button"
                                         class="inspect-direct-btn"
-                                        onclick={() => onNavigateTab('Telemetry Analytics & Result Log')}
+                                        onclick={() => onNavigateTab('Telemetry & Hardware')}
                                     >
                                         Inspect Audit Record ↗
                                     </button>
