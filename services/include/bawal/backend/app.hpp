@@ -9,6 +9,10 @@
 #include "bawal/backend/state.hpp"
 #include "bawal/ipc/shm_producer.hpp"
 
+namespace bawal::server {
+class RollingImageStore;
+}
+
 namespace bawal::backend {
 
 class Database;
@@ -28,7 +32,8 @@ struct ServerConfig {
 class BackendApp {
 public:
     BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerConfig config,
-               Database* database = nullptr);
+               Database* database = nullptr,
+               server::RollingImageStore* image_store = nullptr);
 
     void configure();
     int run();
@@ -41,6 +46,7 @@ private:
     void registerCameraRoutes();
     void registerTelemetryRoutes();
     void registerInspectionRoutes();
+    void registerImageRoutes();
     void registerExampleRoutes();
     void registerCompatibilityRoutes();
     void registerDeviceRoutes();
@@ -50,6 +56,7 @@ private:
     ipc::ShmProducer& m_producer;
     ServerConfig m_config;
     Database* m_database{nullptr};
+    server::RollingImageStore* m_image_store{nullptr};
     crow::App<crow::CORSHandler> m_app;
     std::atomic<double> m_confidence_threshold{0.35};
 };

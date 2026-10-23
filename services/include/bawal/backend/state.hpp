@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -79,6 +81,25 @@ struct InspectionView {
     uint32_t frame_id{0};
     DetectionSoA detections;
     SceneOpticalSoA optical;
+};
+
+struct InspectionHistoryDetection {
+    std::string class_name;
+    float confidence{0.0F};
+    std::array<int, 4> bbox{};
+    float freshness_score{0.0F};
+    float portion_ratio{0.0F};
+};
+
+struct InspectionHistoryEntry {
+    uint64_t frame_id{0};
+    std::string timestamp;
+    std::string verdict;
+    double surface_temp{0.0};
+    std::string image_path;
+    std::vector<InspectionHistoryDetection> detections;
+    double t_safe_hours{0.0};
+    std::string checksum_sha256;
 };
 
 struct TelemetryView {
@@ -163,6 +184,10 @@ public:
     void updatePeerIp(std::string ip);
     void disconnectDevice(std::string_view device_id);
 
+    void pushInspectionHistory(InspectionHistoryEntry entry);
+    [[nodiscard]] std::vector<InspectionHistoryEntry> inspectionHistory(
+        std::size_t limit = 100) const;
+
     [[nodiscard]] CameraView camera() const;
     [[nodiscard]] InspectionView inspection() const;
     [[nodiscard]] TelemetryView telemetry() const;
@@ -176,6 +201,8 @@ public:
     }
 
 private:
+    static constexpr std::size_t kMaxInspectionHistory = 100;
+
     static uint64_t nowNs() noexcept;
 
     mutable std::mutex m_mutex;
@@ -199,6 +226,7 @@ private:
     std::string m_engine_pipeline;
     DetectionSoA m_detections;
     SceneOpticalSoA m_optical;
+    std::deque<InspectionHistoryEntry> m_inspection_history;
 
     uint64_t m_telemetry_received_ns{0};
     std::string m_telemetry_device_id;

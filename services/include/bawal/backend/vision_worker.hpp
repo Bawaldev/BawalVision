@@ -7,6 +7,10 @@
 #include "bawal/backend/database.hpp"
 #include "bawal/backend/state.hpp"
 
+namespace bawal::server {
+class RollingImageStore;
+}
+
 namespace bawal::backend {
 
 /// Resolves MODEL_PATH or the first existing repository/container candidate.
@@ -20,7 +24,9 @@ namespace bawal::backend {
  */
 class VisionWorker {
 public:
-    VisionWorker(BackendState& state, std::string model_path, Database* database = nullptr);
+    VisionWorker(BackendState& state, std::string model_path,
+                 Database* database = nullptr,
+                 server::RollingImageStore* image_store = nullptr);
     ~VisionWorker();
 
     VisionWorker(const VisionWorker&) = delete;
@@ -41,6 +47,7 @@ private:
 
     BackendState& m_state;
     Database* m_database{nullptr};
+    server::RollingImageStore* m_image_store{nullptr};
     std::string m_model_path;
     std::thread m_thread;
     std::atomic<bool> m_running{false};

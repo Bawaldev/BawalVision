@@ -95,6 +95,30 @@ void BackendState::updateInspection(std::string_view device_id, uint32_t frame_i
     m_optical = optical;
 }
 
+void BackendState::pushInspectionHistory(InspectionHistoryEntry entry) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_inspection_history.size() >= kMaxInspectionHistory) {
+        m_inspection_history.pop_front();
+    }
+    m_inspection_history.push_back(std::move(entry));
+}
+
+std::vector<InspectionHistoryEntry> BackendState::inspectionHistory(
+    std::size_t limit) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    limit = std::clamp<std::size_t>(limit, 1, kMaxInspectionHistory);
+
+    std::vector<InspectionHistoryEntry> entries;
+    const std::size_t start = m_inspection_history.size() > limit
+        ? m_inspection_history.size() - limit
+        : 0;
+    entries.reserve(m_inspection_history.size() - start);
+    for (std::size_t i = start; i < m_inspection_history.size(); ++i) {
+        entries.push_back(m_inspection_history[i]);
+    }
+    return entries;
+}
+
 void BackendState::updateTelemetry(const TelemetrySample& sample) {
     const uint64_t now = nowNs();
 

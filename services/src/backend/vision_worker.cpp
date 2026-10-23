@@ -4,14 +4,19 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
 #include <opencv2/core.hpp>
 
 #include "bawal/ipc/shm_consumer.hpp"
+#include "bawal/server/rolling_image_store.hpp"
+#include "bawal/server/sha256.hpp"
 #include "bawal/vision/classifier.hpp"
 #include "bawal/vision/pipeline.hpp"
 #include "bawal/vision/types.hpp"
@@ -84,6 +89,54 @@ bool fileExists(const std::string& path) {
     return file.good();
 }
 
+std::string isoUtcTimestamp() {
+    const std::time_t now = std::chrono::system_clock::to_time_t(
+        std::chrono::system_clock::now());
+    std::tm utc{};
+    gmtime_r(&now, &utc);
+    char buffer[32]{};
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    return buffer;
+}
+
+double estimateSafeHours(float surface_temp) {
+    if (surface_temp <= 0.0F) {
+        return 0.0;
+    }
+    if (surface_temp >= 60.0F) {
+        return 4.5;
+    }
+    if (surface_temp >= 50.0F) {
+        return 3.0;
+    }
+    if (surface_temp >= 40.0F) {
+        return 1.5;
+    }
+    return 0.5;
+}
+
+std::string canonicalAuditPayload(const InspectionHistoryEntry& entry) {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(4);
+    out << "frame_id=" << entry.frame_id
+        << "|timestamp=" << entry.timestamp
+        << "|verdict=" << entry.verdict
+        << "|surface_temp=" << entry.surface_temp
+        << "|image_path=" << entry.image_path
+        << "|t_safe_hours=" << entry.t_safe_hours;
+    for (const auto& detection : entry.detections) {
+        out << "|det=" << detection.class_name
+            << ',' << detection.confidence
+            << ',' << detection.bbox[0]
+            << ',' << detection.bbox[1]
+            << ',' << detection.bbox[2]
+            << ',' << detection.bbox[3]
+            << ',' << detection.freshness_score
+            << ',' << detection.portion_ratio;
+    }
+    return out.str();
+}
+
 } // namespace
 
 std::string resolveModelPath() {
@@ -114,8 +167,12 @@ std::string resolveModelPath() {
     return candidates.front();
 }
 
-VisionWorker::VisionWorker(BackendState& state, std::string model_path, Database* database)
-    : m_state(state), m_database(database), m_model_path(std::move(model_path)) {}
+VisionWorker::VisionWorker(BackendState& state, std::string model_path, Database* database,
+                           server::RollingImageStore* image_store)
+    : m_state(state),
+      m_database(database),
+      m_image_store(image_store),
+      m_model_path(std::move(model_path)) {}
 
 VisionWorker::~VisionWorker() {
     stop();
@@ -211,6 +268,49 @@ void VisionWorker::run() {
         const SceneOpticalSoA optical =
             toOpticalSoA(pipeline.getClassifier().getLastOpticalMetrics());
         m_state.updateInspection(device_id, frame_id, soa, optical, engine_pipeline);
+
+        InspectionHistoryEntry history;
+        history.frame_id = frame_id;
+        history.timestamp = isoUtcTimestamp();
+        const float frame_area = static_cast<float>(
+            std::max(1, frame.cols) * std::max(1, frame.rows));
+        bool rejected = false;
+        const uint32_t detection_count = std::min<uint32_t>(
+            soa.count, DetectionSoA::kMaxDetections);
+        history.detections.reserve(detection_count);
+        for (uint32_t i = 0; i < detection_count; ++i) {
+            const std::string class_name = boundedName(soa.class_name[i]);
+            InspectionHistoryDetection detection;
+            detection.class_name = class_name.empty() ? "unknown" : class_name;
+            detection.confidence = soa.confidence[i];
+            detection.bbox = {
+                static_cast<int>(soa.x[i]),
+                static_cast<int>(soa.y[i]),
+                static_cast<int>(soa.width[i]),
+                static_cast<int>(soa.height[i]),
+            };
+            detection.freshness_score = std::clamp(
+                1.0F - soa.spoilage_score[i] / 100.0F, 0.0F, 1.0F);
+            detection.portion_ratio = std::clamp(
+                (soa.width[i] * soa.height[i]) / frame_area, 0.0F, 1.0F);
+            if (soa.status[i] == static_cast<uint8_t>(FoodStatus::Reject)) {
+                rejected = true;
+            }
+            history.detections.push_back(std::move(detection));
+        }
+
+        history.verdict = rejected ? "REJECTED" : "ACCEPTED";
+        const TelemetryView telemetry = m_state.telemetry();
+        history.surface_temp = telemetry.has_temperature
+            ? static_cast<double>(telemetry.temperature)
+            : 0.0;
+        if (m_image_store != nullptr) {
+            history.image_path = m_image_store->save_frame(frame_id, frame);
+        }
+        history.t_safe_hours = estimateSafeHours(
+            static_cast<float>(history.surface_temp));
+        history.checksum_sha256 = server::sha256Hex(canonicalAuditPayload(history));
+        m_state.pushInspectionHistory(std::move(history));
 
         processed++;
 
