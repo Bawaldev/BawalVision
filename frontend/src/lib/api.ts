@@ -56,7 +56,12 @@ export async function fetchInspectionAuditRecords(
 
 export async function fetchCameraStatus(baseUrl = BASE_URL): Promise<{ active: boolean; deviceId: string; fps: number }> {
     try {
-        const response = await fetch(`${baseUrl}/camera/active`, { cache: 'no-store' });
+        // /camera/status reports whichever source is active (live ESP32 or mock
+        // video); fall back to the live-only endpoint for older backends.
+        let response = await fetch(`${baseUrl}/camera/status`, { cache: 'no-store' });
+        if (!response.ok) {
+            response = await fetch(`${baseUrl}/camera/active`, { cache: 'no-store' });
+        }
         if (response.ok) {
             const data = await response.json();
             const ageMs = Number(data.last_frame_age_ms);
