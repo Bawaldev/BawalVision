@@ -37,6 +37,11 @@ std::string boundedString(const char* data, size_t capacity) {
     return std::string(data, len);
 }
 
+bool isValidJpeg(const std::vector<uint8_t>& image) {
+    return image.size() >= 4 && image[0] == 0xFF && image[1] == 0xD8 &&
+           image[image.size() - 2] == 0xFF && image.back() == 0xD9;
+}
+
 std::string sanitizeDeviceId(std::string id) {
     while (!id.empty()) {
         const char c = id.front();
@@ -573,6 +578,10 @@ std::optional<FrameIngressRequest> parseFrameIngress(const crow::request& req) {
     }
     parsed.camera_model = req.get_header_value("X-Camera-Model");
 
+    if (!isValidJpeg(parsed.image)) {
+        return std::nullopt;
+    }
+
     return parsed;
 }
 
@@ -903,7 +912,7 @@ void BackendApp::registerCameraRoutes() {
         });
 
     CROW_ROUTE(m_app, "/api/v1/camera/active")([this]() {
-        const CameraView camera = m_state.camera();
+        const CameraView camera = m_state.liveCamera();
 
         crow::json::wvalue body;
         body["active"] = camera.active;

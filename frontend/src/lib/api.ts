@@ -56,12 +56,17 @@ export async function fetchInspectionAuditRecords(
 
 export async function fetchCameraStatus(baseUrl = BASE_URL): Promise<{ active: boolean; deviceId: string; fps: number }> {
     try {
-        const response = await fetch(`${baseUrl}/camera/active`);
+        const response = await fetch(`${baseUrl}/camera/active`, { cache: 'no-store' });
         if (response.ok) {
             const data = await response.json();
-            if (data.device_id) {
-                return { active: true, deviceId: data.device_id, fps: Number(data.fps) || 0.0 };
-            }
+            const ageMs = Number(data.last_frame_age_ms);
+            const active = data.active === true && Number.isFinite(ageMs) && ageMs <= 1500;
+            const fps = Number(data.fps);
+            return {
+                active,
+                deviceId: active && typeof data.device_id === 'string' ? data.device_id : '',
+                fps: active && Number.isFinite(fps) && fps > 0 ? fps : 0.0
+            };
         }
     } catch {
         // network or offline error

@@ -38,8 +38,8 @@
         totalPlates = 0,
         passRate = 0.0,
         isOnline = true,
-        hasCamera = true,
-        realFps = 20.0,
+        hasCamera = false,
+        realFps = 0.0,
         realLatencyMs = 42.5,
         serverMemoryMB = 340,
         parallelCores = 4,
@@ -244,7 +244,7 @@
             </div>
             <div class="kpi-footer">
                 <span class="status-indicator live" class:offline={!isOnline && !hasCamera}></span>
-                <span class="kpi-subtext">Continuous Ingestion @ {realFps > 0 ? realFps.toFixed(0) : (hasCamera ? '20' : '0')} FPS</span>
+                <span class="kpi-subtext">Continuous Ingestion @ {hasCamera ? realFps.toFixed(0) : '0'} FPS</span>
             </div>
         </div>
 
@@ -479,7 +479,7 @@
                     <div class="hw-metrics">
                         <div class="hw-metric-item">
                             <span class="hw-metric-label">Throughput Frame</span>
-                            <span class="hw-metric-val mono">{realFps > 0 ? realFps.toFixed(1) : (hasCamera ? '20.0' : '0.0')} FPS</span>
+                            <span class="hw-metric-val mono">{hasCamera ? realFps.toFixed(1) : '0.0'} FPS</span>
                         </div>
                         <div class="hw-metric-item">
                             <span class="hw-metric-label">End-to-End Latency</span>
