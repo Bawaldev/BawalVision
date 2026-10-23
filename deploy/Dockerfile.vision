@@ -7,7 +7,7 @@
 # ------------------------------------------------------------------------------
 # Stage 1: Build environment
 # ------------------------------------------------------------------------------
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:26.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -81,7 +81,7 @@ RUN cmake -B /src/services/build -S /src/services -G Ninja \
 # ------------------------------------------------------------------------------
 # Stage 2: Production runtime
 # ------------------------------------------------------------------------------
-FROM ubuntu:24.04 AS runner
+FROM ubuntu:26.04 AS runner
 
 ENV DEBIAN_FRONTEND=noninteractive
 

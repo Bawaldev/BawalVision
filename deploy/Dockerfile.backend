@@ -9,7 +9,7 @@
 # ------------------------------------------------------------------------------
 # Stage 1: compile the unified bawal_backend binary
 # ------------------------------------------------------------------------------
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:26.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -55,7 +55,7 @@ RUN cmake -S /src/services -B /src/services/build \
 # ------------------------------------------------------------------------------
 # Stage 2: minimal runtime
 # ------------------------------------------------------------------------------
-FROM ubuntu:24.04 AS runtime
+FROM ubuntu:26.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
