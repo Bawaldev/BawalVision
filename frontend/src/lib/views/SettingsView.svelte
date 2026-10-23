@@ -337,7 +337,10 @@
                     formState.backendUrl,
                     gatewayIpToUse
                 );
-                if (!res.success && isWebSerialAvailable() && /not accessible|no such file|no USB serial/i.test(res.message || '')) {
+                // Transport-level server failures (no node visible to the
+                // backend, port busy, ACK timeout) fall back to Web Serial;
+                // credential rejections are surfaced as-is.
+                if (!res.success && isWebSerialAvailable() && /not accessible|no such file|no USB serial|cannot open|timed out|permission denied|did not report/i.test(res.message || '')) {
                     res = await provisionViaBrowserSerial(ssid, connectPassword, gatewayIpToUse);
                 }
             } else {
@@ -515,7 +518,10 @@
             await writer.write(encoder.encode(payload));
             writer.releaseLock();
 
-            const ack = await readBawalAck(port, 7000);
+            // The firmware answers only after it applied the credentials and
+            // waited up to 20 s for the association (rollback on failure), so
+            // a 7 s ACK window times out on every slow AP.
+            const ack = await readBawalAck(port, 30000);
             if (!ack || (ack.status !== 'wifi_provisioned' && ack.status !== 'ok')) {
                 return failure(
                     ack
@@ -766,7 +772,10 @@
             writer.releaseLock();
 
             webSerialMsg = 'Waiting for BAWAL_ACK from ESP32-S3...';
-            const ack = await readBawalAck(port, 7000);
+            // The firmware answers only after it applied the credentials and
+            // waited up to 20 s for the association (rollback on failure), so
+            // a 7 s ACK window times out on every slow AP.
+            const ack = await readBawalAck(port, 30000);
 
             if (ack && (ack.status === 'wifi_provisioned' || ack.status === 'ok')) {
                 const ssid = ack.ssid || serverWifiSsid;
