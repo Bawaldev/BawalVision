@@ -35,13 +35,7 @@
     let errorMessage = $state('');
     let detectedUsbPorts = $state<USBPortInfo[]>([]);
     let selectedUsbPort = $state('');
-    let portOptions = $derived.by(() => {
-        const options = detectedUsbPorts.map((p) => p.port);
-        for (const fallback of ['/dev/ttyACM0', '/dev/ttyUSB0']) {
-            if (!options.includes(fallback)) options.push(fallback);
-        }
-        return options;
-    });
+    let portOptions = $derived.by(() => detectedUsbPorts.map((p) => p.port));
     let detectedHostIp = $state('');
     let gatewayHostIp = $state('');
     let selectedSsid = $state('');
@@ -133,15 +127,11 @@
 
         detectedUsbPorts = hw.usb_ports || [];
         const preferredPort =
-            detectedUsbPorts.find((p) => p.port === '/dev/ttyACM0') ||
-            detectedUsbPorts.find((p) => p.port === '/dev/ttyUSB0') ||
-            detectedUsbPorts[0];
+            detectedUsbPorts.find((p) => p.is_esp32) || detectedUsbPorts[0];
         if (detectedUsbPorts.length === 0) {
-            // Keep the Hardware Flash Port dropdown usable even before the
-            // host exposes the device node to the backend.
-            selectedUsbPort = '/dev/ttyACM0';
+            selectedUsbPort = '';
         } else if (!selectedUsbPort || !detectedUsbPorts.some((p) => p.port === selectedUsbPort)) {
-            selectedUsbPort = preferredPort?.port || '/dev/ttyACM0';
+            selectedUsbPort = preferredPort?.port || '';
         }
 
         if (hw.wifi_networks && hw.wifi_networks.length > 0) {
@@ -230,6 +220,7 @@
 
     onMount(() => {
         refreshHardwareStatus();
+        void handleScanWifi();
         const timer = setInterval(() => {
             if (!isWebSerialConnecting) {
                 refreshHardwareStatus();
@@ -348,7 +339,7 @@
         if (info?.product) {
             return `${port} (${info.product})`;
         }
-        if (port === '/dev/ttyACM0') return `${port} (ESP32-S3 JTAG / Serial)`;
+        if (port.startsWith('/dev/ttyACM')) return `${port} (ESP32-S3 JTAG / Serial)`;
         return `${port} (USB Serial)`;
     }
 
@@ -596,7 +587,7 @@
     async function handlePairUsbDevice(portOverride?: string) {
         if (isWebSerialConnecting) return;
 
-        const targetPort = portOverride || selectedUsbPort || detectedUsbPorts[0]?.port || '/dev/ttyACM0';
+        const targetPort = portOverride || selectedUsbPort || detectedUsbPorts[0]?.port || '';
         isWebSerialConnecting = true;
         pairingPort = targetPort;
         webSerialStatus = 'idle';
@@ -651,7 +642,7 @@
     }
 
     async function handleDirectWebSerialConnect(allowBackendFallback = true) {
-        const targetPort = selectedUsbPort || detectedUsbPorts[0]?.port || '/dev/ttyACM0';
+        const targetPort = selectedUsbPort || detectedUsbPorts[0]?.port || '';
 
         if (typeof navigator === 'undefined' || !('serial' in navigator)) {
             if (allowBackendFallback) {
@@ -1066,23 +1057,9 @@
                             <div class="row-leading">
                                 <span class="empty-icon">ℹ️</span>
                                 <div>
-                                    <span class="empty-title">Direct Host Hardware Mode: <code>/dev/ttyACM0</code></span>
-                                    <p class="port-detail-text">Plugged into the host. Click <strong>Pair /dev/ttyACM0</strong> to auto-provision the active host Wi-Fi, with Web Serial as fallback, or use Wi-Fi below.</p>
+                                    <span class="empty-title">No USB serial ports detected</span>
+                                    <p class="port-detail-text">Plug an ESP32-S3 into the backend host and press <strong>Rescan Ports</strong>, or use <strong>Direct Browser Connect</strong> / Web Serial below.</p>
                                 </div>
-                            </div>
-                            <div class="row-trailing">
-                                <button
-                                    type="button"
-                                    class="fedora-accent-pill-btn"
-                                    onclick={() => handlePairUsbDevice('/dev/ttyACM0')}
-                                    disabled={isWebSerialConnecting}
-                                >
-                                    {#if pairingPort === '/dev/ttyACM0'}
-                                        <span class="btn-spinner"></span> Pairing...
-                                    {:else}
-                                        ⚡ Pair /dev/ttyACM0
-                                    {/if}
-                                </button>
                             </div>
                         </div>
                     {/if}
@@ -1184,8 +1161,13 @@
                             <div class="row-leading">
                                 <span class="empty-icon">📡</span>
                                 <div>
-                                    <span class="empty-title">Scanning for available Wi-Fi networks...</span>
-                                    <p class="port-detail-text">Select <strong>Scan Networks</strong> or verify that the server Wi-Fi interface is active.</p>
+                                    {#if isScanningWifi}
+                                        <span class="empty-title">Scanning for available Wi-Fi networks...</span>
+                                        <p class="port-detail-text">Querying the backend via <code>nmcli</code>.</p>
+                                    {:else}
+                                        <span class="empty-title">No Wi-Fi networks found</span>
+                                        <p class="port-detail-text">Press <strong>Scan Now</strong> and verify NetworkManager (<code>nmcli</code>) is running on the backend host.</p>
+                                    {/if}
                                 </div>
                             </div>
                             <div class="row-trailing">
@@ -1279,6 +1261,8 @@
                                     <select id="wifi-dialog-port" bind:value={selectedUsbPort} class="fedora-select">
                                         {#each portOptions as port}
                                             <option value={port}>{portLabel(port)}</option>
+                                        {:else}
+                                            <option value="">No USB serial ports detected</option>
                                         {/each}
                                     </select>
                                 </div>
@@ -1385,7 +1369,7 @@
                 {:else}
                     <div class="esp-idle-box">
                         <span class="idle-icon">💡</span>
-                        <span class="idle-text">Select your Wi-Fi network above to provision ESP32-S3, or plug into <code>/dev/ttyACM0</code> to automatically apply credentials.</span>
+                        <span class="idle-text">Select your Wi-Fi network above to provision ESP32-S3, or plug into a detected USB serial port to automatically apply credentials.</span>
                     </div>
                 {/if}
             </div>

@@ -303,6 +303,7 @@ export async function fetchWiFiNetworks(baseUrl = BASE_URL): Promise<WiFiNetwork
         });
         if (response.ok) {
             const data = await response.json();
+            if (Array.isArray(data)) return data as WiFiNetworkInfo[];
             return data.networks || [];
         }
     } catch {

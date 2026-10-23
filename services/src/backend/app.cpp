@@ -3,7 +3,6 @@
 #include "bawal/backend/database.hpp"
 
 #include <arpa/inet.h>
-#include <glob.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
 
@@ -11,6 +10,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -140,34 +141,143 @@ bool isEspUsbVendor(std::string_view vendor_id) {
 
 std::vector<UsbPortInfo> scanUsbSerialPorts() {
     std::vector<UsbPortInfo> ports;
-    for (const char* pattern : {"/dev/ttyACM*", "/dev/ttyUSB*"}) {
-        glob_t matches{};
-        if (glob(pattern, 0, nullptr, &matches) != 0) {
-            globfree(&matches);
+    std::error_code ec;
+    std::filesystem::directory_iterator it("/dev", ec);
+    if (ec) {
+        return ports;
+    }
+
+    const std::filesystem::directory_iterator end;
+    for (; it != end; it.increment(ec)) {
+        if (ec) {
+            break;
+        }
+        const std::string node = it->path().filename().string();
+        if (node.rfind("ttyACM", 0) != 0 && node.rfind("ttyUSB", 0) != 0) {
             continue;
         }
-        for (std::size_t i = 0; i < matches.gl_pathc; ++i) {
-            UsbPortInfo info;
-            info.port = matches.gl_pathv[i];
-            const std::string node = std::filesystem::path(info.port).filename().string();
-            info.name = node.rfind("ttyACM", 0) == 0 ? "ESP32-S3 USB Serial/JTAG"
-                                                     : "USB Serial";
 
-            const std::string sys = "/sys/class/tty/" + node + "/device";
-            std::error_code ec;
-            const std::filesystem::path device = std::filesystem::canonical(sys, ec);
-            const std::string base = ec ? sys : device.string();
-            info.vendor_id = readSysfsValue(base + "/../idVendor");
-            info.product_id = readSysfsValue(base + "/../idProduct");
-            info.manufacturer = readSysfsValue(base + "/../manufacturer");
-            info.product = readSysfsValue(base + "/../product");
-            info.is_esp32 = isEspUsbVendor(info.vendor_id) ||
-                            info.manufacturer.find("Espressif") != std::string::npos;
-            ports.push_back(std::move(info));
-        }
-        globfree(&matches);
+        UsbPortInfo info;
+        info.port = "/dev/" + node;
+        info.name = node.rfind("ttyACM", 0) == 0 ? "ESP32-S3 USB Serial/JTAG"
+                                                  : "USB Serial";
+
+        const std::string sys = "/sys/class/tty/" + node + "/device";
+        std::error_code canonical_ec;
+        const std::filesystem::path device =
+            std::filesystem::canonical(sys, canonical_ec);
+        const std::string base = canonical_ec ? sys : device.string();
+        info.vendor_id = readSysfsValue(base + "/../idVendor");
+        info.product_id = readSysfsValue(base + "/../idProduct");
+        info.manufacturer = readSysfsValue(base + "/../manufacturer");
+        info.product = readSysfsValue(base + "/../product");
+        info.is_esp32 = isEspUsbVendor(info.vendor_id) ||
+                        info.manufacturer.find("Espressif") != std::string::npos;
+        ports.push_back(std::move(info));
     }
+
+    std::sort(ports.begin(), ports.end(),
+              [](const UsbPortInfo& lhs, const UsbPortInfo& rhs) {
+                  return lhs.port < rhs.port;
+              });
     return ports;
+}
+
+std::string runShellCommand(const std::string& command) {
+    std::string output;
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr) {
+        return output;
+    }
+    char buffer[512];
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        output.append(buffer);
+    }
+    pclose(pipe);
+    return output;
+}
+
+std::vector<std::string> splitNmcliTerseLine(const std::string& line) {
+    std::vector<std::string> fields;
+    std::string current;
+    bool escaped = false;
+    for (const char c : line) {
+        if (escaped) {
+            current.push_back(c);
+            escaped = false;
+        } else if (c == '\\') {
+            escaped = true;
+        } else if (c == ':') {
+            fields.push_back(current);
+            current.clear();
+        } else {
+            current.push_back(c);
+        }
+    }
+    fields.push_back(current);
+    return fields;
+}
+
+struct WifiNetworkInfo {
+    std::string ssid;
+    int signal{0};
+    std::string security;
+    bool is_saved{false};
+};
+
+std::vector<WifiNetworkInfo> scanWifiNetworks() {
+    std::vector<WifiNetworkInfo> networks;
+    const std::string output = runShellCommand(
+        "timeout 8 nmcli -t -f SSID,SIGNAL,SECURITY device wifi list 2>/dev/null");
+    if (output.empty()) {
+        return networks;
+    }
+
+    std::unordered_map<std::string, std::size_t> index_by_ssid;
+    std::istringstream stream(output);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        const std::vector<std::string> fields = splitNmcliTerseLine(line);
+        if (fields.size() < 3) {
+            continue;
+        }
+
+        const std::string ssid = trimCopy(fields[0]);
+        if (ssid.empty() || ssid == "--") {
+            continue;
+        }
+
+        int signal = 0;
+        try {
+            signal = std::stoi(trimCopy(fields[1]));
+        } catch (const std::exception&) {
+            continue;
+        }
+        signal = std::clamp(signal, 0, 100);
+
+        std::string security = trimCopy(fields[2]);
+        if (security.empty()) {
+            security = "Open";
+        }
+
+        const auto existing = index_by_ssid.find(ssid);
+        if (existing == index_by_ssid.end()) {
+            index_by_ssid.emplace(ssid, networks.size());
+            networks.push_back(WifiNetworkInfo{ssid, signal, security, false});
+        } else if (signal > networks[existing->second].signal) {
+            networks[existing->second].signal = signal;
+            networks[existing->second].security = security;
+        }
+    }
+
+    std::sort(networks.begin(), networks.end(),
+              [](const WifiNetworkInfo& lhs, const WifiNetworkInfo& rhs) {
+                  return lhs.signal > rhs.signal;
+              });
+    return networks;
 }
 
 bool looksDockerOrLoopbackIp(std::string_view ip) {
@@ -1355,8 +1465,22 @@ void BackendApp::registerDeviceRoutes() {
     });
 
     CROW_ROUTE(m_app, "/api/v1/devices/wifi/networks")([]() {
-        crow::json::wvalue body;
+        const std::vector<WifiNetworkInfo> scanned = scanWifiNetworks();
+        const char* server_ssid = std::getenv("WIFI_SSID");
+
         crow::json::wvalue::list networks;
+        for (const auto& network : scanned) {
+            crow::json::wvalue item;
+            item["ssid"] = network.ssid;
+            item["signal"] = network.signal;
+            item["security"] = network.security;
+            item["is_saved"] = network.is_saved;
+            item["is_server"] = server_ssid != nullptr && *server_ssid != '\0' &&
+                                network.ssid == server_ssid;
+            networks.emplace_back(std::move(item));
+        }
+
+        crow::json::wvalue body;
         body["networks"] = std::move(networks);
         return crow::response(body);
     });
