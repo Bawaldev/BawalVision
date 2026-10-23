@@ -35,6 +35,11 @@ public:
     bool shouldStop(uint64_t generation) const;
     void publishFrame(const uint8_t* data, size_t len);
 
+    /** Time of the last complete frame, in steady-clock nanoseconds (0 if none yet). */
+    [[nodiscard]] int64_t lastFrameNs() const noexcept {
+        return m_last_frame_ns.load(std::memory_order_relaxed);
+    }
+
 private:
     void run();
 
@@ -47,6 +52,7 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<uint64_t> m_generation{0};
     std::atomic<uint32_t> m_frame_id{0};
+    std::atomic<int64_t> m_last_frame_ns{0};
 };
 
 } // namespace bawal::backend

@@ -234,6 +234,8 @@ private:
     std::chrono::steady_clock::time_point m_last_frame_time{};
     uint32_t m_last_frame_id{0};
     double m_fps{0.0};
+    std::chrono::steady_clock::time_point m_fps_window_start{};
+    uint64_t m_fps_window_frames{0};
 
     // Live stream metrics exclude browser-supplied MOCK_* video frames.
     std::string m_live_device_id;
@@ -243,6 +245,8 @@ private:
     uint16_t m_live_width{0};
     uint16_t m_live_height{0};
     double m_live_fps{0.0};
+    std::chrono::steady_clock::time_point m_live_fps_window_start{};
+    uint64_t m_live_fps_window_frames{0};
 
     uint64_t m_inspection_sequence{0};
     uint64_t m_inspection_timestamp_ns{0};

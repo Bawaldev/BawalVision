@@ -36,9 +36,11 @@ static const char *TAG = "WIFI";
 
 #define DISCOVERY_BACKOFF_MIN_MS 1000
 #define DISCOVERY_BACKOFF_MAX_MS 30000
-#define MJPEG_CLIENT_LIMIT 2
+#define DISCOVERY_REFRESH_MS 30000
+#define MJPEG_CLIENT_LIMIT 3
 #define MJPEG_FRAME_CAPACITY INITIAL_BUF_CAPACITY
 #define MJPEG_TARGET_CYCLE_US 66000
+#define MJPEG_IDLE_TIMEOUT_US (10LL * 1000LL * 1000LL)
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -212,7 +214,9 @@ bool wifi_nvs_save_full_config(const char *ssid, const char *pass,
     (void)nvs_set_str(handle, NVS_KEY_WIFI_SSID, ssid);
     (void)nvs_set_str(handle, "ssid", ssid);
 
-    if (pass && pass[0] != '\0') {
+    // A non-NULL pass (including "") is an explicit value; NULL preserves the
+    // currently stored password. This lets provisioning switch to an open AP.
+    if (pass != NULL) {
         (void)nvs_set_str(handle, NVS_KEY_WIFI_PASS, pass);
         (void)nvs_set_str(handle, "pass", pass);
     } else {
@@ -263,38 +267,120 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
                                     const char *backend_ip, const char *backend_port) {
     if (!ssid || ssid[0] == '\0') return false;
 
-    str_trim_copy(g_wifi_ssid, sizeof(g_wifi_ssid), ssid);
-    if (pass && pass[0] != '\0') str_trim_copy(g_wifi_pass, sizeof(g_wifi_pass), pass);
+    char new_ssid[sizeof(g_wifi_ssid)] = {0};
+    str_trim_copy(new_ssid, sizeof(new_ssid), ssid);
+    if (new_ssid[0] == '\0') return false;
+
+    char new_pass[sizeof(g_wifi_pass)] = {0};
+    if (pass != NULL) {
+        size_t pass_len = strnlen(pass, sizeof(new_pass));
+        if (pass_len >= sizeof(new_pass)) {
+            ESP_LOGE(TAG, "Rejected: password too long (%u)", (unsigned)pass_len);
+            return false;
+        }
+        if (pass_len > 0 && (pass_len < 8 || pass_len > 63)) {
+            ESP_LOGE(TAG, "Rejected: WPA password must be 8-63 characters");
+            return false;
+        }
+        str_trim_copy(new_pass, sizeof(new_pass), pass);
+    }
+
+    char new_ip[sizeof(g_backend_ip)] = {0};
     if (backend_ip && backend_ip[0] != '\0') {
         if (!is_valid_lan_ip(backend_ip)) {
             ESP_LOGE(TAG, "DITOLAK: Backend IP %s adalah IP Docker/Loopback atau bukan LAN valid", backend_ip);
             return false;
         }
-        str_trim_copy(g_backend_ip, sizeof(g_backend_ip), backend_ip);
+        str_trim_copy(new_ip, sizeof(new_ip), backend_ip);
     }
-    if (backend_port && backend_port[0] != '\0') str_trim_copy(g_backend_port, sizeof(g_backend_port), backend_port);
-    s_discovered_ip[0] = '\0';
 
-    wifi_nvs_save_full_config(g_wifi_ssid, (pass && pass[0] != '\0') ? g_wifi_pass : NULL, g_backend_ip, g_backend_port);
+    char new_port[sizeof(g_backend_port)] = {0};
+    if (backend_port && backend_port[0] != '\0') {
+        int p = atoi(backend_port);
+        if (p <= 0 || p > 65535) {
+            ESP_LOGE(TAG, "Rejected: invalid backend port %s", backend_port);
+            return false;
+        }
+        str_trim_copy(new_port, sizeof(new_port), backend_port);
+    }
+
+    char old_ssid[sizeof(g_wifi_ssid)];
+    char old_pass[sizeof(g_wifi_pass)];
+    char old_ip[sizeof(g_backend_ip)];
+    char old_port[sizeof(g_backend_port)];
+    str_trim_copy(old_ssid, sizeof(old_ssid), g_wifi_ssid);
+    str_trim_copy(old_pass, sizeof(old_pass), g_wifi_pass);
+    str_trim_copy(old_ip, sizeof(old_ip), g_backend_ip);
+    str_trim_copy(old_port, sizeof(old_port), g_backend_port);
+
+    str_trim_copy(g_wifi_ssid, sizeof(g_wifi_ssid), new_ssid);
+    if (pass != NULL) str_trim_copy(g_wifi_pass, sizeof(g_wifi_pass), new_pass);
+    if (new_ip[0] != '\0') str_trim_copy(g_backend_ip, sizeof(g_backend_ip), new_ip);
+    if (new_port[0] != '\0') str_trim_copy(g_backend_port, sizeof(g_backend_port), new_port);
+    s_discovered_ip[0] = '\0';
 
     char target_url[URL_BUFFER_SIZE];
     if (get_backend_url(CAMERA_FRAME_ENDPOINT, target_url, sizeof(target_url)) == ESP_OK) {
         ESP_LOGI(TAG, "Target backend URL: %s", target_url);
     }
 
-    if (s_wifi_initialized) {
-        wifi_config_t cfg = {0};
-        strncpy((char *)cfg.sta.ssid, g_wifi_ssid, sizeof(cfg.sta.ssid) - 1);
-        strncpy((char *)cfg.sta.password, g_wifi_pass, sizeof(cfg.sta.password) - 1);
-        cfg.sta.threshold.authmode = (g_wifi_pass[0] != '\0') ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
-        cfg.sta.pmf_cfg.capable = false;
-        cfg.sta.pmf_cfg.required = false;
+    if (!s_wifi_initialized) {
+        return wifi_nvs_save_full_config(g_wifi_ssid, pass != NULL ? g_wifi_pass : NULL,
+                                         g_backend_ip, g_backend_port);
+    }
+
+    wifi_config_t cfg = {0};
+    strncpy((char *)cfg.sta.ssid, g_wifi_ssid, sizeof(cfg.sta.ssid) - 1);
+    strncpy((char *)cfg.sta.password, g_wifi_pass, sizeof(cfg.sta.password) - 1);
+    cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    cfg.sta.threshold.authmode = (g_wifi_pass[0] != '\0') ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+    cfg.sta.pmf_cfg.capable = false;
+    cfg.sta.pmf_cfg.required = false;
+
+    if (g_wifi_event_group) {
+        xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+    (void)esp_wifi_disconnect();
+    esp_err_t set_err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    if (set_err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(set_err));
+    }
+    (void)esp_wifi_connect();
+
+    bool connected = false;
+    if (g_wifi_event_group) {
+        EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT,
+                                               pdFALSE, pdTRUE, pdMS_TO_TICKS(20000));
+        connected = (bits & WIFI_CONNECTED_BIT) != 0;
+    }
+
+    if (!connected) {
+        ESP_LOGE(TAG, "Provisioning failed to connect; restoring previous credentials");
+        str_trim_copy(g_wifi_ssid, sizeof(g_wifi_ssid), old_ssid);
+        str_trim_copy(g_wifi_pass, sizeof(g_wifi_pass), old_pass);
+        str_trim_copy(g_backend_ip, sizeof(g_backend_ip), old_ip);
+        str_trim_copy(g_backend_port, sizeof(g_backend_port), old_port);
         if (g_wifi_event_group) {
             xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
         }
-        (void)esp_wifi_disconnect();
-        (void)esp_wifi_set_config(WIFI_IF_STA, &cfg);
-        (void)esp_wifi_connect();
+        if (old_ssid[0] != '\0') {
+            wifi_config_t old_cfg = {0};
+            strncpy((char *)old_cfg.sta.ssid, old_ssid, sizeof(old_cfg.sta.ssid) - 1);
+            strncpy((char *)old_cfg.sta.password, old_pass, sizeof(old_cfg.sta.password) - 1);
+            old_cfg.sta.threshold.authmode = (old_pass[0] != '\0') ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+            old_cfg.sta.pmf_cfg.capable = false;
+            old_cfg.sta.pmf_cfg.required = false;
+            (void)esp_wifi_disconnect();
+            (void)esp_wifi_set_config(WIFI_IF_STA, &old_cfg);
+            (void)esp_wifi_connect();
+        }
+        return false;
+    }
+
+    if (!wifi_nvs_save_full_config(g_wifi_ssid, pass != NULL ? g_wifi_pass : NULL,
+                                   g_backend_ip, g_backend_port)) {
+        ESP_LOGW(TAG, "Connected but failed to persist credentials to NVS");
     }
     return true;
 }
@@ -422,18 +508,40 @@ static bool wifi_discover_backend(void) {
         close(sock);
         return false;
     }
+    if (ntohs(src.sin_port) != BACKEND_DISCOVERY_PORT) {
+        ESP_LOGW(TAG, "Discovery: ignoring reply from %s:%u (unexpected source port)",
+                 ip, (unsigned)ntohs(src.sin_port));
+        close(sock);
+        return false;
+    }
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        ESP_LOGW(TAG, "Discovery: ignoring malformed reply from %s", ip);
+        close(sock);
+        return false;
+    }
+    cJSON *service = cJSON_GetObjectItemCaseSensitive(root, "service");
+    if (!cJSON_IsString(service) || strcmp(service->valuestring, "bawal-vision") != 0) {
+        ESP_LOGW(TAG, "Discovery: ignoring reply from %s (unexpected service)", ip);
+        cJSON_Delete(root);
+        close(sock);
+        return false;
+    }
+
+    char port_buf[sizeof(g_backend_port)] = {0};
+    cJSON *port = cJSON_GetObjectItemCaseSensitive(root, "backend_port");
+    if (cJSON_IsNumber(port) && port->valueint > 0 && port->valueint <= 65535) {
+        snprintf(port_buf, sizeof(port_buf), "%d", port->valueint);
+    }
+    cJSON_Delete(root);
 
     bool changed = strcmp(g_backend_ip, ip) != 0;
     str_trim_copy(g_backend_ip, sizeof(g_backend_ip), ip);
     str_trim_copy(s_discovered_ip, sizeof(s_discovered_ip), ip);
-
-    cJSON *root = cJSON_Parse(buf);
-    if (root) {
-        cJSON *port = cJSON_GetObjectItemCaseSensitive(root, "backend_port");
-        if (cJSON_IsNumber(port)) {
-            snprintf(g_backend_port, sizeof(g_backend_port), "%d", port->valueint);
-        }
-        cJSON_Delete(root);
+    if (port_buf[0] != '\0') {
+        if (strcmp(g_backend_port, port_buf) != 0) changed = true;
+        str_trim_copy(g_backend_port, sizeof(g_backend_port), port_buf);
     }
 
     if (changed) {
@@ -449,7 +557,14 @@ static void wifi_discovery_task(void *pvParameters) {
     uint32_t backoff_ms = DISCOVERY_BACKOFF_MIN_MS;
 
     for (;;) {
-        xEventGroupWaitBits(g_wifi_event_group, WIFI_DISCOVERY_BIT, pdTRUE, pdFALSE, portMAX_DELAY);
+        // Wake on a failure notification, but also refresh periodically so a
+        // restarted backend is re-adopted even while telemetry keeps succeeding.
+        xEventGroupWaitBits(g_wifi_event_group, WIFI_DISCOVERY_BIT, pdTRUE, pdFALSE,
+                            pdMS_TO_TICKS(DISCOVERY_REFRESH_MS));
+
+        if (!(xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT)) {
+            continue;
+        }
 
         if (wifi_discover_backend()) {
             backoff_ms = DISCOVERY_BACKOFF_MIN_MS;
@@ -463,7 +578,6 @@ static void wifi_discovery_task(void *pvParameters) {
         if (backoff_ms > DISCOVERY_BACKOFF_MAX_MS) {
             backoff_ms = DISCOVERY_BACKOFF_MAX_MS;
         }
-        xEventGroupSetBits(g_wifi_event_group, WIFI_DISCOVERY_BIT);
     }
 }
 
@@ -493,8 +607,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         lcd_update_http_status("WIFI LOST", true);
         g_wifi_retry_num++;
         uint32_t delay_ms = (g_wifi_retry_num < 5) ? 1000 : 3000;
-        esp_timer_stop(s_reconnect_timer);
-        esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000ULL);
+        if (s_reconnect_timer != NULL) {
+            esp_timer_stop(s_reconnect_timer);
+            esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000ULL);
+        } else {
+            ESP_LOGW(TAG, "Reconnect timer unavailable; retrying immediately");
+            (void)esp_wifi_connect();
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         char ip_str[24] = {0};
@@ -531,7 +650,10 @@ void wifi_init_sta(void) {
         .callback = wifi_reconnect_timer_cb,
         .name = "wifi_reconnect_timer",
     };
-    esp_timer_create(&timer_args, &s_reconnect_timer);
+    if (esp_timer_create(&timer_args, &s_reconnect_timer) != ESP_OK) {
+        s_reconnect_timer = NULL;
+        ESP_LOGE(TAG, "Failed to create Wi-Fi reconnect timer");
+    }
 
     if (!wifi_nvs_load_credentials()) {
         str_trim_copy(g_wifi_ssid, sizeof(g_wifi_ssid), CONFIG_ESP_WIFI_SSID);
@@ -628,12 +750,17 @@ static void mjpeg_stream_task(void *arg) {
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         uint32_t last_frame_id = UINT32_MAX;
         bool first = true;
+        int64_t last_send_us = esp_timer_get_time();
 
         for (;;) {
             const int64_t cycle_start_us = esp_timer_get_time();
             esp_err_t copied = camera_copy_current_frame(&frame);
             if (copied != ESP_OK || frame.header.buffer_len == 0 ||
                 frame.header.frame_id == last_frame_id) {
+                if (esp_timer_get_time() - last_send_us > MJPEG_IDLE_TIMEOUT_US) {
+                    ESP_LOGW(TAG, "Closing idle MJPEG client (no frame for 10 s)");
+                    break;
+                }
                 vTaskDelay(pdMS_TO_TICKS(5));
                 continue;
             }
@@ -650,6 +777,7 @@ static void mjpeg_stream_task(void *arg) {
             }
             last_frame_id = frame.header.frame_id;
             first = false;
+            last_send_us = esp_timer_get_time();
 
             // Limit stream work to the 15 FPS budget while yielding immediately
             // when copying or sending already consumed the full cycle.
@@ -710,7 +838,7 @@ esp_err_t wifi_http_stream_server_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.ctrl_port = 32768;
-    config.max_open_sockets = 5;
+    config.max_open_sockets = 6;
     config.lru_purge_enable = true;
     config.stack_size = 6144;
     esp_err_t err = httpd_start(&s_http_server, &config);
@@ -781,8 +909,14 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
     esp_http_client_set_post_field(client, json, (int)strlen(json));
 
     esp_err_t err = esp_http_client_perform(client);
+    int http_status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
     cJSON_free(json);
+
+    if (err == ESP_OK && (http_status < 200 || http_status >= 300)) {
+        ESP_LOGW(TAG, "Telemetry rejected with HTTP %d", http_status);
+        return ESP_FAIL;
+    }
     return err;
 }
 
@@ -855,7 +989,8 @@ static void handle_provisioning_line(char *line) {
             cJSON *port = cJSON_GetObjectItemCaseSensitive(cmd_json, "backend_port");
 
             const char *ssid_val = (cJSON_IsString(s) && s->valuestring) ? s->valuestring : "";
-            const char *pass_val = (cJSON_IsString(p) && p->valuestring) ? p->valuestring : "";
+            // Omitted password keeps the stored one; an explicit "" targets an open AP.
+            const char *pass_val = (cJSON_IsString(p) && p->valuestring) ? p->valuestring : NULL;
             const char *ip_val = (cJSON_IsString(ip) && ip->valuestring) ? ip->valuestring : "";
 
             char port_buf[16] = "8080";
@@ -866,9 +1001,6 @@ static void handle_provisioning_line(char *line) {
             }
 
             bool ok = wifi_apply_runtime_credentials(ssid_val, pass_val, ip_val, port_buf);
-            if (ok && g_wifi_event_group) {
-                (void)xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(2000));
-            }
             usb_send_ack(ok ? "wifi_provisioned" : "error");
         } else if (strcmp(cmd_item->valuestring, "status") == 0 ||
                    strcmp(cmd_item->valuestring, "get_status") == 0) {
