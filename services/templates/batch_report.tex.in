@@ -1,13 +1,17 @@
 \documentclass[10pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[a4paper,margin=1.5cm]{geometry}
+\usepackage[a4paper,margin=1.4cm]{geometry}
 \usepackage{graphicx}
 \usepackage{xcolor}
+\usepackage{array}
 
-\definecolor{acceptedgreen}{RGB}{34, 139, 34}
-\definecolor{rejectedred}{RGB}{178, 34, 34}
-\definecolor{darknavy}{RGB}{20, 35, 60}
+\definecolor{acceptedgreen}{RGB}{22, 163, 74}
+\definecolor{rejectedred}{RGB}{220, 38, 38}
+\definecolor{reviewamber}{RGB}{217, 119, 6}
+\definecolor{darknavy}{RGB}{15, 23, 42}
+\definecolor{slatebg}{RGB}{241, 245, 249}
+\definecolor{barblue}{RGB}{54, 121, 168}
 
 \setlength{\parindent}{0pt}
 \pagestyle{plain}
@@ -26,20 +30,73 @@
 \vspace{2pt}
 {\color{white}\LARGE\textbf{BATCH FOOD TRAY AUDIT SUMMARY REPORT}}\\[4pt]
 {\color{white}\small High-Throughput Parallel Multimodal Inspection Engine}\\[2pt]
+{\color{white}\small Inspection Type: \texttt{#@INSPECTION_TYPE@} \quad | \quad Generated: #@GENERATED_AT@}\\[2pt]
 \end{minipage}}
 
 \vspace{0.4cm}
 \noindent
 \begin{tabular}{ll}
     \textbf{Batch Identifier:} & \texttt{#@BATCH_ID@} \\
+    \textbf{Inspection Type:} & \texttt{\textbf{#@INSPECTION_TYPE@}} (operator image batch upload) \\
+    \textbf{Model Architecture:} & #@MODEL_ARCH@ \\
+    \textbf{Parallel Engine:} & #@ENGINE@ \\
+    \textbf{OpenMP Workers:} & #@OMP_THREADS@ threads \\
     \textbf{Total Trays Processed:} & #@TOTAL_TRAYS@ baki \\
+    \textbf{Compute Time:} & #@PROCESSING_TIME@ ms \\
+    \textbf{Throughput:} & #@THROUGHPUT@ trays/s \\
     \textbf{Compliance Verdict:} & \textcolor{acceptedgreen}{\textbf{#@ACCEPTED_COUNT@ Accepted}} | \textcolor{rejectedred}{\textbf{#@REJECTED_COUNT@ Rejected}} \\
-    \textbf{Parallel Engine:} & OpenMP Multicore + AVX2 Vectorized YOLOv8s INT8 \\
+    \textbf{Batch Pass Rate:} & \textbf{#@PASS_RATE@\%} of trays accepted \\
+    \textbf{Report Checksum (FNV-1a 64):} & \texttt{#@CHECKSUM@} \\
+\end{tabular}
+
+\vspace{0.5cm}
+\noindent\colorbox{slatebg}{%
+\begin{minipage}{\dimexpr\linewidth-2\fboxsep\relax}
+\vspace{2pt}
+{\large\bfseries Executive Summary}\\[3pt]
+\begin{tabular}{llll}
+    \textbf{Batch Quality Index:} & \textcolor{#@QUALITY_INDEX_COLOR@}{\textbf{#@QUALITY_INDEX@ / 100}} &
+    \textbf{Avg Similarity:} & #@AVG_SIMILARITY@\% \\
+    \textbf{Avg Food Quality:} & #@AVG_QUALITY@\% &
+    \textbf{Quality Std Dev:} & #@QUALITY_STDDEV@ \\
+    \textbf{Quality Range:} & #@MIN_QUALITY@\% -- #@MAX_QUALITY@\% &
+    \textbf{Total Detections:} & #@TOTAL_DETECTIONS@ \\
+    \textbf{Detections PASS:} & \textcolor{acceptedgreen}{#@PASS_DETECTIONS@} &
+    \textbf{Detections REVIEW:} & \textcolor{reviewamber}{#@REVIEW_DETECTIONS@} \\
+    \textbf{Detections REJECT:} & \textcolor{rejectedred}{#@REJECT_DETECTIONS@} &
+    \textbf{Data Source:} & YOLOv8s INT8 + SIMD CV \\
+\end{tabular}\\[3pt]
+{\footnotesize Batch Quality Index $= 100 \times (0.45 \cdot \overline{\mathrm{similarity}} + 0.55 \cdot \overline{\mathrm{quality}}/100) - 25 \cdot \mathrm{reject\,ratio}$.}
+\vspace{2pt}
+\end{minipage}}
+
+\vspace{0.6cm}
+\section*{Detection Quality Analytics}
+\noindent Per-class detector confidence, SIMD freshness scores and verdict distribution across the whole batch.\\[3pt]
+\begin{tabular}{lccccc}
+\hline
+\textbf{Food Class} & \textbf{Detections} & \textbf{Avg Similarity} & \textbf{Avg Quality} & \textbf{P / R / X} & \textbf{Class Pass Rate} \\ \hline
+#@CLASS_TABLE@
+\hline
+\end{tabular}
+
+\vspace{0.5cm}
+\noindent\textbf{SIMD freshness distribution} (quality buckets, all detections):\\[3pt]
+\begin{tabular}{rlc}
+\hline
+\textbf{Quality Bucket} & \textbf{Distribution} & \textbf{Count} \\ \hline
+#@QUALITY_HISTOGRAM@
+\hline
 \end{tabular}
 
 \vspace{0.6cm}
-\hrule
+\section*{Grafana Fleet Analytics}
+#@GRAFANA_SECTION@
+
 \vspace{0.4cm}
+\hrule
+\vspace{2mm}
+{\footnotesize BawalVision batch audit artifact \texttt{#@BATCH_ID@} \quad checksum \texttt{#@CHECKSUM@} \quad #@GENERATED_AT@ \quad engine #@ENGINE@.}
 
 #@TRAY_SECTIONS@
 

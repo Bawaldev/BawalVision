@@ -7,6 +7,11 @@
 #include <vector>
 
 #include "bawal/backend/state.hpp"
+#include "bawal/vision/image/batch_types.hpp"
+
+namespace bawal::vision::image {
+struct BatchReportSummary;
+}
 
 namespace bawal::backend {
 
@@ -69,15 +74,34 @@ public:
     [[nodiscard]] long long inspectionCount();
     [[nodiscard]] std::vector<InspectionRecordRow> listInspections(int limit = 100);
 
+    /**
+     * @brief Fleet-wide analytics read from the same tables the provisioned
+     *        Grafana dashboard (uid: bawalvision_analytics) queries.
+     *
+     * Read-only and fail-soft: returns `available == false` when PostgreSQL is
+     * unreachable so batch reports can still be generated offline.
+     */
+    [[nodiscard]] bawal::vision::image::GrafanaAnalytics fetchGrafanaAnalytics();
+
     bool saveInspection(std::string_view device_id,
                         uint32_t frame_id,
                         const DetectionSoA& detections,
                         const SceneOpticalSoA& optical,
                         std::string_view engine_pipeline);
 
+    /**
+     * @brief Persists a completed ZIP batch as `img-batch` audit rows.
+     *
+     * One `inspections` row per tray plus one `inspection_foods` row per
+     * detection, so batch uploads appear in the Grafana quality panels
+     * alongside live camera frames. No-op (false) without PostgreSQL.
+     */
+    bool saveBatchInspection(const bawal::vision::image::BatchReportSummary& summary);
+
 private:
     bool ensureConnectedLocked();
-    bool ensureDeviceLocked(std::string_view device_id);
+    bool ensureDeviceLocked(std::string_view device_id,
+                            std::string_view device_type = "ESP32");
     bool insertInspectionLocked(std::string_view device_id,
                                 uint32_t frame_id,
                                 const DetectionSoA& detections,
