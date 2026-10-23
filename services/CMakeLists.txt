@@ -88,10 +88,49 @@ find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui dnn)
 find_package(CURL REQUIRED)
 find_package(PostgreSQL QUIET)
-find_package(fmt QUIET)
+find_package(fmt CONFIG QUIET)
 find_package(httplib QUIET)
-find_package(nlohmann_json QUIET)
 find_package(ncnn QUIET)
+
+include(FetchContent)
+
+if(NOT TARGET fmt::fmt)
+    FetchContent_Declare(fmt
+        GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+        GIT_TAG 10.2.1
+        GIT_SHALLOW TRUE
+    )
+    set(FMT_DOC OFF CACHE BOOL "" FORCE)
+    set(FMT_TEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(fmt)
+endif()
+
+if(NOT TARGET glaze::glaze)
+    FetchContent_Declare(glaze
+        GIT_REPOSITORY https://github.com/stephenberry/glaze.git
+        GIT_TAG v4.2.0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(glaze)
+endif()
+
+find_package(mimalloc CONFIG QUIET)
+if(NOT TARGET mimalloc-static AND NOT TARGET mimalloc)
+    FetchContent_Declare(mimalloc
+        GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
+        GIT_TAG v2.1.7
+        GIT_SHALLOW TRUE
+    )
+    set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(mimalloc)
+endif()
+
+option(ENABLE_AWS_LAMBDA "Build vision_service as an AWS Lambda custom runtime" OFF)
+if(ENABLE_AWS_LAMBDA)
+    find_package(aws-lambda-runtime CONFIG REQUIRED)
+endif()
 
 if(NOT TARGET ncnn)
     find_path(NCNN_INCLUDE_DIR  
@@ -234,13 +273,17 @@ else()
     message(STATUS "PostgreSQL/libpq not found - inspection persistence disabled")
 endif()
 
-if(TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(bawal_core PUBLIC nlohmann_json::nlohmann_json)
-endif()
+target_link_libraries(bawal_core PUBLIC fmt::fmt glaze::glaze)
+target_compile_definitions(bawal_core PUBLIC BAWAL_USE_FMT=1 BAWAL_USE_GLAZE=1)
 
-if(TARGET fmt::fmt)
-    target_link_libraries(bawal_core PUBLIC fmt::fmt)
-    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_SYSTEM_FMT=1)
+if(TARGET mimalloc-static)
+    target_link_libraries(bawal_core PUBLIC mimalloc-static)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_MIMALLOC=1)
+elseif(TARGET mimalloc)
+    target_link_libraries(bawal_core PUBLIC mimalloc)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_MIMALLOC=1)
+else()
+    message(FATAL_ERROR "mimalloc package did not provide mimalloc-static or mimalloc target")
 endif()
 
 if(TARGET httplib::httplib)
@@ -266,6 +309,7 @@ option(BAWAL_BUILD_VISION_VIEWER "Build the legacy standalone vision viewer" ON)
 if(BAWAL_BUILD_BACKEND)
     add_executable(bawal_backend src/backend/main_backend.cpp)
     target_link_libraries(bawal_backend PRIVATE bawal_core)
+    target_compile_definitions(bawal_backend PRIVATE BAWAL_USE_MIMALLOC=1)
     install(TARGETS bawal_backend DESTINATION bin)
 endif()
 
@@ -274,5 +318,11 @@ endif()
 if(BAWAL_BUILD_VISION_VIEWER)
     add_executable(vision_service src/main.cpp)
     target_link_libraries(vision_service PRIVATE bawal_core)
+    target_compile_definitions(vision_service PRIVATE BAWAL_USE_MIMALLOC=1)
+    if(ENABLE_AWS_LAMBDA)
+        target_compile_definitions(vision_service PRIVATE BUILD_AWS_LAMBDA=1)
+        target_link_libraries(vision_service PRIVATE AWS::aws-lambda-runtime)
+        set_target_properties(vision_service PROPERTIES OUTPUT_NAME "bootstrap")
+    endif()
     install(TARGETS vision_service DESTINATION bin)
 endif()

@@ -172,7 +172,7 @@ esp_err_t camera_task_init(void) {
   return ESP_OK;
 }
 
-esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
+static esp_err_t camera_copy_frame(camera_frame_buffer_t *out_frame, bool require_new) {
   if (out_frame == NULL || out_frame->data == NULL) return ESP_ERR_INVALID_ARG;
 
   if (xSemaphoreTake(s_camera_mutex, pdMS_TO_TICKS(15)) != pdTRUE) {
@@ -181,7 +181,7 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
 
   frame_slot_t *slot = &s_slots[s_ready_idx];
 
-  if (!s_has_new_frame || slot->header.buffer_len == 0) {
+  if ((require_new && !s_has_new_frame) || slot->header.buffer_len == 0) {
     xSemaphoreGive(s_camera_mutex);
     return ESP_ERR_NOT_FOUND;
   }
@@ -194,10 +194,18 @@ esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
   memcpy(&out_frame->header, &slot->header, sizeof(camera_frame_header_t));
   memcpy(out_frame->data, slot->data, copy_len);
   out_frame->header.buffer_len = copy_len;
-  s_has_new_frame = false;
+  if (require_new) s_has_new_frame = false;
 
   xSemaphoreGive(s_camera_mutex);
   return ESP_OK;
+}
+
+esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame) {
+  return camera_copy_frame(out_frame, true);
+}
+
+esp_err_t camera_copy_current_frame(camera_frame_buffer_t *out_frame) {
+  return camera_copy_frame(out_frame, false);
 }
 
 void Camera_Capture_Task(void *pvParameters) {
