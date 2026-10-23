@@ -1,5 +1,7 @@
 #include "bawal/backend/state.hpp"
 
+#include "bawal/backend/net_utils.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -16,28 +18,6 @@ bool isValidJpeg(const std::vector<uint8_t>& jpeg) {
 
 bool isMockDeviceId(std::string_view device_id) {
     return device_id == "MOCK_VIDEO_CAM" || device_id.rfind("MOCK_", 0) == 0;
-}
-
-// Docker bridge / Desktop VM addresses never identify a LAN edge node.
-bool isDockerOrLoopbackAddress(std::string_view ip) {
-    if (ip.empty() || ip == "0.0.0.0") {
-        return true;
-    }
-    if (ip.rfind("127.", 0) == 0 || ip.rfind("192.168.65.", 0) == 0) {
-        return true;
-    }
-    if (ip.rfind("172.", 0) == 0) {
-        const std::size_t dot = ip.find('.', 4);
-        if (dot != std::string_view::npos) {
-            const std::string octet(ip.substr(4, dot - 4));
-            char* end = nullptr;
-            const long value = std::strtol(octet.c_str(), &end, 10);
-            if (end != octet.c_str() && value >= 16 && value <= 31) {
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 } // namespace
@@ -214,7 +194,7 @@ void BackendState::updateTelemetry(const TelemetrySample& sample) {
 }
 
 void BackendState::updatePeerIp(std::string ip) {
-    if (isDockerOrLoopbackAddress(ip)) {
+    if (looksDockerOrLoopbackIp(ip)) {
         return;
     }
     std::lock_guard<std::mutex> lock(m_mutex);

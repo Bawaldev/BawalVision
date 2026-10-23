@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include "bawal/vision/calibration.hpp"
 #include "bawal/vision/camera_receiver.hpp"
@@ -22,6 +23,22 @@
 #include "bawal/vision/video_source.hpp"
 
 namespace bawal::vision {
+
+/**
+ * @brief Reusable ISP scratch buffers for the illumination pass.
+ *
+ * Declared in the header so the pipeline TU keeps a single definition instead
+ * of a private copy; the members are only meaningful inside the pipeline.
+ */
+struct IspScratch {
+    std::vector<cv::Mat> bgr_planes = std::vector<cv::Mat>(3);
+    std::vector<cv::Mat> lab_planes = std::vector<cv::Mat>(3);
+    cv::Mat balanced;
+    cv::Mat lab;
+    cv::Mat contrast;
+    cv::Mat blurred;
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(1.8, cv::Size(8, 8));
+};
 
 /**
  * @brief Complete inspection output container.

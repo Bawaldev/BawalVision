@@ -1,4 +1,5 @@
 #include "bawal/vision/pipeline.hpp"
+
 #include "bawal/vision/simd_food_evaluator.hpp"
 #include "bawal/ml/ncnn_generator.hpp"
 #include <chrono>
@@ -28,16 +29,6 @@ bool envFlagValue(const char* name, bool default_value) noexcept {
     return value == "1" || value == "true" || value == "TRUE" ||
            value == "yes" || value == "on";
 }
-
-struct IspScratch {
-    std::vector<cv::Mat> bgr_planes = std::vector<cv::Mat>(3);
-    std::vector<cv::Mat> lab_planes = std::vector<cv::Mat>(3);
-    cv::Mat balanced;
-    cv::Mat lab;
-    cv::Mat contrast;
-    cv::Mat blurred;
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(1.8, cv::Size(8, 8));
-};
 
 } // anonymous namespace
 
@@ -236,7 +227,7 @@ void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
     scratch.bgr_planes[2].convertTo(scratch.bgr_planes[2], -1, gain_r, 0);
     cv::merge(scratch.bgr_planes, scratch.balanced);
 
-    // 2. CLAHE pada kanal L* (angkat bayangan gelap wajah tanpa bikin silau lampu plafon)
+    // 2. CLAHE on the L* channel (lifts dark shadows without blowing out bright ceiling lights)
     cv::cvtColor(scratch.balanced, scratch.lab, cv::COLOR_BGR2Lab);
     cv::split(scratch.lab, scratch.lab_planes);
     scratch.clahe->apply(scratch.lab_planes[0], scratch.lab_planes[0]);

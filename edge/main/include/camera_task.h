@@ -19,6 +19,12 @@ extern "C" {
 #define STREAM_FPS           20
 #define INITIAL_BUF_CAPACITY (256 * 1024)
 
+/** Double-buffered frame slot: metadata header plus a heap/PSRAM pixel buffer. */
+typedef struct __attribute__((aligned(8))) {
+  camera_frame_header_t header;
+  uint8_t *data;
+} frame_slot_t;
+
 /**
  * @brief Initialize the OV5640-compatible camera in crisp JPEG VGA mode (640x480).
  *

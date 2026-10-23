@@ -1,6 +1,11 @@
 #include "bawal/backend/app.hpp"
 
+#include "bawal/backend/byte_range.hpp"
 #include "bawal/backend/database.hpp"
+#include "bawal/backend/net_utils.hpp"
+#include "bawal/backend/text_utils.hpp"
+#include "bawal/backend/usb_probe.hpp"
+#include "bawal/backend/wifi_probe.hpp"
 #include "bawal/server/rolling_image_store.hpp"
 
 #include <arpa/inet.h>
@@ -102,18 +107,6 @@ uint64_t nowUnixSeconds() {
             std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
-std::string trimCopy(std::string value) {
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
-        value.erase(value.begin());
-    }
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
-        value.pop_back();
-    }
-    return value;
-}
-
-bool looksDockerOrLoopbackIp(std::string_view ip);
-
 std::string requestClientIp(const crow::request& req) {
     std::string ip = req.remote_ip_address;
     if (ip.rfind("::ffff:", 0) == 0) {
@@ -125,287 +118,6 @@ std::string requestClientIp(const crow::request& req) {
         return {};
     }
     return ip;
-}
-
-std::string readSysfsValue(const std::string& path) {
-    std::ifstream input(path);
-    std::string value;
-    std::getline(input, value);
-    return trimCopy(value);
-}
-
-struct UsbPortInfo {
-    std::string port;
-    std::string name;
-    std::string vendor_id;
-    std::string product_id;
-    std::string manufacturer;
-    std::string product;
-    bool is_esp32{false};
-};
-
-bool isEspUsbVendor(std::string_view vendor_id) {
-    return vendor_id == "303a" || vendor_id == "10c4" ||
-           vendor_id == "1a86" || vendor_id == "0403";
-}
-
-std::vector<UsbPortInfo> scanUsbSerialPorts() {
-    std::vector<UsbPortInfo> ports;
-    std::error_code ec;
-    std::filesystem::directory_iterator it("/dev", ec);
-    if (ec) {
-        return ports;
-    }
-
-    const std::filesystem::directory_iterator end;
-    for (; it != end; it.increment(ec)) {
-        if (ec) {
-            break;
-        }
-        const std::string node = it->path().filename().string();
-        if (node.rfind("ttyACM", 0) != 0 && node.rfind("ttyUSB", 0) != 0) {
-            continue;
-        }
-
-        UsbPortInfo info;
-        info.port = "/dev/" + node;
-        info.name = node.rfind("ttyACM", 0) == 0 ? "ESP32-S3 USB Serial/JTAG"
-                                                  : "USB Serial";
-
-        const std::string sys = "/sys/class/tty/" + node + "/device";
-        std::error_code canonical_ec;
-        const std::filesystem::path device =
-            std::filesystem::canonical(sys, canonical_ec);
-        const std::string base = canonical_ec ? sys : device.string();
-        info.vendor_id = readSysfsValue(base + "/../idVendor");
-        info.product_id = readSysfsValue(base + "/../idProduct");
-        info.manufacturer = readSysfsValue(base + "/../manufacturer");
-        info.product = readSysfsValue(base + "/../product");
-        info.is_esp32 = isEspUsbVendor(info.vendor_id) ||
-                        info.manufacturer.find("Espressif") != std::string::npos;
-        ports.push_back(std::move(info));
-    }
-
-    std::sort(ports.begin(), ports.end(),
-              [](const UsbPortInfo& lhs, const UsbPortInfo& rhs) {
-                  return lhs.port < rhs.port;
-              });
-    return ports;
-}
-
-std::string runShellCommand(const std::string& command, int* exit_status = nullptr) {
-    std::string output;
-    FILE* pipe = popen(command.c_str(), "r");
-    if (pipe == nullptr) {
-        if (exit_status != nullptr) {
-            *exit_status = -1;
-        }
-        return output;
-    }
-    char buffer[512];
-    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        output.append(buffer);
-    }
-    if (exit_status != nullptr) {
-        *exit_status = pclose(pipe);
-    } else {
-        pclose(pipe);
-    }
-    return output;
-}
-
-std::string resolveHostExecutable(const std::vector<std::string>& absolute_candidates,
-                                  const std::string& fallback) {
-    for (const std::string& candidate : absolute_candidates) {
-        std::error_code ec;
-        if (std::filesystem::exists(candidate, ec) && !ec) {
-            return candidate;
-        }
-    }
-    return fallback;
-}
-
-std::vector<std::string> splitNmcliTerseLine(const std::string& line) {
-    std::vector<std::string> fields;
-    std::string current;
-    bool escaped = false;
-    for (const char c : line) {
-        if (escaped) {
-            current.push_back(c);
-            escaped = false;
-        } else if (c == '\\') {
-            escaped = true;
-        } else if (c == ':') {
-            fields.push_back(current);
-            current.clear();
-        } else {
-            current.push_back(c);
-        }
-    }
-    fields.push_back(current);
-    return fields;
-}
-
-struct WifiNetworkInfo {
-    std::string ssid;
-    int signal{0};
-    std::string security;
-    bool is_saved{false};
-};
-
-std::vector<WifiNetworkInfo> parseWifiNetworks(const std::string& output) {
-    std::vector<WifiNetworkInfo> networks;
-    std::unordered_map<std::string, std::size_t> index_by_ssid;
-    std::istringstream stream(output);
-    std::string line;
-    while (std::getline(stream, line)) {
-        if (line.empty()) {
-            continue;
-        }
-        const std::vector<std::string> fields = splitNmcliTerseLine(line);
-        if (fields.size() < 3) {
-            continue;
-        }
-
-        const std::string ssid = trimCopy(fields[0]);
-        if (ssid.empty() || ssid == "--") {
-            continue;
-        }
-
-        int signal = 0;
-        try {
-            signal = std::stoi(trimCopy(fields[1]));
-        } catch (const std::exception&) {
-            continue;
-        }
-        signal = std::clamp(signal, 0, 100);
-
-        std::string security = trimCopy(fields[2]);
-        if (security.empty()) {
-            security = "Open";
-        }
-
-        const auto existing = index_by_ssid.find(ssid);
-        if (existing == index_by_ssid.end()) {
-            index_by_ssid.emplace(ssid, networks.size());
-            networks.push_back(WifiNetworkInfo{ssid, signal, security, false});
-        } else if (signal > networks[existing->second].signal) {
-            networks[existing->second].signal = signal;
-            networks[existing->second].security = security;
-        }
-    }
-
-    std::sort(networks.begin(), networks.end(),
-              [](const WifiNetworkInfo& lhs, const WifiNetworkInfo& rhs) {
-                  return lhs.signal > rhs.signal;
-              });
-    return networks;
-}
-
-std::vector<WifiNetworkInfo> scanWifiNetworks(std::string* raw_output = nullptr,
-                                              std::string* executed_command = nullptr,
-                                              int* exit_status = nullptr) {
-    const std::string nmcli = resolveHostExecutable(
-        {"/usr/bin/nmcli", "/bin/nmcli", "/usr/local/bin/nmcli"}, "nmcli");
-    const std::string timeout = resolveHostExecutable(
-        {"/usr/bin/timeout", "/bin/timeout"}, "timeout");
-    const std::string rescan_command =
-        timeout + " 8 " + nmcli +
-        " -t -f SSID,SIGNAL,SECURITY device wifi list --rescan yes 2>&1";
-    const std::string cached_command =
-        timeout + " 8 " + nmcli +
-        " -t -f SSID,SIGNAL,SECURITY device wifi list 2>&1";
-
-    int status = -1;
-    std::string output = runShellCommand(rescan_command, &status);
-    std::string command = rescan_command;
-    std::vector<WifiNetworkInfo> networks = parseWifiNetworks(output);
-
-    // A forced rescan is rejected when NetworkManager is already scanning
-    // (or when the caller lacks permission). Fall back to the cached list so
-    // the settings page still shows the last known networks.
-    if (networks.empty()) {
-        int fallback_status = -1;
-        std::string fallback_output = runShellCommand(cached_command, &fallback_status);
-        std::vector<WifiNetworkInfo> fallback_networks =
-            parseWifiNetworks(fallback_output);
-        if (!fallback_networks.empty() || output.empty()) {
-            output = std::move(fallback_output);
-            status = fallback_status;
-            command = cached_command;
-            networks = std::move(fallback_networks);
-        }
-    }
-
-    if (raw_output != nullptr) {
-        *raw_output = output;
-    }
-    if (executed_command != nullptr) {
-        *executed_command = command;
-    }
-    if (exit_status != nullptr) {
-        *exit_status = status;
-    }
-    return networks;
-}
-
-bool looksDockerOrLoopbackIp(std::string_view ip) {
-    if (ip.empty() || ip == "0.0.0.0") {
-        return true;
-    }
-    if (ip.rfind("127.", 0) == 0 || ip.rfind("192.168.65.", 0) == 0) {
-        return true;
-    }
-    if (ip.rfind("172.", 0) == 0) {
-        const std::size_t dot = ip.find('.', 4);
-        if (dot != std::string_view::npos) {
-            const std::string second(ip.substr(4, dot - 4));
-            char* end = nullptr;
-            const long octet = std::strtol(second.c_str(), &end, 10);
-            if (end != second.c_str() && octet >= 16 && octet <= 31) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-std::string detectHostLanIp() {
-    for (const char* key : {"HOST_LAN_IP", "BACKEND_IP"}) {
-        const char* value = std::getenv(key);
-        if (value != nullptr && *value != '\0' && !looksDockerOrLoopbackIp(value)) {
-            return value;
-        }
-    }
-
-    std::string fallback;
-    ifaddrs* interfaces = nullptr;
-    if (getifaddrs(&interfaces) != 0) {
-        return {};
-    }
-    for (ifaddrs* it = interfaces; it != nullptr; it = it->ifa_next) {
-        if (it->ifa_addr == nullptr || it->ifa_addr->sa_family != AF_INET) {
-            continue;
-        }
-        char buffer[INET_ADDRSTRLEN] = {0};
-        const auto* addr = reinterpret_cast<const sockaddr_in*>(it->ifa_addr);
-        if (inet_ntop(AF_INET, &addr->sin_addr, buffer, sizeof(buffer)) == nullptr) {
-            continue;
-        }
-        const std::string ip(buffer);
-        if (looksDockerOrLoopbackIp(ip)) {
-            continue;
-        }
-        if (ip.rfind("192.168.", 0) == 0 || ip.rfind("10.", 0) == 0) {
-            freeifaddrs(interfaces);
-            return ip;
-        }
-        if (fallback.empty()) {
-            fallback = ip;
-        }
-    }
-    freeifaddrs(interfaces);
-    return fallback;
 }
 
 int base64Value(char c) {
@@ -469,22 +181,7 @@ crow::response jsonError(int code, std::string_view message) {
     return crow::response(code, body);
 }
 
-struct FrameIngressRequest {
-    std::string device_id;
-    uint32_t frame_id{0};
-    uint16_t width{0};
-    uint16_t height{0};
-    std::string camera_model;
-    float temperature{0.0f};
-    uint8_t cpu_load{0};
-    uint32_t free_heap_internal{0};
-    uint32_t free_heap_psram{0};
-    bool has_temperature{false};
-    bool has_cpu_load{false};
-    bool has_free_heap_internal{false};
-    bool has_free_heap_psram{false};
-    std::vector<uint8_t> image;
-};
+
 
 std::optional<FrameIngressRequest> parseFrameIngress(const crow::request& req) {
     const std::string content_type = req.get_header_value("Content-Type");
@@ -585,12 +282,6 @@ std::optional<FrameIngressRequest> parseFrameIngress(const crow::request& req) {
     return parsed;
 }
 
-std::string toLowerAscii(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
-}
-
 std::vector<std::filesystem::path> exampleRoots() {
     std::vector<std::filesystem::path> roots;
     const auto add = [&roots](const std::filesystem::path& candidate) {
@@ -659,53 +350,6 @@ std::string deterministicVideoUuid(std::string_view key) {
         << std::setw(4) << static_cast<uint16_t>(second >> 48) << '-'
         << std::setw(12) << (second & 0xFFFFFFFFFFFFULL);
     return out.str();
-}
-
-struct ByteRange {
-    uint64_t start{0};
-    uint64_t end{0};
-};
-
-std::optional<ByteRange> parseByteRange(std::string_view header, uint64_t size) {
-    if (size == 0 || header.rfind("bytes=", 0) != 0) {
-        return std::nullopt;
-    }
-
-    const std::string spec(header.substr(6));
-    const std::size_t dash = spec.find('-');
-    if (dash == std::string::npos) {
-        return std::nullopt;
-    }
-
-    try {
-        const std::string first = spec.substr(0, dash);
-        const std::string last = spec.substr(dash + 1);
-        uint64_t start = 0;
-        uint64_t end = 0;
-
-        if (first.empty()) {
-            const uint64_t suffix = std::stoull(last);
-            if (suffix == 0) {
-                return std::nullopt;
-            }
-            start = suffix >= size ? 0 : size - suffix;
-            end = size - 1;
-        } else {
-            start = std::stoull(first);
-            end = last.empty() ? size - 1 : std::stoull(last);
-        }
-
-        if (start >= size) {
-            return std::nullopt;
-        }
-        end = std::min(end, size - 1);
-        if (end < start) {
-            return std::nullopt;
-        }
-        return ByteRange{start, end};
-    } catch (const std::exception&) {
-        return std::nullopt;
-    }
 }
 
 std::string videoMimeType(const std::filesystem::path& path) {

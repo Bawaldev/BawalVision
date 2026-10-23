@@ -20,13 +20,8 @@
 static const char *TAG = "CAMERA";
 
 #define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY
-// Quality 24 mengunci ukuran frame VGA 640x480 di ~10-14 KB (mencegah TCP bufferbloat di Wi-Fi)
+// Quality 24 keeps VGA 640x480 frames at ~10-14 KB (prevents Wi-Fi TCP bufferbloat)
 #define STREAM_JPEG_QUALITY 24
-
-typedef struct {
-  camera_frame_header_t header;
-  uint8_t *data;
-} frame_slot_t;
 
 static frame_slot_t s_slots[2] = {0};
 static volatile int s_ready_idx = 0;
@@ -145,7 +140,7 @@ esp_err_t camera_task_init(void) {
     s->set_awb_gain(s, 1);
     s->set_wb_mode(s, 0);
     
-    // Matikan sharpness artifisial agar VBR tidak membengkak saat ada gerakan
+    // Disable artificial sharpening so VBR does not balloon on motion
     s->set_sharpness(s, 0);
 
     s->set_exposure_ctrl(s, 1);

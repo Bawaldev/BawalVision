@@ -211,10 +211,10 @@ void app_main(void) {
     disable_all_indicator_leds();
 
     if (pin_conflicts_with_camera(PIN_LED_FLASH)) {
-        ESP_LOGE(TAG, "PIN_LED_FLASH (%d) konflik dengan pin kamera!", PIN_LED_FLASH);
+        ESP_LOGE(TAG, "PIN_LED_FLASH (%d) conflicts with a camera pin!", PIN_LED_FLASH);
     }
     if (pin_conflicts_with_camera(PIN_BTN_TRIGGER)) {
-        ESP_LOGE(TAG, "PIN_BTN_TRIGGER (%d) konflik dengan pin kamera!", PIN_BTN_TRIGGER);
+        ESP_LOGE(TAG, "PIN_BTN_TRIGGER (%d) conflicts with a camera pin!", PIN_BTN_TRIGGER);
     }
 
     esp_log_level_set("camera", ESP_LOG_INFO);
@@ -236,7 +236,7 @@ void app_main(void) {
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize Camera Driver: %s", esp_err_to_name(ret));
     } else {
-        // Core 1 didedikasikan murni untuk Camera Capture DMA (Prioritas 5)
+        // Core 1 is dedicated to camera capture DMA (priority 5)
         if (camera_task_start(5, 1) == NULL) {
             ESP_LOGE(TAG, "Failed to start camera_task on Core 1");
         } else {
