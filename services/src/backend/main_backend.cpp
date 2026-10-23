@@ -94,19 +94,22 @@ int main() {
     }
     producer.startNotify();
 
+    bawal::backend::MjpegIngress mjpeg_ingress(state, producer);
+    mjpeg_ingress.start();
+
+    const auto peer_callback = [&state, &mjpeg_ingress](const std::string& ip) {
+        state.updatePeerIp(ip);
+        mjpeg_ingress.setPeerIp(ip);
+    };
+
     bawal::backend::BackendApp app(state, producer, config, &database, &image_store);
+    app.setPeerCallback(peer_callback);
     app.configure();
 
     // ESP32-S3 nodes locate the backend through this UDP responder when their
     // cached/compiled IP is stale (DHCP change, Docker bridge IP, etc.).
     bawal::backend::DiscoveryResponder discovery;
-    bawal::backend::MjpegIngress mjpeg_ingress(state, producer);
-    mjpeg_ingress.start();
-    discovery.setPeerCallback(
-        [&state, &mjpeg_ingress](const std::string& ip) {
-            state.updatePeerIp(ip);
-            mjpeg_ingress.setPeerIp(ip);
-        });
+    discovery.setPeerCallback(peer_callback);
     const uint16_t discovery_port = envPortOrDefault("DISCOVERY_PORT", 8765);
     if (discovery.start(discovery_port, config.port)) {
         std::cout << "[INFO] UDP backend discovery responder on :" << discovery_port

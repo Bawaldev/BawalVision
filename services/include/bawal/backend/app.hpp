@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include "bawal/backend/state.hpp"
@@ -39,6 +40,9 @@ public:
     int run();
     void stop();
 
+    /** Observe the source IP of device telemetry/frame requests. */
+    void setPeerCallback(std::function<void(const std::string&)> callback);
+
     [[nodiscard]] crow::App<crow::CORSHandler>& app() noexcept { return m_app; }
 
 private:
@@ -59,6 +63,7 @@ private:
     server::RollingImageStore* m_image_store{nullptr};
     crow::App<crow::CORSHandler> m_app;
     std::atomic<double> m_confidence_threshold{0.35};
+    std::function<void(const std::string&)> m_peer_callback;
 };
 
 } // namespace bawal::backend

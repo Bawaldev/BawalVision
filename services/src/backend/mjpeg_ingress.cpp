@@ -14,10 +14,17 @@
 namespace bawal::backend {
 namespace {
 
+int64_t steadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 struct TransferContext {
     MjpegIngress* ingress;
     uint64_t generation;
     std::string pending;
+    int64_t started_ns;
 };
 
 size_t parseContentLength(std::string_view header) {
@@ -63,7 +70,15 @@ size_t receiveMjpeg(char* data, size_t size, size_t count, void* user) {
 
 int transferProgress(void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
     auto& ctx = *static_cast<TransferContext*>(user);
-    return ctx.ingress->shouldStop(ctx.generation) ? 1 : 0;
+    if (ctx.ingress->shouldStop(ctx.generation)) return 1;
+
+    // A TCP connection can stay half-open after an ESP reboot while the
+    // firmware stream task is stalled. Abort the pull when no complete JPEG
+    // has arrived for a while so the outer loop reconnects.
+    constexpr int64_t kNoFrameTimeoutNs = 10'000'000'000LL;
+    const int64_t last_frame_ns = std::max(ctx.started_ns, ctx.ingress->lastFrameNs());
+    if (steadyNowNs() - last_frame_ns > kNoFrameTimeoutNs) return 1;
+    return 0;
 }
 
 } // namespace
@@ -106,6 +121,7 @@ void MjpegIngress::publishFrame(const uint8_t* data, size_t len) {
         data[0] != 0xFF || data[1] != 0xD8 ||
         data[len - 2] != 0xFF || data[len - 1] != 0xD9) return;
     const uint32_t id = m_frame_id.fetch_add(1, std::memory_order_relaxed) + 1;
+    m_last_frame_ns.store(steadyNowNs(), std::memory_order_relaxed);
     const std::vector<uint8_t> jpeg(data, data + len);
     // Count every complete JPEG that reached the backend. The SHM ring only
     // carries the latest frames; a busy vision worker never queues old work.
@@ -134,7 +150,7 @@ void MjpegIngress::run() {
             continue;
         }
 
-        TransferContext context{this, generation, {}};
+        TransferContext context{this, generation, {}, steadyNowNs()};
         const std::string url = "http://" + peer + "/stream";
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receiveMjpeg);
@@ -143,13 +159,25 @@ void MjpegIngress::run() {
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &context);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+        // The ESP32 may accept TCP and then send nothing (camera stalled or
+        // client limit reached). Drop that connection quickly instead of
+        // holding the only pull slot forever.
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 5L);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
         curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
         curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
         const CURLcode result = curl_easy_perform(curl);
-        if (result != CURLE_OK && !shouldStop(generation)) {
-            std::cerr << "[WARN] MJPEG pull from " << peer << " stopped: "
-                      << curl_easy_strerror(result) << '\n';
+        long http_status = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+        if (!shouldStop(generation)) {
+            if (result != CURLE_OK) {
+                std::cerr << "[WARN] MJPEG pull from " << peer << " stopped: "
+                          << curl_easy_strerror(result) << '\n';
+            } else if (http_status >= 400) {
+                std::cerr << "[WARN] MJPEG pull from " << peer
+                          << " rejected with HTTP " << http_status << '\n';
+            }
         }
         curl_easy_cleanup(curl);
         if (m_running.load(std::memory_order_acquire) &&

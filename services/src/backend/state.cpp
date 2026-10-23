@@ -63,11 +63,19 @@ void BackendState::updateFrame(std::string_view device_id, uint32_t frame_id,
         m_device_id.assign(device_id);
     }
 
-    if (m_last_frame_time.time_since_epoch().count() != 0) {
-        const double delta_sec = std::chrono::duration<double>(now - m_last_frame_time).count();
-        m_fps = delta_sec > 0.0 && delta_sec <= 1.5 ? 1.0 / delta_sec : 0.0;
-    } else {
+    // Average over a 1 s window: instantaneous 1/delta spikes when the pull
+    // delivers a burst of buffered frames after a stall.
+    ++m_fps_window_frames;
+    if (m_fps_window_start.time_since_epoch().count() == 0) {
+        m_fps_window_start = now;
+        m_fps_window_frames = 1;
         m_fps = 0.0;
+    } else if (const double window_sec =
+                   std::chrono::duration<double>(now - m_fps_window_start).count();
+               window_sec >= 1.0) {
+        m_fps = static_cast<double>(m_fps_window_frames) / window_sec;
+        m_fps_window_start = now;
+        m_fps_window_frames = 0;
     }
     m_last_frame_time = now;
     m_last_frame_id = frame_id;
@@ -85,11 +93,17 @@ void BackendState::updateFrame(std::string_view device_id, uint32_t frame_id,
     }
 
     m_live_device_id.assign(device_id);
-    if (m_live_last_frame_time.time_since_epoch().count() != 0) {
-        const double delta_sec = std::chrono::duration<double>(now - m_live_last_frame_time).count();
-        m_live_fps = delta_sec > 0.0 && delta_sec <= 1.5 ? 1.0 / delta_sec : 0.0;
-    } else {
+    ++m_live_fps_window_frames;
+    if (m_live_fps_window_start.time_since_epoch().count() == 0) {
+        m_live_fps_window_start = now;
+        m_live_fps_window_frames = 1;
         m_live_fps = 0.0;
+    } else if (const double window_sec =
+                   std::chrono::duration<double>(now - m_live_fps_window_start).count();
+               window_sec >= 1.0) {
+        m_live_fps = static_cast<double>(m_live_fps_window_frames) / window_sec;
+        m_live_fps_window_start = now;
+        m_live_fps_window_frames = 0;
     }
     m_live_last_frame_time = now;
     m_live_last_frame_id = frame_id;
@@ -214,12 +228,16 @@ void BackendState::disconnectDevice(std::string_view device_id) {
     if (all || device_id == m_device_id) {
         m_last_frame_time = {};
         m_fps = 0.0;
+        m_fps_window_start = {};
+        m_fps_window_frames = 0;
         m_device_id.clear();
     }
     if (all || device_id == m_live_device_id) {
         m_live_last_frame_time = {};
         m_live_device_id.clear();
         m_live_fps = 0.0;
+        m_live_fps_window_start = {};
+        m_live_fps_window_frames = 0;
     }
     if (all || device_id == m_telemetry_device_id) {
         m_telemetry_received_ns = 0;

@@ -789,6 +789,10 @@ BackendApp::BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerCo
       m_database(database),
       m_image_store(image_store) {}
 
+void BackendApp::setPeerCallback(std::function<void(const std::string&)> callback) {
+    m_peer_callback = std::move(callback);
+}
+
 void BackendApp::configure() {
     auto& cors = m_app.get_middleware<crow::CORSHandler>();
     cors.global()
@@ -865,6 +869,12 @@ void BackendApp::registerCameraRoutes() {
                 return jsonError(503, "POSIX SHM producer is not initialized");
             }
 
+            const std::string peer_ip = requestClientIp(req);
+            if (!peer_ip.empty() && !isMockDeviceId(parsed->device_id) &&
+                m_peer_callback) {
+                m_peer_callback(peer_ip);
+            }
+
             // Publish metadata before the SHM notification so the vision
             // thread observes the correct device id on the very first frame.
             m_state.updateFrame(parsed->device_id, parsed->frame_id, parsed->image,
@@ -879,7 +889,7 @@ void BackendApp::registerCameraRoutes() {
                 TelemetrySample sample;
                 sample.device_id = parsed->device_id;
                 sample.camera_model = parsed->camera_model;
-                sample.ip_address = requestClientIp(req);
+                sample.ip_address = peer_ip;
                 sample.timestamp = nowUnixSeconds();
                 sample.temperature = parsed->temperature;
                 sample.cpu_temperature = parsed->temperature;
@@ -1159,8 +1169,13 @@ void BackendApp::registerTelemetryRoutes() {
                 return jsonError(400, "Invalid JSON telemetry payload");
             }
 
+            const std::string peer_ip = requestClientIp(req);
+            if (!peer_ip.empty() && m_peer_callback) {
+                m_peer_callback(peer_ip);
+            }
+
             TelemetrySample sample;
-            sample.ip_address = requestClientIp(req);
+            sample.ip_address = peer_ip;
             sample.connection_mode = "wifi_lan";
             sample.timestamp = nowUnixSeconds();
 

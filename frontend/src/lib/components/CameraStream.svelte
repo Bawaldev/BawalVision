@@ -148,7 +148,7 @@
         liveRefreshTimer = setTimeout(() => {
             liveRefreshTimer = null;
             if (sourceMode === 'live' && isTabVisible) streamEpoch = Date.now();
-        }, 40);
+        }, 100);
     }
 
     function handleGlobalSourceMode(event: Event) {
@@ -791,9 +791,7 @@
                         alt="AI Live Inspection Stream"
                         class="feed-video"
                         onload={() => { streamError = false; retryCount = 0; scheduleLiveRefresh(); }}
-                        onerror={() => {
-                            if (!hasCamera) streamError = true;
-                        }}
+                        onerror={() => { streamError = true; }}
                     />
                 {:else}
                     <!-- Standby State -->
