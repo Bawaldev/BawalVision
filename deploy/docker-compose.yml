@@ -55,6 +55,16 @@ services:
       - ../ml/AI1/model:/app/ml/AI1/model:ro
       - ../weights:/app/weights:ro
       - ../examples:/app/examples:ro
+      # Wi-Fi scan (nmcli) talks to the host NetworkManager over its system bus.
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      # Expose host serial nodes so /api/v1/devices/status can enumerate
+      # /dev/ttyACM* and /dev/ttyUSB* instead of only the container's /dev.
+      - /dev:/dev:ro
+      - /sys:/sys:ro
+    # The host /dev bind above is read-only; SHM producer still needs a
+    # writable /dev/shm for shm_open()/frame transport.
+    tmpfs:
+      - /dev/shm:size=256m
     depends_on:
       postgres:
         condition: service_healthy
