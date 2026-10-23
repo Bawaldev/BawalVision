@@ -39,13 +39,16 @@ just build-vision
 just run-vision-tsan
 ```
 
-### 2. Go Backend
+### 2. C++20 Crow Backend
 ```bash
-# Run unit tests and concurrency race detector
-just test-backend
+# Compile the unified Crow backend (HTTP + in-process vision)
+just build-backend
 
-# Launch local gateway server
-just run-gateway
+# Run against the Docker PostgreSQL instance (host process, Wi-Fi scan capable)
+just run-backend
+
+# Exercise the HTTP API against a live backend
+just test-api
 ```
 
 ### 3. ESP32-S3 Firmware
@@ -99,6 +102,6 @@ We enforce the [Conventional Commits](https://www.conventionalcommits.org/) stan
 
 1. **Keep Commits Clean**: Never commit `.env`, Wi-Fi secrets, private keys, or raw image datasets.
 2. **Architecture Portability**: Do NOT use `-march=native` in C++ code; use explicit feature detection (`-mavx2`, `__AVX2__`, NEON intrinsics) to ensure portability.
-3. **Run CI Checks Locally**: Before opening a PR, ensure `just test-backend` and `just build-vision` pass locally.
+3. **Run CI Checks Locally**: Before opening a PR, ensure `just build-backend`, `just build-vision`, `just test-api`, and `just check-frontend` pass locally.
 4. **Link Issues**: Reference related issues in the PR description (e.g. `Fixes #42`).
 

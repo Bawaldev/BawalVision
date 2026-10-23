@@ -1,23 +1,28 @@
-name: Multi-Arch Docker Build & Validation
+name: Docker Image Build Matrix
 
 on:
   push:
     branches: [ "main", "master" ]
     paths:
       - 'deploy/**'
-      - 'Dockerfile'
       - 'services/**'
       - 'ml/**'
+      - 'frontend/**'
+      - '.dockerignore'
       - '.github/workflows/docker-ci.yml'
   pull_request:
     branches: [ "main", "master" ]
     paths:
       - 'deploy/**'
-      - 'Dockerfile'
       - 'services/**'
       - 'ml/**'
+      - 'frontend/**'
+      - '.dockerignore'
       - '.github/workflows/docker-ci.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: docker-ci-${{ github.ref }}
@@ -27,14 +32,17 @@ jobs:
   docker-build:
     name: Build ${{ matrix.target.name }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         target:
           - name: bawal-backend
-            dockerfile: Dockerfile
+            dockerfile: deploy/Dockerfile.backend
           - name: bawal-vision
             dockerfile: deploy/Dockerfile.vision
+          - name: bawal-frontend
+            dockerfile: deploy/Dockerfile.frontend
     steps:
       - name: Checkout Monorepo
         uses: actions/checkout@v7
@@ -50,4 +58,3 @@ jobs:
           push: false
           cache-from: type=gha,scope=${{ matrix.target.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target.name }}
-

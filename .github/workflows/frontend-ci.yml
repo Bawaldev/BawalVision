@@ -1,0 +1,57 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - 'frontend/**'
+      - 'deploy/Dockerfile.frontend'
+      - '.github/workflows/frontend-ci.yml'
+  pull_request:
+    branches: [ "main", "master" ]
+    paths:
+      - 'frontend/**'
+      - 'deploy/Dockerfile.frontend'
+      - '.github/workflows/frontend-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-and-build:
+    name: SvelteKit Typecheck & Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache npm Downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('frontend/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Install Dependencies
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Typecheck SvelteKit
+        run: npm run check
+
+      - name: Build Production Assets
+        run: npm run build

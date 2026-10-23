@@ -96,8 +96,9 @@ JSON_RESP=$(curl_json POST "${BASE_URL}/camera/frame" \
   -d "{\"device_id\":\"${DEVICE_ID}\",\"frame_id\":1002,\"width\":640,\"height\":480,\"format\":0,\"image_base64\":\"${FRAME_B64}\"}")
 assert_contains "${JSON_RESP}" '"status":"success"' "JSON/base64 frame accepted"
 
-# Give the vision thread time to consume the newest SHM frame.
-sleep 2
+# Give the vision thread time to consume the newest SHM frame. Keep this below
+# the 1.5 s camera staleness window so the active camera check stays reliable.
+sleep 1
 
 # ------------------------------------------------------------------------------
 # STEP 4: CAMERA ACTIVE (after ingress)
