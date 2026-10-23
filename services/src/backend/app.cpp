@@ -932,6 +932,31 @@ void BackendApp::registerCameraRoutes() {
         return crow::response(body);
     });
 
+    // Effective source status: live ESP32 or mock video. The HMI uses this to
+    // report the real ingestion FPS for whichever source is currently active.
+    CROW_ROUTE(m_app, "/api/v1/camera/status")([this]() {
+        const CameraView camera = m_state.camera();
+        const bool is_mock = isMockDeviceId(camera.device_id);
+
+        crow::json::wvalue body;
+        body["active"] = camera.active;
+        body["device_id"] = camera.device_id;
+        body["source_type"] = is_mock ? "mock_video" : "live_esp32";
+        body["is_mock"] = is_mock;
+        body["telemetry_struct"] = "TelemetryIngressPayload";
+        body["fps"] = camera.fps;
+        body["frames_total"] = camera.frames_total;
+        body["frame_id"] = camera.frame_id;
+        body["width"] = camera.width;
+        body["height"] = camera.height;
+        body["last_frame_age_ms"] = camera.last_frame_age_ms;
+        body["vision_ready"] = m_state.visionReady();
+        body["message"] = camera.active
+            ? "Camera ingress active"
+            : "No active camera source found";
+        return crow::response(body);
+    });
+
     auto serve_raw = [this](std::string device_id) {
         device_id = normalizeDeviceParam(std::move(device_id));
         const std::vector<uint8_t> jpeg = m_state.latestJpeg(device_id);
