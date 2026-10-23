@@ -1,5 +1,5 @@
 pillow>=10.0.0
-numpy>=1.24.0
+numpy>=2.5.4
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch>=2.14.1
 torchvision>=0.17.0
