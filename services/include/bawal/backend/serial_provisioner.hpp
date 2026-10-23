@@ -50,4 +50,18 @@ struct EspSerialResult {
                                                  int backend_port = 8080,
                                                  int timeout_ms = 30000);
 
+/**
+ * @brief Last successful probe/provision ACK, cached for HTTP status polls.
+ *
+ * The Settings page polls `/devices/status` every 1.5 s; probing the serial
+ * port that often would fight with `idf.py monitor` and the firmware console.
+ * Instead, every successful transaction refreshes this snapshot so the status
+ * endpoint can report the board's real SSID instead of the static env guess.
+ *
+ * @param out Decoded ACK snapshot.
+ * @param age_ms Optional age of the snapshot in milliseconds.
+ * @return false when no successful transaction has happened yet.
+ */
+[[nodiscard]] bool lastEspSerialAck(EspSerialAck& out, long long* age_ms = nullptr);
+
 } // namespace bawal::backend

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 
 #include "bawal/backend/text_utils.hpp"
@@ -41,6 +42,20 @@ std::string resolveHostExecutable(const std::vector<std::string>& absolute_candi
         }
     }
     return fallback;
+}
+
+/** Single-quote a value for /bin/sh so SSIDs with spaces stay one argument. */
+std::string shellQuote(std::string_view value) {
+    std::string quoted = "'";
+    for (const char c : value) {
+        if (c == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted.push_back(c);
+        }
+    }
+    quoted.push_back('\'');
+    return quoted;
 }
 
 std::vector<std::string> splitNmcliTerseLine(const std::string& line) {
@@ -160,6 +175,61 @@ std::vector<WifiNetworkInfo> scanWifiNetworks(std::string* raw_output,
         *exit_status = status;
     }
     return networks;
+}
+
+std::string detectActiveWifiSsid() {
+    const std::string nmcli = resolveHostExecutable(
+        {"/usr/bin/nmcli", "/bin/nmcli", "/usr/local/bin/nmcli"}, "nmcli");
+    const std::string timeout = resolveHostExecutable(
+        {"/usr/bin/timeout", "/bin/timeout"}, "timeout");
+
+    // Cached list only: a forced rescan costs seconds and the ACTIVE flag is
+    // already accurate for the current association.
+    const std::string output = runShellCommand(
+        timeout + " 5 " + nmcli + " -t -f ACTIVE,SSID device wifi list --rescan no 2>/dev/null");
+    std::istringstream stream(output);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (line.rfind("yes:", 0) != 0) {
+            continue;
+        }
+        const std::vector<std::string> fields = splitNmcliTerseLine(line);
+        if (fields.size() >= 2 && !fields[1].empty()) {
+            return fields[1];
+        }
+    }
+
+    // Fallback: the active connection name (Wi-Fi connection names mirror SSIDs).
+    const std::string dev_output = runShellCommand(
+        timeout + " 5 " + nmcli + " -t -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null");
+    std::istringstream dev_stream(dev_output);
+    while (std::getline(dev_stream, line)) {
+        const std::vector<std::string> fields = splitNmcliTerseLine(line);
+        if (fields.size() >= 4 && fields[1] == "wifi" && fields[2] == "connected" &&
+            !fields[3].empty()) {
+            return fields[3];
+        }
+    }
+    return {};
+}
+
+std::string wifiPasswordForSsid(std::string_view ssid) {
+    if (ssid.empty()) {
+        return {};
+    }
+    const std::string nmcli = resolveHostExecutable(
+        {"/usr/bin/nmcli", "/bin/nmcli", "/usr/local/bin/nmcli"}, "nmcli");
+    const std::string quoted = shellQuote(ssid);
+    for (const char* field : {"802-11-wireless-security.psk",
+                              "802-11-wireless-security.sae-password"}) {
+        const std::string output = runShellCommand(
+            nmcli + " -s -g " + field + " connection show " + quoted + " 2>/dev/null");
+        const std::string value = trimCopy(output);
+        if (!value.empty()) {
+            return value;
+        }
+    }
+    return {};
 }
 
 } // namespace bawal::backend

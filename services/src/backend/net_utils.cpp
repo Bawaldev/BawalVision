@@ -4,7 +4,10 @@
 #include <ifaddrs.h>
 #include <netinet/in.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
 namespace bawal::backend {
 
@@ -30,18 +33,14 @@ bool looksDockerOrLoopbackIp(std::string_view ip) {
 }
 
 std::string detectHostLanIp() {
-    for (const char* key : {"HOST_LAN_IP", "BACKEND_IP"}) {
-        const char* value = std::getenv(key);
-        if (value != nullptr && *value != '\0' && !looksDockerOrLoopbackIp(value)) {
-            return value;
-        }
-    }
-
-    std::string fallback;
     ifaddrs* interfaces = nullptr;
     if (getifaddrs(&interfaces) != 0) {
         return {};
     }
+
+    std::vector<std::string> local_ips;
+    std::string primary;
+    std::string fallback;
     for (ifaddrs* it = interfaces; it != nullptr; it = it->ifa_next) {
         if (it->ifa_addr == nullptr || it->ifa_addr->sa_family != AF_INET) {
             continue;
@@ -55,15 +54,33 @@ std::string detectHostLanIp() {
         if (looksDockerOrLoopbackIp(ip)) {
             continue;
         }
-        if (ip.rfind("192.168.", 0) == 0 || ip.rfind("10.", 0) == 0) {
-            freeifaddrs(interfaces);
-            return ip;
-        }
-        if (fallback.empty()) {
+        local_ips.push_back(ip);
+        if (primary.empty() && (ip.rfind("192.168.", 0) == 0 || ip.rfind("10.", 0) == 0)) {
+            primary = ip;
+        } else if (fallback.empty()) {
             fallback = ip;
         }
     }
     freeifaddrs(interfaces);
+
+    // Honour HOST_LAN_IP/BACKEND_IP only while that address is really bound to
+    // one of our interfaces right now. Roaming the laptop to another Wi-Fi
+    // must not keep advertising the previous network's address (which would
+    // strand the ESP32 on UDP discovery until it re-finds the backend).
+    for (const char* key : {"HOST_LAN_IP", "BACKEND_IP"}) {
+        const char* value = std::getenv(key);
+        if (value == nullptr || *value == '\0' || looksDockerOrLoopbackIp(value)) {
+            continue;
+        }
+        const std::string configured(value);
+        if (std::find(local_ips.begin(), local_ips.end(), configured) != local_ips.end()) {
+            return configured;
+        }
+    }
+
+    if (!primary.empty()) {
+        return primary;
+    }
     return fallback;
 }
 

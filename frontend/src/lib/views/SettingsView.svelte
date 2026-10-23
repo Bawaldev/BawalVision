@@ -43,6 +43,7 @@
     let portOptions = $derived.by(() => detectedUsbPorts.map((p) => p.port));
     let detectedHostIp = $state('');
     let gatewayHostIp = $state('');
+    let gatewayHostIpEdited = $state(false);
     let selectedSsid = $state('');
     let connectToast = $state('');
     let serverWifiSsid = $state('');
@@ -144,8 +145,11 @@
         }
 
         if (hw.server_wifi) {
-            if (!serverWifiSsid && hw.server_wifi.ssid) {
-                serverWifiSsid = hw.server_wifi.ssid;
+            // Track the backend's live association so the "Same as Server"
+            // badge follows network switches (env WIFI_SSID may be stale).
+            const backendSsid = hw.server_wifi.ssid || hw.server_wifi.active_ssid || '';
+            if (backendSsid) {
+                serverWifiSsid = backendSsid;
             }
             if (hw.server_wifi.backend_ip) {
                 serverBackendIp = hw.server_wifi.backend_ip;
@@ -161,7 +165,12 @@
             : (hw.detected_host_ip || hw.server_wifi?.detected_host_ip || hw.server_wifi?.backend_ip || '');
         if (liveHostIp && isValidGatewayIp(liveHostIp)) {
             detectedHostIp = liveHostIp;
-            if (!gatewayHostIp || !isValidGatewayIp(gatewayHostIp)) {
+            // Auto mode: the gateway field tracks the host's current LAN IP, so
+            // roaming the laptop to another Wi-Fi can never leave the previous
+            // network's address behind (which strands the ESP32 on UDP
+            // discovery and looks like an unstable connection). A value the
+            // user typed manually is always preserved.
+            if (!gatewayHostIpEdited || !gatewayHostIp || !isValidGatewayIp(gatewayHostIp)) {
                 gatewayHostIp = liveHostIp;
             }
         } else {
@@ -234,12 +243,20 @@
         }
         refreshHardwareStatus();
         void handleScanWifi();
+        // One passive serial probe on load so the port card shows the board's
+        // real SSID without pressing Probe (also warms the backend ACK cache).
+        const probeTimer = setTimeout(() => {
+            if (detectedUsbPorts.length > 0) void handleProbeUsbPort();
+        }, 1800);
         const timer = setInterval(() => {
             if (!isWebSerialConnecting) {
                 refreshHardwareStatus();
             }
         }, 1500);
-        return () => clearInterval(timer);
+        return () => {
+            clearInterval(timer);
+            clearTimeout(probeTimer);
+        };
     });
 
     async function applyInspectionSource(mode: InspectionSourceMode) {
@@ -387,6 +404,15 @@
         webSerialMsg = res.wifiConnected === false
             ? `✓ Credentials stored on ${port}. ESP32-S3 is associating with ${ssid}...`
             : `✓ ${port} paired to ${ssid}. ESP32-S3 is in sync.`;
+        // Reflect the just-provisioned network immediately instead of waiting
+        // for the next status poll to refresh the port card.
+        espUsbStatus = {
+            port,
+            device_id: res.deviceId || espUsbStatus?.device_id || formState.deviceId || '',
+            current_ssid: ssid,
+            wifi_connected: res.wifiConnected !== false,
+            temperature: espUsbStatus?.temperature ?? 0
+        };
         onDeviceConnectionChange?.(true, res.deviceId);
     }
 
@@ -1057,6 +1083,10 @@
                                                     <span class="fedora-badge yellow">⚠ Different SSID</span>
                                                 {/if}
                                             </div>
+                                        {:else if espUsbStatus && espUsbStatus.port === portInfo.port}
+                                            <div class="port-ssid-indicator">
+                                                <span class="port-subdetail-muted">Wi-Fi: press Probe to read the board's current network</span>
+                                            </div>
                                         {:else}
                                             <div class="port-ssid-indicator">
                                                 <span class="port-subdetail-muted">Wi-Fi: Not Associated (Select a Wi-Fi below to switch / connect)</span>
@@ -1314,7 +1344,12 @@
                                         id="wifi-dialog-backend"
                                         type="text"
                                         class="fedora-input"
+                                        autocomplete="off"
+                                        autocorrect="off"
+                                        autocapitalize="off"
+                                        spellcheck="false"
                                         bind:value={gatewayHostIp}
+                                        oninput={() => (gatewayHostIpEdited = true)}
                                         placeholder={detectedHostIp || 'Auto-detect laptop Wi-Fi IP'}
                                     />
                                     {#if gatewayHostIp && !isValidGatewayIp(gatewayHostIp)}

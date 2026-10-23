@@ -1677,10 +1677,18 @@ void BackendApp::registerDeviceRoutes() {
         }
 
         const std::vector<UsbPortInfo> usb_ports = scanUsbSerialPorts();
+        // detectHostLanIp() honours BACKEND_IP/HOST_LAN_IP only while that
+        // address is actually bound to one of our interfaces, so a laptop that
+        // roamed to another Wi-Fi never advertises the previous network's IP.
         const std::string host_ip = detectHostLanIp();
         const char* ssid = std::getenv("WIFI_SSID");
         const char* wifi_pass = std::getenv("WIFI_PASS");
-        const char* backend_ip_env = std::getenv("BACKEND_IP");
+        // The .env Wi-Fi is a fallback only: once the laptop roams, the live
+        // NetworkManager association is the truth and must win.
+        const std::string active_ssid = detectActiveWifiSsid();
+        const std::string server_ssid =
+            !active_ssid.empty() ? active_ssid : (ssid != nullptr ? std::string(ssid)
+                                                                  : std::string{});
 
         crow::json::wvalue body;
         body["connected"] = connected;
@@ -1708,13 +1716,24 @@ void BackendApp::registerDeviceRoutes() {
         body["usb_ports"] = std::move(ports);
 
         if (!usb_ports.empty()) {
+            EspSerialAck cached;
+            long long cache_age_ms = -1;
+            const bool has_cached =
+                lastEspSerialAck(cached, &cache_age_ms) && cache_age_ms <= 600'000;
+
             crow::json::wvalue esp_status;
             esp_status["port"] = usb_ports.front().port;
-            esp_status["device_id"] = device_id;
-            esp_status["current_ssid"] = ssid != nullptr ? ssid : "";
-            esp_status["wifi_connected"] = connected;
-            esp_status["temperature"] =
-                telemetry.has_temperature ? telemetry.temperature : 0.0f;
+            esp_status["device_id"] = has_cached && !cached.device_id.empty()
+                ? cached.device_id
+                : device_id;
+            // Never invent an SSID from the stale .env: without a recent serial
+            // ACK only telemetry is authoritative, and it carries no SSID.
+            esp_status["current_ssid"] = has_cached ? cached.ssid : "";
+            esp_status["wifi_connected"] = has_cached ? cached.wifi_connected : connected;
+            esp_status["temperature"] = has_cached
+                ? cached.temperature
+                : (telemetry.has_temperature ? telemetry.temperature : 0.0f);
+            esp_status["status_source"] = has_cached ? "serial" : "telemetry";
             body["esp_usb_status"] = std::move(esp_status);
         }
 
@@ -1722,12 +1741,10 @@ void BackendApp::registerDeviceRoutes() {
         body["wifi_networks"] = std::move(networks);
 
         crow::json::wvalue server_wifi;
-        server_wifi["ssid"] = ssid != nullptr ? ssid : "";
+        server_wifi["ssid"] = server_ssid;
+        server_wifi["active_ssid"] = active_ssid;
         server_wifi["has_password"] = wifi_pass != nullptr && *wifi_pass != '\0';
-        const std::string backend_ip =
-            (backend_ip_env != nullptr && *backend_ip_env != '\0') ? backend_ip_env
-                                                                   : host_ip;
-        server_wifi["backend_ip"] = backend_ip;
+        server_wifi["backend_ip"] = host_ip;
         server_wifi["detected_host_ip"] = host_ip;
         server_wifi["backend_port"] = std::to_string(m_config.port);
         body["server_wifi"] = std::move(server_wifi);
@@ -1760,7 +1777,13 @@ void BackendApp::registerDeviceRoutes() {
         std::cerr << "[WIFI] parsed " << scanned.size() << " network(s)\n"
                   << std::flush;
 
-        const char* server_ssid = std::getenv("WIFI_SSID");
+        // Highlight the network the host is actually associated with; the
+        // .env WIFI_SSID only answers when nmcli cannot tell us.
+        const std::string active_ssid = detectActiveWifiSsid();
+        const char* env_ssid = std::getenv("WIFI_SSID");
+        const std::string server_ssid =
+            !active_ssid.empty() ? active_ssid : (env_ssid != nullptr ? std::string(env_ssid)
+                                                                      : std::string{});
 
         crow::json::wvalue::list networks;
         for (const auto& network : scanned) {
@@ -1769,8 +1792,7 @@ void BackendApp::registerDeviceRoutes() {
             item["signal"] = network.signal;
             item["security"] = network.security;
             item["is_saved"] = network.is_saved;
-            item["is_server"] = server_ssid != nullptr && *server_ssid != '\0' &&
-                                network.ssid == server_ssid;
+            item["is_server"] = !server_ssid.empty() && network.ssid == server_ssid;
             networks.emplace_back(std::move(item));
         }
 
@@ -1988,16 +2010,32 @@ void BackendApp::registerDeviceRoutes() {
                 }
             }
 
+            // No target supplied: use the host's current LAN address instead of
+            // letting the board drift over UDP discovery. If the address is
+            // still unreachable the firmware falls back to discovery anyway.
+            if (backend_ip.empty()) {
+                backend_ip = detectHostLanIp();
+            }
+
             // Pairing the board to the backend host's own Wi-Fi must not require
-            // retyping the password in the browser: fill it from the server
-            // environment (never sent back over the API). An empty password for
-            // any other SSID still means "open network".
+            // retyping the password in the browser. Fill it server-side (never
+            // sent back over the API), preferring NetworkManager's live secret
+            // for the network the host is actually on; .env is only a fallback.
+            // An empty password for any other SSID still means "open network".
             if (password.empty()) {
+                const std::string active_ssid = detectActiveWifiSsid();
                 const char* server_ssid = std::getenv("WIFI_SSID");
-                const char* server_pass = std::getenv("WIFI_PASS");
-                if (server_ssid != nullptr && *server_ssid != '\0' && ssid == server_ssid &&
-                    server_pass != nullptr) {
-                    password = server_pass;
+                const bool host_network =
+                    (!active_ssid.empty() && ssid == active_ssid) ||
+                    (server_ssid != nullptr && *server_ssid != '\0' && ssid == server_ssid);
+                if (host_network) {
+                    password = wifiPasswordForSsid(ssid);
+                    if (password.empty()) {
+                        const char* server_pass = std::getenv("WIFI_PASS");
+                        if (server_pass != nullptr) {
+                            password = server_pass;
+                        }
+                    }
                 }
             }
 
