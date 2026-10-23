@@ -38,6 +38,8 @@ static const char *TAG = "WIFI";
 #define DISCOVERY_BACKOFF_MAX_MS 30000
 #define MJPEG_CLIENT_LIMIT 2
 #define MJPEG_FRAME_CAPACITY INITIAL_BUF_CAPACITY
+#define TELEMETRY_ENDPOINT "/api/v1/telemetry"
+#define TELEMETRY_URL_BUFFER_SIZE 128
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -266,11 +268,6 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
 
     wifi_nvs_save_full_config(g_wifi_ssid, (pass && pass[0] != '\0') ? g_wifi_pass : NULL, g_backend_ip, g_backend_port);
 
-    char target_url[URL_BUFFER_SIZE];
-    if (get_backend_url(CAMERA_FRAME_ENDPOINT, target_url, sizeof(target_url)) == ESP_OK) {
-        ESP_LOGI(TAG, "Target backend URL: %s", target_url);
-    }
-
     if (s_wifi_initialized) {
         wifi_config_t cfg = {0};
         strncpy((char *)cfg.sta.ssid, g_wifi_ssid, sizeof(cfg.sta.ssid) - 1);
@@ -298,46 +295,116 @@ uint16_t get_backend_port(void) {
 bool get_backend_ip(char *out_ip, size_t max_len) {
     if (!out_ip || max_len == 0) return false;
 
-    if (is_valid_ipv4(g_backend_ip)) {
-        strncpy(out_ip, g_backend_ip, max_len - 1);
-        out_ip[max_len - 1] = '\0';
+    /* Prefer an explicitly configured host only when it is reachable on this LAN. */
+    if (is_valid_ipv4(CONFIG_BACKEND_IP) && is_same_subnet_ip(CONFIG_BACKEND_IP)) {
+        snprintf(out_ip, max_len, "%s", CONFIG_BACKEND_IP);
         return true;
     }
 
-    esp_netif_ip_info_t ip_info;
+    esp_netif_ip_info_t ip_info = {0};
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.gw.addr != 0) {
-        snprintf(out_ip, max_len, IPSTR, IP2STR(&ip_info.gw));
-        return true;
+    if (!netif) netif = esp_netif_get_default_netif();
+    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+        /* An NVS-discovered host on the current subnet takes precedence over the router. */
+        if (is_valid_ipv4(g_backend_ip) && is_same_subnet_ip(g_backend_ip)) {
+            snprintf(out_ip, max_len, "%s", g_backend_ip);
+            return true;
+        }
+        /* Legacy deployments host the backend at the LAN gateway. */
+        if (ip_info.gw.addr != 0) {
+            snprintf(out_ip, max_len, IPSTR, IP2STR(&ip_info.gw));
+            return true;
+        }
     }
 
+    /* Keep a valid configured address available before DHCP has completed. */
+    if (is_valid_ipv4(g_backend_ip)) {
+        snprintf(out_ip, max_len, "%s", g_backend_ip);
+        return true;
+    }
     if (is_valid_ipv4(CONFIG_BACKEND_IP)) {
-        strncpy(out_ip, CONFIG_BACKEND_IP, max_len - 1);
-        out_ip[max_len - 1] = '\0';
+        snprintf(out_ip, max_len, "%s", CONFIG_BACKEND_IP);
         return true;
     }
-
     return false;
 }
 
 esp_err_t get_backend_url(const char *endpoint, char *out_url, size_t max_len) {
     if (!endpoint || !out_url || max_len == 0) return ESP_ERR_INVALID_ARG;
-    char ip[32] = {0};
+    char ip[INET_ADDRSTRLEN] = {0};
     if (!get_backend_ip(ip, sizeof(ip))) return ESP_ERR_NOT_FOUND;
-    uint16_t port = get_backend_port();
-    snprintf(out_url, max_len, "http://%s:%u%s", ip, port, endpoint);
-    return ESP_OK;
+    int n = snprintf(out_url, max_len, "http://%s:%u%s", ip, get_backend_port(), endpoint);
+    return n > 0 && (size_t)n < max_len ? ESP_OK : ESP_ERR_INVALID_SIZE;
 }
 
-void wifi_notify_backend_failure(void) {
-    s_discovered_ip[0] = '\0';
-    if (g_wifi_event_group) {
-        xEventGroupSetBits(g_wifi_event_group, WIFI_DISCOVERY_BIT);
+static esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,
+                                          telemetry_data_t *data) {
+    if (!backend_ip || !is_valid_ipv4(backend_ip)) return ESP_ERR_INVALID_ARG;
+    char url[TELEMETRY_URL_BUFFER_SIZE];
+    int url_len = snprintf(url, sizeof(url), "http://%s:%u%s", backend_ip, port,
+                           TELEMETRY_ENDPOINT);
+    if (url_len <= 0 || (size_t)url_len >= sizeof(url)) return ESP_ERR_INVALID_SIZE;
+
+    telemetry_data_t meta;
+    init_device_metadata(&meta);
+    const char *dev_id = (data && data->device_id[0]) ? data->device_id : meta.device_id;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(root, "device_id", dev_id);
+    cJSON_AddStringToObject(root, "firmware_version", meta.firmware_version);
+    cJSON_AddNumberToObject(root, "timestamp", (double)time(NULL));
+    cJSON_AddNumberToObject(root, "temperature", (double)get_esp32_cpu_temperature());
+    cJSON_AddNumberToObject(root, "cpu_load", (double)get_cpu_usage_percentage());
+    cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
+    cJSON_AddNumberToObject(root, "free_heap_internal",
+                            (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(root, "free_heap_psram",
+                            (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cJSON_AddStringToObject(root, "camera_model", camera_get_sensor_name());
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) return ESP_ERR_NO_MEM;
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 2000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        cJSON_free(json);
+        return ESP_FAIL;
     }
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Connection", "close");
+    esp_http_client_set_header(client, "X-Device-ID", dev_id);
+    esp_http_client_set_header(client, "X-Device-Token", CONFIG_DEVICE_AUTH_TOKEN);
+    esp_http_client_set_post_field(client, json, (int)strlen(json));
+
+    esp_err_t err = esp_http_client_perform(client);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    cJSON_free(json);
+    return err;
 }
 
-bool wifi_camera_stream_is_healthy(void) {
-    return is_camera_streaming();
+void WiFi_Server_Task(void *pvParameters) {
+    (void)pvParameters;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (!(g_wifi_event_group &&
+              (xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT))) continue;
+
+        char backend_ip[INET_ADDRSTRLEN] = {0};
+        if (get_backend_ip(backend_ip, sizeof(backend_ip))) {
+            ESP_LOGI(TAG, "Backend target: %s:%u", backend_ip, get_backend_port());
+            esp_err_t err = send_telemetry_to_backend(backend_ip, get_backend_port(), NULL);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Telemetry request failed: %s", esp_err_to_name(err));
+            }
+        }
+    }
 }
 
 static void wifi_reconnect_timer_cb(void *arg) {
@@ -477,10 +544,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         lcd_update_wifi_status(true, ip_str);
         lcd_update_http_status("WIFI READY", false);
 
-        char target_url[URL_BUFFER_SIZE] = {0};
-        if (get_backend_url(CAMERA_FRAME_ENDPOINT, target_url, sizeof(target_url)) == ESP_OK) {
-            ESP_LOGI(TAG, "Target backend URL: %s", target_url);
-        }
     }
 }
 
@@ -660,69 +723,6 @@ esp_err_t wifi_http_stream_server_start(void) {
 
     ESP_LOGI(TAG, "Native MJPEG server ready at http://<esp32-ip>/stream (VGA)");
     return ESP_OK;
-}
-
-esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telemetry_data_t *data) {
-    if (!backend_ip) return ESP_ERR_INVALID_ARG;
-    char url[URL_BUFFER_SIZE];
-    snprintf(url, sizeof(url), "http://%s:%u%s", backend_ip, port, BACKEND_ENDPOINT);
-
-    telemetry_data_t meta;
-    init_device_metadata(&meta);
-    const char *dev_id = (data && data->device_id[0]) ? data->device_id : meta.device_id;
-    float temp = get_esp32_cpu_temperature();
-    uint8_t load = get_cpu_usage_percentage();
-
-    cJSON *root = cJSON_CreateObject();
-    if (!root) return ESP_ERR_NO_MEM;
-    cJSON_AddStringToObject(root, "device_id", dev_id);
-    cJSON_AddStringToObject(root, "firmware_version", meta.firmware_version);
-    cJSON_AddNumberToObject(root, "timestamp", (double)time(NULL));
-    cJSON_AddNumberToObject(root, "temperature", (double)temp);
-    cJSON_AddNumberToObject(root, "cpu_load", (double)load);
-    cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
-    cJSON_AddNumberToObject(root, "free_heap_internal",
-                            (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-    cJSON_AddNumberToObject(root, "free_heap_psram",
-                            (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    cJSON_AddStringToObject(root, "camera_model", camera_get_sensor_name());
-
-    char *json = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (!json) return ESP_ERR_NO_MEM;
-
-    esp_http_client_config_t config = {
-        .url = url,
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = 1500,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        cJSON_free(json);
-        return ESP_FAIL;
-    }
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_header(client, "X-Device-ID", dev_id);
-    esp_http_client_set_header(client, "X-Device-Token", CONFIG_DEVICE_AUTH_TOKEN);
-    esp_http_client_set_post_field(client, json, (int)strlen(json));
-
-    esp_err_t err = esp_http_client_perform(client);
-    esp_http_client_cleanup(client);
-    cJSON_free(json);
-    return err;
-}
-
-void WiFi_Server_Task(void *pvParameters) {
-    (void)pvParameters;
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        if (!(g_wifi_event_group && (xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT))) continue;
-
-        char backend_ip[32];
-        if (get_backend_ip(backend_ip, sizeof(backend_ip))) {
-            (void)send_telemetry_to_backend(backend_ip, get_backend_port(), NULL);
-        }
-    }
 }
 
 static void usb_send_ack(const char *status) {
