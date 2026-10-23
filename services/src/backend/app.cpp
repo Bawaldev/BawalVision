@@ -479,6 +479,7 @@ struct FrameIngressRequest {
     uint8_t cpu_load{0};
     uint32_t free_heap_internal{0};
     uint32_t free_heap_psram{0};
+    bool is_rewind{false};
     bool has_temperature{false};
     bool has_cpu_load{false};
     bool has_free_heap_internal{false};
@@ -547,6 +548,14 @@ std::optional<FrameIngressRequest> parseFrameIngress(const crow::request& req) {
     if (parsed.frame_id == 0) {
         parsed.frame_id = parseHeaderU32(req, "X-Frame-ID");
     }
+
+    const auto truthy_header = [&req](const char* name) {
+        const std::string value = req.get_header_value(name);
+        return value == "1" || value == "true" || value == "TRUE" ||
+               value == "yes" || value == "on";
+    };
+    parsed.is_rewind = truthy_header("X-Is-Rewind") ||
+                       truthy_header("X-Video-Rewind");
 
     const std::string temperature_header = req.get_header_value("X-ESP-Temp");
     if (!temperature_header.empty()) {
@@ -869,6 +878,16 @@ void BackendApp::registerCameraRoutes() {
             // thread observes the correct device id on the very first frame.
             m_state.updateFrame(parsed->device_id, parsed->frame_id, parsed->image,
                                 parsed->width, parsed->height);
+
+            // Mock video loop/seek: reset the tray state machine exactly once
+            // per rewind edge so the next tray can be audited again.
+            const bool rewind_now = parsed->is_rewind;
+            if (rewind_now != m_last_rewind.load(std::memory_order_acquire)) {
+                m_last_rewind.store(rewind_now, std::memory_order_release);
+                if (rewind_now) {
+                    m_state.requestTrackerReset();
+                }
+            }
 
             // Real ESP32-S3 nodes attach temperature, CPU load, and camera
             // model headers to every frame. Fold them into the telemetry cache
@@ -1444,7 +1463,7 @@ void BackendApp::registerExampleRoutes() {
 }
 
 void BackendApp::registerCompatibilityRoutes() {
-    const auto camera_mode = [](const crow::request& req) {
+    const auto camera_mode = [this](const crow::request& req) {
         std::string mode = "live";
         try {
             const auto doc = crow::json::load(req.body);
@@ -1454,6 +1473,10 @@ void BackendApp::registerCompatibilityRoutes() {
         } catch (const std::exception&) {
             // Keep the default; the mock frame payload still carries its own mode.
         }
+
+        // Switching between live and mock drains the previous tray state so a
+        // new sample is never suppressed by a stale lock.
+        m_state.requestTrackerReset();
 
         crow::json::wvalue body;
         body["status"] = "success";
@@ -1467,7 +1490,9 @@ void BackendApp::registerCompatibilityRoutes() {
         .methods(crow::HTTPMethod::Post)(camera_mode);
 
     CROW_ROUTE(m_app, "/api/v1/devices/mock/reset")
-        .methods(crow::HTTPMethod::Post)([]() {
+        .methods(crow::HTTPMethod::Post)([this]() {
+            m_state.requestTrackerReset();
+            m_last_rewind.store(false, std::memory_order_release);
             crow::json::wvalue body;
             body["success"] = true;
             body["message"] = "Mock inspection and rewind state cleared.";
@@ -1485,13 +1510,16 @@ void BackendApp::registerCompatibilityRoutes() {
         }
 
         if (m_image_store != nullptr) {
-            const std::vector<uint8_t> jpeg = m_state.latestJpeg();
+            // Prefer the vision worker's annotated frame (bounding boxes and
+            // labels already rendered) so the rolling audit buffer never stores
+            // a plain, un-annotated snapshot.
+            std::vector<uint8_t> jpeg = m_state.latestAnnotatedJpeg();
+            if (jpeg.empty()) {
+                jpeg = m_state.latestJpeg();
+            }
             if (!jpeg.empty()) {
-                const cv::Mat frame = cv::imdecode(jpeg, cv::IMREAD_COLOR);
-                if (!frame.empty()) {
-                    (void)m_image_store->save_frame(
-                        inspection.valid ? inspection.frame_id : 0, frame);
-                }
+                (void)m_image_store->save_encoded(
+                    inspection.valid ? inspection.frame_id : 0, jpeg);
             }
         }
 
@@ -1523,20 +1551,7 @@ void BackendApp::registerCompatibilityRoutes() {
     CROW_ROUTE(m_app, "/api/v1/records")([this]() {
         crow::json::wvalue::list records;
         if (m_database != nullptr) {
-            bool mock_record_included = false;
             for (const auto& record : m_database->listInspections(100)) {
-                const bool is_mock =
-                    record.device_id == "MOCK_VIDEO_CAM" ||
-                    record.device_id.rfind("MOCK_", 0) == 0;
-                if (is_mock) {
-                    // The vision worker persists snapshots periodically; expose
-                    // one mock-video tray record instead of every sampled frame.
-                    if (mock_record_included) {
-                        continue;
-                    }
-                    mock_record_included = true;
-                }
-
                 crow::json::wvalue item;
                 item["id"] = record.id;
                 item["device_id"] = record.device_id;

@@ -29,6 +29,11 @@
         localEngineEnabled: true
     });
 
+    // Global inspection source preference (shared with CameraStream).
+    type InspectionSourceMode = 'live' | 'mock';
+    let inspectionSource = $state<InspectionSourceMode>('live');
+    let sourceModeBusy = $state(false);
+
     // ESP32-S3 Hardware Connection & USB Serial Provisioning State
     let connectionStatus = $state<'disconnected' | 'connecting' | 'connected' | 'failed'>('disconnected');
     let connectingStepText = $state('Probing shared Wi-Fi & USB slots...');
@@ -219,6 +224,14 @@
     });
 
     onMount(() => {
+        try {
+            const saved = localStorage.getItem('bawal_source_mode');
+            if (saved === 'mock' || saved === 'live') {
+                inspectionSource = saved;
+            }
+        } catch {
+            // localStorage unavailable; keep the live default.
+        }
         refreshHardwareStatus();
         void handleScanWifi();
         const timer = setInterval(() => {
@@ -228,6 +241,26 @@
         }, 1500);
         return () => clearInterval(timer);
     });
+
+    async function applyInspectionSource(mode: InspectionSourceMode) {
+        if (mode === inspectionSource || sourceModeBusy) return;
+        sourceModeBusy = true;
+        inspectionSource = mode;
+        try {
+            localStorage.setItem('bawal_source_mode', mode);
+        } catch {
+            // Preference persistence is best-effort.
+        }
+        await fetch('/api/v1/camera/mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode })
+        }).catch(() => {});
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('bawal-source-mode', { detail: mode }));
+        }
+        sourceModeBusy = false;
+    }
 
     async function handleScanWifi() {
         isScanningWifi = true;
@@ -1375,7 +1408,37 @@
             </div>
         </div>
 
-        <!-- 2. Detection Confidence Thresholds -->
+        <!-- 2. Inspection Source (Live Camera vs Mock Video) -->
+        <div class="settings-card">
+            <div class="section-header">
+                <span class="section-icon">🎬</span>
+                <h3>Inspection Source</h3>
+            </div>
+            <div class="source-mode-grid">
+                <button
+                    type="button"
+                    class="source-mode-btn"
+                    class:active={inspectionSource === 'live'}
+                    disabled={sourceModeBusy}
+                    onclick={() => applyInspectionSource('live')}
+                >
+                    <strong>Live ESP32 Camera</strong>
+                    <small>Stream frames from the physical sensor node in real time.</small>
+                </button>
+                <button
+                    type="button"
+                    class="source-mode-btn"
+                    class:active={inspectionSource === 'mock'}
+                    disabled={sourceModeBusy}
+                    onclick={() => applyInspectionSource('mock')}
+                >
+                    <strong>Mock MP4 Video</strong>
+                    <small>Replay a bundled sample video through the same vision pipeline.</small>
+                </button>
+            </div>
+        </div>
+
+        <!-- 3. Detection Confidence Thresholds -->
         <div class="settings-card">
             <div class="section-header">
                 <span class="section-icon">🎯</span>
@@ -1397,7 +1460,7 @@
             </div>
         </div>
 
-        <!-- 3. Engine Hardware Accelerators -->
+        <!-- 4. Engine Hardware Accelerators -->
         <div class="settings-card">
             <div class="section-header">
                 <span class="section-icon">⚡</span>
@@ -1529,6 +1592,51 @@
         flex-direction: column;
         gap: 14px;
         box-shadow: var(--shadow-card);
+    }
+
+    .source-mode-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    .source-mode-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        padding: 12px 14px;
+        text-align: left;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .source-mode-btn:hover:not(:disabled) {
+        border-color: var(--accent-blue);
+    }
+
+    .source-mode-btn.active {
+        border-color: var(--accent-blue);
+        background: color-mix(in srgb, var(--accent-blue) 10%, var(--bg-inset));
+    }
+
+    .source-mode-btn:disabled {
+        opacity: 0.65;
+        cursor: wait;
+    }
+
+    .source-mode-btn strong {
+        font-size: 0.8rem;
+        color: var(--text-primary);
+    }
+
+    .source-mode-btn small {
+        font-size: 0.7rem;
+        line-height: 1.4;
+        color: var(--text-muted);
     }
 
     .section-header {

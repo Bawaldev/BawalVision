@@ -1,11 +1,14 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "bawal/backend/database.hpp"
 #include "bawal/backend/state.hpp"
+#include "bawal/vision/classifier.hpp"
 
 namespace bawal::server {
 class RollingImageStore;
@@ -43,7 +46,36 @@ public:
     }
 
 private:
+    struct TraySignature {
+        bool valid{false};
+        std::string class_name;
+        int x{0};
+        int y{0};
+        int width{0};
+        int height{0};
+    };
+
     void run();
+
+    static float intersectionOverUnion(const TraySignature& lhs,
+                                       const TraySignature& rhs);
+    static TraySignature primarySignature(
+        const std::vector<bawal::vision::DetectionResult>& detections);
+    static bool sameSignature(const TraySignature& lhs,
+                              const TraySignature& rhs);
+
+    /// Debounces the tray: returns true exactly once when a new, stable food
+    /// object should be written to the audit log and rolling image buffer.
+    bool updateTrayState(
+        const std::vector<bawal::vision::DetectionResult>& detections);
+    void resetTrayState() noexcept;
+
+    bool m_current_tray_locked{false};
+    int m_stable_frames_count{0};
+    int m_empty_frames_count{0};
+    TraySignature m_last_tray_signature;
+    TraySignature m_candidate_signature;
+    std::chrono::steady_clock::time_point m_last_annotated_encode{};
 
     BackendState& m_state;
     Database* m_database{nullptr};

@@ -151,8 +151,16 @@
         }, 40);
     }
 
+    function handleGlobalSourceMode(event: Event) {
+        const mode = (event as CustomEvent<string>).detail;
+        if (mode === 'mock' || mode === 'live') {
+            void setSourceMode(mode);
+        }
+    }
+
     // Initial mount: restore persisted source mode, selected video, and fetch examples list with unique UUIDs
     onMount(() => {
+        window.addEventListener('bawal-source-mode', handleGlobalSourceMode);
         const refreshDiscoveredStream = () => {
             fetch('/api/v1/devices/status', { cache: 'no-store' })
                 .then(res => res.ok ? res.json() : null)
@@ -560,6 +568,7 @@
     }
 
     onDestroy(() => {
+        window.removeEventListener('bawal-source-mode', handleGlobalSourceMode);
         if (typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         }

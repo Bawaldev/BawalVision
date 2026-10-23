@@ -15,6 +15,7 @@
 #include <opencv2/core.hpp>
 
 #include "bawal/ipc/shm_consumer.hpp"
+#include "bawal/server/jpeg_utils.hpp"
 #include "bawal/server/rolling_image_store.hpp"
 #include "bawal/server/sha256.hpp"
 #include "bawal/vision/classifier.hpp"
@@ -26,6 +27,12 @@ namespace {
 
 constexpr std::chrono::milliseconds kIdlePoll{2};
 constexpr std::chrono::milliseconds kInitRetry{500};
+constexpr std::chrono::milliseconds kAnnotatedCacheInterval{250};
+
+// A tray must be seen consistently before it is written to the audit log, and
+// must stay empty for roughly one second before the state machine unlocks.
+constexpr int kStableTrayFrames = 4;
+constexpr int kEmptyTrayFrames = 18;
 
 std::string boundedName(std::string_view name) {
     std::string out(name);
@@ -167,6 +174,123 @@ std::string resolveModelPath() {
     return candidates.front();
 }
 
+float VisionWorker::intersectionOverUnion(const TraySignature& lhs,
+                                           const TraySignature& rhs) {
+    if (lhs.width <= 0 || lhs.height <= 0 || rhs.width <= 0 || rhs.height <= 0) {
+        return 0.0F;
+    }
+
+    const int x1 = std::max(lhs.x, rhs.x);
+    const int y1 = std::max(lhs.y, rhs.y);
+    const int x2 = std::min(lhs.x + lhs.width, rhs.x + rhs.width);
+    const int y2 = std::min(lhs.y + lhs.height, rhs.y + rhs.height);
+    const int intersection = std::max(0, x2 - x1) * std::max(0, y2 - y1);
+    if (intersection <= 0) {
+        return 0.0F;
+    }
+
+    const int lhs_area = lhs.width * lhs.height;
+    const int rhs_area = rhs.width * rhs.height;
+    const int union_area = lhs_area + rhs_area - intersection;
+    if (union_area <= 0) {
+        return 0.0F;
+    }
+    return static_cast<float>(intersection) / static_cast<float>(union_area);
+}
+
+VisionWorker::TraySignature VisionWorker::primarySignature(
+    const std::vector<bawal::vision::DetectionResult>& detections) {
+    TraySignature signature;
+    const bawal::vision::DetectionResult* best = nullptr;
+    int best_area = 0;
+
+    for (const auto& detection : detections) {
+        if (detection.class_id < 0 || detection.class_name == "no_food" ||
+            detection.class_name == "no_model") {
+            continue;
+        }
+        const int area = std::max(0, detection.bbox.width) *
+                         std::max(0, detection.bbox.height);
+        if (best == nullptr || area > best_area ||
+            (area == best_area && detection.confidence > best->confidence)) {
+            best = &detection;
+            best_area = area;
+        }
+    }
+
+    if (best != nullptr) {
+        signature.valid = true;
+        signature.class_name = best->class_name;
+        signature.x = best->bbox.x;
+        signature.y = best->bbox.y;
+        signature.width = best->bbox.width;
+        signature.height = best->bbox.height;
+    }
+    return signature;
+}
+
+bool VisionWorker::sameSignature(const TraySignature& lhs,
+                                 const TraySignature& rhs) {
+    return lhs.valid && rhs.valid && lhs.class_name == rhs.class_name &&
+           intersectionOverUnion(lhs, rhs) > 0.50F;
+}
+
+void VisionWorker::resetTrayState() noexcept {
+    m_current_tray_locked = false;
+    m_stable_frames_count = 0;
+    m_empty_frames_count = 0;
+    m_last_tray_signature = TraySignature{};
+    m_candidate_signature = TraySignature{};
+}
+
+bool VisionWorker::updateTrayState(
+    const std::vector<bawal::vision::DetectionResult>& detections) {
+    if (detections.empty()) {
+        m_stable_frames_count = 0;
+        m_candidate_signature = TraySignature{};
+        ++m_empty_frames_count;
+        if (m_empty_frames_count >= kEmptyTrayFrames) {
+            m_current_tray_locked = false;
+            m_last_tray_signature = TraySignature{};
+            m_empty_frames_count = 0;
+        }
+        return false;
+    }
+
+    const TraySignature signature = primarySignature(detections);
+    if (!signature.valid) {
+        return false;
+    }
+
+    m_empty_frames_count = 0;
+
+    // A tray is locked from its first stable emit until the scene stays empty
+    // long enough to be considered cleared. Bounding-box jitter or a second
+    // object appearing on the same tray must never create a duplicate record.
+    if (m_current_tray_locked) {
+        return false;
+    }
+
+    if (sameSignature(m_candidate_signature, signature)) {
+        ++m_stable_frames_count;
+    } else {
+        m_candidate_signature = signature;
+        m_stable_frames_count = 1;
+    }
+
+    if (m_stable_frames_count < kStableTrayFrames) {
+        return false;
+    }
+
+    // Single audit emit for this tray. Lock immediately so subsequent frames
+    // of the same object are suppressed.
+    m_current_tray_locked = true;
+    m_last_tray_signature = signature;
+    m_candidate_signature = signature;
+    m_stable_frames_count = 0;
+    return true;
+}
+
 VisionWorker::VisionWorker(BackendState& state, std::string model_path, Database* database,
                            server::RollingImageStore* image_store)
     : m_state(state),
@@ -225,11 +349,8 @@ void VisionWorker::run() {
     const std::string engine_pipeline =
         std::string(pipeline.getModelArchitecture()) + " + OpenCV HSV";
 
-    constexpr std::chrono::seconds kPersistInterval{2};
-
     uint64_t processed = 0;
     uint64_t persist_failures = 0;
-    std::chrono::steady_clock::time_point last_persist{};
     while (m_running.load(std::memory_order_acquire)) {
         cv::Mat frame;
         uint32_t frame_id = 0;
@@ -239,6 +360,15 @@ void VisionWorker::run() {
         }
 
         const std::string device_id = m_state.camera().device_id;
+        const bool is_mock_video = device_id == "MOCK_VIDEO_CAM" ||
+                                   device_id.rfind("MOCK_", 0) == 0;
+
+        // A mock video loop/seek or a manual re-inspection resets the tray
+        // state machine exactly once per request.
+        if (m_state.consumeTrackerReset()) {
+            pipeline.resetTracker();
+            resetTrayState();
+        }
 
         const int64_t t0 = cv::getTickCount();
         std::vector<bawal::vision::DetectionResult> detected;
@@ -269,56 +399,84 @@ void VisionWorker::run() {
             toOpticalSoA(pipeline.getClassifier().getLastOpticalMetrics());
         m_state.updateInspection(device_id, frame_id, soa, optical, engine_pipeline);
 
-        InspectionHistoryEntry history;
-        history.frame_id = frame_id;
-        history.timestamp = isoUtcTimestamp();
-        const float frame_area = static_cast<float>(
-            std::max(1, frame.cols) * std::max(1, frame.rows));
-        bool rejected = false;
-        const uint32_t detection_count = std::min<uint32_t>(
-            soa.count, DetectionSoA::kMaxDetections);
-        history.detections.reserve(detection_count);
-        for (uint32_t i = 0; i < detection_count; ++i) {
-            const std::string class_name = boundedName(soa.class_name[i]);
-            InspectionHistoryDetection detection;
-            detection.class_name = class_name.empty() ? "unknown" : class_name;
-            detection.confidence = soa.confidence[i];
-            detection.bbox = {
-                static_cast<int>(soa.x[i]),
-                static_cast<int>(soa.y[i]),
-                static_cast<int>(soa.width[i]),
-                static_cast<int>(soa.height[i]),
-            };
-            detection.freshness_score = std::clamp(
-                1.0F - soa.spoilage_score[i] / 100.0F, 0.0F, 1.0F);
-            detection.portion_ratio = std::clamp(
-                (soa.width[i] * soa.height[i]) / frame_area, 0.0F, 1.0F);
-            if (soa.status[i] == static_cast<uint8_t>(FoodStatus::Reject)) {
-                rejected = true;
+        // Always render the overlay for the stream and keep an annotated JPEG
+        // snapshot for manual audits; only the debounced tray emit persists it.
+        bawal::vision::InspectionOutput stream_output;
+        stream_output.frame_id = frame_id;
+        if (!pipeline.processStream(frame, valid, stream_output, is_mock_video)) {
+            std::cerr << "[VISION] stream overlay failed for frame #" << frame_id << "\n";
+            continue;
+        }
+        const cv::Mat& annotated = !stream_output.annotated_image.empty()
+            ? stream_output.annotated_image
+            : frame;
+
+        const auto now = std::chrono::steady_clock::now();
+        if (m_last_annotated_encode.time_since_epoch().count() == 0 ||
+            now - m_last_annotated_encode >= kAnnotatedCacheInterval) {
+            m_last_annotated_encode = now;
+            std::vector<uint8_t> annotated_jpeg;
+            if (server::encodeJPEGFrame(annotated, annotated_jpeg, 85)) {
+                m_state.updateAnnotatedJpeg(std::move(annotated_jpeg));
             }
-            history.detections.push_back(std::move(detection));
         }
 
-        history.verdict = rejected ? "REJECTED" : "ACCEPTED";
-        const TelemetryView telemetry = m_state.telemetry();
-        history.surface_temp = telemetry.has_temperature
-            ? static_cast<double>(telemetry.temperature)
-            : 0.0;
-        if (m_image_store != nullptr) {
-            history.image_path = m_image_store->save_frame(frame_id, frame);
-        }
-        history.t_safe_hours = estimateSafeHours(
-            static_cast<float>(history.surface_temp));
-        history.checksum_sha256 = server::sha256Hex(canonicalAuditPayload(history));
-        m_state.pushInspectionHistory(std::move(history));
+        const bool should_emit = updateTrayState(valid);
+        if (should_emit) {
+            InspectionHistoryEntry history;
+            history.frame_id = frame_id;
+            history.timestamp = isoUtcTimestamp();
+            const float frame_area = static_cast<float>(
+                std::max(1, frame.cols) * std::max(1, frame.rows));
+            bool rejected = false;
+            const uint32_t detection_count = std::min<uint32_t>(
+                soa.count, DetectionSoA::kMaxDetections);
+            history.detections.reserve(detection_count);
+            for (uint32_t i = 0; i < detection_count; ++i) {
+                const std::string class_name = boundedName(soa.class_name[i]);
+                InspectionHistoryDetection detection;
+                detection.class_name = class_name.empty() ? "unknown" : class_name;
+                detection.confidence = soa.confidence[i];
+                detection.bbox = {
+                    static_cast<int>(soa.x[i]),
+                    static_cast<int>(soa.y[i]),
+                    static_cast<int>(soa.width[i]),
+                    static_cast<int>(soa.height[i]),
+                };
+                detection.freshness_score = std::clamp(
+                    1.0F - soa.spoilage_score[i] / 100.0F, 0.0F, 1.0F);
+                detection.portion_ratio = std::clamp(
+                    (soa.width[i] * soa.height[i]) / frame_area, 0.0F, 1.0F);
+                if (soa.status[i] == static_cast<uint8_t>(FoodStatus::Reject)) {
+                    rejected = true;
+                }
+                history.detections.push_back(std::move(detection));
+            }
 
-        processed++;
+            history.verdict = rejected ? "REJECTED" : "ACCEPTED";
+            const TelemetryView telemetry = m_state.telemetry();
+            history.surface_temp = telemetry.has_temperature
+                ? static_cast<double>(telemetry.temperature)
+                : 0.0;
+            if (m_image_store != nullptr) {
+                // Store the rendered overlay (bounding boxes + labels), never
+                // the raw camera frame.
+                history.image_path =
+                    m_image_store->save_frame(frame_id, annotated);
+            }
+            history.t_safe_hours = estimateSafeHours(
+                static_cast<float>(history.surface_temp));
+            history.checksum_sha256 =
+                server::sha256Hex(canonicalAuditPayload(history));
+            m_state.pushInspectionHistory(std::move(history));
 
-        if (m_database != nullptr) {
-            const auto now = std::chrono::steady_clock::now();
-            if (last_persist.time_since_epoch().count() == 0 ||
-                now - last_persist >= kPersistInterval) {
-                last_persist = now;
+            // Force the manual-snapshot cache to this exact emitted frame.
+            std::vector<uint8_t> annotated_jpeg;
+            if (server::encodeJPEGFrame(annotated, annotated_jpeg, 85)) {
+                m_state.updateAnnotatedJpeg(std::move(annotated_jpeg));
+            }
+
+            if (m_database != nullptr) {
                 if (m_database->saveInspection(device_id, frame_id, soa, optical,
                                                engine_pipeline)) {
                     persist_failures = 0;
@@ -330,7 +488,14 @@ void VisionWorker::run() {
                     }
                 }
             }
+
+            std::cout << "[VISION] single audit emit frame #" << frame_id
+                      << " | detections: " << valid.size()
+                      << " | device: " << (device_id.empty() ? "<none>" : device_id)
+                      << "\n";
         }
+
+        processed++;
 
         if (processed % 30 == 1 || !valid.empty()) {
             std::cout << "[VISION] frame #" << frame_id

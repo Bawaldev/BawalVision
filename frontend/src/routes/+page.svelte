@@ -2,8 +2,8 @@
     import { onMount, onDestroy } from 'svelte';
     import Sidebar from '$lib/components/Sidebar.svelte';
     import TopBar from '$lib/components/TopBar.svelte';
-    import OverviewView from '$lib/views/OverviewView.svelte';
     import DashboardView from '$lib/views/DashboardView.svelte';
+    import InspectionReportsView from '$lib/views/InspectionReportsView.svelte';
     import TelemetryResultLogView from '$lib/views/TelemetryResultLogView.svelte';
     import SettingsView from '$lib/views/SettingsView.svelte';
 
@@ -39,13 +39,13 @@
 
     // State Variables
     const VALID_TABS = [
-        'Overview',
-        'Dashboard',
-        'Telemetry Analytics & Result Log',
-        'System & Cloud Settings'
+        'Live Inspection',
+        'Inspection Reports',
+        'Telemetry & Grafana',
+        'Settings'
     ];
 
-    let activeTab = $state('Overview');
+    let activeTab = $state('Live Inspection');
     let transitionDirection = $state<'forward' | 'backward' | 'none'>('none');
     let isHydrated = $state(false);
     let records = $state<InspectionRecord[]>([]);
@@ -64,11 +64,11 @@
         if (typeof window !== 'undefined') {
             try {
                 localStorage.setItem('bawal_active_tab', tab);
-                const slug = tab === 'Overview'
-                    ? 'overview'
-                    : (tab === 'Telemetry Analytics & Result Log'
+                const slug = tab === 'Inspection Reports'
+                    ? 'reports'
+                    : (tab === 'Telemetry & Grafana'
                         ? 'telemetry'
-                        : (tab === 'System & Cloud Settings' ? 'settings' : 'live'));
+                        : (tab === 'Settings' ? 'settings' : 'live'));
                 window.location.hash = slug;
             } catch {}
         }
@@ -290,15 +290,15 @@
         if (typeof window === 'undefined') return;
         try {
             const hash = window.location.hash.toLowerCase();
-            let targetTab = 'Overview';
-            if (hash.includes('telemetry') || hash.includes('result')) {
-                targetTab = 'Telemetry Analytics & Result Log';
+            let targetTab = 'Live Inspection';
+            if (hash.includes('report') || hash.includes('audit')) {
+                targetTab = 'Inspection Reports';
+            } else if (hash.includes('telemetry') || hash.includes('grafana')) {
+                targetTab = 'Telemetry & Grafana';
             } else if (hash.includes('setting')) {
-                targetTab = 'System & Cloud Settings';
+                targetTab = 'Settings';
             } else if (hash.includes('live') || hash.includes('inspect') || hash.includes('dashboard')) {
-                targetTab = 'Dashboard';
-            } else if (hash.includes('overview')) {
-                targetTab = 'Overview';
+                targetTab = 'Live Inspection';
             } else {
                 const savedTab = localStorage.getItem('bawal_active_tab');
                 if (savedTab && VALID_TABS.includes(savedTab)) {
@@ -531,36 +531,18 @@
         <main class="page-body">
             <div 
                 class="view-panel" 
-                class:is-active={activeTab === 'Overview'} 
-                class:is-hidden={activeTab !== 'Overview'}
+                class:is-active={activeTab === 'Inspection Reports'} 
+                class:is-hidden={activeTab !== 'Inspection Reports'}
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >
-                <OverviewView
-                    {records}
-                    {telemetry}
-                    {totalAccepted}
-                    {totalRejected}
-                    {totalPlates}
-                    {passRate}
-                    {isOnline}
-                    {hasCamera}
-                    {realFps}
-                    {realLatencyMs}
-                    {serverMemoryMB}
-                    {parallelCores}
-                    {gravitonAvailable}
-                    gravitonEnabled={systemConfig.gravitonEngineEnabled}
-                    {localEngineAvailable}
-                    confidenceThreshold={systemConfig.minConfidenceThreshold}
-                    onNavigateTab={handleSelectTab}
-                />
+                <InspectionReportsView />
             </div>
 
             <div 
                 class="view-panel" 
-                class:is-active={activeTab === 'Dashboard'} 
-                class:is-hidden={activeTab !== 'Dashboard'}
+                class:is-active={activeTab === 'Live Inspection'} 
+                class:is-hidden={activeTab !== 'Live Inspection'}
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >
@@ -585,8 +567,8 @@
 
             <div 
                 class="view-panel" 
-                class:is-active={activeTab === 'Telemetry Analytics & Result Log'} 
-                class:is-hidden={activeTab !== 'Telemetry Analytics & Result Log'}
+                class:is-active={activeTab === 'Telemetry & Grafana'} 
+                class:is-hidden={activeTab !== 'Telemetry & Grafana'}
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >
@@ -598,8 +580,8 @@
 
             <div 
                 class="view-panel" 
-                class:is-active={activeTab === 'System & Cloud Settings'} 
-                class:is-hidden={activeTab !== 'System & Cloud Settings'}
+                class:is-active={activeTab === 'Settings'} 
+                class:is-hidden={activeTab !== 'Settings'}
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >

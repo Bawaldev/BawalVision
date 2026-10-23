@@ -25,7 +25,7 @@ std::string RollingImageStore::save_frame(uint64_t frame_id, const cv::Mat& bgr_
     }
 
     std::vector<uint8_t> jpeg;
-    if (!encodeJPEGFrame(bgr_mat, jpeg, 82)) {
+    if (!encodeJPEGFrame(bgr_mat, jpeg, 85)) {
         return {};
     }
     return save_encoded(frame_id, jpeg);
