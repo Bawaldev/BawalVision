@@ -28,7 +28,6 @@
 static const char *TAG = "MAIN";
 
 #define LCD_TASK_STACK_SIZE 4096
-#define WIFI_TASK_STACK_SIZE 4096
 #define USB_PROV_STACK_SIZE 4096
 #define BUTTON_LED_TASK_STACK_SIZE 4096
 
@@ -41,10 +40,6 @@ static const int s_candidate_indicator_pins[] = {
 
 static StaticTask_t s_lcd_task_buffer;
 static StackType_t s_lcd_task_stack[LCD_TASK_STACK_SIZE];
-
-static StaticTask_t s_wifi_task_buffer;
-static StackType_t s_wifi_task_stack[WIFI_TASK_STACK_SIZE];
-static TaskHandle_t s_wifi_task_handle = NULL;
 
 static StaticTask_t s_usb_prov_task_buffer;
 static StackType_t s_usb_prov_task_stack[USB_PROV_STACK_SIZE];
@@ -258,14 +253,6 @@ void app_main(void) {
         s_lcd_task_stack, &s_lcd_task_buffer, 0);
     if (lcd_task_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create lcd_task");
-        return;
-    }
-
-    s_wifi_task_handle = xTaskCreateStaticPinnedToCore(
-        WiFi_Server_Task, "WiFi_Server_Task", WIFI_TASK_STACK_SIZE,
-        NULL, 4, s_wifi_task_stack, &s_wifi_task_buffer, 0);
-    if (s_wifi_task_handle == NULL) {
-        ESP_LOGE(TAG, "Failed to create WiFi_Server_Task");
         return;
     }
 

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { connectEspDevice, disconnectEspDevice, fetchDeviceStatus, provisionEspViaUsb, fetchWiFiNetworks, probeEspUsbPort } from '../api';
+    import { connectEspDevice, disconnectEspDevice, fetchDeviceStatus, fetchWiFiNetworks, probeEspUsbPort } from '../api';
     import type { SystemConfig, EspConnectionResult, USBPortInfo, WiFiNetworkInfo } from '../types';
 
     interface Props {
@@ -38,6 +38,7 @@
     let portOptions = $derived.by(() => detectedUsbPorts.map((p) => p.port));
     let detectedHostIp = $state('');
     let gatewayHostIp = $state('');
+    let gatewayHostIpEdited = $state(false);
     let selectedSsid = $state('');
     let connectToast = $state('');
     let serverWifiSsid = $state('');
@@ -156,12 +157,12 @@
             : (hw.detected_host_ip || hw.server_wifi?.detected_host_ip || hw.server_wifi?.backend_ip || '');
         if (liveHostIp && isValidGatewayIp(liveHostIp)) {
             detectedHostIp = liveHostIp;
-            if (!gatewayHostIp || !isValidGatewayIp(gatewayHostIp)) {
+            if (!gatewayHostIpEdited && (!gatewayHostIp || !isValidGatewayIp(gatewayHostIp))) {
                 gatewayHostIp = liveHostIp;
             }
         } else {
             detectedHostIp = '';
-            if (isDockerOrLoopbackIp(gatewayHostIp)) {
+            if (!gatewayHostIpEdited && isDockerOrLoopbackIp(gatewayHostIp)) {
                 gatewayHostIp = '';
             }
         }
@@ -250,11 +251,7 @@
     function handleSelectNetwork(net: WiFiNetworkInfo) {
         selectedNetwork = net;
         selectedSsid = net.ssid;
-        if (net.is_server || net.ssid === serverWifiSsid) {
-            connectPassword = serverWifiPassword;
-        } else {
-            connectPassword = '';
-        }
+        connectPassword = '';
         connectError = '';
         wifiConnectSuccess = false;
         wifiSuccessMsg = '';
@@ -278,11 +275,7 @@
         wifiConnectSuccess = false;
 
         const ssid = (selectedSsid || selectedNetwork.ssid || '').trim();
-        const detectedPort = detectedUsbPorts[0]?.port || '';
-        let gatewayIpToUse = (gatewayHostIp || detectedHostIp || '').trim();
-        if (!gatewayIpToUse && serverBackendIp && isValidGatewayIp(serverBackendIp)) {
-            gatewayIpToUse = serverBackendIp.trim();
-        }
+        const gatewayIpToUse = (gatewayHostIp || '').trim();
         if (gatewayIpToUse && !isValidGatewayIp(gatewayIpToUse)) {
             connectError =
                 'IP gateway tidak valid (Docker/loopback). Gunakan IP WiFi laptop, atau kosongkan agar ESP menemukan backend via UDP discovery.';
@@ -291,25 +284,10 @@
         }
 
         try {
-            // Prefer the backend when it can actually see the board's USB node.
-            // Otherwise go straight to Web Serial: under Docker Desktop the
-            // daemon runs in a VM, so host /dev/ttyACM* is never visible and a
-            // backend call would only fail with "port not accessible".
-            let res: EspConnectionResult;
-            if (detectedPort) {
-                res = await provisionEspViaUsb(
-                    detectedPort,
-                    ssid,
-                    connectPassword,
-                    formState.backendUrl,
-                    gatewayIpToUse
-                );
-                if (!res.success && isWebSerialAvailable() && /not accessible|no such file|no USB serial/i.test(res.message || '')) {
-                    res = await provisionViaBrowserSerial(ssid, connectPassword, gatewayIpToUse);
-                }
-            } else {
-                res = await provisionViaBrowserSerial(ssid, connectPassword, gatewayIpToUse);
-            }
+            // Provision from the browser so Docker never tries to open the
+            // host's USB serial device. requestPort() must run from this user
+            // gesture; the browser then writes set_wifi directly to the ESP32.
+            const res = await provisionViaBrowserSerial(ssid, connectPassword, gatewayIpToUse);
 
             if (res.success) {
                 const targetIp = res.gatewayHostIp || gatewayIpToUse || 'auto';
@@ -399,25 +377,6 @@
         return null;
     }
 
-    function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(
-                () => reject(new Error('Timed out waiting for browser serial authorization')),
-                timeoutMs
-            );
-            promise.then(
-                (value) => {
-                    clearTimeout(timer);
-                    resolve(value);
-                },
-                (err) => {
-                    clearTimeout(timer);
-                    reject(err);
-                }
-            );
-        });
-    }
-
     function isWebSerialAvailable(): boolean {
         return typeof navigator !== 'undefined' && 'serial' in navigator;
     }
@@ -438,8 +397,7 @@
 
         if (!isWebSerialAvailable()) {
             return failure(
-                'The backend cannot see host USB serial (Docker Desktop runs in a VM), and Web Serial is unavailable. ' +
-                    'Open this page in Chrome/Edge on localhost, or run the backend on the host with `just edge-stack`.'
+                'Web Serial is unavailable. Open Settings in Chrome, Edge, or Brave on localhost/HTTPS, then pair the ESP32 directly from this browser.'
             );
         }
         if (!ssid) {
@@ -448,12 +406,9 @@
 
         let port: any = null;
         try {
-            port = await withTimeout(
-                (navigator as any).serial.requestPort({
-                    filters: [{ usbVendorId: 0x303a }] // Espressif Systems
-                }),
-                20000
-            );
+            port = await (navigator as any).serial.requestPort({
+                filters: [{ usbVendorId: 0x303a }] // Espressif Systems
+            });
         } catch (err: any) {
             return failure(
                 err?.name === 'NotFoundError'
@@ -479,8 +434,11 @@
                     backend_port: 8080
                 }) + '\n';
 
-            await writer.write(encoder.encode(payload));
-            writer.releaseLock();
+            try {
+                await writer.write(encoder.encode(payload));
+            } finally {
+                writer.releaseLock();
+            }
 
             const ack = await readBawalAck(port, 7000);
             if (!ack || (ack.status !== 'wifi_provisioned' && ack.status !== 'ok')) {
@@ -517,140 +475,19 @@
         }
     }
 
-    // Server-side fallback: the backend opens /dev/ttyACM* directly, so it
-    // works even when the browser lacks Web Serial or the user denies access.
-    async function provisionViaServer(targetPort: string, ssidOverride?: string): Promise<boolean> {
-        webSerialStatus = 'idle';
-        webSerialMsg = `Web Serial is unavailable. Falling back to server-side USB provisioning on ${targetPort}...`;
-
-        const hw = await fetchDeviceStatus(formState.backendUrl);
-        if (hw?.server_wifi) {
-            if (hw.server_wifi.ssid) serverWifiSsid = hw.server_wifi.ssid;
-            if (hw.server_wifi.backend_ip) serverBackendIp = hw.server_wifi.backend_ip;
-        }
-
-        const visiblePorts = hw?.usb_ports || [];
-        if (visiblePorts.length === 0) {
-            webSerialStatus = 'error';
-            webSerialMsg =
-                'The backend cannot see any USB serial device. Docker Desktop cannot pass host USB through to its VM; ' +
-                'run `just edge-stack` (backend on host) or use Chrome/Edge on localhost for Direct Browser Connect.';
-            return false;
-        }
-        if (!visiblePorts.some((p) => p.port === targetPort)) {
-            targetPort = visiblePorts[0].port;
-        }
-
-        const ssid = (ssidOverride || hw?.server_wifi?.ssid || serverWifiSsid || '').trim();
-        let backendIp = (gatewayHostIp || '').trim();
-        if (backendIp && !isValidGatewayIp(backendIp)) {
-            backendIp = '';
-        }
-        if (!backendIp) {
-            for (const candidate of [
-                hw?.detected_host_ip,
-                hw?.server_wifi?.detected_host_ip,
-                hw?.server_wifi?.backend_ip,
-                serverBackendIp
-            ]) {
-                const value = (candidate || '').trim();
-                if (value && isValidGatewayIp(value)) {
-                    backendIp = value;
-                    break;
-                }
-            }
-        }
-        if (!ssid) {
-            webSerialStatus = 'error';
-            webSerialMsg = 'Server Wi-Fi SSID is unavailable; cannot provision the ESP32-S3.';
-            return false;
-        }
-
-        const res = await provisionEspViaUsb(
-            targetPort,
-            ssid,
-            serverWifiPassword,
-            formState.backendUrl,
-            backendIp
-        );
-        if (res.success) {
-            applyProvisionedResult(res, targetPort, res.provisionedSsid || ssid);
-            await refreshHardwareStatus();
-            return true;
-        }
-
-        webSerialStatus = 'error';
-        webSerialMsg = res.message || `Server-side USB provisioning failed on ${targetPort}.`;
-        return false;
-    }
-
     async function handlePairUsbDevice(portOverride?: string) {
         if (isWebSerialConnecting) return;
 
         const targetPort = portOverride || selectedUsbPort || detectedUsbPorts[0]?.port || '';
-        isWebSerialConnecting = true;
-        pairingPort = targetPort;
-        webSerialStatus = 'idle';
-
-        // No backend-visible node (common under Docker Desktop): skip the
-        // guaranteed-to-fail server call and go straight to browser Web Serial.
-        if (detectedUsbPorts.length === 0) {
-            isWebSerialConnecting = false;
-            await handleDirectWebSerialConnect(false);
-            return;
-        }
-
-        webSerialMsg = `Reading active host Wi-Fi and provisioning ${targetPort}...`;
-
-        try {
-            const hw = await fetchDeviceStatus(formState.backendUrl);
-            if (hw?.server_wifi) {
-                if (hw.server_wifi.ssid) serverWifiSsid = hw.server_wifi.ssid;
-                if (hw.server_wifi.backend_ip) serverBackendIp = hw.server_wifi.backend_ip;
-            }
-
-            const ssid = hw?.server_wifi?.ssid || serverWifiSsid;
-            const backendIp = (gatewayHostIp || hw?.detected_host_ip || hw?.server_wifi?.detected_host_ip || hw?.server_wifi?.backend_ip || serverBackendIp || '').trim();
-            const res = await provisionEspViaUsb(
-                targetPort,
-                ssid,
-                serverWifiPassword,
-                formState.backendUrl,
-                backendIp
-            );
-
-            if (res.success) {
-                applyProvisionedResult(res, targetPort, res.provisionedSsid || ssid || 'host Wi-Fi');
-                await refreshHardwareStatus();
-                return;
-            }
-
-            webSerialStatus = 'error';
-            webSerialMsg = res.message || `Failed to provision ${targetPort}.`;
-
-            if (typeof navigator !== 'undefined' && 'serial' in navigator && ssid) {
-                isWebSerialConnecting = false;
-                await handleDirectWebSerialConnect(false);
-            }
-        } catch (err: any) {
-            webSerialStatus = 'error';
-            webSerialMsg = err?.message || 'USB pairing failed.';
-        } finally {
-            isWebSerialConnecting = false;
-            pairingPort = '';
-        }
+        await handleDirectWebSerialConnect(targetPort);
     }
 
-    async function handleDirectWebSerialConnect(allowBackendFallback = true) {
-        const targetPort = selectedUsbPort || detectedUsbPorts[0]?.port || '';
+    async function handleDirectWebSerialConnect(preferredPort = '') {
+        const targetPort = preferredPort || selectedUsbPort || detectedUsbPorts[0]?.port || '';
 
         if (typeof navigator === 'undefined' || !('serial' in navigator)) {
-            if (allowBackendFallback) {
-                await provisionViaServer(targetPort);
-                return;
-            }
             webSerialStatus = 'error';
-            webSerialMsg = 'Web Serial API is available in Chromium, Google Chrome, or Microsoft Edge on Fedora Linux.';
+            webSerialMsg = 'Web Serial is unavailable. Open Settings in Chrome, Edge, or Brave on localhost/HTTPS.';
             return;
         }
 
@@ -661,6 +498,12 @@
         let port: any = null;
 
         try {
+            // Request permission before any awaited network calls so browser
+            // transient user activation is still valid.
+            port = await (navigator as any).serial.requestPort({
+                filters: [{ usbVendorId: 0x303a }]
+            });
+
             let hw: any = null;
             if (!serverWifiSsid || !serverBackendIp) {
                 hw = await fetchDeviceStatus(formState.backendUrl);
@@ -697,24 +540,8 @@
                 }
             }
 
-            try {
-                // Never leave the modal hanging on the browser permission
-                // prompt: time out and hand the job to the backend instead.
-                port = await withTimeout(
-                    (navigator as any).serial.requestPort({
-                        filters: [
-                            { usbVendorId: 0x303a } // Espressif Systems
-                        ]
-                    }),
-                    4000
-                );
-            } catch (authErr: any) {
-                if (!allowBackendFallback) throw authErr;
-                await provisionViaServer(targetPort, serverWifiSsid);
-                return;
-            }
-
             await port.open({ baudRate: 115200 });
+            await new Promise((resolve) => setTimeout(resolve, 3500));
 
             const encoder = new TextEncoder();
             const writer = port.writable.getWriter();
@@ -729,8 +556,11 @@
                 backend_port: 8080
             }) + '\n';
 
-            await writer.write(encoder.encode(payload));
-            writer.releaseLock();
+            try {
+                await writer.write(encoder.encode(payload));
+            } finally {
+                writer.releaseLock();
+            }
 
             webSerialMsg = 'Waiting for BAWAL_ACK from ESP32-S3...';
             const ack = await readBawalAck(port, 7000);
@@ -757,22 +587,14 @@
                 const message = ack
                     ? `ESP32-S3 returned status '${ack.status || 'unknown'}'.`
                     : 'No BAWAL_ACK received from ESP32-S3. Check USB permissions and that idf.py monitor is closed.';
-                if (allowBackendFallback) {
-                    await provisionViaServer(targetPort, serverWifiSsid);
-                } else {
-                    webSerialStatus = 'error';
-                    webSerialMsg = message;
-                }
+                webSerialStatus = 'error';
+                webSerialMsg = message;
             }
         } catch (err: any) {
-            if (allowBackendFallback) {
-                await provisionViaServer(targetPort, serverWifiSsid);
-            } else {
-                webSerialStatus = 'error';
-                webSerialMsg = err?.name === 'NotFoundError'
-                    ? 'Serial port selection canceled.'
-                    : (err?.message || 'Failed to open serial port.');
-            }
+            webSerialStatus = 'error';
+            webSerialMsg = err?.name === 'NotFoundError'
+                ? 'Serial port selection canceled.'
+                : (err?.message || 'Failed to open serial port.');
         } finally {
             if (port) {
                 try {
@@ -815,29 +637,6 @@
         }
     }
 
-    async function handleProvisionUsbWifi() {
-        const portToUse = selectedUsbPort || (detectedUsbPorts[0]?.port ?? '');
-        if (!portToUse) {
-            connectionStatus = 'failed';
-            errorMessage = 'No USB Serial device (/dev/ttyACM* or /dev/ttyUSB*) plugged into the server.';
-            return;
-        }
-        connectionStatus = 'connecting';
-        errorMessage = '';
-        connectingStepText = `Provisioning server Wi-Fi '${serverWifiSsid || 'Auto'}' over ${portToUse}...`;
-
-        const res = await provisionEspViaUsb(portToUse, serverWifiSsid, serverWifiPassword, formState.backendUrl);
-        if (res.success) {
-            connectionStatus = 'connected';
-            lastConnDetails = res;
-            onDeviceConnectionChange?.(true, res.deviceId);
-            await refreshHardwareStatus();
-        } else {
-            connectionStatus = 'failed';
-            errorMessage = res.message || 'USB Wi-Fi provisioning failed.';
-        }
-    }
-
     async function handleDisconnectEsp() {
         const targetId = formState.deviceId || lastConnDetails.deviceId || '*';
         try {
@@ -873,7 +672,7 @@
         {/if}
     </div>
 
-    <form onsubmit={handleSubmit} class="settings-form">
+    <form onsubmit={handleSubmit} class="settings-form" autocomplete="off">
         <!-- 1. Gateway & Connectivity (Fedora Adwaita / Quick Settings UI/UX) -->
         <div class="settings-card fedora-card">
             <div class="section-header">
@@ -912,6 +711,7 @@
                             bind:value={formState.deviceId}
                             placeholder="e.g. ESP32S3_441BF6C95678"
                             class="form-input esp-id-input"
+                            autocomplete="off"
                             disabled={connectionStatus === 'connecting'}
                         />
                     </div>
@@ -966,9 +766,9 @@
                         <button
                             type="button"
                             class="fedora-accent-pill-btn"
-                            onclick={() => handleDirectWebSerialConnect(true)}
+                            onclick={() => handleDirectWebSerialConnect()}
                             disabled={isWebSerialConnecting}
-                            title="Pair ESP32-S3 via Web Serial, falling back to server-side USB provisioning"
+                            title="Pair ESP32-S3 directly from this browser using Web Serial"
                         >
                             {#if isWebSerialConnecting}
                                 <span class="btn-spinner"></span> Pairing...
@@ -1183,7 +983,7 @@
             <!-- Adwaita / Fedora Wi-Fi Password Connection Modal -->
             {#if showConnectModal && selectedNetwork}
                 <div class="fedora-modal-backdrop" onclick={closeConnectModal} role="presentation">
-                    <div class="fedora-dialog" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+                    <div class="fedora-dialog" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="dialog-title" tabindex="-1">
                         <div class="dialog-header">
                             <div class="dialog-icon-circle">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1215,24 +1015,26 @@
 
                             <div class="dialog-field">
                                 <label for="wifi-dialog-ssid">Target Wi-Fi Network (SSID)</label>
-                                <input id="wifi-dialog-ssid" type="text" class="fedora-input" bind:value={selectedSsid} placeholder="Wi-Fi SSID" />
+                                <input
+                                    id="wifi-dialog-ssid"
+                                    type="text"
+                                    class="fedora-input"
+                                    bind:value={selectedSsid}
+                                    placeholder="Wi-Fi SSID"
+                                    autocomplete="off"
+                                />
                             </div>
 
                             <div class="dialog-field">
-                                <div class="field-label-row">
-                                    <label for="wifi-dialog-pass">Password</label>
-                                    {#if selectedNetwork.is_server}
-                                        <span class="auto-creds-badge">✓ Auto-managed by Server</span>
-                                    {/if}
-                                </div>
+                                <label for="wifi-dialog-pass">Password</label>
                                 <div class="password-input-wrap">
                                     <input
                                         id="wifi-dialog-pass"
                                         type={showPassword ? 'text' : 'password'}
                                         bind:value={connectPassword}
-                                        placeholder={selectedNetwork.is_server ? "Server saved credentials (leave blank to auto-use server password)" : "Enter Wi-Fi network password"}
+                                        placeholder="Enter Wi-Fi network password"
                                         class="fedora-input"
-                                        autocomplete="new-password"
+                                        autocomplete="off"
                                     />
                                     <button
                                         type="button"
@@ -1273,7 +1075,9 @@
                                         type="text"
                                         class="fedora-input"
                                         bind:value={gatewayHostIp}
+                                        oninput={() => (gatewayHostIpEdited = true)}
                                         placeholder={detectedHostIp || 'Auto-detect laptop Wi-Fi IP'}
+                                        autocomplete="off"
                                     />
                                     {#if gatewayHostIp && !isValidGatewayIp(gatewayHostIp)}
                                         <span class="gateway-ip-error">IP Docker/loopback tidak diizinkan. Gunakan IP WiFi laptop atau kosongkan.</span>
@@ -1282,7 +1086,7 @@
                             </div>
 
                             <div class="dialog-security-note">
-                                🔒 <span><strong>Zero-Persistence Security:</strong> Credentials are sent transiently to ESP32 memory via USB CDC and are never stored in database or cookies.</span>
+                                🔒 <span>Credentials are sent directly from this browser over USB. The ESP32 stores Wi-Fi settings in NVS flash.</span>
                             </div>
 
                             {#if connectError}
@@ -1392,6 +1196,7 @@
                     bind:value={formState.minConfidenceThreshold}
                     oninput={() => onSaveConfig(formState)}
                     class="form-range"
+                    autocomplete="off"
                 />
                 <small>Vision classification acceptance threshold (Range: 25% – 98%, Default: 35%)</small>
             </div>
@@ -1409,6 +1214,7 @@
                         type="checkbox"
                         bind:checked={formState.gravitonEngineEnabled}
                         disabled={!config.gravitonEngineAvailable}
+                        autocomplete="off"
                     />
                     <div class="check-text">
                         <strong>
@@ -1428,7 +1234,7 @@
                 </label>
 
                 <label class="check-item">
-                    <input type="checkbox" bind:checked={formState.localEngineEnabled} />
+                    <input type="checkbox" bind:checked={formState.localEngineEnabled} autocomplete="off" />
                     <div class="check-text">
                         <strong>Local C++20 Vision Service ({parallelCores > 0 ? `${parallelCores}-Core ` : ''}OpenMP SIMD)</strong>
                         <small>Active on-premise zero-dependency machine vision pipeline ({parallelCores > 0 ? `${parallelCores} parallel worker threads` : 'multi-threaded'})</small>
@@ -2429,18 +2235,6 @@
         background: #3584e4;
         border-color: #1c71d8;
         color: #ffffff;
-    }
-
-    .field-label-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }
-
-    .auto-creds-badge {
-        font-size: 0.65rem;
-        color: #2ec27e;
-        font-weight: 600;
     }
 
     .empty-row {

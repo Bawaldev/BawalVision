@@ -18,8 +18,6 @@ extern "C" {
 #define NVS_KEY_WIFI_PASS    "wifi_pass"
 #define NVS_KEY_BACKEND_IP   "backend_ip"
 #define NVS_KEY_BACKEND_PORT "backend_port"
-#define BACKEND_ENDPOINT "/api/v1/telemetry"
-#define CAMERA_FRAME_ENDPOINT "/api/v1/camera/frame"
 #define BACKEND_DISCOVERY_PORT 8765
 #define BACKEND_DISCOVERY_MAGIC "BAWAL_DISCOVER_V1"
 
@@ -43,7 +41,6 @@ extern "C" {
 #define CONFIG_DEVICE_AUTH_TOKEN "bawal_secure_token_prod"
 #endif
 
-#define URL_BUFFER_SIZE 128
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
@@ -93,30 +90,9 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass, const ch
 void usb_serial_provisioning_task(void *pvParameters);
 
 /**
- * @brief POST a flat telemetry JSON payload to /api/v1/telemetry.
- */
-esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port,
-                                    telemetry_data_t *data);
-
-/**
- * @brief Resolve the backend IPv4 address from NVS, build config, or UDP discovery.
- */
-bool get_backend_ip(char *out_ip, size_t max_len);
-
-/**
- * @brief Build complete target URL for a given endpoint based on priority.
- */
-esp_err_t get_backend_url(const char *endpoint, char *out_url, size_t max_len);
-
-/**
  * @brief Return the effective backend TCP port.
  */
 uint16_t get_backend_port(void);
-
-/**
- * @brief Periodic telemetry task (5 s heartbeat, no queue).
- */
-void WiFi_Server_Task(void *pvParameters);
 
 /**
  * @brief Start the native ESP-IDF MJPEG server on port 80.

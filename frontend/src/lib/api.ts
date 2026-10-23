@@ -243,7 +243,6 @@ export async function provisionEspViaUsb(
                 usb_port: usbPort,
                 ssid,
                 password,
-                backend_ip: gatewayHostIp,
                 gateway_host_ip: gatewayHostIp
             })
         });
