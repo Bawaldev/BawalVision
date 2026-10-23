@@ -5,6 +5,7 @@
     import OverviewView from '$lib/views/OverviewView.svelte';
     import DashboardView from '$lib/views/DashboardView.svelte';
     import InspectionReportsView from '$lib/views/InspectionReportsView.svelte';
+    import BatchInspectionView from '$lib/components/BatchInspectionView.svelte';
     import TelemetryResultLogView from '$lib/views/TelemetryResultLogView.svelte';
     import GrafanaDashboardView from '$lib/views/GrafanaDashboardView.svelte';
     import SettingsView from '$lib/views/SettingsView.svelte';
@@ -44,10 +45,21 @@
         'Overview',
         'Live Inspection',
         'Inspection Reports',
+        'Batch Inspection',
         'Telemetry & Hardware',
         'Grafana Dashboard',
         'Settings'
     ];
+
+    const TAB_SLUGS: Record<string, string> = {
+        'Overview': 'overview',
+        'Live Inspection': 'live',
+        'Inspection Reports': 'reports',
+        'Batch Inspection': 'batch',
+        'Telemetry & Hardware': 'telemetry',
+        'Grafana Dashboard': 'grafana',
+        'Settings': 'settings'
+    };
 
     let activeTab = $state('Overview');
     let transitionDirection = $state<'forward' | 'backward' | 'none'>('none');
@@ -68,16 +80,7 @@
         if (typeof window !== 'undefined') {
             try {
                 localStorage.setItem('bawal_active_tab', tab);
-                const slug = tab === 'Overview'
-                    ? 'overview'
-                    : (tab === 'Inspection Reports'
-                        ? 'reports'
-                        : (tab === 'Telemetry & Hardware'
-                            ? 'telemetry'
-                            : (tab === 'Grafana Dashboard'
-                                ? 'grafana'
-                                : (tab === 'Settings' ? 'settings' : 'live'))));
-                window.location.hash = slug;
+                window.location.hash = TAB_SLUGS[tab] ?? 'live';
             } catch {}
         }
     }
@@ -299,7 +302,9 @@
         try {
             const hash = window.location.hash.toLowerCase();
             let targetTab = 'Overview';
-            if (hash.includes('report') || hash.includes('audit')) {
+            if (hash.includes('batch')) {
+                targetTab = 'Batch Inspection';
+            } else if (hash.includes('report') || hash.includes('audit')) {
                 targetTab = 'Inspection Reports';
             } else if (hash.includes('grafana')) {
                 targetTab = 'Grafana Dashboard';
@@ -578,6 +583,16 @@
                 class:slide-backward={transitionDirection === 'backward'}
             >
                 <InspectionReportsView />
+            </div>
+
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Batch Inspection'} 
+                class:is-hidden={activeTab !== 'Batch Inspection'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
+                <BatchInspectionView />
             </div>
 
             <div 
