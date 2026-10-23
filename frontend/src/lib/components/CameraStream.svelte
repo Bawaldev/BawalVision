@@ -568,7 +568,9 @@
     }
 
     onDestroy(() => {
-        window.removeEventListener('bawal-source-mode', handleGlobalSourceMode);
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('bawal-source-mode', handleGlobalSourceMode);
+        }
         if (typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         }
