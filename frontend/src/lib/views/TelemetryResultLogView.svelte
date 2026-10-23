@@ -3,6 +3,7 @@
     import { fetchRecords } from '../api';
     import CameraStream from '../components/CameraStream.svelte';
     import GrafanaAnalyticsEmbed from '../components/GrafanaAnalyticsEmbed.svelte';
+    import InspectionAuditPanel from '../components/InspectionAuditPanel.svelte';
     import type { InspectionRecord, TelemetryPayload } from '../types';
 
     interface Props {
@@ -906,6 +907,11 @@
             </div>
         {/if}
     </div>
+
+    <!-- ========================================================================= -->
+    <!-- ROW 1B: LIVE INSPECTION AUDIT STREAM (Rolling FIFO Images)               -->
+    <!-- ========================================================================= -->
+    <InspectionAuditPanel />
 
     <!-- ========================================================================= -->
     <!-- ROW 2: RESULT LOG (Full-Width Historical Database Table)                 -->

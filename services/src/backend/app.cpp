@@ -1,6 +1,7 @@
 #include "bawal/backend/app.hpp"
 
 #include "bawal/backend/database.hpp"
+#include "bawal/server/rolling_image_store.hpp"
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -25,6 +26,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <opencv2/imgcodecs.hpp>
 
 namespace bawal::backend {
 namespace {
@@ -770,11 +773,12 @@ crow::json::wvalue buildExamplesJson() {
 } // namespace
 
 BackendApp::BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerConfig config,
-                       Database* database)
+                       Database* database, server::RollingImageStore* image_store)
     : m_state(state),
       m_producer(producer),
       m_config(std::move(config)),
-      m_database(database) {}
+      m_database(database),
+      m_image_store(image_store) {}
 
 void BackendApp::configure() {
     auto& cors = m_app.get_middleware<crow::CORSHandler>();
@@ -833,6 +837,7 @@ void BackendApp::registerRoutes() {
     registerCameraRoutes();
     registerTelemetryRoutes();
     registerInspectionRoutes();
+    registerImageRoutes();
     registerExampleRoutes();
     registerCompatibilityRoutes();
     registerDeviceRoutes();
@@ -1273,6 +1278,82 @@ void BackendApp::registerInspectionRoutes() {
 
         return crow::response(body);
     });
+
+    CROW_ROUTE(m_app, "/api/v1/inspections")([this](const crow::request& req) {
+        std::size_t limit = 100;
+        if (const char* value = req.url_params.get("limit"); value != nullptr) {
+            char* end = nullptr;
+            const unsigned long parsed = std::strtoul(value, &end, 10);
+            if (end != value && parsed > 0) {
+                limit = std::min<std::size_t>(parsed, 100);
+            }
+        }
+
+        const std::vector<InspectionHistoryEntry> entries =
+            m_state.inspectionHistory(limit);
+        crow::json::wvalue::list records;
+        records.reserve(entries.size());
+        for (const auto& entry : entries) {
+            crow::json::wvalue item;
+            item["frame_id"] = entry.frame_id;
+            item["timestamp"] = entry.timestamp;
+            item["verdict"] = entry.verdict;
+            item["surface_temp"] = entry.surface_temp;
+            item["image_path"] = entry.image_path;
+            item["t_safe_hours"] = entry.t_safe_hours;
+
+            crow::json::wvalue::list detections;
+            detections.reserve(entry.detections.size());
+            for (const auto& detection : entry.detections) {
+                crow::json::wvalue detection_item;
+                detection_item["class_name"] = detection.class_name;
+                detection_item["confidence"] = detection.confidence;
+                crow::json::wvalue::list bbox;
+                bbox.emplace_back(detection.bbox[0]);
+                bbox.emplace_back(detection.bbox[1]);
+                bbox.emplace_back(detection.bbox[2]);
+                bbox.emplace_back(detection.bbox[3]);
+                detection_item["bbox"] = std::move(bbox);
+                detection_item["freshness_score"] = detection.freshness_score;
+                detection_item["portion_ratio"] = detection.portion_ratio;
+                detections.emplace_back(std::move(detection_item));
+            }
+            item["detections"] = std::move(detections);
+            item["checksum_sha256"] = entry.checksum_sha256;
+            records.emplace_back(std::move(item));
+        }
+
+        crow::json::wvalue body(std::move(records));
+        return crow::response(body);
+    });
+}
+
+void BackendApp::registerImageRoutes() {
+    CROW_ROUTE(m_app, "/inspections/<string>")
+        ([](const crow::request&, crow::response& res, const std::string& filename) {
+            namespace fs = std::filesystem;
+
+            if (filename.empty() ||
+                filename.find("..") != std::string::npos ||
+                filename.find('/') != std::string::npos ||
+                filename.find('\\') != std::string::npos) {
+                res.code = 400;
+                res.end("Bad Request");
+                return;
+            }
+
+            const fs::path file_path = fs::path("./data/inspections") / filename;
+            std::error_code ec;
+            if (!fs::is_regular_file(file_path, ec)) {
+                res.code = 404;
+                res.end("Image Not Found");
+                return;
+            }
+
+            res.set_static_file_info(file_path.string(), "image/jpeg");
+            res.add_header("Cache-Control", "public, max-age=3600");
+            res.end();
+        });
 }
 
 void BackendApp::registerExampleRoutes() {
@@ -1392,6 +1473,17 @@ void BackendApp::registerCompatibilityRoutes() {
                 inspection.device_id, inspection.frame_id,
                 inspection.detections, inspection.optical,
                 inspection.engine_pipeline);
+        }
+
+        if (m_image_store != nullptr) {
+            const std::vector<uint8_t> jpeg = m_state.latestJpeg();
+            if (!jpeg.empty()) {
+                const cv::Mat frame = cv::imdecode(jpeg, cv::IMREAD_COLOR);
+                if (!frame.empty()) {
+                    (void)m_image_store->save_frame(
+                        inspection.valid ? inspection.frame_id : 0, frame);
+                }
+            }
         }
 
         crow::json::wvalue body;

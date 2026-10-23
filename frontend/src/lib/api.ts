@@ -1,4 +1,4 @@
-import type { InspectionRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult, DeviceHardwareStatus, WiFiNetworkInfo } from './types';
+import type { InspectionRecord, InspectionAuditRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult, DeviceHardwareStatus, WiFiNetworkInfo } from './types';
 
 const BASE_URL = '/api/v1';
 
@@ -31,6 +31,25 @@ export async function fetchRecords(baseUrl = BASE_URL): Promise<InspectionRecord
         return await response.json();
     } catch (err) {
         console.warn('[API] Could not fetch records from backend:', err);
+        return [];
+    }
+}
+
+export async function fetchInspectionAuditRecords(
+    limit = 100,
+    baseUrl = BASE_URL
+): Promise<InspectionAuditRecord[]> {
+    try {
+        const response = await fetch(`${baseUrl}/inspections?limit=${limit}`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error ${response.status}`);
+        }
+        const data = await response.json();
+        return Array.isArray(data) ? data as InspectionAuditRecord[] : [];
+    } catch (err) {
+        console.warn('[API] Could not fetch inspection audit records:', err);
         return [];
     }
 }

@@ -20,6 +20,11 @@ export default defineConfig(({ mode }) => {
 					target: env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080',
 					changeOrigin: true,
 					secure: false
+				},
+				'/inspections': {
+					target: env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080',
+					changeOrigin: true,
+					secure: false
 				}
 			}
 		},
@@ -31,6 +36,11 @@ export default defineConfig(({ mode }) => {
 					secure: false
 				},
 				'/examples': {
+					target: backendTarget,
+					changeOrigin: true,
+					secure: false
+				},
+				'/inspections': {
 					target: backendTarget,
 					changeOrigin: true,
 					secure: false

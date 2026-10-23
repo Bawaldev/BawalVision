@@ -14,6 +14,7 @@
 #include "bawal/backend/mjpeg_ingress.hpp"
 #include "bawal/backend/vision_worker.hpp"
 #include "bawal/ipc/shm_producer.hpp"
+#include "bawal/server/rolling_image_store.hpp"
 
 namespace {
 
@@ -77,8 +78,10 @@ int main() {
                   << "; continuing with in-memory inspection snapshots only\n";
     }
 
+    bawal::server::RollingImageStore image_store("./data/inspections", 50);
+
     bawal::backend::VisionWorker vision(state, bawal::backend::resolveModelPath(),
-                                        &database);
+                                        &database, &image_store);
     vision.start();
 
     // Bind the UDS notifier only after the consumer is listening. This keeps a
@@ -91,7 +94,7 @@ int main() {
     }
     producer.startNotify();
 
-    bawal::backend::BackendApp app(state, producer, config, &database);
+    bawal::backend::BackendApp app(state, producer, config, &database, &image_store);
     app.configure();
 
     // ESP32-S3 nodes locate the backend through this UDP responder when their

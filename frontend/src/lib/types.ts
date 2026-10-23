@@ -117,6 +117,25 @@ export interface MockTelemetryPayload {
     scene_optical?: SceneOpticalMetrics;
 }
 
+export interface InspectionAuditDetection {
+    class_name: string;
+    confidence: number;
+    bbox: [number, number, number, number];
+    freshness_score: number;
+    portion_ratio: number;
+}
+
+export interface InspectionAuditRecord {
+    frame_id: number;
+    timestamp: string;
+    verdict: 'ACCEPTED' | 'REJECTED' | string;
+    surface_temp: number;
+    image_path: string;
+    detections: InspectionAuditDetection[];
+    t_safe_hours: number;
+    checksum_sha256: string;
+}
+
 export interface InferenceLogEntry {
     id: string;
     timestamp: string;
