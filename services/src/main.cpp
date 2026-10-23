@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
         : (backend_base_url + "/api/v1/camera/latest/raw");
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
-    // 4. Inisialisasi Model AI Inspection Pipeline
+    // 4. Initialize the AI inspection pipeline model
     std::string model_path = "/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx";
     if (const char* env_model = std::getenv("MODEL_PATH")) {
         if (std::string(env_model).length() > 0) {
@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
         cv::resizeWindow(window_name, 800, 600);
     }
 
-    // 5. Inisialisasi Ingestion (Mock MP4 vs Zero-Copy POSIX SHM IPC)
+    // 5. Initialize ingestion (mock MP4 vs zero-copy POSIX SHM IPC)
     bool use_video_source = false;
     if (const char* env_video = std::getenv("VIDEO_PATH")) {
         if (std::string(env_video).length() > 0) {
@@ -290,18 +290,18 @@ int main(int argc, char** argv) {
     std::atomic<uint32_t> shm_latest_frame_id{0};
     std::thread shm_worker;
 
-    // Fallback HTTP FrameGrabber (hanya aktif jika mode video lokal atau jika SHM gagal)
+    // Fallback HTTP frame grabber (only active for local video mode or when SHM fails)
     LatestFrameGrabber frame_grabber(pipeline.getVideoSource());
 
     if (use_video_source) {
         frame_grabber.start();
     } else {
-        // Coba inisialisasi Consumer SHM modular
+        // Try to initialize the modular SHM consumer
         if (shm_consumer.init()) {
             use_shm = true;
             shm_worker_running.store(true, std::memory_order_release);
 
-            // Ingestion worker asinkron: Menunggu sinyal frame SHM tanpa menyandera GUI main loop
+            // Asynchronous ingestion worker: waits for SHM frame signals without blocking the GUI main loop
             shm_worker = std::thread([&]() {
                 cv::Mat decoded;
                 uint32_t fid = 0;
@@ -326,9 +326,9 @@ int main(int argc, char** argv) {
                     }
                 }
             });
-            fmt::print("[IPC] POSIX Shared Memory zero-copy consumer aktif!\n");
+            fmt::print("[IPC] POSIX shared memory zero-copy consumer active!\n");
         } else {
-            fmt::print("[WARN] Gagal mengaktifkan SHM. Fallback otomatis ke HTTP frame grabber.\n");
+            fmt::print("[WARN] Failed to enable SHM. Falling back to the HTTP frame grabber.\n");
             (void)pipeline.openVideoSource(SourceMode::ESP32_STREAM, stream_url);
             pipeline.getVideoSource().setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
             frame_grabber.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
@@ -339,7 +339,7 @@ int main(int argc, char** argv) {
     uint64_t frame_seq = 0;
     auto last_ai_dispatch = std::chrono::steady_clock::now() - std::chrono::seconds(1);
 
-    // AI Worker Asinkron (Single-Slot Mailbox Decoupled)
+    // Asynchronous AI worker (single-slot decoupled mailbox)
     std::mutex ai_mutex;
     LatestMatMailbox ai_mailbox(3);
     std::atomic<bool> ai_worker_running{true};
@@ -399,7 +399,7 @@ int main(int argc, char** argv) {
             if (pipeline.runInference(frame_to_process, detected)) {
                 const double infer_ms = ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
                 
-                // Sinkronisasi Confidence Threshold dinamis dari backend tiap 3 detik
+                // Sync the dynamic confidence threshold from the backend every 3 seconds
                 const auto now_thresh = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now_thresh - last_thresh_sync).count() >= 3) {
                     last_thresh_sync = now_thresh;

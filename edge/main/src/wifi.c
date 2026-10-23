@@ -288,7 +288,7 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
     char new_ip[sizeof(g_backend_ip)] = {0};
     if (backend_ip && backend_ip[0] != '\0') {
         if (!is_valid_lan_ip(backend_ip)) {
-            ESP_LOGE(TAG, "DITOLAK: Backend IP %s adalah IP Docker/Loopback atau bukan LAN valid", backend_ip);
+            ESP_LOGE(TAG, "REJECTED: Backend IP %s is a Docker/loopback or non-LAN address", backend_ip);
             return false;
         }
         str_trim_copy(new_ip, sizeof(new_ip), backend_ip);
@@ -709,15 +709,10 @@ void wifi_init_sta(void) {
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     }
     ESP_ERROR_CHECK(esp_wifi_start());
-    // Radio Wi-Fi aktif terus tanpa sleep
+    // Keep the Wi-Fi radio always on (no power save)
     (void)esp_wifi_set_ps(WIFI_PS_NONE);
     s_wifi_initialized = true;
 }
-
-typedef struct {
-    httpd_req_t *request;
-    int client_fd;
-} mjpeg_stream_context_t;
 
 static esp_err_t snapshot_handler(httpd_req_t *req) {
     camera_frame_buffer_t frame = {0};

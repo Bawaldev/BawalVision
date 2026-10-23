@@ -16,7 +16,7 @@ constexpr const char* SHM_NAME = "/bawal_frame_shm";
 // when running with `ipc: host`.
 constexpr const char* SOCK_NOTIFY_PATH = "/dev/shm/bawal_shm.sock";
 
-// Global Header: Aligned ke 64 byte (1 Cache line)
+// Global header: aligned to 64 bytes (1 cache line)
 struct alignas(64) ShmGlobalHeader {
     uint32_t magic{SHM_MAGIC};
     uint32_t version{1};
@@ -27,7 +27,7 @@ struct alignas(64) ShmGlobalHeader {
 };
 static_assert(sizeof(ShmGlobalHeader) == 64, "Header must be 64 bytes");
 
-// Metadata Per Slot: Aligned ke 64 byte (1 Cache line)
+// Per-slot metadata: aligned to 64 bytes (1 cache line)
 struct alignas(64) ShmSlotHeader {
     std::atomic<uint32_t> ready{0}; // 0 = idle/writing, 1 = ready for read
     uint32_t frame_id{0};

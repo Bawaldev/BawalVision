@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "bawal/backend/state.hpp"
 #include "bawal/ipc/shm_producer.hpp"
@@ -23,6 +24,29 @@ struct ServerConfig {
     uint16_t port{8080};
 };
 
+/**
+ * @brief Parsed frame ingress request (raw or JSON/base64 body plus headers).
+ *
+ * Fields are grouped 8-byte first and 1-byte last so the heavy string/vector
+ * members never leave padding holes between the scalar metadata.
+ */
+struct alignas(8) FrameIngressRequest {
+    std::string device_id;
+    std::string camera_model;
+    std::vector<uint8_t> image;
+    uint32_t frame_id{0};
+    uint32_t free_heap_internal{0};
+    uint32_t free_heap_psram{0};
+    float temperature{0.0f};
+    uint16_t width{0};
+    uint16_t height{0};
+    uint8_t cpu_load{0};
+    bool has_temperature{false};
+    bool has_cpu_load{false};
+    bool has_free_heap_internal{false};
+    bool has_free_heap_psram{false};
+    uint8_t reserved[4]{0}; ///< Explicit tail padding after the 1-byte flags
+};
 /**
  * @brief Crow HTTP front-end for the unified C++ backend.
  *

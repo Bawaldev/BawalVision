@@ -20,13 +20,6 @@ int64_t steadyNowNs() {
         .count();
 }
 
-struct TransferContext {
-    MjpegIngress* ingress;
-    uint64_t generation;
-    std::string pending;
-    int64_t started_ns;
-};
-
 size_t parseContentLength(std::string_view header) {
     constexpr std::string_view key = "Content-Length:";
     size_t pos = header.find(key);
@@ -45,7 +38,7 @@ size_t parseContentLength(std::string_view header) {
 
 size_t receiveMjpeg(char* data, size_t size, size_t count, void* user) {
     const size_t bytes = size * count;
-    auto& ctx = *static_cast<TransferContext*>(user);
+    auto& ctx = *static_cast<MjpegTransferContext*>(user);
     constexpr size_t kMaxPendingBytes = 512 * 1024;
     if (bytes == 0 || ctx.pending.size() + bytes > kMaxPendingBytes) return 0;
     ctx.pending.append(data, bytes);
@@ -69,7 +62,7 @@ size_t receiveMjpeg(char* data, size_t size, size_t count, void* user) {
 }
 
 int transferProgress(void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
-    auto& ctx = *static_cast<TransferContext*>(user);
+    auto& ctx = *static_cast<MjpegTransferContext*>(user);
     if (ctx.ingress->shouldStop(ctx.generation) || ctx.ingress->sourcePaused()) return 1;
 
     // A TCP connection can stay half-open after an ESP reboot while the
@@ -163,7 +156,7 @@ void MjpegIngress::run() {
             continue;
         }
 
-        TransferContext context{this, generation, {}, steadyNowNs()};
+        MjpegTransferContext context{this, generation, steadyNowNs(), {}};
         const std::string url = "http://" + peer + "/stream";
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receiveMjpeg);

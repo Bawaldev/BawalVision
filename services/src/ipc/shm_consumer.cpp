@@ -8,25 +8,25 @@ namespace bawal::ipc {
 bool ShmFrameConsumer::init() {
     m_shm_fd = shm_open(SHM_NAME, O_RDONLY, 0666);
     if (m_shm_fd < 0) {
-        std::cerr << "[SHM] Gagal membuka shm_open: " << strerror(errno) << std::endl;
+        std::cerr << "[SHM] shm_open failed: " << strerror(errno) << std::endl;
         return false;
     }
     void* ptr = mmap(nullptr, TOTAL_SHM_SIZE, PROT_READ, MAP_SHARED, m_shm_fd, 0);
     if (ptr == MAP_FAILED) {
-        std::cerr << "[SHM] mmap gagal: " << strerror(errno) << std::endl;
+        std::cerr << "[SHM] mmap failed: " << strerror(errno) << std::endl;
         return false;
     }
     m_base_ptr = reinterpret_cast<uint8_t*>(ptr);
     m_global_hdr = reinterpret_cast<ShmGlobalHeader*>(m_base_ptr);
     if (m_global_hdr->magic != SHM_MAGIC) {
-        std::cerr << "[SHM] Magic header tidak cocok (backend belum siap?)" << std::endl;
+        std::cerr << "[SHM] Magic header mismatch (backend not ready?)" << std::endl;
         return false;
     }
 
     unlink(SOCK_NOTIFY_PATH);
     m_server_sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (m_server_sock < 0) {
-        std::cerr << "[SHM] Gagal membuat UDS notify: " << strerror(errno) << std::endl;
+        std::cerr << "[SHM] Failed to create UDS notify socket: " << strerror(errno) << std::endl;
         return false;
     }
 
@@ -35,7 +35,7 @@ bool ShmFrameConsumer::init() {
     strncpy(addr.sun_path, SOCK_NOTIFY_PATH, sizeof(addr.sun_path) - 1);
 
     if (bind(m_server_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::cerr << "[SHM] Gagal bind UDS notify: " << strerror(errno) << std::endl;
+        std::cerr << "[SHM] Failed to bind UDS notify socket: " << strerror(errno) << std::endl;
         return false;
     }
     // Backend and vision may run as different users; allow the Go producer to
@@ -51,7 +51,7 @@ bool ShmFrameConsumer::init() {
     (void)setsockopt(m_server_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
     listen(m_server_sock, 1);
-    std::cout << "[SHM] Consumer siap. Menunggu producer terhubung...\n";
+    std::cout << "[SHM] Consumer ready. Waiting for the producer to connect...\n";
     return true;
 }
 
@@ -64,7 +64,7 @@ bool ShmFrameConsumer::waitForNextFrame(cv::Mat& out_bgr_frame, uint32_t& out_fr
         timeout.tv_sec = 0;
         timeout.tv_usec = 200 * 1000;
         (void)setsockopt(m_client_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-        std::cout << "[SHM] Producer terhubung ke pipeline C++!\n";
+        std::cout << "[SHM] Producer connected to the C++ pipeline!\n";
     }
 
     uint64_t latest_seq = 0;
