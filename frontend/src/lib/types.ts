@@ -89,6 +89,8 @@ export interface TelemetryPayload {
     cpu_core1_load?: number | null;
     heap_free?: number | null;
     free_heap?: number | null;
+    free_heap_internal?: number | null;
+    free_heap_psram?: number | null;
     rssi?: number | null;
     server_memory_mb?: number | null;
     camera_model?: string | null;

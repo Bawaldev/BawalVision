@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -95,11 +96,15 @@ struct TelemetryView {
     int8_t cpu_core0_load{-1};
     int8_t cpu_core1_load{-1};
     uint64_t heap_free{0};
+    uint64_t free_heap_internal{0};
+    uint64_t free_heap_psram{0};
     int16_t rssi{0};
     bool has_temperature{false};
     bool has_cpu_temperature{false};
     bool has_cpu_load{false};
     bool has_heap_free{false};
+    bool has_free_heap_internal{false};
+    bool has_free_heap_psram{false};
     bool has_rssi{false};
 };
 
@@ -121,11 +126,15 @@ struct TelemetrySample {
     int cpu_core0_load{-1};
     int cpu_core1_load{-1};
     uint64_t heap_free{0};
+    uint64_t free_heap_internal{0};
+    uint64_t free_heap_psram{0};
     int rssi{0};
     bool has_temperature{false};
     bool has_cpu_temperature{false};
     bool has_cpu_load{false};
     bool has_heap_free{false};
+    bool has_free_heap_internal{false};
+    bool has_free_heap_psram{false};
     bool has_rssi{false};
 };
 
@@ -179,6 +188,7 @@ private:
     uint64_t m_frames_total{0};
     uint64_t m_last_frame_ns{0};
     uint64_t m_prev_frame_ns{0};
+    std::deque<uint64_t> m_frame_times_ns;
     uint32_t m_last_frame_id{0};
     double m_fps{0.0};
 
@@ -203,12 +213,16 @@ private:
     int8_t m_telemetry_core0_load{-1};
     int8_t m_telemetry_core1_load{-1};
     uint64_t m_telemetry_heap_free{0};
+    uint64_t m_telemetry_free_heap_internal{0};
+    uint64_t m_telemetry_free_heap_psram{0};
     int16_t m_telemetry_rssi{0};
     std::string m_peer_ip;
     bool m_telemetry_has_temperature{false};
     bool m_telemetry_has_cpu_temperature{false};
     bool m_telemetry_has_cpu_load{false};
     bool m_telemetry_has_heap_free{false};
+    bool m_telemetry_has_free_heap_internal{false};
+    bool m_telemetry_has_free_heap_psram{false};
     bool m_telemetry_has_rssi{false};
 
     std::atomic<bool> m_vision_ready{false};

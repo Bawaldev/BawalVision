@@ -50,15 +50,20 @@ void BackendState::updateFrame(std::string_view device_id, uint32_t frame_id,
         m_device_id.assign(device_id);
     }
 
-    if (m_prev_frame_ns != 0 && now > m_prev_frame_ns) {
-        const uint64_t delta_ns = now - m_prev_frame_ns;
-        if (delta_ns >= 1'000'000ULL && delta_ns <= 2'000'000'000ULL) {
-            const double instant = 1.0e9 / static_cast<double>(delta_ns);
-            m_fps = (m_fps <= 0.0) ? instant : (m_fps * 0.9 + instant * 0.1);
-            m_fps = std::clamp(m_fps, 0.0, 240.0);
-        }
+    m_frame_times_ns.push_back(now);
+    constexpr uint64_t kFpsWindowNs = 1'000'000'000ULL;
+    while (m_frame_times_ns.size() > 1 && now - m_frame_times_ns.front() > kFpsWindowNs) {
+        m_frame_times_ns.pop_front();
     }
-
+    if (m_frame_times_ns.size() > 1) {
+        const uint64_t span_ns = now - m_frame_times_ns.front();
+        m_fps = span_ns > 0
+            ? static_cast<double>(m_frame_times_ns.size() - 1) * 1.0e9 / static_cast<double>(span_ns)
+            : 0.0;
+        m_fps = std::clamp(m_fps, 0.0, 240.0);
+    } else {
+        m_fps = 0.0;
+    }
     m_prev_frame_ns = now;
     m_last_frame_ns = now;
     m_last_frame_id = frame_id;
@@ -134,6 +139,14 @@ void BackendState::updateTelemetry(const TelemetrySample& sample) {
         m_telemetry_heap_free = sample.heap_free;
         m_telemetry_has_heap_free = true;
     }
+    if (sample.has_free_heap_internal) {
+        m_telemetry_free_heap_internal = sample.free_heap_internal;
+        m_telemetry_has_free_heap_internal = true;
+    }
+    if (sample.has_free_heap_psram) {
+        m_telemetry_free_heap_psram = sample.free_heap_psram;
+        m_telemetry_has_free_heap_psram = true;
+    }
     if (sample.has_rssi) {
         m_telemetry_rssi = static_cast<int16_t>(sample.rssi);
         m_telemetry_has_rssi = true;
@@ -171,6 +184,8 @@ void BackendState::disconnectDevice(std::string_view device_id) {
         m_telemetry_has_cpu_temperature = false;
         m_telemetry_has_cpu_load = false;
         m_telemetry_has_heap_free = false;
+        m_telemetry_has_free_heap_internal = false;
+        m_telemetry_has_free_heap_psram = false;
         m_telemetry_has_rssi = false;
     }
 }
@@ -193,11 +208,15 @@ TelemetryView BackendState::telemetry() const {
     view.cpu_core0_load = m_telemetry_core0_load;
     view.cpu_core1_load = m_telemetry_core1_load;
     view.heap_free = m_telemetry_heap_free;
+    view.free_heap_internal = m_telemetry_free_heap_internal;
+    view.free_heap_psram = m_telemetry_free_heap_psram;
     view.rssi = m_telemetry_rssi;
     view.has_temperature = m_telemetry_has_temperature;
     view.has_cpu_temperature = m_telemetry_has_cpu_temperature;
     view.has_cpu_load = m_telemetry_has_cpu_load;
     view.has_heap_free = m_telemetry_has_heap_free;
+    view.has_free_heap_internal = m_telemetry_has_free_heap_internal;
+    view.has_free_heap_psram = m_telemetry_has_free_heap_psram;
     view.has_rssi = m_telemetry_has_rssi;
     if (view.valid && now >= m_telemetry_received_ns) {
         view.age_ms = (now - m_telemetry_received_ns) / 1'000'000ULL;

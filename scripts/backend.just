@@ -69,20 +69,24 @@ build-backend:
     cd {{ justfile_directory() }} && if [ ! -f "services/build/Makefile" ] && [ ! -f "services/build/build.ninja" ]; then just configure-vision; fi
     cd {{ justfile_directory() }} && cmake --build services/build --target bawal_backend --parallel $(nproc)
 
-# Run the C++ backend on the host against the Docker PostgreSQL instance
+# Run the C++ backend on the host against the Docker PostgreSQL instance.
+# The host process is the only way to scan the host's Wi-Fi through nmcli on
+# Docker Desktop, which runs containers in a VM without access to wlp*/NM.
 [group('Backend')]
 run-backend:
     @just compose-up postgres
+    -cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} stop bawal_backend >/dev/null 2>&1 || true
     cd {{ justfile_directory() }} && \
         CROW_PORT={{ BACKEND_PORT }} \
         DB_HOST={{ env_var_or_default("DB_HOST", "localhost") }} \
         DB_PORT={{ POSTGRES_PORT }} \
         ./services/build/bin/bawal_backend
 
-# Start PostgreSQL and the C++ backend in Docker
+# Start PostgreSQL and the C++ backend in Docker (native Docker Engine only;
+# Docker Desktop cannot scan host Wi-Fi from a container)
 [group('Backend')]
 edge-stack:
-    @just compose-up
+    @just compose-up "postgres bawal_backend"
 
 # Run the Crow C++ API integration suite against a live backend
 [group('Backend')]
@@ -128,10 +132,10 @@ compose-up service="":
 compose-down:
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} down
 
-# Build or rebuild docker-compose service images
+# Build or rebuild docker-compose service images (includes opt-in backend)
 [group('Docker')]
 compose-build service="":
-    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} build {{ service }}
+    cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} --profile docker-backend build {{ service }}
 
 # Follow docker-compose logs for service(s)
 [group('Docker')]

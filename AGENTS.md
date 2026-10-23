@@ -81,6 +81,11 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
   (TCP connect succeeds, HTTP requests never reach the container). The compose stack
   publishes the C++ backend on `0.0.0.0:8080`; on affected Docker Desktop setups use
   `just run-backend` (host process) and point the ESP32 at the laptop IP.
+- **Wi-Fi scanning requires the host backend on Docker Desktop.** Containers run in
+  a VM without the host's `wlp*` interface or NetworkManager D-Bus socket, so mounting
+  `/run/dbus/system_bus_socket` (or `network_mode: host`) cannot work there. Use
+  `just compose-up postgres frontend` + `just run-backend`; the frontend proxies to
+  `host.docker.internal:8080`. Only a native Docker Engine can scan from the container.
 - **lwIP TCP buffers cap at 65535** (`CONFIG_LWIP_TCP_SND_BUF_DEFAULT` /
   `CONFIG_LWIP_TCP_WND_DEFAULT`). `65536` is outside the Kconfig range when
   `LWIP_WND_SCALE=off`, so Kconfig silently falls back to 5760. Check the generated

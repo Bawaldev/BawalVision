@@ -136,6 +136,44 @@
 
     let currentCores = $derived(getCoreLoads(currentTelemetry));
 
+    // ESP32-S3 memory reference capacities (N16R8: 8 MB PSRAM, ~320 KB usable internal heap).
+    const INTERNAL_HEAP_TOTAL_BYTES = 320 * 1024;
+    const PSRAM_TOTAL_BYTES = 8 * 1024 * 1024;
+
+    type MemoryTone = 'ok' | 'warning' | 'critical' | 'offline';
+
+    function memoryTone(
+        bytes: number | null | undefined,
+        warningBelow: number,
+        criticalBelow: number
+    ): MemoryTone {
+        if (bytes == null) return 'offline';
+        if (bytes < criticalBelow) return 'critical';
+        if (bytes < warningBelow) return 'warning';
+        return 'ok';
+    }
+
+    function formatInternalRam(bytes: number | null | undefined): string {
+        if (bytes == null) return 'N/A';
+        return `${(bytes / 1024).toFixed(1)} KB / ${Math.round(INTERNAL_HEAP_TOTAL_BYTES / 1024)} KB`;
+    }
+
+    function formatPsram(bytes: number | null | undefined): string {
+        if (bytes == null) return 'N/A';
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB / ${Math.round(PSRAM_TOTAL_BYTES / (1024 * 1024))} MB`;
+    }
+
+    let internalMemoryTone = $derived<MemoryTone>(
+        isDeviceConnected
+            ? memoryTone(currentTelemetry?.free_heap_internal, 30 * 1024, 15 * 1024)
+            : 'offline'
+    );
+    let psramMemoryTone = $derived<MemoryTone>(
+        isDeviceConnected
+            ? memoryTone(currentTelemetry?.free_heap_psram, 1024 * 1024, 256 * 1024)
+            : 'offline'
+    );
+
     // Chart SVG Coordinates Calculations (Range: 15°C to 65°C, CPU: 0% to 100%)
     const CHART_WIDTH = 1000;
     const CHART_HEIGHT = 280;
@@ -794,6 +832,40 @@
                             {:else}
                                 Offline
                             {/if}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="metric-row highlight-mem-internal">
+                    <span class="metric-label">
+                        <span class="dot mem-internal-dot"></span> Internal RAM
+                    </span>
+                    <div class="value-box">
+                        <span
+                            class="value-text"
+                            class:offline-val={!isDeviceConnected}
+                            class:mem-ok={internalMemoryTone === 'ok'}
+                            class:mem-warning={internalMemoryTone === 'warning'}
+                            class:mem-critical={internalMemoryTone === 'critical'}
+                        >
+                            {isDeviceConnected ? formatInternalRam(currentTelemetry?.free_heap_internal) : 'Offline'}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="metric-row highlight-mem-psram">
+                    <span class="metric-label">
+                        <span class="dot mem-psram-dot"></span> PSRAM
+                    </span>
+                    <div class="value-box">
+                        <span
+                            class="value-text"
+                            class:offline-val={!isDeviceConnected}
+                            class:mem-ok={psramMemoryTone === 'ok'}
+                            class:mem-warning={psramMemoryTone === 'warning'}
+                            class:mem-critical={psramMemoryTone === 'critical'}
+                        >
+                            {isDeviceConnected ? formatPsram(currentTelemetry?.free_heap_psram) : 'Offline'}
                         </span>
                     </div>
                 </div>
@@ -1593,6 +1665,36 @@
 
     .metric-row.highlight-cpu2 .value-text {
         color: #c084fc;
+    }
+
+    .value-text.mem-ok {
+        color: #22c55e;
+    }
+
+    .value-text.mem-warning {
+        color: #f59e0b;
+    }
+
+    .value-text.mem-critical {
+        color: #ef4444;
+    }
+
+    .mem-internal-dot,
+    .mem-psram-dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        margin-right: 5px;
+        vertical-align: middle;
+    }
+
+    .mem-internal-dot {
+        background: #22c55e;
+    }
+
+    .mem-psram-dot {
+        background: #14b8a6;
     }
 
     .cpu1-dot {
