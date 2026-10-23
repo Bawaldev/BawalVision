@@ -1,38 +1,30 @@
 CompileFlags:
   CompilationDatabase: build
   Add:
+    - -Iedge/main/include
+    - -Iedge/main/src
+    - -Iedge/main
+    - -Iedge/managed_components/waveshare__esp_lcd_st7735/include
+    - -iquoteedge/main/include
+    - -iquoteedge/main/src
+    - --target=riscv32
     - -std=gnu17
     - -D__XTENSA__=1
     - -DESP_PLATFORM=1
-    - -Wno-unknown-warning-option
-    - -Wno-unknown-attributes
-    - -Wno-ignored-attributes
-    - -Wno-unused-command-line-argument
   Remove:
-    - "@"
-    - --sysroot
-    - -isysroot
+    - -fno-tree-switch-conversion
+    - -fno-shrink-wrap
+    - -fstrict-volatile-bitfields
+    - -mtext-section-literals
     - -mlongcalls
     - -mlong-calls
     - -mdisable-hardware-atomics
-    - -mtext-section-literals
-    - -fstrict-volatile-bitfields
-    - -fno-tree-switch-conversion
-    - -fzero-init-padding-bits
     - -fzero-init-padding-bits=all
     - -fno-malloc-dce
     - -fno-jump-tables
-    - -fno-reorder-blocks
-    - -fno-shrink-wrap
-    - --target=xtensa
+    - -fno-rtti
+    - -fno-exceptions
+    - --target=xtensa-esp32s3-elf
     - -target
     - xtensa-esp32s3-elf
-    - -Wno-old-style-declaration
-    - -I*intel*
-
-Diagnostics:
-  UnusedIncludes: None
-  Suppress:
-    - drv_unknown_argument
-    - drv_unknown_argument_with_suggestion
-    - pp_expr_bad_token_lparen
+    - -fno-reorder-blocks

@@ -112,7 +112,10 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
 - **Compile commands & clangd**: For clangd, `.clangd` reads the per-tree
   databases `edge/build/compile_commands.json` and
   `services/build/compile_commands.json`; generate them with `just build-edge` and
-  `just configure-vision`. MS IntelliSense is disabled (`.vscode/settings.json`).
+  `just configure-vision`. Both recipes append header entries via
+  `scripts/gen_clangd_headers.py` (also runnable as `just clangd-db`) — without
+  them clangd gives headers a dependency's flags and reports unknown types.
+  MS IntelliSense is disabled (`.vscode/settings.json`).
 - **Frontend lockfiles are gitignored** (`package-lock.json`), so `npm ci` can never
   work; use `just install-frontend` (`npm install`). `.npmrc` sets
   `engine-strict=true` and `legacy-peer-deps=true`.

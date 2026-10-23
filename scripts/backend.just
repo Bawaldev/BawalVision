@@ -21,6 +21,20 @@ configure-vision target="Release":
     cd {{ justfile_directory() }} && cmake -B services/build -S services \
         -DCMAKE_BUILD_TYPE={{ target }} \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    cd {{ justfile_directory() }} && python3 scripts/gen_clangd_headers.py \
+        --db services/build/compile_commands.json \
+        --include services/include \
+        --include ml/include \
+        --representative src/backend/app.cpp
+
+# Append header entries to compile_commands.json so clangd resolves their flags
+[group('Vision')]
+clangd-db:
+    cd {{ justfile_directory() }} && python3 scripts/gen_clangd_headers.py \
+        --db services/build/compile_commands.json \
+        --include services/include \
+        --include ml/include \
+        --representative src/backend/app.cpp
 
 # Build C++ vision service
 [group('Vision')]

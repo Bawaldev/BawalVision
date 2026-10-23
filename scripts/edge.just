@@ -6,6 +6,10 @@ DEFAULT_PORT := env_var_or_default("PORT", "/dev/ttyACM0")
 [group('Edge')]
 build-edge:
     @just _idf-exec "build"
+    cd {{ justfile_directory() }} && python3 scripts/gen_clangd_headers.py \
+        --db edge/build/compile_commands.json \
+        --include edge/main/include \
+        --representative main/src/wifi.c
 
 # Clean ESP-IDF build directory
 [group('Edge')]
@@ -16,6 +20,10 @@ clean-edge:
 [group('Edge')]
 configure-edge:
     @just _idf-exec "reconfigure"
+    cd {{ justfile_directory() }} && python3 scripts/gen_clangd_headers.py \
+        --db edge/build/compile_commands.json \
+        --include edge/main/include \
+        --representative main/src/wifi.c
 
 # Erase flash / NVS on ESP32-S3
 [group('Edge')]
