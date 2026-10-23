@@ -2,6 +2,7 @@
     import { onMount, onDestroy } from 'svelte';
     import Sidebar from '$lib/components/Sidebar.svelte';
     import TopBar from '$lib/components/TopBar.svelte';
+    import OverviewView from '$lib/views/OverviewView.svelte';
     import DashboardView from '$lib/views/DashboardView.svelte';
     import InspectionReportsView from '$lib/views/InspectionReportsView.svelte';
     import TelemetryResultLogView from '$lib/views/TelemetryResultLogView.svelte';
@@ -40,6 +41,7 @@
 
     // State Variables
     const VALID_TABS = [
+        'Overview',
         'Live Inspection',
         'Inspection Reports',
         'Telemetry & Hardware',
@@ -47,7 +49,7 @@
         'Settings'
     ];
 
-    let activeTab = $state('Live Inspection');
+    let activeTab = $state('Overview');
     let transitionDirection = $state<'forward' | 'backward' | 'none'>('none');
     let isHydrated = $state(false);
     let records = $state<InspectionRecord[]>([]);
@@ -66,13 +68,15 @@
         if (typeof window !== 'undefined') {
             try {
                 localStorage.setItem('bawal_active_tab', tab);
-                const slug = tab === 'Inspection Reports'
-                    ? 'reports'
-                    : (tab === 'Telemetry & Hardware'
-                        ? 'telemetry'
-                        : (tab === 'Grafana Dashboard'
-                            ? 'grafana'
-                            : (tab === 'Settings' ? 'settings' : 'live')));
+                const slug = tab === 'Overview'
+                    ? 'overview'
+                    : (tab === 'Inspection Reports'
+                        ? 'reports'
+                        : (tab === 'Telemetry & Hardware'
+                            ? 'telemetry'
+                            : (tab === 'Grafana Dashboard'
+                                ? 'grafana'
+                                : (tab === 'Settings' ? 'settings' : 'live'))));
                 window.location.hash = slug;
             } catch {}
         }
@@ -294,7 +298,7 @@
         if (typeof window === 'undefined') return;
         try {
             const hash = window.location.hash.toLowerCase();
-            let targetTab = 'Live Inspection';
+            let targetTab = 'Overview';
             if (hash.includes('report') || hash.includes('audit')) {
                 targetTab = 'Inspection Reports';
             } else if (hash.includes('grafana')) {
@@ -305,11 +309,8 @@
                 targetTab = 'Settings';
             } else if (hash.includes('live') || hash.includes('inspect') || hash.includes('dashboard')) {
                 targetTab = 'Live Inspection';
-            } else {
-                const savedTab = localStorage.getItem('bawal_active_tab');
-                if (savedTab && VALID_TABS.includes(savedTab)) {
-                    targetTab = savedTab;
-                }
+            } else if (hash.includes('overview')) {
+                targetTab = 'Overview';
             }
             if (targetTab !== activeTab) {
                 setTabWithTransition(targetTab);
@@ -541,6 +542,34 @@
 
         <!-- Page Content Router (Persistent View Panels: No DOM Destruction, Instant Switching + CSR 60 FPS Transitions) -->
         <main class="page-body">
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Overview'} 
+                class:is-hidden={activeTab !== 'Overview'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
+                <OverviewView
+                    {records}
+                    {telemetry}
+                    {totalAccepted}
+                    {totalRejected}
+                    {totalPlates}
+                    {passRate}
+                    {isOnline}
+                    {hasCamera}
+                    {realFps}
+                    {realLatencyMs}
+                    {serverMemoryMB}
+                    {parallelCores}
+                    {gravitonAvailable}
+                    gravitonEnabled={systemConfig.gravitonEngineEnabled}
+                    {localEngineAvailable}
+                    confidenceThreshold={systemConfig.minConfidenceThreshold}
+                    onNavigateTab={handleSelectTab}
+                />
+            </div>
+
             <div 
                 class="view-panel" 
                 class:is-active={activeTab === 'Inspection Reports'} 

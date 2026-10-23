@@ -7,13 +7,18 @@
     }
 
     let {
-        activeTab = 'Live Inspection',
+        activeTab = 'Overview',
         onSelectTab,
         activeDevice = 'ESP32S3_441BF6C95678',
         isOnline = true
     }: Props = $props();
 
     const menuItems = [
+        {
+            id: 'Overview',
+            label: 'Overview',
+            icon: 'M3 12l9-9 9 9M5 10v10a1 1 0 001 1h3a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1h3a1 1 0 001-1V10'
+        },
         {
             id: 'Live Inspection',
             label: 'Live Inspection',
@@ -61,7 +66,7 @@
         </div>
     </div>
 
-    <!-- Navigation Menu (Exactly 5 Dedicated Workspace Tabs) -->
+    <!-- Navigation Menu (Exactly 6 Dedicated Workspace Tabs) -->
     <nav class="nav-menu">
         <div class="nav-group-label">WORKSPACE</div>
         {#each menuItems as item}
