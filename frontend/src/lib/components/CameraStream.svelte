@@ -127,11 +127,26 @@
         if (typeof document !== 'undefined') {
             if (document.hidden) {
                 isTabVisible = false;
+                if (liveRefreshTimer !== null) {
+                    clearTimeout(liveRefreshTimer);
+                    liveRefreshTimer = null;
+                }
             } else {
                 streamEpoch = Date.now();
                 isTabVisible = true;
             }
         }
+    }
+
+    function scheduleLiveRefresh() {
+        if (streamUrl || sourceMode !== 'live' || !isTabVisible) return;
+        if (liveRefreshTimer !== null) clearTimeout(liveRefreshTimer);
+        // The Crow route sends one snapshot and closes the response. Re-arm
+        // only after that image loaded so slow responses never pile up.
+        liveRefreshTimer = setTimeout(() => {
+            liveRefreshTimer = null;
+            if (sourceMode === 'live' && isTabVisible) streamEpoch = Date.now();
+        }, 40);
     }
 
     // Initial mount: restore persisted source mode, selected video, and fetch examples list with unique UUIDs
@@ -179,13 +194,6 @@
                 // Fallback to presets if backend is unavailable
             });
 
-        // Crow materialises one bounded MJPEG snapshot per request, so the
-        // live <img> must be re-armed to show new ESP32-S3 frames.
-        liveRefreshTimer = setInterval(() => {
-            if (sourceMode === 'live' && isTabVisible) {
-                streamEpoch = Date.now();
-            }
-        }, 1200);
     });
 
     function formatExampleLabel(path: string): string {
@@ -540,7 +548,7 @@
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         }
         if (liveRefreshTimer !== null) {
-            clearInterval(liveRefreshTimer);
+            clearTimeout(liveRefreshTimer);
             liveRefreshTimer = null;
         }
         stopMockPushing();
@@ -751,7 +759,7 @@
                         src={activeStreamUrl}
                         alt="AI Live Inspection Stream"
                         class="feed-video"
-                        onload={() => { streamError = false; retryCount = 0; }}
+                        onload={() => { streamError = false; retryCount = 0; scheduleLiveRefresh(); }}
                         onerror={() => {
                             if (!hasCamera) streamError = true;
                         }}
