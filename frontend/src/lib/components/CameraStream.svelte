@@ -113,6 +113,8 @@
 
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
+    let discoveredStreamUrl = $state('');
+    let deviceStatusTimer: ReturnType<typeof setInterval> | null = null;
     let retryCount = $state(0);
     const MAX_RETRIES = 3;
     let isTabVisible = $state(true);
@@ -120,7 +122,7 @@
     let activeStreamUrl = $derived(
         !isTabVisible
             ? ''
-            : (streamUrl || `/api/v1/camera/stream?t=${streamEpoch}`)
+            : (streamUrl || discoveredStreamUrl || `/api/v1/camera/stream?t=${streamEpoch}`)
     );
 
     function handleVisibilityChange() {
@@ -139,7 +141,7 @@
     }
 
     function scheduleLiveRefresh() {
-        if (streamUrl || sourceMode !== 'live' || !isTabVisible) return;
+        if (streamUrl || discoveredStreamUrl || sourceMode !== 'live' || !isTabVisible) return;
         if (liveRefreshTimer !== null) clearTimeout(liveRefreshTimer);
         // The Crow route sends one snapshot and closes the response. Re-arm
         // only after that image loaded so slow responses never pile up.
@@ -151,6 +153,20 @@
 
     // Initial mount: restore persisted source mode, selected video, and fetch examples list with unique UUIDs
     onMount(() => {
+        const refreshDiscoveredStream = () => {
+            fetch('/api/v1/devices/status', { cache: 'no-store' })
+                .then(res => res.ok ? res.json() : null)
+                .then(data => {
+                    const nextUrl = typeof data?.stream_url === 'string' ? data.stream_url : '';
+                    if (nextUrl && nextUrl !== discoveredStreamUrl) {
+                        discoveredStreamUrl = nextUrl;
+                        streamError = false;
+                    }
+                })
+                .catch(() => {});
+        };
+        refreshDiscoveredStream();
+        deviceStatusTimer = setInterval(refreshDiscoveredStream, 2000);
         if (typeof document !== 'undefined') {
             document.addEventListener('visibilitychange', handleVisibilityChange);
         }
@@ -550,6 +566,10 @@
         if (liveRefreshTimer !== null) {
             clearTimeout(liveRefreshTimer);
             liveRefreshTimer = null;
+        }
+        if (deviceStatusTimer !== null) {
+            clearInterval(deviceStatusTimer);
+            deviceStatusTimer = null;
         }
         stopMockPushing();
         if (mockVideoSrc.startsWith('blob:')) {

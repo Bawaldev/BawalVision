@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -17,6 +18,7 @@
 #include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
+#include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_system.h"
@@ -32,14 +34,10 @@
 
 static const char *TAG = "WIFI";
 
-#define STREAM_TX_BUFFER_SIZE 32768
-// Longgarkan timeout agar saat terjadi jitter/retransmisi soket tidak di-abort prematur
-#define HTTP_TIMEOUT_MS 1200
-// Target pacing ~20 FPS (50 ms)
-#define STREAM_TARGET_INTERVAL_MS 50
 #define DISCOVERY_BACKOFF_MIN_MS 1000
 #define DISCOVERY_BACKOFF_MAX_MS 30000
-#define STREAM_WATCHDOG_TIMEOUT_US ((int64_t)30 * 1000 * 1000)
+#define MJPEG_CLIENT_LIMIT 2
+#define MJPEG_FRAME_CAPACITY INITIAL_BUF_CAPACITY
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -49,16 +47,13 @@ char g_backend_ip[32] = {0};
 char g_backend_port[8] = "8080";
 
 static char s_discovered_ip[32] = {0};
-static TaskHandle_t s_stream_task_handle = NULL;
-static esp_http_client_handle_t s_stream_client = NULL;
-static char s_stream_url[URL_BUFFER_SIZE] = {0};
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static bool s_wifi_initialized = false;
+static httpd_handle_t s_http_server = NULL;
+static atomic_int s_mjpeg_clients = 0;
 
 void wifi_notify_stream_frame_ready(void) {
-    if (s_stream_task_handle != NULL) {
-        xTaskNotifyGive(s_stream_task_handle);
-    }
+    /* Camera capture now feeds the pull-based HTTP stream directly. */
 }
 
 static void str_trim_copy(char *dst, size_t dst_sz, const char *src) {
@@ -270,13 +265,6 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
     s_discovered_ip[0] = '\0';
 
     wifi_nvs_save_full_config(g_wifi_ssid, (pass && pass[0] != '\0') ? g_wifi_pass : NULL, g_backend_ip, g_backend_port);
-
-    if (s_stream_client != NULL) {
-        esp_http_client_close(s_stream_client);
-        esp_http_client_cleanup(s_stream_client);
-        s_stream_client = NULL;
-        s_stream_url[0] = '\0';
-    }
 
     char target_url[URL_BUFFER_SIZE];
     if (get_backend_url(CAMERA_FRAME_ENDPOINT, target_url, sizeof(target_url)) == ESP_OK) {
@@ -556,122 +544,122 @@ void wifi_init_sta(void) {
     s_wifi_initialized = true;
 }
 
-esp_err_t send_camera_frame_to_backend(const char *backend_ip, uint16_t port, const char *device_id) {
-    static camera_frame_buffer_t tx_frame = {0};
-    char url[URL_BUFFER_SIZE];
-    char frame_id_str[16], temp_str[16], load_str[16];
-    char heap_int_str[16], heap_psram_str[16];
+typedef struct {
+    httpd_req_t *request;
+    int client_fd;
+} mjpeg_stream_context_t;
 
-    if (!backend_ip || !device_id || !is_camera_streaming()) {
-        return ESP_ERR_INVALID_STATE;
+static esp_err_t snapshot_handler(httpd_req_t *req) {
+    camera_frame_buffer_t frame = {0};
+    frame.capacity = MJPEG_FRAME_CAPACITY;
+    frame.data = heap_caps_malloc(frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (frame.data == NULL) return ESP_ERR_NO_MEM;
+
+    esp_err_t err = camera_copy_current_frame(&frame);
+    if (err == ESP_OK && frame.header.buffer_len > 0) {
+        httpd_resp_set_type(req, "image/jpeg");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        err = httpd_resp_send(req, (const char *)frame.data, frame.header.buffer_len);
+    } else {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_sendstr(req, "Camera frame not ready");
     }
-    snprintf(url, sizeof(url), "http://%s:%u%s", backend_ip, port, CAMERA_FRAME_ENDPOINT);
+    free(frame.data);
+    return err;
+}
 
-    if (tx_frame.data == NULL) {
-        tx_frame.capacity = INITIAL_BUF_CAPACITY;
-        tx_frame.data = (uint8_t *)heap_caps_malloc(tx_frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (tx_frame.data == NULL) {
-            tx_frame.data = (uint8_t *)malloc(tx_frame.capacity);
+static void mjpeg_stream_task(void *arg) {
+    httpd_req_t *req = (httpd_req_t *)arg;
+    camera_frame_buffer_t frame = {0};
+    frame.capacity = MJPEG_FRAME_CAPACITY;
+    frame.data = heap_caps_malloc(frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (frame.data != NULL) {
+        httpd_resp_set_type(req, "multipart/x-mixed-replace; boundary=frame");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        uint32_t last_frame_id = UINT32_MAX;
+        bool first = true;
+
+        for (;;) {
+            esp_err_t copied = camera_copy_current_frame(&frame);
+            if (copied != ESP_OK || frame.header.buffer_len == 0 ||
+                frame.header.frame_id == last_frame_id) {
+                vTaskDelay(pdMS_TO_TICKS(5));
+                continue;
+            }
+
+            char part_header[96];
+            int header_len = snprintf(part_header, sizeof(part_header),
+                "%s--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
+                first ? "" : "\r\n", (unsigned)frame.header.buffer_len);
+            if (header_len <= 0 ||
+                httpd_resp_send_chunk(req, part_header, header_len) != ESP_OK ||
+                httpd_resp_send_chunk(req, (const char *)frame.data,
+                                      (ssize_t)frame.header.buffer_len) != ESP_OK) {
+                break;
+            }
+            last_frame_id = frame.header.frame_id;
+            first = false;
         }
-        if (tx_frame.data == NULL) return ESP_ERR_NO_MEM;
+        free(frame.data);
     }
 
-    if (camera_copy_latest_frame(&tx_frame) != ESP_OK || tx_frame.header.buffer_len == 0) {
-        return ESP_ERR_NOT_FOUND;
+    (void)httpd_resp_send_chunk(req, NULL, 0);
+    (void)httpd_req_async_handler_complete(req);
+    atomic_fetch_sub(&s_mjpeg_clients, 1);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t stream_handler(httpd_req_t *req) {
+    int active = atomic_load(&s_mjpeg_clients);
+    if (active >= MJPEG_CLIENT_LIMIT) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Maximum MJPEG clients reached");
     }
 
-    if (s_stream_client == NULL || strcmp(s_stream_url, url) != 0) {
-        if (s_stream_client != NULL) {
-            esp_http_client_close(s_stream_client);
-            esp_http_client_cleanup(s_stream_client);
-        }
-        esp_http_client_config_t config = {
-            .url = url,
-            .method = HTTP_METHOD_POST,
-            .timeout_ms = HTTP_TIMEOUT_MS,
-            .buffer_size_tx = STREAM_TX_BUFFER_SIZE,
-            .keep_alive_enable = true,
-        };
-        s_stream_client = esp_http_client_init(&config);
-        if (!s_stream_client) return ESP_FAIL;
-        strncpy(s_stream_url, url, sizeof(s_stream_url) - 1);
-        ESP_LOGI(TAG, "Target backend URL: %s", url);
+    httpd_req_t *async_req = NULL;
+    esp_err_t err = httpd_req_async_handler_begin(req, &async_req);
+    if (err != ESP_OK) return err;
+
+    atomic_fetch_add(&s_mjpeg_clients, 1);
+    if (xTaskCreate(mjpeg_stream_task, "mjpeg_stream", 4096, async_req, 5, NULL) != pdPASS) {
+        atomic_fetch_sub(&s_mjpeg_clients, 1);
+        (void)httpd_req_async_handler_complete(async_req);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+esp_err_t wifi_http_stream_server_start(void) {
+    if (s_http_server != NULL) return ESP_OK;
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 80;
+    config.ctrl_port = 32768;
+    config.max_open_sockets = 5;
+    config.lru_purge_enable = true;
+    config.stack_size = 6144;
+    esp_err_t err = httpd_start(&s_http_server, &config);
+    if (err != ESP_OK) return err;
+
+    const httpd_uri_t stream_uri = {
+        .uri = "/stream", .method = HTTP_GET,
+        .handler = stream_handler, .user_ctx = NULL
+    };
+    const httpd_uri_t snapshot_uri = {
+        .uri = "/snapshot", .method = HTTP_GET,
+        .handler = snapshot_handler, .user_ctx = NULL
+    };
+    if ((err = httpd_register_uri_handler(s_http_server, &stream_uri)) != ESP_OK ||
+        (err = httpd_register_uri_handler(s_http_server, &snapshot_uri)) != ESP_OK) {
+        httpd_stop(s_http_server);
+        s_http_server = NULL;
+        return err;
     }
 
-    static uint32_t s_last_telemetry_check = 0;
-    static float s_cached_temp = 50.0f;
-    static uint8_t s_cached_load = 5;
-    uint32_t now_ticks = (uint32_t)xTaskGetTickCount();
-    if (now_ticks - s_last_telemetry_check > pdMS_TO_TICKS(1000) || s_last_telemetry_check == 0) {
-        s_cached_temp = get_esp32_cpu_temperature();
-        s_cached_load = get_cpu_usage_percentage();
-        s_last_telemetry_check = now_ticks;
-    }
-
-    const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-
-    snprintf(frame_id_str, sizeof(frame_id_str), "%lu", (unsigned long)tx_frame.header.frame_id);
-    snprintf(temp_str, sizeof(temp_str), "%.2f", s_cached_temp);
-    snprintf(load_str, sizeof(load_str), "%u", (unsigned)s_cached_load);
-    snprintf(heap_int_str, sizeof(heap_int_str), "%u", (unsigned)free_internal);
-    snprintf(heap_psram_str, sizeof(heap_psram_str), "%u", (unsigned)free_psram);
-
-    esp_http_client_set_header(s_stream_client, "Content-Type", "image/jpeg");
-    esp_http_client_set_header(s_stream_client, "Connection", "keep-alive");
-    esp_http_client_set_header(s_stream_client, "X-Device-ID", device_id);
-    esp_http_client_set_header(s_stream_client, "X-Device-Token", CONFIG_DEVICE_AUTH_TOKEN);
-    esp_http_client_set_header(s_stream_client, "X-Frame-ID", frame_id_str);
-    esp_http_client_set_header(s_stream_client, "X-ESP-Temp", temp_str);
-    esp_http_client_set_header(s_stream_client, "X-ESP-CPU-Load", load_str);
-    esp_http_client_set_header(s_stream_client, "X-ESP-Free-Heap-Int", heap_int_str);
-    esp_http_client_set_header(s_stream_client, "X-ESP-Free-Heap-PSRAM", heap_psram_str);
-    esp_http_client_set_header(s_stream_client, "X-Camera-Model", camera_get_sensor_name());
-    esp_http_client_set_post_field(s_stream_client, (const char *)tx_frame.data, (int)tx_frame.header.buffer_len);
-
-    static int s_err_count = 0;
-    static uint32_t s_perf_samples = 0;
-    static uint64_t s_perf_total_us = 0;
-    static uint64_t s_perf_total_bytes = 0;
-    const int64_t send_start_us = esp_timer_get_time();
-    
-    esp_err_t err = esp_http_client_perform(s_stream_client);
-    const uint64_t send_elapsed_us = (uint64_t)(esp_timer_get_time() - send_start_us);
-    s_perf_samples++;
-    s_perf_total_us += send_elapsed_us;
-    s_perf_total_bytes += tx_frame.header.buffer_len;
-
-    if (s_perf_samples >= 20) {
-        ESP_LOGI(TAG, "Frame POST avg=%llu ms payload_avg=%llu bytes over %u frames",
-                 (unsigned long long)(s_perf_total_us / s_perf_samples / 1000ULL),
-                 (unsigned long long)(s_perf_total_bytes / s_perf_samples),
-                 (unsigned)s_perf_samples);
-        s_perf_samples = 0;
-        s_perf_total_us = 0;
-        s_perf_total_bytes = 0;
-    }
-
-    if (err == ESP_OK) {
-        int status = esp_http_client_get_status_code(s_stream_client);
-        if (status >= 200 && status < 300) {
-            s_err_count = 0;
-            return ESP_OK;
-        }
-    }
-
-    ESP_LOGW(TAG, "Frame POST failed: %s after %llu ms, payload=%u bytes",
-             esp_err_to_name(err), (unsigned long long)(send_elapsed_us / 1000ULL),
-             (unsigned)tx_frame.header.buffer_len);
-   
-    // Hanya tutup soket jika terjadi error berturut-turut minimal 3 kali
-    s_err_count++;
-    if (s_err_count >= 3) {
-        esp_http_client_close(s_stream_client);
-        wifi_notify_backend_failure();
-        s_err_count = 0;
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-    return ESP_FAIL;
+    ESP_LOGI(TAG, "Native MJPEG server ready at http://<esp32-ip>/stream (VGA)");
+    return ESP_OK;
 }
 
 esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telemetry_data_t *data) {
@@ -724,65 +712,10 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
     return err;
 }
 
-void http_stream_sender_task(void *pvParameters) {
-    (void)pvParameters;
-    s_stream_task_handle = xTaskGetCurrentTaskHandle();
-    ESP_LOGI(TAG, "Stream sender task started (target ~20 FPS, %dms adaptive pacing)", STREAM_TARGET_INTERVAL_MS);
-
-    char backend_ip[32];
-    telemetry_data_t meta;
-    init_device_metadata(&meta);
-    const TickType_t target_interval = pdMS_TO_TICKS(STREAM_TARGET_INTERVAL_MS);
-    int64_t last_success_us = esp_timer_get_time();
-
-    for (;;) {
-        TickType_t start_time = xTaskGetTickCount();
-
-        if (!(g_wifi_event_group && (xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT))) {
-            last_success_us = esp_timer_get_time();
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        if (!get_backend_ip(backend_ip, sizeof(backend_ip))) {
-            last_success_us = esp_timer_get_time();
-            vTaskDelay(pdMS_TO_TICKS(300));
-            continue;
-        }
-
-        if (!is_camera_streaming()) {
-            last_success_us = esp_timer_get_time();
-        }
-
-        esp_err_t res = send_camera_frame_to_backend(backend_ip, get_backend_port(), meta.device_id);
-        if (res == ESP_OK) {
-            last_success_us = esp_timer_get_time();
-        } else if (esp_timer_get_time() - last_success_us > STREAM_WATCHDOG_TIMEOUT_US) {
-            ESP_LOGE(TAG, "No frame delivered for %d s, restarting ESP32-S3", (int)(STREAM_WATCHDOG_TIMEOUT_US / 1000000));
-            esp_restart();
-        }
-
-        if (res == ESP_ERR_NOT_FOUND) {
-            // Buffer belum ada frame baru, beri jeda singkat untuk context switch
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        }
-
-        // Non-blocking adaptive frame pacing: buang frame usang jika transmisi lambat
-        TickType_t elapsed = xTaskGetTickCount() - start_time;
-        if (elapsed < target_interval) {
-            vTaskDelay(target_interval - elapsed);
-        } else {
-            taskYIELD();
-        }
-    }
-}
-
 void WiFi_Server_Task(void *pvParameters) {
     (void)pvParameters;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(3000));
-        if (is_camera_streaming()) continue;
         if (!(g_wifi_event_group && (xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT))) continue;
 
         char backend_ip[32];

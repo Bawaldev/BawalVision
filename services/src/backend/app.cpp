@@ -1487,7 +1487,9 @@ void BackendApp::registerDeviceRoutes() {
         std::string connection_mode = "disconnected";
         std::string device_id;
         std::string firmware_version;
-        std::string ip_address;
+        // UDP discovery learns the ESP32 peer address before any camera POST;
+        // expose it so the browser can pull MJPEG directly from the node.
+        std::string ip_address = telemetry.ip_address;
 
         if (telemetry_fresh) {
             connected = true;
@@ -1518,6 +1520,9 @@ void BackendApp::registerDeviceRoutes() {
         body["device_id"] = device_id;
         body["firmware_version"] = firmware_version;
         body["ip_address"] = ip_address;
+        body["stream_url"] = ip_address.empty()
+            ? ""
+            : "http://" + ip_address + "/stream";
         body["detected_host_ip"] = host_ip;
 
         crow::json::wvalue::list ports;

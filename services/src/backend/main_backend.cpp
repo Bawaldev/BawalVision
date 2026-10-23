@@ -5,10 +5,13 @@
 #include <string>
 #include <thread>
 
+#include <curl/curl.h>
+
 #include "bawal/backend/app.hpp"
 #include "bawal/backend/database.hpp"
 #include "bawal/backend/discovery.hpp"
 #include "bawal/backend/state.hpp"
+#include "bawal/backend/mjpeg_ingress.hpp"
 #include "bawal/backend/vision_worker.hpp"
 #include "bawal/ipc/shm_producer.hpp"
 
@@ -63,6 +66,7 @@ int main() {
     }
 
     bawal::backend::BackendState state;
+    curl_global_init(CURL_GLOBAL_DEFAULT);
 
     bawal::backend::DatabaseConfig db_config =
         bawal::backend::DatabaseConfig::fromEnvironment();
@@ -93,8 +97,13 @@ int main() {
     // ESP32-S3 nodes locate the backend through this UDP responder when their
     // cached/compiled IP is stale (DHCP change, Docker bridge IP, etc.).
     bawal::backend::DiscoveryResponder discovery;
+    bawal::backend::MjpegIngress mjpeg_ingress(state, producer);
+    mjpeg_ingress.start();
     discovery.setPeerCallback(
-        [&state](const std::string& ip) { state.updatePeerIp(ip); });
+        [&state, &mjpeg_ingress](const std::string& ip) {
+            state.updatePeerIp(ip);
+            mjpeg_ingress.setPeerIp(ip);
+        });
     const uint16_t discovery_port = envPortOrDefault("DISCOVERY_PORT", 8765);
     if (discovery.start(discovery_port, config.port)) {
         std::cout << "[INFO] UDP backend discovery responder on :" << discovery_port
@@ -110,7 +119,9 @@ int main() {
 
     const int rc = app.run();
     discovery.stop();
+    mjpeg_ingress.stop();
     vision.stop();
     producer.stopNotify();
+    curl_global_cleanup();
     return rc;
 }

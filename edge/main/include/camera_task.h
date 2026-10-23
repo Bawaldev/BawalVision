@@ -41,6 +41,9 @@ const char *camera_get_sensor_name(void);
  */
 esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame);
 
+/** Copy the current latest frame without consuming its availability flag. */
+esp_err_t camera_copy_current_frame(camera_frame_buffer_t *out_frame);
+
 /**
  * @brief Return whether camera is streaming.
  */

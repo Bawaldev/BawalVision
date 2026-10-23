@@ -61,7 +61,7 @@ extern char g_backend_port[8];
 void wifi_init_sta(void);
 
 /**
- * @brief Notify stream sender task that a new camera frame is ready.
+ * @brief Notify the legacy frame sender (retained for capture task compatibility).
  */
 void wifi_notify_stream_frame_ready(void);
 
@@ -119,9 +119,9 @@ uint16_t get_backend_port(void);
 void WiFi_Server_Task(void *pvParameters);
 
 /**
- * @brief Camera task: keep one HTTP client, grab CAMERA_GRAB_LATEST, POST JPEG at ~15 FPS.
+ * @brief Start the native ESP-IDF MJPEG server on port 80.
  */
-void http_stream_sender_task(void *pvParameters);
+esp_err_t wifi_http_stream_server_start(void);
 
 #ifdef __cplusplus
 }

@@ -1,3 +1,125 @@
+#ifdef BUILD_AWS_LAMBDA
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <limits>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <aws/lambda-runtime/runtime.h>
+#include <fmt/core.h>
+#include <glaze/glaze.hpp>
+#include <openssl/evp.h>
+
+#include "bawal/server/inspection_dto.hpp"
+#include "bawal/vision/pipeline.hpp"
+
+namespace {
+
+static bawal::vision::InspectionPipeline g_cloud_pipeline;
+
+std::vector<uint8_t> decodeBase64(std::string_view encoded) {
+    if (encoded.empty() || encoded.size() % 4 != 0 ||
+        encoded.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+
+    std::vector<uint8_t> decoded((encoded.size() / 4) * 3);
+    const int written = EVP_DecodeBlock(
+        decoded.data(), reinterpret_cast<const unsigned char*>(encoded.data()),
+        static_cast<int>(encoded.size()));
+    if (written < 0) {
+        return {};
+    }
+
+    size_t padding = 0;
+    if (!encoded.empty() && encoded.back() == '=') ++padding;
+    if (encoded.size() > 1 && encoded[encoded.size() - 2] == '=') ++padding;
+    decoded.resize(static_cast<size_t>(written) - padding);
+    return decoded;
+}
+
+aws::lambda_runtime::invocation_response lambda_handler(
+    aws::lambda_runtime::invocation_request const& request) {
+    try {
+        bawal::server::LambdaEvent event;
+        if (const auto error = glz::read_json(event, request.payload); error) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Malformed JSON event", "InvalidPayload");
+        }
+
+        std::vector<uint8_t> image_bytes;
+        if (!event.image_base64.empty()) {
+            image_bytes = decodeBase64(event.image_base64);
+        } else if (event.is_base64_encoded) {
+            image_bytes = decodeBase64(event.body);
+        } else {
+            image_bytes.assign(event.body.begin(), event.body.end());
+        }
+        if (image_bytes.empty()) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Event did not contain a usable image payload", "InvalidPayload");
+        }
+
+        bawal::vision::InspectionOutput output;
+        if (!g_cloud_pipeline.execute(image_bytes, output)) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Vision pipeline could not process the image", "ExecutionError");
+        }
+
+        bawal::server::InspectionResponse dto;
+        dto.frame_id = event.frame_id;
+        dto.status = "PROCESSED";
+        dto.image_path.clear();
+        // The current model does not estimate food surface temperature.
+        dto.surface_temp = 0.0;
+        dto.detections.reserve(output.detections.size());
+        for (const auto& detection : output.detections) {
+            dto.detections.push_back({
+                std::string(detection.class_name), detection.confidence,
+                {detection.bbox.x, detection.bbox.y,
+                 detection.bbox.width, detection.bbox.height}});
+        }
+
+        std::string body;
+        if (const auto error = glz::write_json(dto, body); error) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Could not serialize inspection result", "SerializationError");
+        }
+        std::string response_payload;
+        const bawal::server::LambdaProxyResponse proxy_response{200, {}, std::move(body)};
+        if (const auto error = glz::write_json(proxy_response, response_payload); error) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Could not serialize Lambda response", "SerializationError");
+        }
+        return aws::lambda_runtime::invocation_response::success(
+            response_payload, "application/json");
+    } catch (const std::exception& error) {
+        return aws::lambda_runtime::invocation_response::failure(
+            error.what(), "ExecutionError");
+    }
+}
+
+} // namespace
+
+int main() {
+    const char* model_path = std::getenv("MODEL_PATH");
+    if (model_path == nullptr || *model_path == '\0') {
+        model_path = "/app/models/ai1_vision_int8.onnx";
+    }
+    if (!g_cloud_pipeline.initialize(model_path, 640, 480)) {
+        fmt::print(stderr, "[FATAL] Failed to initialize Lambda vision pipeline\n");
+        return 1;
+    }
+    return aws::lambda_runtime::run_handler(lambda_handler);
+}
+
+#else
+
 #include <iostream>
 #include <fstream>
 #include <array>
@@ -22,6 +144,7 @@
 #include "bawal/vision/frame_grabber.hpp"
 #include "bawal/server.hpp"
 #include "bawal/server/async_frame_publisher.hpp"
+#include "bawal/server/inspection_dto.hpp"
 #include "bawal/ipc.hpp"
 using namespace bawal::vision;
 using namespace bawal::server;
@@ -341,59 +464,71 @@ int main(int argc, char** argv) {
                 const bool heartbeat_sync = is_mock_source ? (elapsed_since_dispatch >= 2500) : (elapsed_since_dispatch >= 15000);
                 const bool debounce_ok = (elapsed_since_dispatch >= 800);
 
-                auto serializeVisionDetectionsJson = [&](std::string& out_body, const std::vector<DetectionResult>& dets) {
-                    const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
-                    out_body += fmt::format(
-                        R"("scene_optical":{{"avg_r":{:.1f},"avg_g":{:.1f},"avg_b":{:.1f},"lux_luminance":{:.1f},"color_temperature":{},"white_balance_status":"{}"}},"detections":[)",
-                        optical.avg_r, optical.avg_g, optical.avg_b,
-                        optical.lux_luminance, optical.color_temperature, optical.white_balance_status
-                    );
-                    for (size_t i = 0; i < dets.size(); ++i) {
-                        const auto& vd = dets[i];
-                        const float spoilage_pct = std::clamp(vd.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
-                        const std::string status = (vd.spoilage.is_visually_spoiled || spoilage_pct >= 45.0f)
-                                                       ? "REJECT"
-                                                       : ((spoilage_pct >= 25.0f || vd.confidence < 0.60f) ? "REVIEW" : "PASS");
-                        if (i > 0) out_body.push_back(',');
-                        out_body += fmt::format(
-                            R"({{"food_name":"{}","similarity_rate":{:.4f},"spoilage_score":{:.2f},"status":"{}","box":[{},{},{},{}]}})",
-                            vd.class_name, vd.confidence, spoilage_pct, status,
-                            vd.bbox.x, vd.bbox.y, vd.bbox.width, vd.bbox.height
-                        );
+                auto serializeDto = [](const auto& value) {
+                    std::string json;
+                    if (const auto error = glz::write_json(value, json); error) {
+                        fmt::print(stderr, "[JSON] Glaze serialization failed\n");
+                        return std::string{};
                     }
-                    out_body.push_back(']');
+                    return json;
+                };
+
+                auto buildSceneOpticalDto = [](const SceneOpticalMetrics& optical) {
+                    return bawal::server::SceneOpticalDto{
+                        optical.avg_r, optical.avg_g, optical.avg_b,
+                        optical.lux_luminance, optical.color_temperature,
+                        optical.white_balance_status};
+                };
+
+                auto buildDetectionDtos = [](const std::vector<DetectionResult>& dets) {
+                    std::vector<bawal::server::InspectionDetectionDto> result;
+                    result.reserve(dets.size());
+                    for (const auto& detection : dets) {
+                        const float spoilage_pct = std::clamp(
+                            detection.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
+                        const char* status = (detection.spoilage.is_visually_spoiled ||
+                                              spoilage_pct >= 45.0f)
+                            ? "REJECT"
+                            : ((spoilage_pct >= 25.0f || detection.confidence < 0.60f)
+                                   ? "REVIEW" : "PASS");
+                        result.push_back({
+                            std::string(detection.class_name), detection.confidence,
+                            spoilage_pct, status,
+                            {detection.bbox.x, detection.bbox.y,
+                             detection.bbox.width, detection.bbox.height}});
+                    }
+                    return result;
+                };
+
+                auto serializeVisionDetectionsJson = [&](const std::vector<DetectionResult>& dets) {
+                    const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
                     return optical;
                 };
 
                 if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty()) {
                     const bool is_rewound = video_has_rewound.exchange(false, std::memory_order_relaxed);
                     const std::string engine_pipeline = fmt::format("{} + OpenCV HSV", pipeline.getModelArchitecture());
+                    const auto optical = serializeVisionDetectionsJson(valid_detections);
+                    const auto scene_optical = buildSceneOpticalDto(optical);
+                    const auto detections = buildDetectionDtos(valid_detections);
                     std::string payload_json = is_mock_source
-                        ? fmt::format(
-                              R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest","engine_pipeline":"{}","is_rewind":{},)",
-                              dev_id, dev_id, engine_pipeline, is_rewound ? "true" : "false"
-                          )
-                        : fmt::format(
-                              R"({{"device_id":"{}","source_type":"live_esp32","is_rewind":{},)",
-                              dev_id, is_rewound ? "true" : "false"
-                          );
-
-                    const auto optical = serializeVisionDetectionsJson(payload_json, valid_detections);
-                    payload_json.push_back('}');
+                        ? serializeDto(bawal::server::MockInspectionPayload{
+                              dev_id, dev_id, "mock_video", "MockInspectionRequest",
+                              engine_pipeline, is_rewound, scene_optical, detections})
+                        : serializeDto(bawal::server::LiveInspectionPayload{
+                              dev_id, "live_esp32", is_rewound, scene_optical, detections});
 
                     if (is_mock_source) {
-                        const std::string mock_telemetry_json = fmt::format(
-                            R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","telemetry_struct":"MockTelemetryPayload","connection_mode":"mock_simulation","engine_pipeline":"{}","is_rewind":{},"scene_optical":{{"avg_r":{:.1f},"avg_g":{:.1f},"avg_b":{:.1f},"lux_luminance":{:.1f},"color_temperature":{},"white_balance_status":"{}"}}}})",
-                            dev_id, dev_id, engine_pipeline, is_rewound ? "true" : "false",
-                            optical.avg_r, optical.avg_g, optical.avg_b, optical.lux_luminance,
-                            optical.color_temperature, optical.white_balance_status
-                        );
+                        const std::string mock_telemetry_json = serializeDto(
+                            bawal::server::MockTelemetryPayload{
+                                dev_id, dev_id, "mock_video", "MockTelemetryPayload",
+                                "mock_simulation", engine_pipeline, is_rewound, scene_optical});
                         (void)bawal::server::postMockTelemetryPayload(backend_base_url, mock_telemetry_json);
                     }
 
-                    const bool dispatched = is_mock_source
+                    const bool dispatched = !payload_json.empty() && (is_mock_source
                         ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, payload_json)
-                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, payload_json);
+                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, payload_json));
                     if (dispatched) {
                         last_dispatch_time = current_time;
                         last_state_signature = current_state_sig;
@@ -407,21 +542,19 @@ int main(int argc, char** argv) {
                         );
                     }
                 } else if (should_clear_backend && !dev_id.empty()) {
-                    std::string clear_json = is_mock_source
-                        ? fmt::format(
-                              R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest",)",
-                              dev_id, dev_id
-                          )
-                        : fmt::format(
-                              R"({{"device_id":"{}","source_type":"live_esp32",)",
-                              dev_id
-                          );
                     const std::vector<DetectionResult> empty_dets;
-                    (void)serializeVisionDetectionsJson(clear_json, empty_dets);
-                    clear_json.push_back('}');
-                    const bool cleared = is_mock_source
+                    const auto optical = serializeVisionDetectionsJson(empty_dets);
+                    const auto scene_optical = buildSceneOpticalDto(optical);
+                    std::string clear_json = is_mock_source
+                        ? serializeDto(bawal::server::MockInspectionPayload{
+                              dev_id, dev_id, "mock_video", "MockInspectionRequest",
+                              fmt::format("{} + OpenCV HSV", pipeline.getModelArchitecture()),
+                              false, scene_optical, {}})
+                        : serializeDto(bawal::server::LiveInspectionPayload{
+                              dev_id, "live_esp32", false, scene_optical, {}});
+                    const bool cleared = !clear_json.empty() && (is_mock_source
                         ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, clear_json)
-                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_json);
+                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_json));
                     if (cleared) {
                         last_dispatch_time = current_time;
                         last_state_signature.clear();
@@ -629,3 +762,5 @@ int main(int argc, char** argv) {
     std::cout << "\n[SUCCESS] Vision pipeline service exited cleanly.\n";
     return 0;
 }
+
+#endif // BUILD_AWS_LAMBDA

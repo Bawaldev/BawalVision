@@ -29,7 +29,6 @@ static const char *TAG = "MAIN";
 
 #define LCD_TASK_STACK_SIZE 4096
 #define WIFI_TASK_STACK_SIZE 4096
-#define HTTP_STREAM_STACK_SIZE 6144  // Diperbesar agar aman menampung frame VGA & header HTTP
 #define USB_PROV_STACK_SIZE 4096
 #define BUTTON_LED_TASK_STACK_SIZE 4096
 
@@ -46,10 +45,6 @@ static StackType_t s_lcd_task_stack[LCD_TASK_STACK_SIZE];
 static StaticTask_t s_wifi_task_buffer;
 static StackType_t s_wifi_task_stack[WIFI_TASK_STACK_SIZE];
 static TaskHandle_t s_wifi_task_handle = NULL;
-
-static StaticTask_t s_http_stream_task_buffer;
-static StackType_t s_http_stream_task_stack[HTTP_STREAM_STACK_SIZE];
-static TaskHandle_t s_http_sender_task_handle = NULL;
 
 static StaticTask_t s_usb_prov_task_buffer;
 static StackType_t s_usb_prov_task_stack[USB_PROV_STACK_SIZE];
@@ -251,6 +246,11 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "Connecting to Wi-Fi Network...");
     wifi_init_sta();
+    esp_err_t stream_server_err = wifi_http_stream_server_start();
+    if (stream_server_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start MJPEG HTTP server: %s",
+                 esp_err_to_name(stream_server_err));
+    }
 
     ESP_LOGI(TAG, "Starting 128x160 SPI TFT LVGL Task (Static)...");
     TaskHandle_t lcd_task_handle = xTaskCreateStaticPinnedToCore(
@@ -266,15 +266,6 @@ void app_main(void) {
         NULL, 4, s_wifi_task_stack, &s_wifi_task_buffer, 0);
     if (s_wifi_task_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create WiFi_Server_Task");
-        return;
-    }
-
-    // Core 0 menangani HTTP Streaming Task (Prioritas 5)
-    s_http_sender_task_handle = xTaskCreateStaticPinnedToCore(
-        http_stream_sender_task, "HTTP_Stream_Task", HTTP_STREAM_STACK_SIZE,
-        NULL, 5, s_http_stream_task_stack, &s_http_stream_task_buffer, 0);
-    if (s_http_sender_task_handle == NULL) {
-        ESP_LOGE(TAG, "Failed to create HTTP_Stream_Task");
         return;
     }
 
