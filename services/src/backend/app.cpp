@@ -8,6 +8,8 @@
 #include "bawal/backend/wifi_probe.hpp"
 #include "bawal/server/rolling_image_store.hpp"
 #include "bawal/report/latex_generator.hpp"
+#include "bawal/vision/classifier.hpp"
+#include "bawal/vision/image/batch_inspector.hpp"
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -180,6 +182,28 @@ crow::response jsonError(int code, std::string_view message) {
     crow::json::wvalue body;
     body["error"] = std::string(message);
     return crow::response(code, body);
+}
+
+constexpr std::string_view kBatchTemplateName = "batch_report.tex.in";
+
+/** Locate the multi-page batch LaTeX template relative to the backend CWD. */
+std::filesystem::path resolveBatchTemplatePath() {
+    namespace fs = std::filesystem;
+    if (const char* env = std::getenv("BAWAL_BATCH_TEMPLATE");
+        env != nullptr && *env != '\0' && fs::is_regular_file(env)) {
+        return fs::path(env);
+    }
+    const fs::path candidates[] = {
+        fs::path("./services/templates") / kBatchTemplateName,
+        fs::path("../services/templates") / kBatchTemplateName,
+        fs::path("/app/services/templates") / kBatchTemplateName,
+    };
+    for (const fs::path& candidate : candidates) {
+        if (fs::is_regular_file(candidate)) {
+            return candidate;
+        }
+    }
+    return {};
 }
 
 
@@ -436,6 +460,10 @@ BackendApp::BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerCo
 
 void BackendApp::setPeerCallback(std::function<void(const std::string&)> callback) {
     m_peer_callback = std::move(callback);
+}
+
+void BackendApp::setBatchClassifier(bawal::vision::FoodClassifier* classifier) noexcept {
+    m_batch_classifier = classifier;
 }
 
 void BackendApp::configure() {
@@ -1108,6 +1136,101 @@ void BackendApp::registerInspectionRoutes() {
         res.add_header("X-Report-Format", "tex");
         res.end();
     });
+
+    // ------------------------------------------------------------------
+    // Batch image inspection: ZIP upload -> parallel OpenMP inspection ->
+    // multi-page master PDF report.
+    // ------------------------------------------------------------------
+    CROW_ROUTE(m_app, "/api/v1/inspections/batch-zip")
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (req.body.empty()) {
+                return jsonError(400, "Empty payload body. Please upload a valid ZIP archive.");
+            }
+            if (req.body.size() > bawal::vision::image::BatchInspector::kMaxZipBytes) {
+                return jsonError(413, "ZIP archive exceeds maximum limit of 15 MB.");
+            }
+            if (m_batch_classifier == nullptr || !m_batch_classifier->isReady()) {
+                return jsonError(503, "Batch classifier is not ready (ONNX model unavailable).");
+            }
+
+            const std::filesystem::path template_path = resolveBatchTemplatePath();
+            if (template_path.empty()) {
+                return jsonError(500, "Batch LaTeX template not found on the server.");
+            }
+
+            // One dedicated batch classifier: serialize concurrent uploads
+            // instead of interleaving tracker state across Crow worker threads.
+            std::lock_guard<std::mutex> batch_lock(m_batch_mutex);
+            const bawal::vision::image::BatchReportSummary summary =
+                bawal::vision::image::BatchInspector::processZipBuffer(
+                    reinterpret_cast<const uint8_t*>(req.body.data()),
+                    req.body.size(),
+                    *m_batch_classifier,
+                    template_path);
+
+            if (summary.total_images == 0) {
+                return jsonError(400, "Failed to extract valid image files (.jpg/.png) from ZIP archive.");
+            }
+
+            crow::json::wvalue res;
+            res["status"] = "success";
+            res["batch_id"] = summary.batch_id;
+            res["total_trays"] = summary.total_images;
+            res["accepted"] = summary.accepted_count;
+            res["rejected"] = summary.rejected_count;
+            res["processing_time_ms"] = summary.total_processing_time_ms;
+            res["pdf_download_url"] =
+                "/api/v1/inspections/batch/" + summary.batch_id + "/report.pdf";
+
+            crow::response response(200, res);
+            response.set_header("Content-Type", "application/json");
+            return response;
+        });
+
+    CROW_ROUTE(m_app, "/api/v1/inspections/batch/<string>/report.pdf")
+        ([](const crow::request&, crow::response& res, const std::string& batch_id) {
+            // Directory traversal guard: batch ids are flat path components.
+            if (batch_id.empty() || batch_id.find("..") != std::string::npos ||
+                batch_id.find('/') != std::string::npos ||
+                batch_id.find('\\') != std::string::npos) {
+                res.code = 400;
+                res.end("Bad Request: Invalid batch identifier");
+                return;
+            }
+
+            namespace fs = std::filesystem;
+            const fs::path batch_dir = fs::path("/tmp/bawal_batches") / batch_id;
+            const fs::path pdf_file = batch_dir / "master_report.pdf";
+            const fs::path tex_file = batch_dir / "master_report.tex";
+
+            std::error_code ec;
+            if (fs::is_regular_file(pdf_file, ec)) {
+                res.set_static_file_info_unsafe(pdf_file.string(), "application/pdf");
+                res.add_header(
+                    "Content-Disposition",
+                    "attachment; filename=\"BawalVision-Batch-" + batch_id + ".pdf\"");
+                res.add_header("X-Report-Format", "pdf");
+                res.end();
+                return;
+            }
+
+            // pdflatex may be absent on the host; serve the generated LaTeX
+            // source and tell the client which artifact it actually received.
+            if (fs::is_regular_file(tex_file, ec)) {
+                res.set_static_file_info_unsafe(tex_file.string(), "text/x-tex");
+                res.add_header(
+                    "Content-Disposition",
+                    "attachment; filename=\"BawalVision-Batch-" + batch_id + ".tex\"");
+                res.add_header("X-Report-Format", "tex");
+                res.end();
+                return;
+            }
+
+            res.code = 404;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Master batch PDF report not found or compilation pending\"}");
+            res.end();
+        });
 }
 
 void BackendApp::registerImageRoutes() {

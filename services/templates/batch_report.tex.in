@@ -1,0 +1,46 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[a4paper,margin=1.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+
+\definecolor{acceptedgreen}{RGB}{34, 139, 34}
+\definecolor{rejectedred}{RGB}{178, 34, 34}
+\definecolor{darknavy}{RGB}{20, 35, 60}
+
+\setlength{\parindent}{0pt}
+\pagestyle{plain}
+
+\begin{document}
+
+{\small BawalVision Industrial AI | Batch Audit Compliance \hfill Batch ID: \texttt{#@BATCH_ID@}}
+
+\vspace{2mm}
+\hrule
+\vspace{4mm}
+
+\noindent\colorbox{darknavy}{%
+\begin{minipage}{\dimexpr\linewidth-2\fboxsep\relax}
+\centering
+\vspace{2pt}
+{\color{white}\LARGE\textbf{BATCH FOOD TRAY AUDIT SUMMARY REPORT}}\\[4pt]
+{\color{white}\small High-Throughput Parallel Multimodal Inspection Engine}\\[2pt]
+\end{minipage}}
+
+\vspace{0.4cm}
+\noindent
+\begin{tabular}{ll}
+    \textbf{Batch Identifier:} & \texttt{#@BATCH_ID@} \\
+    \textbf{Total Trays Processed:} & #@TOTAL_TRAYS@ baki \\
+    \textbf{Compliance Verdict:} & \textcolor{acceptedgreen}{\textbf{#@ACCEPTED_COUNT@ Accepted}} | \textcolor{rejectedred}{\textbf{#@REJECTED_COUNT@ Rejected}} \\
+    \textbf{Parallel Engine:} & OpenMP Multicore + AVX2 Vectorized YOLOv8s INT8 \\
+\end{tabular}
+
+\vspace{0.6cm}
+\hrule
+\vspace{0.4cm}
+
+#@TRAY_SECTIONS@
+
+\end{document}

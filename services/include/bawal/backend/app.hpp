@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,10 @@
 
 namespace bawal::server {
 class RollingImageStore;
+}
+
+namespace bawal::vision {
+class FoodClassifier;
 }
 
 namespace bawal::backend {
@@ -67,6 +72,15 @@ public:
     /** Observe the source IP of device telemetry/frame requests. */
     void setPeerCallback(std::function<void(const std::string&)> callback);
 
+    /**
+     * @brief Attach a dedicated classifier for ZIP batch inspection.
+     *
+     * Must be a separate FoodClassifier instance from the live VisionWorker
+     * pipeline: batch jobs run on Crow worker threads and must never contend
+     * with or race the 30 FPS live inference path.
+     */
+    void setBatchClassifier(bawal::vision::FoodClassifier* classifier) noexcept;
+
     [[nodiscard]] crow::App<crow::CORSHandler>& app() noexcept { return m_app; }
 
 private:
@@ -88,6 +102,8 @@ private:
     crow::App<crow::CORSHandler> m_app;
     std::atomic<double> m_confidence_threshold{0.35};
     std::function<void(const std::string&)> m_peer_callback;
+    bawal::vision::FoodClassifier* m_batch_classifier{nullptr};
+    std::mutex m_batch_mutex; ///< Serializes ZIP batch jobs sharing one classifier.
 };
 
 } // namespace bawal::backend
