@@ -1182,6 +1182,41 @@ void BackendApp::registerInspectionRoutes() {
             res["pdf_download_url"] =
                 "/api/v1/inspections/batch/" + summary.batch_id + "/report.pdf";
 
+            // Per-tray gallery payload: annotated image URL, verdict and the
+            // YOLOv8s INT8 detection breakdown for the dedicated batch tab.
+            crow::json::wvalue::list items;
+            items.reserve(summary.items.size());
+            for (const auto& item : summary.items) {
+                crow::json::wvalue item_json;
+                item_json["index"] = item.index;
+                item_json["filename"] = item.filename;
+                item_json["accepted"] = item.accepted;
+                item_json["surface_temp"] = item.surface_temp;
+                item_json["t_safe_hours"] = item.t_safe_hours;
+                item_json["annotated_url"] = "/api/v1/inspections/batch/" + summary.batch_id +
+                                             "/annotated/" + std::to_string(item.index);
+
+                crow::json::wvalue::list detections;
+                detections.reserve(item.detections.size());
+                for (const auto& detection : item.detections) {
+                    crow::json::wvalue detection_json;
+                    detection_json["class_name"] = std::string(detection.class_name);
+                    detection_json["confidence"] = detection.confidence;
+                    detection_json["freshness"] = 1.0f - detection.spoilage.discoloration_ratio;
+
+                    crow::json::wvalue::list bbox;
+                    bbox.emplace_back(detection.bbox.x);
+                    bbox.emplace_back(detection.bbox.y);
+                    bbox.emplace_back(detection.bbox.width);
+                    bbox.emplace_back(detection.bbox.height);
+                    detection_json["bbox"] = std::move(bbox);
+                    detections.emplace_back(std::move(detection_json));
+                }
+                item_json["detections"] = std::move(detections);
+                items.emplace_back(std::move(item_json));
+            }
+            res["items"] = std::move(items);
+
             crow::response response(200, res);
             response.set_header("Content-Type", "application/json");
             return response;
@@ -1229,6 +1264,36 @@ void BackendApp::registerInspectionRoutes() {
             res.code = 404;
             res.set_header("Content-Type", "application/json");
             res.write("{\"error\":\"Master batch PDF report not found or compilation pending\"}");
+            res.end();
+        });
+
+    // Annotated tray snapshot produced by the batch inspector.
+    CROW_ROUTE(m_app, "/api/v1/inspections/batch/<string>/annotated/<uint>")
+        ([](const crow::request&, crow::response& res, const std::string& batch_id,
+            uint32_t index) {
+            if (batch_id.empty() || index == 0 ||
+                batch_id.find("..") != std::string::npos ||
+                batch_id.find('/') != std::string::npos ||
+                batch_id.find('\\') != std::string::npos) {
+                res.code = 400;
+                res.end("Bad Request: Invalid batch identifier");
+                return;
+            }
+
+            namespace fs = std::filesystem;
+            const fs::path image_file = fs::path("/tmp/bawal_batches") / batch_id / "annotated" /
+                                        ("annotated-" + std::to_string(index) + ".jpg");
+
+            std::error_code ec;
+            if (!fs::is_regular_file(image_file, ec)) {
+                res.code = 404;
+                res.set_header("Content-Type", "application/json");
+                res.write("{\"error\":\"Annotated tray image not found for this batch\"}");
+                res.end();
+                return;
+            }
+
+            res.set_static_file_info_unsafe(image_file.string(), "image/jpeg");
             res.end();
         });
 }

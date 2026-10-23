@@ -30,6 +30,11 @@
             icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h6l6 6v10a2 2 0 01-2 2zM13 3v6h6'
         },
         {
+            id: 'Batch Inspection',
+            label: 'Batch Inspection',
+            icon: 'M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9'
+        },
+        {
             id: 'Telemetry & Hardware',
             label: 'Telemetry & Hardware',
             icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z'
@@ -66,7 +71,7 @@
         </div>
     </div>
 
-    <!-- Navigation Menu (Exactly 6 Dedicated Workspace Tabs) -->
+    <!-- Navigation Menu (7 Dedicated Workspace Tabs) -->
     <nav class="nav-menu">
         <div class="nav-group-label">WORKSPACE</div>
         {#each menuItems as item}
@@ -409,7 +414,7 @@
 
         .nav-menu {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
             gap: 6px;
             padding: 8px 10px;
         }
