@@ -38,6 +38,7 @@ static const char *TAG = "WIFI";
 #define DISCOVERY_BACKOFF_MAX_MS 30000
 #define MJPEG_CLIENT_LIMIT 2
 #define MJPEG_FRAME_CAPACITY INITIAL_BUF_CAPACITY
+#define MJPEG_TARGET_CYCLE_US 66000
 
 EventGroupHandle_t g_wifi_event_group = NULL;
 int g_wifi_retry_num = 0;
@@ -629,6 +630,7 @@ static void mjpeg_stream_task(void *arg) {
         bool first = true;
 
         for (;;) {
+            const int64_t cycle_start_us = esp_timer_get_time();
             esp_err_t copied = camera_copy_current_frame(&frame);
             if (copied != ESP_OK || frame.header.buffer_len == 0 ||
                 frame.header.frame_id == last_frame_id) {
@@ -648,6 +650,21 @@ static void mjpeg_stream_task(void *arg) {
             }
             last_frame_id = frame.header.frame_id;
             first = false;
+
+            // Limit stream work to the 15 FPS budget while yielding immediately
+            // when copying or sending already consumed the full cycle.
+            const int64_t elapsed_us = esp_timer_get_time() - cycle_start_us;
+            const int64_t remaining_us = MJPEG_TARGET_CYCLE_US - elapsed_us;
+            if (remaining_us > 0) {
+                const TickType_t delay_ticks = pdMS_TO_TICKS((remaining_us + 999) / 1000);
+                if (delay_ticks > 0) {
+                    vTaskDelay(delay_ticks);
+                } else {
+                    taskYIELD();
+                }
+            } else {
+                taskYIELD();
+            }
         }
         free(frame.data);
     }
