@@ -9,9 +9,23 @@
         generateInspectionMarkdown
     } from '../utils/reportGenerator';
 
+    const MAX_BATCH_ZIP_BYTES = 15 * 1024 * 1024;
+
+    interface BatchZipSummary {
+        batch_id: string;
+        total_trays: number;
+        accepted: number;
+        rejected: number;
+        processing_time_ms: number;
+        pdf_download_url: string;
+        error?: string;
+    }
+
     let records = $state<InspectionAuditRecord[]>([]);
     let isLoading = $state(true);
     let isDownloadingPdf = $state<Record<number, boolean>>({});
+    let isUploadingBatch = $state(false);
+    let zipInput = $state<HTMLInputElement | null>(null);
     let selectedRecord = $state<InspectionAuditRecord | null>(null);
     let failedImages = $state<Record<string, boolean>>({});
     let toast = $state('');
@@ -33,12 +47,12 @@
         return () => clearInterval(timer);
     });
 
-    function showToast(message: string) {
+    function showToast(message: string, duration = 2600) {
         toast = message;
         if (toastTimer) clearTimeout(toastTimer);
         toastTimer = setTimeout(() => {
             toast = '';
-        }, 2600);
+        }, duration);
     }
 
     function imageFailed(path: string) {
@@ -69,6 +83,78 @@
         const markdown = generateBatchInspectionMarkdown(records);
         downloadMarkdown(`MBG-REPORT-BATCH-${records.length}.md`, markdown);
         showToast(`Batch report (${records.length} records) downloaded`);
+    }
+
+    function openZipPicker() {
+        if (isUploadingBatch) return;
+        zipInput?.click();
+    }
+
+    async function downloadBatchArtifact(url: string, batchId: string) {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Batch report download failed (${response.status})`);
+        }
+
+        // The backend serves the LaTeX source when pdflatex is unavailable;
+        // X-Report-Format tells us which artifact actually arrived.
+        const servedFormat = response.headers.get('X-Report-Format') === 'tex' ? 'tex' : 'pdf';
+        const blob = await response.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = blobUrl;
+        anchor.download = `BawalVision-Batch-${batchId}.${servedFormat}`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        window.URL.revokeObjectURL(blobUrl);
+
+        showToast(servedFormat === 'pdf'
+            ? `Master batch PDF ${batchId} downloaded`
+            : `TeX engine unavailable — batch LaTeX source ${batchId} downloaded`);
+    }
+
+    async function handleZipSelected(event: Event) {
+        const input = event.currentTarget as HTMLInputElement;
+        const file = input.files?.[0];
+        input.value = '';
+        if (!file) return;
+
+        if (!file.name.toLowerCase().endsWith('.zip')) {
+            showToast('Invalid file: please select a .zip archive');
+            return;
+        }
+        if (file.size > MAX_BATCH_ZIP_BYTES) {
+            showToast('ZIP exceeds the 15 MB upload limit');
+            return;
+        }
+
+        isUploadingBatch = true;
+        showToast('Uploading & processing batch ZIP with OpenMP AI...', 10000);
+        try {
+            const response = await fetch('/api/v1/inspections/batch-zip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/zip' },
+                body: file
+            });
+
+            const payload = (await response.json().catch(() => null)) as BatchZipSummary | null;
+            if (!response.ok) {
+                throw new Error(payload?.error ?? `Server returned ${response.status}`);
+            }
+
+            const trays = payload?.total_trays ?? 0;
+            const elapsedMs = Math.round(payload?.processing_time_ms ?? 0);
+            showToast(`Batch processed: ${trays} trays in ${elapsedMs} ms. Downloading Master PDF...`, 10000);
+
+            if (payload?.pdf_download_url && payload.batch_id) {
+                await downloadBatchArtifact(payload.pdf_download_url, payload.batch_id);
+            }
+        } catch (err) {
+            showToast(err instanceof Error ? err.message : 'Batch ZIP upload failed', 5000);
+        } finally {
+            isUploadingBatch = false;
+        }
     }
 
     async function copyRecord(record: InspectionAuditRecord) {
@@ -140,6 +226,22 @@
         <div class="audit-actions">
             <button type="button" class="action-btn" onclick={loadRecords}>↻ Refresh</button>
             <button type="button" class="action-btn primary" onclick={reportBatch}>📄 Export Batch (.md)</button>
+            <button
+                type="button"
+                class="action-btn batch-upload-btn"
+                disabled={isUploadingBatch}
+                onclick={openZipPicker}
+            >
+                {isUploadingBatch ? '⏳ Processing ZIP...' : '📦 Upload Batch ZIP'}
+            </button>
+            <input
+                type="file"
+                accept=".zip,application/zip"
+                class="hidden-file-input"
+                aria-label="Upload batch ZIP archive"
+                bind:this={zipInput}
+                onchange={handleZipSelected}
+            />
         </div>
     </div>
 
@@ -482,6 +584,22 @@
 
     .action-btn.ghost {
         background: transparent;
+    }
+
+    .action-btn.batch-upload-btn {
+        background: var(--accent-blue-dim);
+        border-color: var(--accent-blue-light);
+        color: var(--accent-blue);
+    }
+
+    .action-btn.batch-upload-btn:hover:not(:disabled) {
+        background: var(--accent-blue);
+        border-color: var(--accent-blue);
+        color: var(--text-white);
+    }
+
+    .hidden-file-input {
+        display: none;
     }
 
     .audit-empty {

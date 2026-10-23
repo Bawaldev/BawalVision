@@ -15,6 +15,7 @@
 #include "bawal/backend/vision_worker.hpp"
 #include "bawal/ipc/shm_producer.hpp"
 #include "bawal/server/rolling_image_store.hpp"
+#include "bawal/vision/classifier.hpp"
 
 namespace {
 
@@ -80,9 +81,17 @@ int main() {
 
     bawal::server::RollingImageStore image_store("./data/inspections", 50);
 
-    bawal::backend::VisionWorker vision(state, bawal::backend::resolveModelPath(),
-                                        &database, &image_store);
+    const std::string model_path = bawal::backend::resolveModelPath();
+    bawal::backend::VisionWorker vision(state, model_path, &database, &image_store);
     vision.start();
+
+    // Dedicated classifier for ZIP batch inspection. A separate instance keeps
+    // batch jobs from contending with (or racing) the live inference pipeline.
+    bawal::vision::FoodClassifier batch_classifier;
+    if (!batch_classifier.init(model_path, 2)) {
+        std::cerr << "[WARN] Batch classifier unavailable (model: " << model_path
+                  << "); POST /api/v1/inspections/batch-zip will return 503\n";
+    }
 
     // Bind the UDS notifier only after the consumer is listening. This keeps a
     // restarted process from reusing a socket left by a previous run.
@@ -104,6 +113,7 @@ int main() {
 
     bawal::backend::BackendApp app(state, producer, config, &database, &image_store);
     app.setPeerCallback(peer_callback);
+    app.setBatchClassifier(&batch_classifier);
     app.configure();
 
     // ESP32-S3 nodes locate the backend through this UDP responder when their

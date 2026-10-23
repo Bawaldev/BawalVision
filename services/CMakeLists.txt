@@ -308,7 +308,7 @@ option(BAWAL_BUILD_VISION_VIEWER "Build the legacy standalone vision viewer" ON)
 # Unified C++ web service: Crow HTTP + in-process SHM vision consumer.
 if(BAWAL_BUILD_BACKEND)
     add_executable(bawal_backend src/backend/main_backend.cpp)
-    target_link_libraries(bawal_backend PRIVATE bawal_core)
+    target_link_libraries(bawal_backend PRIVATE bawal_core OpenMP::OpenMP_CXX)
     target_compile_definitions(bawal_backend PRIVATE BAWAL_USE_MIMALLOC=1)
     install(TARGETS bawal_backend DESTINATION bin)
 endif()
