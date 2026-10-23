@@ -208,3 +208,17 @@ OUTPUT.md
 daffa.md
 
 data/inspections
+
+
+# ==========================================
+# Batch Inspection & Scraper Archives
+# ==========================================
+*.zip
+*.tar.gz
+
+# Direktori unduhan sementara dari image scraper
+downloaded_images/
+
+# Direktori kerja sementara pemrosesan batch bawal
+/tmp/bawal_batches/
+/tmp/bawal_reports/
