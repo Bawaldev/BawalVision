@@ -257,6 +257,38 @@ void BackendState::disconnectDevice(std::string_view device_id) {
     }
 }
 
+void BackendState::clearDetectionState() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_latest_jpeg.clear();
+    m_latest_annotated_jpeg.clear();
+    m_inspection_sequence = 0;
+    m_inspection_timestamp_ns = 0;
+    m_inspection_frame_id = 0;
+    m_inspection_device_id.clear();
+    m_detections = DetectionSoA{};
+    m_optical = SceneOpticalSoA{};
+}
+
+void BackendState::requestSourceClear() noexcept {
+    m_tracker_reset_requested.store(true, std::memory_order_release);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(600);
+    m_source_clear_deadline_ns.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(deadline.time_since_epoch())
+            .count(),
+        std::memory_order_release);
+}
+
+bool BackendState::sourceClearActive() const noexcept {
+    const int64_t deadline = m_source_clear_deadline_ns.load(std::memory_order_acquire);
+    if (deadline == 0) {
+        return false;
+    }
+    const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+    return now < deadline;
+}
+
 TelemetryView BackendState::telemetry() const {
     const uint64_t now = nowNs();
 

@@ -380,6 +380,12 @@ void VisionWorker::run() {
             resetTrayState();
         }
 
+        // Drop frames produced before a mock/live switch: draining them keeps
+        // the previous source's overlay and tray state off the new stream.
+        if (m_state.sourceClearActive()) {
+            continue;
+        }
+
         const int64_t t0 = cv::getTickCount();
         std::vector<bawal::vision::DetectionResult> detected;
         const bool inferred = pipeline.runInference(frame, detected);

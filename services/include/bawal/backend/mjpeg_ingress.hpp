@@ -40,6 +40,9 @@ public:
         return m_last_frame_ns.load(std::memory_order_relaxed);
     }
 
+    /** True while mock video owns the pipeline and the live pull must pause. */
+    [[nodiscard]] bool sourcePaused() const noexcept;
+
 private:
     void run();
 
