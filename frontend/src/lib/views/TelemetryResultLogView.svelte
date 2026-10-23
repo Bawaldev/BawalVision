@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { fetchRecords } from '../api';
-    import GrafanaAnalyticsEmbed from '../components/GrafanaAnalyticsEmbed.svelte';
     import type { InspectionRecord, TelemetryPayload } from '../types';
 
     interface Props {
@@ -64,7 +63,7 @@
     });
 
     // View tab for chart: 'both' (default) | 'cpu' | 'temperature'
-    let activeChartTab = $state<'both' | 'cpu' | 'temperature' | 'grafana'>('both');
+    let activeChartTab = $state<'both' | 'cpu' | 'temperature'>('both');
 
     // Dual-core helper: extract Core 0 (WiFi/Protocol) and Core 1 (App/Vision)
     function getCoreLoads(pt?: TelemetryPayload | null): { cpu1: number; cpu2: number } {
@@ -276,8 +275,6 @@
                             telemetry & cpu utilization
                         {:else if activeChartTab === 'cpu'}
                             cpu 1 & cpu 2 load
-                        {:else if activeChartTab === 'grafana'}
-                            real-time ai model telemetry (yolov8)
                         {:else}
                             temperature telemetry
                         {/if}
@@ -313,16 +310,6 @@
                             onclick={() => (activeChartTab = 'temperature')}
                         >
                             🌡️ Temperature
-                        </button>
-                        <button
-                            type="button"
-                            role="tab"
-                            aria-selected={activeChartTab === 'grafana'}
-                            class="chart-pill grafana-pill"
-                            class:active={activeChartTab === 'grafana'}
-                            onclick={() => (activeChartTab = 'grafana')}
-                        >
-                            🤖 AI Model Monitor
                         </button>
                     </div>
                 </div>
@@ -530,11 +517,6 @@
                                 </div>
                             </div>
                         </div>
-                    </div>
-                {:else if activeChartTab === 'grafana'}
-                    <!-- GRAFANA EMBED: Direct PostgreSQL Real-Time Dashboard -->
-                    <div class="grafana-embed-tab-wrapper" style="padding: 0 0.5rem; width: 100%;">
-                        <GrafanaAnalyticsEmbed height="560px" />
                     </div>
                 {:else if activeChartTab === 'cpu'}
                     <!-- SINGLE VIEW: Full Height CPU 1 & CPU 2 Chart -->

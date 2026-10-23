@@ -5,6 +5,7 @@
     import DashboardView from '$lib/views/DashboardView.svelte';
     import InspectionReportsView from '$lib/views/InspectionReportsView.svelte';
     import TelemetryResultLogView from '$lib/views/TelemetryResultLogView.svelte';
+    import GrafanaDashboardView from '$lib/views/GrafanaDashboardView.svelte';
     import SettingsView from '$lib/views/SettingsView.svelte';
 
     import {
@@ -41,7 +42,8 @@
     const VALID_TABS = [
         'Live Inspection',
         'Inspection Reports',
-        'Telemetry & Grafana',
+        'Telemetry & Hardware',
+        'Grafana Dashboard',
         'Settings'
     ];
 
@@ -66,9 +68,11 @@
                 localStorage.setItem('bawal_active_tab', tab);
                 const slug = tab === 'Inspection Reports'
                     ? 'reports'
-                    : (tab === 'Telemetry & Grafana'
+                    : (tab === 'Telemetry & Hardware'
                         ? 'telemetry'
-                        : (tab === 'Settings' ? 'settings' : 'live'));
+                        : (tab === 'Grafana Dashboard'
+                            ? 'grafana'
+                            : (tab === 'Settings' ? 'settings' : 'live')));
                 window.location.hash = slug;
             } catch {}
         }
@@ -293,8 +297,10 @@
             let targetTab = 'Live Inspection';
             if (hash.includes('report') || hash.includes('audit')) {
                 targetTab = 'Inspection Reports';
-            } else if (hash.includes('telemetry') || hash.includes('grafana')) {
-                targetTab = 'Telemetry & Grafana';
+            } else if (hash.includes('grafana')) {
+                targetTab = 'Grafana Dashboard';
+            } else if (hash.includes('telemetry') || hash.includes('hardware')) {
+                targetTab = 'Telemetry & Hardware';
             } else if (hash.includes('setting')) {
                 targetTab = 'Settings';
             } else if (hash.includes('live') || hash.includes('inspect') || hash.includes('dashboard')) {
@@ -567,8 +573,8 @@
 
             <div 
                 class="view-panel" 
-                class:is-active={activeTab === 'Telemetry & Grafana'} 
-                class:is-hidden={activeTab !== 'Telemetry & Grafana'}
+                class:is-active={activeTab === 'Telemetry & Hardware'} 
+                class:is-hidden={activeTab !== 'Telemetry & Hardware'}
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >
@@ -576,6 +582,16 @@
                     currentTelemetry={telemetry}
                     history={telemetryHistory}
                 />
+            </div>
+
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Grafana Dashboard'} 
+                class:is-hidden={activeTab !== 'Grafana Dashboard'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
+                <GrafanaDashboardView />
             </div>
 
             <div 

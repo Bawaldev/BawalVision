@@ -25,9 +25,14 @@
             icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h6l6 6v10a2 2 0 01-2 2zM13 3v6h6'
         },
         {
-            id: 'Telemetry & Grafana',
-            label: 'Telemetry & Grafana',
+            id: 'Telemetry & Hardware',
+            label: 'Telemetry & Hardware',
             icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z'
+        },
+        {
+            id: 'Grafana Dashboard',
+            label: 'Grafana',
+            icon: 'M11 3a8 8 0 108 8h-3a5 5 0 11-5-5V3zm1 5v5l4 2'
         },
         {
             id: 'Settings',
@@ -56,7 +61,7 @@
         </div>
     </div>
 
-    <!-- Navigation Menu (Exactly 4 Dedicated Workspace Tabs) -->
+    <!-- Navigation Menu (Exactly 5 Dedicated Workspace Tabs) -->
     <nav class="nav-menu">
         <div class="nav-group-label">WORKSPACE</div>
         {#each menuItems as item}
@@ -399,7 +404,7 @@
 
         .nav-menu {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 6px;
             padding: 8px 10px;
         }
@@ -424,8 +429,9 @@
 
         .nav-text {
             flex: initial;
-            font-size: 0.76rem;
-            white-space: nowrap;
+            font-size: 0.62rem;
+            line-height: 1.15;
+            white-space: normal;
         }
     }
 
