@@ -1,0 +1,14 @@
+CompileFlags:
+  CompilationDatabase: ../services/build
+  Add:
+    - -xc++
+    - -std=c++20
+    - -Iml/include
+    - -Iservices/include
+    - -Wall
+    - -Wextra
+    - -mavx2
+    - -mfma
+    - -fopenmp
+    - -I/usr/include/opencv4
+    - -I/usr/include/ncnn
