@@ -3,7 +3,7 @@ numpy>=1.24.0
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch>=2.14.1
 torchvision>=0.17.0
-onnx>=1.15.0
+onnx>=1.23.2
 onnxruntime>=1.31.0
 ultralytics>=8.4.174
 pyyaml>=6.0.3
