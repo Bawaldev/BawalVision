@@ -1,4 +1,4 @@
-name: Cleanup Cache and Trash Folder
+name: Repository Hygiene Guard
 
 on:
   push:
@@ -7,24 +7,45 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  cleanup:
-    runs-on: ubuntu-latest
+  hygiene:
+    name: Generated Artifacts Stay Untracked
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
 
-      - name: Clean Cache Trash Directory
+      - name: Reject Tracked Build & Cache Artifacts
         run: |
-          mkdir -p .cache_trash
-          rm -rf .cache_trash/*
-          touch .cache_trash/.gitkeep
-          echo "Cache trash directory cleared successfully."
-
-      - name: Verify OUTPUT.md Presence
-        run: |
-          if [ ! -f "OUTPUT.md" ]; then
-            echo "Warning: OUTPUT.md does not exist yet."
-          else
-            echo "OUTPUT.md verified."
+          set -euo pipefail
+          echo "Scanning the git index for generated build/cache artifacts..."
+          OFFENDERS=$(git ls-files | grep -E '^(\.cache_trash/|OUTPUT\.md$|services/build/|services/build-tsan/|edge/build/|frontend/node_modules/|frontend/\.svelte-kit/|frontend/build/)' || true)
+          if [ -n "${OFFENDERS}" ]; then
+            echo "::error::Generated artifacts must not be committed:"
+            echo "${OFFENDERS}"
+            exit 1
           fi
+          echo "✓ No generated build or cache artifacts are tracked."
+
+      - name: Verify Local Artifacts Are Ignored
+        run: |
+          set -euo pipefail
+          mkdir -p .cache_trash
+          touch .cache_trash/hygiene_probe
+          for probe in .cache_trash/hygiene_probe OUTPUT.md; do
+            if git check-ignore -q "${probe}"; then
+              echo "✓ ${probe} is ignored."
+            else
+              echo "::error::${probe} must be covered by .gitignore."
+              exit 1
+            fi
+          done
+          rm -f .cache_trash/hygiene_probe

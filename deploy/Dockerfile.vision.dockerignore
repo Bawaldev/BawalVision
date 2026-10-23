@@ -1,0 +1,96 @@
+# ==============================================================================
+# Build-context allowlist for deploy/Dockerfile.vision
+#
+# This file takes precedence over the repository-root .dockerignore when the
+# vision image is built with `--file deploy/Dockerfile.vision`. The vision
+# Dockerfile additionally compiles the ML NCNN generator and runs
+# scripts/fetch_ncnn_model.sh, so those trees must stay in the context even
+# though the backend image does not need them.
+# ==============================================================================
+
+# Git, CI and repository metadata
+.git/
+.github/
+.gitignore
+.gitattributes
+.gitleaks.toml
+LICENSE
+NOTICE
+SECURITY.md
+
+# Unrelated subsystems and large assets
+frontend/
+edge/
+assets/
+docs/
+hardware/
+examples/
+aws-infra/
+logs/
+data/
+.venv/
+weights/
+*.pt
+.cache_trash/
+OUTPUT.md
+
+# ML: keep only the sources compiled into the NCNN generator
+ml/**
+!ml/include/
+!ml/include/**
+!ml/src/
+!ml/src/**
+!ml/ncnn_generator.cpp
+
+# Build artifacts and binaries
+a.out
+build/
+services/build/
+services/build-tsan/
+edge/build/
+**/bin/
+*.o
+*.a
+*.so
+*.dylib
+*.elf
+*.bin
+*.map
+compile_commands.json
+*.exe
+*.test
+
+# Python and Node artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+node_modules/
+*.log
+
+# Datasets, model weights and caches
+ml/dataset/
+ml/**/dataset/
+ml/**/dataset*/
+ml/**/runs/
+ml/**/yolo_dataset/
+ml/AI1/model/
+.dvc/cache/
+.dvc/tmp/
+
+# Local environment and temp files
+.env
+.env.*
+!.env.example
+tmp/
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
