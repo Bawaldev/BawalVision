@@ -3,6 +3,7 @@
 #include "bawal/backend/byte_range.hpp"
 #include "bawal/backend/database.hpp"
 #include "bawal/backend/net_utils.hpp"
+#include "bawal/backend/serial_provisioner.hpp"
 #include "bawal/backend/text_utils.hpp"
 #include "bawal/backend/usb_probe.hpp"
 #include "bawal/backend/wifi_probe.hpp"
@@ -1810,13 +1811,35 @@ void BackendApp::registerDeviceRoutes() {
                 return crow::response(404, body);
             }
 
+            // Real serial transaction: ask the board for its live state so the
+            // Settings screen can show the current SSID/backend target without
+            // depending on a browser Web Serial session.
+            const EspSerialResult probe = probeEspSerial(port, 6000);
+
             crow::json::wvalue body;
-            body["success"] = false;
             body["port"] = port;
-            body["message"] =
-                "USB serial port " + port +
-                " detected, but serial probing is not accessible from this backend build; "
-                "use the browser Web Serial flow to query the ESP32-S3.";
+            if (probe.success && probe.ack.received) {
+                body["success"] = true;
+                body["status"] = probe.ack.status.empty() ? "ok" : probe.ack.status;
+                body["device_id"] = probe.ack.device_id;
+                body["firmware_version"] = probe.ack.firmware_version;
+                body["current_ssid"] = probe.ack.ssid;
+                body["wifi_connected"] = probe.ack.wifi_connected;
+                body["backend_ip"] = probe.ack.backend_ip;
+                body["backend_port"] = probe.ack.backend_port;
+                body["temperature"] = probe.ack.temperature;
+                body["cpu_temperature"] = probe.ack.cpu_temperature;
+                body["cpu_load"] = probe.ack.cpu_load;
+                body["message"] = probe.ack.wifi_connected
+                    ? ("ESP32-S3 (" + probe.ack.device_id + ") is connected to \"" +
+                       probe.ack.ssid + "\"")
+                    : "ESP32-S3 detected over USB serial (Wi-Fi not associated)";
+                return crow::response(body);
+            }
+
+            body["success"] = false;
+            body["message"] = "USB serial port " + port +
+                              " detected, but no BAWAL_ACK received: " + probe.error;
             return crow::response(body);
         });
 
@@ -1883,11 +1906,34 @@ void BackendApp::registerDeviceRoutes() {
                 const std::string port =
                     !requested_port.empty() ? requested_port : ports.front().port;
                 body["usb_port"] = port;
+
+                // The board may already be provisioned and associated while the
+                // backend has no telemetry yet (fresh boot, stale IP, ...).
+                // Ask it directly over USB serial before reporting failure.
+                const EspSerialResult probe = probeEspSerial(port, 6000);
+                if (probe.success && probe.ack.received && probe.ack.wifi_connected &&
+                    matches(probe.ack.device_id)) {
+                    body["success"] = true;
+                    body["status"] = "connected";
+                    body["device_id"] = probe.ack.device_id;
+                    body["firmware_version"] = probe.ack.firmware_version.empty()
+                        ? "1.0.0"
+                        : probe.ack.firmware_version;
+                    body["ip_address"] = "USB Serial";
+                    body["usb_port"] = port;
+                    body["connection_mode"] = "usb_serial";
+                    body["latency_ms"] = 4;
+                    body["message"] =
+                        "ESP32-S3 is associated with \"" + probe.ack.ssid +
+                        "\" and targeting " + probe.ack.backend_ip + ":" +
+                        std::to_string(probe.ack.backend_port);
+                    return crow::response(body);
+                }
+
                 body["message"] =
                     "USB serial port " + port +
-                    " is present, but Wi-Fi provisioning is not accessible from the "
-                    "backend process; use the browser Web Serial flow to provision "
-                    "the ESP32-S3.";
+                    " is present, but the ESP32-S3 did not report an active Wi-Fi "
+                    "association over serial: " + probe.error;
             } else {
                 body["message"] =
                     "No ESP32-S3 detected on the server Wi-Fi network or USB serial "
@@ -1899,10 +1945,42 @@ void BackendApp::registerDeviceRoutes() {
     CROW_ROUTE(m_app, "/api/v1/devices/usb/provision")
         .methods(crow::HTTPMethod::Post)([](const crow::request& req) {
             std::string port;
+            std::string ssid;
+            std::string password;
+            std::string backend_ip;
+            int backend_port = 8080;
+
             const auto doc = crow::json::load(req.body);
-            if (doc && doc.has("usb_port") && doc["usb_port"].t() == crow::json::type::String) {
-                port = trimCopy(static_cast<std::string>(doc["usb_port"].s()));
+            if (doc) {
+                if (doc.has("usb_port") && doc["usb_port"].t() == crow::json::type::String) {
+                    port = trimCopy(static_cast<std::string>(doc["usb_port"].s()));
+                }
+                if (doc.has("ssid") && doc["ssid"].t() == crow::json::type::String) {
+                    ssid = trimCopy(static_cast<std::string>(doc["ssid"].s()));
+                }
+                if (doc.has("password") && doc["password"].t() == crow::json::type::String) {
+                    password = static_cast<std::string>(doc["password"].s());
+                }
+                for (const char* key : {"backend_ip", "gateway_host_ip"}) {
+                    if (backend_ip.empty() && doc.has(key) &&
+                        doc[key].t() == crow::json::type::String) {
+                        backend_ip = trimCopy(static_cast<std::string>(doc[key].s()));
+                    }
+                }
+                if (doc.has("backend_port")) {
+                    const auto& value = doc["backend_port"];
+                    if (value.t() == crow::json::type::Number && value.i() > 0 &&
+                        value.i() <= 65535) {
+                        backend_port = static_cast<int>(value.i());
+                    } else if (value.t() == crow::json::type::String) {
+                        const int parsed = std::atoi(std::string(value.s()).c_str());
+                        if (parsed > 0 && parsed <= 65535) {
+                            backend_port = parsed;
+                        }
+                    }
+                }
             }
+
             if (port.empty()) {
                 const std::vector<UsbPortInfo> ports = scanUsbSerialPorts();
                 if (!ports.empty()) {
@@ -1910,14 +1988,78 @@ void BackendApp::registerDeviceRoutes() {
                 }
             }
 
+            // Pairing the board to the backend host's own Wi-Fi must not require
+            // retyping the password in the browser: fill it from the server
+            // environment (never sent back over the API). An empty password for
+            // any other SSID still means "open network".
+            if (password.empty()) {
+                const char* server_ssid = std::getenv("WIFI_SSID");
+                const char* server_pass = std::getenv("WIFI_PASS");
+                if (server_ssid != nullptr && *server_ssid != '\0' && ssid == server_ssid &&
+                    server_pass != nullptr) {
+                    password = server_pass;
+                }
+            }
+
             crow::json::wvalue body;
-            body["success"] = false;
             body["usb_port"] = port;
-            body["message"] =
-                std::string("USB serial provisioning is not accessible from the backend "
-                            "process") +
-                (port.empty() ? std::string(".") : (" on " + port + ".")) +
-                " Use the browser Web Serial flow to provision the ESP32-S3.";
+            if (port.empty()) {
+                body["success"] = false;
+                body["message"] =
+                    "No USB serial port detected (/dev/ttyACM* or /dev/ttyUSB*) on the "
+                    "backend host; connect the ESP32-S3 or use the browser Web Serial flow.";
+                return crow::response(400, body);
+            }
+            if (ssid.empty()) {
+                body["success"] = false;
+                body["message"] = "Target Wi-Fi SSID is required for provisioning.";
+                return crow::response(400, body);
+            }
+
+            // The firmware applies the credentials, waits up to 20 s for the
+            // association and only then answers with BAWAL_ACK (rolling back on
+            // failure), so the serial transaction must be patient.
+            const EspSerialResult provision =
+                provisionEspSerial(port, ssid, password, backend_ip, backend_port, 30000);
+
+            if (provision.success && provision.ack.received &&
+                provision.ack.status != "error") {
+                const std::string provisioned_ssid =
+                    provision.ack.ssid.empty() ? ssid : provision.ack.ssid;
+                const std::string target_ip =
+                    provision.ack.backend_ip.empty() ? backend_ip : provision.ack.backend_ip;
+
+                body["success"] = true;
+                body["status"] = provision.ack.status.empty() ? "wifi_provisioned"
+                                                              : provision.ack.status;
+                body["device_id"] = provision.ack.device_id;
+                body["firmware_version"] = provision.ack.firmware_version;
+                body["provisioned_ssid"] = provisioned_ssid;
+                body["backend_ip"] = target_ip;
+                body["gateway_host_ip"] = target_ip;
+                body["wifi_connected"] = provision.ack.wifi_connected;
+                body["temperature"] = provision.ack.temperature;
+                body["message"] = provision.ack.wifi_connected
+                    ? ("Provisioned Wi-Fi \"" + provisioned_ssid + "\" on " + port +
+                       " - board is online")
+                    : ("Credentials stored on " + port + "; ESP32-S3 is associating with \"" +
+                       provisioned_ssid + "\"...");
+                return crow::response(body);
+            }
+
+            body["success"] = false;
+            if (provision.success && provision.ack.received) {
+                body["status"] = "error";
+                body["device_id"] = provision.ack.device_id;
+                body["firmware_version"] = provision.ack.firmware_version;
+                body["message"] =
+                    "ESP32-S3 rejected Wi-Fi \"" + ssid +
+                    "\" (credentials rolled back). Check the password and AP security, then retry.";
+            } else {
+                body["message"] = "USB provisioning on " + port +
+                                  " failed: " + provision.error +
+                                  ". Close idf.py monitor or any other serial tool and retry.";
+            }
             return crow::response(body);
         });
 
