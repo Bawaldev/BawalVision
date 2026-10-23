@@ -1158,6 +1158,14 @@ void BackendApp::registerInspectionRoutes() {
                 return jsonError(500, "Batch LaTeX template not found on the server.");
             }
 
+            // Fleet analytics: read the same PostgreSQL tables the provisioned
+            // Grafana dashboard renders, so the master PDF carries fleet context
+            // next to the batch-local quality metrics.
+            bawal::vision::image::GrafanaAnalytics analytics;
+            if (m_database != nullptr && m_database->ready()) {
+                analytics = m_database->fetchGrafanaAnalytics();
+            }
+
             // One dedicated batch classifier: serialize concurrent uploads
             // instead of interleaving tracker state across Crow worker threads.
             std::lock_guard<std::mutex> batch_lock(m_batch_mutex);
@@ -1166,21 +1174,113 @@ void BackendApp::registerInspectionRoutes() {
                     reinterpret_cast<const uint8_t*>(req.body.data()),
                     req.body.size(),
                     *m_batch_classifier,
-                    template_path);
+                    template_path,
+                    &analytics);
 
             if (summary.total_images == 0) {
                 return jsonError(400, "Failed to extract valid image files (.jpg/.png) from ZIP archive.");
             }
 
+            // Persist the batch as `img-batch` audit rows so the Grafana
+            // quality panels include operator ZIP uploads alongside live
+            // camera inspections. Fails soft when PostgreSQL is offline.
+            const bool persisted =
+                m_database != nullptr && m_database->saveBatchInspection(summary);
+
             crow::json::wvalue res;
             res["status"] = "success";
             res["batch_id"] = summary.batch_id;
+            res["inspection_type"] = summary.inspection_type;
+            res["generated_at"] = summary.generated_at;
+            res["model_arch"] = summary.model_arch;
+            res["engine"] = summary.engine;
+            res["omp_threads"] = summary.omp_threads;
             res["total_trays"] = summary.total_images;
             res["accepted"] = summary.accepted_count;
             res["rejected"] = summary.rejected_count;
             res["processing_time_ms"] = summary.total_processing_time_ms;
+            res["throughput_trays_per_sec"] = summary.throughput_images_per_sec;
+            res["pass_rate"] = summary.total_images > 0
+                ? static_cast<double>(summary.accepted_count) /
+                      static_cast<double>(summary.total_images) * 100.0
+                : 0.0;
+            res["quality_index"] = summary.quality.quality_index;
+            res["avg_similarity"] = summary.quality.avg_similarity;
+            res["avg_quality"] = summary.quality.avg_quality;
+            res["min_quality"] = summary.quality.min_quality;
+            res["max_quality"] = summary.quality.max_quality;
+            res["quality_stddev"] = summary.quality.stddev_quality;
+            res["total_detections"] = summary.quality.total_detections;
+            res["pass_detections"] = summary.quality.pass_detections;
+            res["review_detections"] = summary.quality.review_detections;
+            res["reject_detections"] = summary.quality.reject_detections;
+            res["report_checksum"] = summary.report_checksum;
+            res["persisted_to_postgres"] = persisted;
             res["pdf_download_url"] =
                 "/api/v1/inspections/batch/" + summary.batch_id + "/report.pdf";
+
+            crow::json::wvalue::list histogram;
+            histogram.reserve(summary.quality_histogram.size());
+            for (const uint32_t bucket : summary.quality_histogram) {
+                histogram.emplace_back(bucket);
+            }
+            res["quality_histogram"] = std::move(histogram);
+
+            crow::json::wvalue::list class_rows;
+            class_rows.reserve(summary.class_breakdown.size());
+            for (const auto& cls : summary.class_breakdown) {
+                crow::json::wvalue cls_json;
+                cls_json["class_name"] =
+                    std::string(bawal::vision::image::fixedStringView(cls.class_name));
+                cls_json["detections"] = cls.detections;
+                cls_json["pass_count"] = cls.pass_count;
+                cls_json["review_count"] = cls.review_count;
+                cls_json["reject_count"] = cls.reject_count;
+                cls_json["avg_similarity"] = cls.avg_similarity;
+                cls_json["avg_quality"] = cls.avg_quality;
+                class_rows.emplace_back(std::move(cls_json));
+            }
+            res["class_breakdown"] = std::move(class_rows);
+
+            crow::json::wvalue grafana_json;
+            grafana_json["available"] = summary.grafana.available;
+            grafana_json["datasource"] =
+                std::string(bawal::vision::image::kGrafanaDatasource);
+            grafana_json["dashboard_url"] =
+                std::string(bawal::vision::image::kGrafanaDashboardUrl);
+            grafana_json["total_inspections"] = summary.grafana.total_inspections;
+            grafana_json["inspections_24h"] = summary.grafana.inspections_24h;
+            grafana_json["tracked_devices"] = summary.grafana.tracked_devices;
+            grafana_json["avg_similarity_pct"] = summary.grafana.avg_similarity_pct;
+            grafana_json["fresh_food_rate"] = summary.grafana.fresh_food_rate;
+            grafana_json["avg_spoilage_pct"] = summary.grafana.avg_spoilage_pct;
+
+            crow::json::wvalue::list grafana_classes;
+            grafana_classes.reserve(summary.grafana.class_stats.size());
+            for (const auto& cls : summary.grafana.class_stats) {
+                crow::json::wvalue cls_json;
+                cls_json["class_name"] =
+                    std::string(bawal::vision::image::fixedStringView(cls.class_name));
+                cls_json["detections"] = cls.detections;
+                cls_json["avg_similarity_pct"] = cls.avg_similarity_pct;
+                cls_json["avg_spoilage_pct"] = cls.avg_spoilage_pct;
+                cls_json["pass_rate"] = cls.pass_rate;
+                grafana_classes.emplace_back(std::move(cls_json));
+            }
+            grafana_json["class_stats"] = std::move(grafana_classes);
+
+            crow::json::wvalue::list grafana_daily;
+            grafana_daily.reserve(summary.grafana.daily.size());
+            for (const auto& point : summary.grafana.daily) {
+                crow::json::wvalue point_json;
+                point_json["day"] =
+                    std::string(bawal::vision::image::fixedStringView(point.day));
+                point_json["inspections"] = point.inspections;
+                point_json["pass_rate"] = point.pass_rate;
+                grafana_daily.emplace_back(std::move(point_json));
+            }
+            grafana_json["daily"] = std::move(grafana_daily);
+            res["grafana"] = std::move(grafana_json);
 
             // Per-tray gallery payload: annotated image URL, verdict and the
             // YOLOv8s INT8 detection breakdown for the dedicated batch tab.
@@ -1193,6 +1293,11 @@ void BackendApp::registerInspectionRoutes() {
                 item_json["accepted"] = item.accepted;
                 item_json["surface_temp"] = item.surface_temp;
                 item_json["t_safe_hours"] = item.t_safe_hours;
+                item_json["avg_similarity"] = item.avg_similarity;
+                item_json["avg_quality"] = item.avg_quality;
+                item_json["pass_detections"] = item.pass_detections;
+                item_json["review_detections"] = item.review_detections;
+                item_json["reject_detections"] = item.reject_detections;
                 item_json["annotated_url"] = "/api/v1/inspections/batch/" + summary.batch_id +
                                              "/annotated/" + std::to_string(item.index);
 
@@ -1202,7 +1307,9 @@ void BackendApp::registerInspectionRoutes() {
                     crow::json::wvalue detection_json;
                     detection_json["class_name"] = std::string(detection.class_name);
                     detection_json["confidence"] = detection.confidence;
-                    detection_json["freshness"] = 1.0f - detection.spoilage.discoloration_ratio;
+                    detection_json["freshness"] = bawal::vision::image::freshnessScore(detection) / 100.0f;
+                    detection_json["status"] = bawal::vision::image::qualityStatusName(
+                        bawal::vision::image::classifyQuality(detection));
 
                     crow::json::wvalue::list bbox;
                     bbox.emplace_back(detection.bbox.x);

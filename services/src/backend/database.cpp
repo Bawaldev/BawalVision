@@ -1,5 +1,7 @@
 #include "bawal/backend/database.hpp"
 
+#include "bawal/vision/image/batch_inspector.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -186,21 +188,23 @@ bool Database::ensureConnectedLocked() {
 #endif
 }
 
-bool Database::ensureDeviceLocked(std::string_view device_id) {
+bool Database::ensureDeviceLocked(std::string_view device_id, std::string_view device_type) {
 #ifdef BAWAL_HAVE_POSTGRES
     if (!ensureConnectedLocked()) {
         return false;
     }
 
     const std::string id = sanitizeId(device_id);
-    const char* params[] = {id.c_str(), "crow-cpp-1.0"};
+    const std::string type = device_type.empty() ? std::string("ESP32") : std::string(device_type);
+    const char* params[] = {id.c_str(), type.c_str(), "crow-cpp-1.0"};
     PGresult* result = PQexecParams(
         static_cast<PGconn*>(m_conn),
         "INSERT INTO devices (id, device_type, firmware_version, status, last_seen_at) "
-        "VALUES ($1, 'ESP32', $2, 'ACTIVE', NOW()) "
+        "VALUES ($1, $2, $3, 'ACTIVE', NOW()) "
         "ON CONFLICT (id) DO UPDATE "
-        "SET last_seen_at = NOW(), updated_at = NOW(), status = 'ACTIVE'",
-        2, nullptr, params, nullptr, nullptr, 0);
+        "SET device_type = EXCLUDED.device_type, last_seen_at = NOW(), "
+        "    updated_at = NOW(), status = 'ACTIVE'",
+        3, nullptr, params, nullptr, nullptr, 0);
     const bool ok = resultOk(result);
     if (!ok) {
         std::cerr << "[DB] Device upsert failed: "
@@ -210,6 +214,7 @@ bool Database::ensureDeviceLocked(std::string_view device_id) {
     return ok;
 #else
     (void)device_id;
+    (void)device_type;
     return false;
 #endif
 }
@@ -474,6 +479,215 @@ std::vector<InspectionRecordRow> Database::listInspections(int limit) {
     (void)limit;
 #endif
     return records;
+}
+
+bawal::vision::image::GrafanaAnalytics Database::fetchGrafanaAnalytics() {
+    bawal::vision::image::GrafanaAnalytics analytics;
+#ifdef BAWAL_HAVE_POSTGRES
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!ensureConnectedLocked()) {
+        return analytics;
+    }
+
+    PGconn* conn = static_cast<PGconn*>(m_conn);
+
+    // Headline KPIs: identical aggregates to the Grafana stat panels, so the
+    // PDF and the dashboard can never drift apart.
+    PGresult* headline = PQexec(
+        conn,
+        "SELECT (SELECT COUNT(*) FROM inspections), "
+        "       (SELECT COUNT(*) FROM inspections WHERE created_at >= NOW() - INTERVAL '24 hours'), "
+        "       (SELECT COUNT(*) FROM devices), "
+        "       COALESCE(ROUND(AVG(similarity_rate) * 100, 1), 0), "
+        "       COALESCE(ROUND(COUNT(*) FILTER (WHERE status = 'PASS')::numeric "
+        "                      / NULLIF(COUNT(*), 0) * 100, 1), 0), "
+        "       COALESCE(ROUND(AVG(spoilage_score), 1), 0) "
+        "FROM inspection_foods");
+    if (!resultOk(headline)) {
+        std::cerr << "[DB] Grafana analytics headline query failed: "
+                  << PQerrorMessage(conn);
+        PQclear(headline);
+        return analytics;
+    }
+
+    analytics.available = true;
+    analytics.total_inspections = static_cast<uint64_t>(toLongLong(tupleValue(headline, 0, 0)));
+    analytics.inspections_24h = static_cast<uint64_t>(toLongLong(tupleValue(headline, 0, 1)));
+    analytics.tracked_devices = static_cast<uint64_t>(toLongLong(tupleValue(headline, 0, 2)));
+    analytics.avg_similarity_pct = toDouble(tupleValue(headline, 0, 3));
+    analytics.fresh_food_rate = toDouble(tupleValue(headline, 0, 4));
+    analytics.avg_spoilage_pct = toDouble(tupleValue(headline, 0, 5));
+    PQclear(headline);
+
+    // Per-class fleet quality (top 8 classes by detection volume).
+    PGresult* classes = PQexec(
+        conn,
+        "SELECT fi.name, COUNT(*), "
+        "       COALESCE(ROUND(AVG(ifo.similarity_rate) * 100, 1), 0), "
+        "       COALESCE(ROUND(AVG(ifo.spoilage_score), 1), 0), "
+        "       COALESCE(ROUND(COUNT(*) FILTER (WHERE ifo.status = 'PASS')::numeric "
+        "                      / NULLIF(COUNT(*), 0) * 100, 1), 0) "
+        "FROM inspection_foods ifo "
+        "JOIN food_items fi ON fi.id = ifo.food_item_id "
+        "GROUP BY fi.name ORDER BY COUNT(*) DESC LIMIT 8");
+    if (resultOk(classes)) {
+        const int rows = PQntuples(classes);
+        analytics.class_stats.reserve(static_cast<size_t>(std::max(0, rows)));
+        for (int row = 0; row < rows; ++row) {
+            bawal::vision::image::GrafanaClassStat stat;
+            bawal::vision::image::assignFixedString(
+                stat.class_name, tupleValue(classes, row, 0));
+            stat.detections = static_cast<uint64_t>(toLongLong(tupleValue(classes, row, 1)));
+            stat.avg_similarity_pct = toDouble(tupleValue(classes, row, 2));
+            stat.avg_spoilage_pct = toDouble(tupleValue(classes, row, 3));
+            stat.pass_rate = toDouble(tupleValue(classes, row, 4));
+            analytics.class_stats.push_back(std::move(stat));
+        }
+    } else {
+        std::cerr << "[DB] Grafana analytics class query failed: "
+                  << PQerrorMessage(conn);
+    }
+    PQclear(classes);
+
+    // 7-day inspection volume / pass-rate trend.
+    PGresult* daily = PQexec(
+        conn,
+        "SELECT to_char(date_trunc('day', i.created_at), 'MM-DD') AS day, "
+        "       COUNT(DISTINCT i.id), "
+        "       COALESCE(ROUND(COUNT(*) FILTER (WHERE ifo.status = 'PASS')::numeric "
+        "                      / NULLIF(COUNT(*), 0) * 100, 1), 0) "
+        "FROM inspections i "
+        "JOIN inspection_foods ifo ON ifo.inspection_id = i.id "
+        "WHERE i.created_at >= NOW() - INTERVAL '7 days' "
+        "GROUP BY 1 ORDER BY 1");
+    if (resultOk(daily)) {
+        const int rows = PQntuples(daily);
+        analytics.daily.reserve(static_cast<size_t>(std::max(0, rows)));
+        for (int row = 0; row < rows; ++row) {
+            bawal::vision::image::GrafanaDailyPoint point;
+            bawal::vision::image::assignFixedString(point.day, tupleValue(daily, row, 0));
+            point.inspections = static_cast<uint64_t>(toLongLong(tupleValue(daily, row, 1)));
+            point.pass_rate = toDouble(tupleValue(daily, row, 2));
+            analytics.daily.push_back(std::move(point));
+        }
+    } else {
+        std::cerr << "[DB] Grafana analytics daily query failed: "
+                  << PQerrorMessage(conn);
+    }
+    PQclear(daily);
+#endif
+    return analytics;
+}
+
+bool Database::saveBatchInspection(
+    const bawal::vision::image::BatchReportSummary& summary) {
+#ifdef BAWAL_HAVE_POSTGRES
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!ensureConnectedLocked()) {
+        return false;
+    }
+    if (!ensureDeviceLocked("BATCH_IMG_UPLOAD", "BATCH_UPLOADER")) {
+        return false;
+    }
+
+    PGconn* conn = static_cast<PGconn*>(m_conn);
+    PGresult* begin = PQexec(conn, "BEGIN");
+    const bool begin_ok = resultOk(begin);
+    PQclear(begin);
+    if (!begin_ok) {
+        return false;
+    }
+
+    bool ok = true;
+    for (const auto& item : summary.items) {
+        const std::string frame = std::to_string(item.index);
+        const std::string image_uri = item.annotated_image_path;
+        const char* inspection_params[] = {
+            "BATCH_IMG_UPLOAD",
+            "img-batch-1.0",
+            frame.c_str(),
+            item.accepted ? "f" : "t",
+            "0.00",
+            image_uri.c_str(),
+            "img-batch"
+        };
+
+        PGresult* inspection = PQexecParams(
+            conn,
+            "INSERT INTO inspections "
+            "(device_id, firmware_version, frame_id, cpu_temperature, temperature, cpu_load, "
+            " is_spoiled, t_safe_hours, image_s3_uri, engine_pipeline) "
+            "VALUES ($1, $2, $3, 35.00, 25.00, 0, $4, $5, $6, $7) RETURNING id",
+            7, nullptr, inspection_params, nullptr, nullptr, 0);
+        if (!resultOk(inspection)) {
+            std::cerr << "[DB] Batch inspection insert failed: " << PQerrorMessage(conn);
+            PQclear(inspection);
+            ok = false;
+            break;
+        }
+        const std::string inspection_id = tupleValue(inspection, 0, 0);
+        PQclear(inspection);
+
+        for (const auto& detection : item.detections) {
+            std::string food_name = std::string(detection.class_name);
+            if (food_name.empty()) {
+                food_name = "unknown";
+            }
+
+            const char* food_params[] = {food_name.c_str()};
+            PGresult* food = PQexecParams(
+                conn,
+                "INSERT INTO food_items (name) VALUES ($1) "
+                "ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+                1, nullptr, food_params, nullptr, nullptr, 0);
+            if (!resultOk(food)) {
+                std::cerr << "[DB] Batch food item upsert failed: " << PQerrorMessage(conn);
+                PQclear(food);
+                continue;
+            }
+            const std::string food_id = tupleValue(food, 0, 0);
+            PQclear(food);
+
+            const std::string similarity = std::to_string(
+                std::clamp(detection.confidence, 0.0f, 1.0f));
+            const std::string spoilage = std::to_string(
+                std::clamp(detection.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f));
+            const char* status = bawal::vision::image::qualityStatusName(
+                bawal::vision::image::classifyQuality(detection));
+
+            const char* item_params[] = {
+                inspection_id.c_str(),
+                food_id.c_str(),
+                similarity.c_str(),
+                spoilage.c_str(),
+                status
+            };
+            PGresult* food_row = PQexecParams(
+                conn,
+                "INSERT INTO inspection_foods "
+                "(inspection_id, food_item_id, similarity_rate, spoilage_score, status) "
+                "VALUES ($1, $2, $3, $4, $5) "
+                "ON CONFLICT (inspection_id, food_item_id) DO UPDATE "
+                "SET similarity_rate = GREATEST(inspection_foods.similarity_rate, EXCLUDED.similarity_rate), "
+                "    spoilage_score = GREATEST(inspection_foods.spoilage_score, EXCLUDED.spoilage_score), "
+                "    status = EXCLUDED.status",
+                5, nullptr, item_params, nullptr, nullptr, 0);
+            if (!resultOk(food_row)) {
+                std::cerr << "[DB] Batch inspection food insert failed: "
+                          << PQerrorMessage(conn);
+            }
+            PQclear(food_row);
+        }
+    }
+
+    PGresult* finish = PQexec(conn, ok ? "COMMIT" : "ROLLBACK");
+    const bool finish_ok = resultOk(finish);
+    PQclear(finish);
+    return ok && finish_ok;
+#else
+    (void)summary;
+    return false;
+#endif
 }
 
 } // namespace bawal::backend

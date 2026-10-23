@@ -1,6 +1,8 @@
 #include "bawal/vision/simd_food_evaluator.hpp"
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <vector>
 
 namespace bawal::vision {
@@ -268,6 +270,91 @@ TextureMetric evaluateTextureAVX2(const cv::Mat& food_roi) {
     metric.is_valid_food_texture = (metric.edge_energy >= 4.5f || metric.std_dev >= 8.0f);
 
     return metric;
+}
+
+QualityVectorStats computeQualityStatsSIMD(const float* similarity,
+                                           const float* quality,
+                                           size_t count) {
+    QualityVectorStats stats;
+    if (similarity == nullptr || quality == nullptr || count == 0) {
+        return stats;
+    }
+
+    float sum_similarity = 0.0f;
+    float sum_quality = 0.0f;
+    float sum_sq_quality = 0.0f;
+    float min_quality = std::numeric_limits<float>::max();
+    float max_quality = std::numeric_limits<float>::lowest();
+
+#if defined(__AVX2__)
+    // 8 lanes per iteration: running sums, sum-of-squares and min/max.
+    __m256 v_sum_sim = _mm256_setzero_ps();
+    __m256 v_sum_qual = _mm256_setzero_ps();
+    __m256 v_sum_sq = _mm256_setzero_ps();
+    __m256 v_min = _mm256_set1_ps(std::numeric_limits<float>::max());
+    __m256 v_max = _mm256_set1_ps(std::numeric_limits<float>::lowest());
+
+    size_t i = 0;
+    for (; i + 8 <= count; i += 8) {
+        const __m256 v_sim = _mm256_loadu_ps(similarity + i);
+        const __m256 v_qual = _mm256_loadu_ps(quality + i);
+        v_sum_sim = _mm256_add_ps(v_sum_sim, v_sim);
+        v_sum_qual = _mm256_add_ps(v_sum_qual, v_qual);
+        v_sum_sq = _mm256_add_ps(v_sum_sq, _mm256_mul_ps(v_qual, v_qual));
+        v_min = _mm256_min_ps(v_min, v_qual);
+        v_max = _mm256_max_ps(v_max, v_qual);
+    }
+
+    alignas(32) float lane_sum_sim[8];
+    alignas(32) float lane_sum_qual[8];
+    alignas(32) float lane_sum_sq[8];
+    alignas(32) float lane_min[8];
+    alignas(32) float lane_max[8];
+    _mm256_store_ps(lane_sum_sim, v_sum_sim);
+    _mm256_store_ps(lane_sum_qual, v_sum_qual);
+    _mm256_store_ps(lane_sum_sq, v_sum_sq);
+    _mm256_store_ps(lane_min, v_min);
+    _mm256_store_ps(lane_max, v_max);
+
+    #pragma omp simd reduction(+:sum_similarity, sum_quality, sum_sq_quality)
+    for (int lane = 0; lane < 8; ++lane) {
+        sum_similarity += lane_sum_sim[lane];
+        sum_quality += lane_sum_qual[lane];
+        sum_sq_quality += lane_sum_sq[lane];
+        min_quality = std::min(min_quality, lane_min[lane]);
+        max_quality = std::max(max_quality, lane_max[lane]);
+    }
+
+    // Scalar tail for the final < 8 detections.
+    for (; i < count; ++i) {
+        sum_similarity += similarity[i];
+        sum_quality += quality[i];
+        sum_sq_quality += quality[i] * quality[i];
+        min_quality = std::min(min_quality, quality[i]);
+        max_quality = std::max(max_quality, quality[i]);
+    }
+#else
+    // OpenMP SIMD fallback (aarch64 NEON / portable builds).
+    #pragma omp simd reduction(+:sum_similarity, sum_quality, sum_sq_quality) \
+                         reduction(min:min_quality) reduction(max:max_quality)
+    for (size_t i = 0; i < count; ++i) {
+        sum_similarity += similarity[i];
+        sum_quality += quality[i];
+        sum_sq_quality += quality[i] * quality[i];
+        min_quality = std::min(min_quality, quality[i]);
+        max_quality = std::max(max_quality, quality[i]);
+    }
+#endif
+
+    const float inv_count = 1.0f / static_cast<float>(count);
+    stats.mean_similarity = sum_similarity * inv_count;
+    stats.mean_quality = sum_quality * inv_count;
+    const float variance =
+        std::max(0.0f, sum_sq_quality * inv_count - stats.mean_quality * stats.mean_quality);
+    stats.std_quality = std::sqrt(variance);
+    stats.min_quality = min_quality;
+    stats.max_quality = max_quality;
+    return stats;
 }
 
 } // namespace bawal::vision

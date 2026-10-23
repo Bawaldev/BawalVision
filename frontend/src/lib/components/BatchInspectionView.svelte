@@ -8,6 +8,7 @@
         class_name: string;
         confidence: number;
         freshness: number;
+        status?: string;
         bbox: number[];
     }
 
@@ -19,15 +20,80 @@
         t_safe_hours: number;
         annotated_url: string;
         detections: BatchDetection[];
+        avg_similarity?: number;
+        avg_quality?: number;
+        pass_detections?: number;
+        review_detections?: number;
+        reject_detections?: number;
+    }
+
+    interface BatchClassStat {
+        class_name: string;
+        detections: number;
+        pass_count: number;
+        review_count: number;
+        reject_count: number;
+        avg_similarity: number;
+        avg_quality: number;
+    }
+
+    interface GrafanaClassStat {
+        class_name: string;
+        detections: number;
+        avg_similarity_pct: number;
+        avg_spoilage_pct: number;
+        pass_rate: number;
+    }
+
+    interface GrafanaDailyPoint {
+        day: string;
+        inspections: number;
+        pass_rate: number;
+    }
+
+    interface GrafanaAnalytics {
+        available: boolean;
+        datasource: string;
+        dashboard_url: string;
+        total_inspections: number;
+        inspections_24h: number;
+        tracked_devices: number;
+        avg_similarity_pct: number;
+        fresh_food_rate: number;
+        avg_spoilage_pct: number;
+        class_stats: GrafanaClassStat[];
+        daily: GrafanaDailyPoint[];
     }
 
     interface BatchSummary {
         status: string;
         batch_id: string;
+        inspection_type?: string;
+        generated_at?: string;
+        model_arch?: string;
+        engine?: string;
+        omp_threads?: number;
         total_trays: number;
         accepted: number;
         rejected: number;
         processing_time_ms: number;
+        throughput_trays_per_sec?: number;
+        pass_rate?: number;
+        quality_index?: number;
+        avg_similarity?: number;
+        avg_quality?: number;
+        min_quality?: number;
+        max_quality?: number;
+        quality_stddev?: number;
+        total_detections?: number;
+        pass_detections?: number;
+        review_detections?: number;
+        reject_detections?: number;
+        report_checksum?: string;
+        persisted_to_postgres?: boolean;
+        quality_histogram?: number[];
+        class_breakdown?: BatchClassStat[];
+        grafana?: GrafanaAnalytics;
         pdf_download_url: string;
         items?: BatchItem[];
         error?: string;
@@ -62,6 +128,13 @@
     let galleryItems = $derived(summary?.items ?? []);
     let passRate = $derived(
         summary && summary.total_trays > 0 ? (summary.accepted / summary.total_trays) * 100 : 0
+    );
+    let classBreakdown = $derived(summary?.class_breakdown ?? []);
+    let detectionHistogram = $derived(summary?.quality_histogram ?? []);
+    let histogramMax = $derived(Math.max(1, ...detectionHistogram));
+    let grafana = $derived(summary?.grafana ?? null);
+    let grafanaDailyMax = $derived(
+        Math.max(1, ...(grafana?.daily ?? []).map((point) => point.inspections))
     );
 
     function clearTimers() {
@@ -233,6 +306,12 @@
     function formatPercent(value: number): string {
         return `${(value * 100).toFixed(0)}%`;
     }
+
+    function qualityTone(index: number): 'good' | 'warn' | 'bad' {
+        if (index >= 85) return 'good';
+        if (index >= 70) return 'warn';
+        return 'bad';
+    }
 </script>
 
 <div class="batch-view">
@@ -246,9 +325,12 @@
                 multi-page LaTeX master report per batch.
             </p>
         </div>
-        <div class="batch-badge">
-            <span class="badge-dot"></span>
-            OpenMP + AVX2
+        <div class="batch-badges">
+            <span class="batch-type-badge">{summary?.inspection_type ?? 'IMG_BATCH'}</span>
+            <div class="batch-badge">
+                <span class="badge-dot"></span>
+                OpenMP + AVX2
+            </div>
         </div>
     </header>
 
@@ -319,13 +401,22 @@
         <section class="kpi-panel card">
             <div class="kpi-grid">
                 <div class="kpi-card wide">
-                    <span class="kpi-label">Batch ID</span>
-                    <strong class="kpi-value mono">{summary.batch_id}</strong>
+                    <span class="kpi-label">Batch ID · Inspection Type</span>
+                    <strong class="kpi-value mono">
+                        {summary.batch_id}
+                        <span class="type-inline">{summary.inspection_type ?? 'IMG_BATCH'}</span>
+                    </strong>
+                    {#if summary.generated_at}
+                        <span class="kpi-sub mono">{summary.generated_at}</span>
+                    {/if}
                 </div>
                 <div class="kpi-card">
                     <span class="kpi-label">Parallel Compute Time</span>
                     <strong class="kpi-value">{formatMs(summary.processing_time_ms)}</strong>
-                    <span class="kpi-sub">OpenMP SIMD multi-core</span>
+                    <span class="kpi-sub">
+                        {summary.omp_threads ?? '?'} OMP threads ·
+                        {summary.throughput_trays_per_sec?.toFixed(1) ?? '0.0'} trays/s
+                    </span>
                 </div>
                 <div class="kpi-card">
                     <span class="kpi-label">Total Trays</span>
@@ -342,6 +433,28 @@
                     <strong class="kpi-value">{summary.rejected}</strong>
                     <span class="kpi-sub">spoilage flagged</span>
                 </div>
+                <div class="kpi-card quality {qualityTone(summary.quality_index ?? 0)}">
+                    <span class="kpi-label">Batch Quality Index</span>
+                    <strong class="kpi-value">{(summary.quality_index ?? 0).toFixed(1)}</strong>
+                    <span class="kpi-sub">similarity · freshness · rejects</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="kpi-label">Avg Similarity</span>
+                    <strong class="kpi-value">{((summary.avg_similarity ?? 0) * 100).toFixed(1)}%</strong>
+                    <span class="kpi-sub">YOLOv8 confidence</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="kpi-label">Avg Food Quality</span>
+                    <strong class="kpi-value">{(summary.avg_quality ?? 0).toFixed(1)}%</strong>
+                    <span class="kpi-sub">SIMD freshness (AVX2)</span>
+                </div>
+                <div class="kpi-card">
+                    <span class="kpi-label">Detections P / R / X</span>
+                    <strong class="kpi-value mono">
+                        {summary.pass_detections ?? 0} / {summary.review_detections ?? 0} / {summary.reject_detections ?? 0}
+                    </strong>
+                    <span class="kpi-sub">{summary.total_detections ?? 0} total food items scored</span>
+                </div>
             </div>
 
             <div class="kpi-actions">
@@ -356,8 +469,112 @@
                 <button type="button" class="btn ghost" disabled={isBusy} onclick={resetBatch}>
                     ↺ Process another batch
                 </button>
+                {#if summary.report_checksum}
+                    <span class="checksum-chip" title="FNV-1a 64 report checksum">
+                        ⧉ {summary.report_checksum}
+                    </span>
+                {/if}
+                {#if summary.persisted_to_postgres}
+                    <span class="persisted-chip" title="Batch rows persisted for Grafana">
+                        ✓ Grafana feed
+                    </span>
+                {/if}
             </div>
         </section>
+
+        {#if classBreakdown.length > 0}
+            <section class="analytics-section card">
+                <div class="gallery-header">
+                    <h3>Food Quality Analytics</h3>
+                    <span class="gallery-count">{summary.total_detections ?? 0} detections scored</span>
+                </div>
+                <div class="class-table">
+                    <div class="class-row head">
+                        <span>Class</span>
+                        <span>Detections</span>
+                        <span>Avg Similarity</span>
+                        <span>Avg Quality</span>
+                        <span>P / R / X</span>
+                    </div>
+                    {#each classBreakdown as cls}
+                        <div class="class-row">
+                            <span class="class-name">{cls.class_name}</span>
+                            <span>{cls.detections}</span>
+                            <span>{formatPercent(cls.avg_similarity)}</span>
+                            <span>{cls.avg_quality.toFixed(1)}%</span>
+                            <span class="mono">{cls.pass_count} / {cls.review_count} / {cls.reject_count}</span>
+                        </div>
+                    {/each}
+                </div>
+            </section>
+        {/if}
+
+        {#if grafana}
+            <section class="analytics-section card">
+                <div class="gallery-header">
+                    <h3>Grafana Fleet Analytics</h3>
+                    <a class="grafana-link" href={grafana.dashboard_url} target="_blank" rel="noopener">
+                        Open dashboard →
+                    </a>
+                </div>
+                {#if grafana.available}
+                    <div class="fleet-grid">
+                        <div class="fleet-chip">
+                            <span class="fleet-label">Total Inspections</span>
+                            <strong>{grafana.total_inspections}</strong>
+                        </div>
+                        <div class="fleet-chip">
+                            <span class="fleet-label">Last 24h</span>
+                            <strong>{grafana.inspections_24h}</strong>
+                        </div>
+                        <div class="fleet-chip">
+                            <span class="fleet-label">Tracked Devices</span>
+                            <strong>{grafana.tracked_devices}</strong>
+                        </div>
+                        <div class="fleet-chip">
+                            <span class="fleet-label">Fleet Avg Similarity</span>
+                            <strong>{grafana.avg_similarity_pct.toFixed(1)}%</strong>
+                        </div>
+                        <div class="fleet-chip">
+                            <span class="fleet-label">Fresh Food Rate</span>
+                            <strong>{grafana.fresh_food_rate.toFixed(1)}%</strong>
+                        </div>
+                        <div class="fleet-chip">
+                            <span class="fleet-label">Avg Spoilage</span>
+                            <strong>{grafana.avg_spoilage_pct.toFixed(1)}%</strong>
+                        </div>
+                    </div>
+                    {#if grafana.daily.length > 0}
+                        <div class="trend-list">
+                            {#each grafana.daily as point}
+                                <div class="trend-row">
+                                    <span class="trend-day">{point.day}</span>
+                                    <div class="trend-track">
+                                        <div
+                                            class="trend-fill"
+                                            style="width: {Math.max(2, (point.inspections / grafanaDailyMax) * 100)}%"
+                                        ></div>
+                                    </div>
+                                    <span class="trend-meta">
+                                        {point.inspections} · {point.pass_rate.toFixed(1)}% pass
+                                    </span>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                    <p class="fleet-source">
+                        Source: {grafana.datasource} · batch rows are written with pipeline
+                        <code>img-batch</code> so they land in the same Grafana panels as live
+                        camera inspections.
+                    </p>
+                {:else}
+                    <div class="banner notice">
+                        PostgreSQL datasource offline — fleet analytics unavailable for this run.
+                        The batch report still compiled from in-memory results.
+                    </div>
+                {/if}
+            </section>
+        {/if}
 
         <section class="gallery-section">
             <div class="gallery-header">
@@ -400,6 +617,16 @@
                                     <span class="metric-chip">🌡️ {item.surface_temp.toFixed(1)} °C</span>
                                     <span class="metric-chip">⏳ t_safe {item.t_safe_hours.toFixed(1)} h</span>
                                     <span class="metric-chip">{item.detections.length} detections</span>
+                                    {#if item.avg_similarity !== undefined}
+                                        <span class="metric-chip">
+                                            sim {(item.avg_similarity * 100).toFixed(1)}%
+                                        </span>
+                                    {/if}
+                                    {#if item.avg_quality !== undefined}
+                                        <span class="metric-chip">
+                                            quality {item.avg_quality.toFixed(1)}%
+                                        </span>
+                                    {/if}
                                 </div>
 
                                 <div class="detection-log">
@@ -409,8 +636,18 @@
                                         {#each item.detections as detection}
                                             <div class="detection-line">
                                                 <span class="class-name">{detection.class_name}</span>
-                                                <span class="det-stat">conf {formatPercent(detection.confidence)}</span>
-                                                <span class="det-stat">fresh {formatPercent(detection.freshness)}</span>
+                                                <span class="det-stat">sim {formatPercent(detection.confidence)}</span>
+                                                <span class="det-stat">quality {formatPercent(detection.freshness)}</span>
+                                                {#if detection.status}
+                                                    <span
+                                                        class="det-status"
+                                                        class:pass={detection.status === 'PASS'}
+                                                        class:review={detection.status === 'REVIEW'}
+                                                        class:reject={detection.status === 'REJECT'}
+                                                    >
+                                                        {detection.status}
+                                                    </span>
+                                                {/if}
                                             </div>
                                         {/each}
                                     {/if}
@@ -465,6 +702,13 @@
         color: var(--accent-blue);
     }
 
+    .batch-badges {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+    }
+
     .batch-badge {
         display: inline-flex;
         align-items: center;
@@ -477,6 +721,18 @@
         border: 1px solid #ddd0fb;
         border-radius: var(--radius-pill);
         padding: 6px 11px;
+    }
+
+    .batch-type-badge {
+        font-size: 0.66rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        font-family: var(--font-mono);
+        color: var(--accent-blue);
+        background: var(--accent-blue-dim);
+        border: 1px solid #c7dfef;
+        border-radius: var(--radius-pill);
+        padding: 6px 10px;
     }
 
     .badge-dot {
@@ -770,10 +1026,70 @@
         color: var(--text-muted);
     }
 
+    .kpi-card.quality.good {
+        border-color: #bbf7d0;
+        background: var(--accent-green-dim);
+    }
+
+    .kpi-card.quality.good .kpi-value {
+        color: #15803d;
+    }
+
+    .kpi-card.quality.warn {
+        border-color: #fde68a;
+        background: var(--accent-amber-dim);
+    }
+
+    .kpi-card.quality.warn .kpi-value {
+        color: #b45309;
+    }
+
+    .kpi-card.quality.bad {
+        border-color: #fecaca;
+        background: var(--accent-red-dim);
+    }
+
+    .kpi-card.quality.bad .kpi-value {
+        color: var(--accent-red);
+    }
+
+    .type-inline {
+        display: inline-block;
+        margin-left: 6px;
+        font-size: 0.58rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        color: var(--accent-blue);
+        background: var(--accent-blue-dim);
+        border: 1px solid #c7dfef;
+        border-radius: var(--radius-pill);
+        padding: 1px 7px;
+        vertical-align: middle;
+    }
+
     .kpi-actions {
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .checksum-chip,
+    .persisted-chip {
+        font-size: 0.62rem;
+        font-weight: 700;
+        font-family: var(--font-mono);
+        border-radius: var(--radius-pill);
+        padding: 5px 10px;
+        border: 1px solid var(--border-subtle);
+        color: var(--text-muted);
+        background: var(--bg-inset);
+    }
+
+    .persisted-chip {
+        color: #15803d;
+        background: var(--accent-green-dim);
+        border-color: #bbf7d0;
     }
 
     .btn {
@@ -814,6 +1130,148 @@
     .btn.ghost:hover:not(:disabled) {
         background: var(--bg-chip);
         color: var(--text-primary);
+    }
+
+    .analytics-section {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 16px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-card);
+    }
+
+    .grafana-link {
+        font-size: 0.68rem;
+        font-weight: 700;
+        color: var(--accent-blue);
+        text-decoration: none;
+    }
+
+    .grafana-link:hover {
+        text-decoration: underline;
+    }
+
+    .class-table {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+    }
+
+    .class-row {
+        display: grid;
+        grid-template-columns: 1.4fr 0.8fr 1fr 1fr 1fr;
+        gap: 8px;
+        padding: 7px 10px;
+        font-size: 0.68rem;
+        color: var(--text-secondary);
+        border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .class-row:last-child {
+        border-bottom: none;
+    }
+
+    .class-row.head {
+        font-weight: 800;
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        background: var(--bg-inset);
+    }
+
+    .class-row .class-name {
+        font-weight: 700;
+        color: var(--text-primary);
+        font-family: var(--font-mono);
+    }
+
+    .class-row .mono {
+        font-family: var(--font-mono);
+    }
+
+    .fleet-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 8px;
+    }
+
+    .fleet-chip {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 9px 11px;
+        background: var(--bg-inset);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+    }
+
+    .fleet-label {
+        font-size: 0.58rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+    }
+
+    .fleet-chip strong {
+        font-size: 0.92rem;
+        color: var(--text-primary);
+    }
+
+    .trend-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .trend-row {
+        display: grid;
+        grid-template-columns: 52px 1fr auto;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .trend-day {
+        font-size: 0.64rem;
+        font-family: var(--font-mono);
+        color: var(--text-secondary);
+    }
+
+    .trend-track {
+        height: 8px;
+        background: var(--bg-chip);
+        border-radius: var(--radius-pill);
+        overflow: hidden;
+    }
+
+    .trend-fill {
+        height: 100%;
+        background: linear-gradient(90deg, var(--accent-blue), var(--accent-blue-light));
+        border-radius: var(--radius-pill);
+    }
+
+    .trend-meta {
+        font-size: 0.62rem;
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        white-space: nowrap;
+    }
+
+    .fleet-source {
+        margin: 0;
+        font-size: 0.62rem;
+        color: var(--text-muted);
+    }
+
+    .fleet-source code {
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
     }
 
     .gallery-section {
@@ -997,6 +1455,33 @@
 
     .det-stat {
         color: var(--text-muted);
+    }
+
+    .det-status {
+        font-size: 0.56rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        padding: 1px 6px;
+        border-radius: var(--radius-pill);
+        border: 1px solid transparent;
+    }
+
+    .det-status.pass {
+        color: #15803d;
+        background: var(--accent-green-dim);
+        border-color: #bbf7d0;
+    }
+
+    .det-status.review {
+        color: #b45309;
+        background: var(--accent-amber-dim);
+        border-color: #fde68a;
+    }
+
+    .det-status.reject {
+        color: #b91c1c;
+        background: var(--accent-red-dim);
+        border-color: #fecaca;
     }
 
     .no-detection {
