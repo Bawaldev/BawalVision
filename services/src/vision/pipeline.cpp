@@ -29,6 +29,16 @@ bool envFlagValue(const char* name, bool default_value) noexcept {
            value == "yes" || value == "on";
 }
 
+struct IspScratch {
+    std::vector<cv::Mat> bgr_planes = std::vector<cv::Mat>(3);
+    std::vector<cv::Mat> lab_planes = std::vector<cv::Mat>(3);
+    cv::Mat balanced;
+    cv::Mat lab;
+    cv::Mat contrast;
+    cv::Mat blurred;
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(1.8, cv::Size(8, 8));
+};
+
 } // anonymous namespace
 
 bool InspectionPipeline::initialize(std::string_view model_path, int target_width, int target_height) {
@@ -217,31 +227,26 @@ void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
     const float gain_g = static_cast<float>((mean_bgr[1] > 1.0) ? (gray_target / mean_bgr[1]) : 1.0f);
     const float gain_r = static_cast<float>((mean_bgr[2] > 1.0) ? (gray_target / mean_bgr[2]) : 1.0f);
 
-    cv::Mat balanced;
-    std::vector<cv::Mat> channels(3);
-    cv::split(src, channels);
-    channels[0].convertTo(channels[0], -1, gain_b, 0);
-    channels[1].convertTo(channels[1], -1, gain_g, 0);
-    channels[2].convertTo(channels[2], -1, gain_r, 0);
-    cv::merge(channels, balanced);
+    // Reuse per-thread work buffers. A thread-local CLAHE instance also avoids
+    // sharing its mutable histogram state if callers run pipelines in parallel.
+    thread_local IspScratch scratch;
+    cv::split(src, scratch.bgr_planes);
+    scratch.bgr_planes[0].convertTo(scratch.bgr_planes[0], -1, gain_b, 0);
+    scratch.bgr_planes[1].convertTo(scratch.bgr_planes[1], -1, gain_g, 0);
+    scratch.bgr_planes[2].convertTo(scratch.bgr_planes[2], -1, gain_r, 0);
+    cv::merge(scratch.bgr_planes, scratch.balanced);
 
     // 2. CLAHE pada kanal L* (angkat bayangan gelap wajah tanpa bikin silau lampu plafon)
-    cv::Mat lab;
-    cv::cvtColor(balanced, lab, cv::COLOR_BGR2Lab);
-    std::vector<cv::Mat> lab_planes;
-    cv::split(lab, lab_planes);
+    cv::cvtColor(scratch.balanced, scratch.lab, cv::COLOR_BGR2Lab);
+    cv::split(scratch.lab, scratch.lab_planes);
+    scratch.clahe->apply(scratch.lab_planes[0], scratch.lab_planes[0]);
+    cv::merge(scratch.lab_planes, scratch.lab);
+    cv::cvtColor(scratch.lab, scratch.contrast, cv::COLOR_Lab2BGR);
 
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(1.6, cv::Size(8, 8));
-    clahe->apply(lab_planes[0], lab_planes[0]);
-    cv::merge(lab_planes, lab);
-
-    cv::Mat contrast_enhanced;
-    cv::cvtColor(lab, contrast_enhanced, cv::COLOR_Lab2BGR);
-
-    // 3. Unsharp Masking Ringan
-    cv::Mat low_freq;
-    cv::GaussianBlur(contrast_enhanced, low_freq, cv::Size(0, 0), 1.5);
-    cv::addWeighted(contrast_enhanced, 1.20, low_freq, -0.20, 0, dst);
+    // OpenCV dispatches addWeighted to its optimized SIMD implementation
+    // (including AVX2 when available), without requiring non-portable compiler flags.
+    cv::GaussianBlur(scratch.contrast, scratch.blurred, cv::Size(0, 0), 1.75);
+    cv::addWeighted(scratch.contrast, 1.25, scratch.blurred, -0.25, 0, dst);
 }
 
 bool InspectionPipeline::processStream(const cv::Mat& frame,

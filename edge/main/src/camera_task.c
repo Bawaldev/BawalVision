@@ -20,7 +20,7 @@
 static const char *TAG = "CAMERA";
 
 #define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY
-#define STREAM_JPEG_QUALITY 20
+#define STREAM_JPEG_QUALITY 22
 
 typedef struct {
   camera_frame_header_t header;
@@ -146,6 +146,7 @@ esp_err_t camera_task_init(void) {
     s->set_whitebal(s, 1);
     s->set_awb_gain(s, 1);
     s->set_wb_mode(s, 0);
+    s->set_sharpness(s, 0);
 
     s->set_exposure_ctrl(s, 1);
     s->set_aec2(s, 0);

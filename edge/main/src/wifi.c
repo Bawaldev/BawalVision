@@ -32,12 +32,12 @@
 
 static const char *TAG = "WIFI";
 
-#define STREAM_TX_BUFFER_SIZE 36864
+#define STREAM_TX_BUFFER_SIZE 32768
 // Aggressive send timeout: never let one stalled Wi-Fi packet freeze capture.
-#define HTTP_TIMEOUT_MS 1500
+#define HTTP_TIMEOUT_MS 1200
 // Adaptive pacing window: send immediately when slower than this interval,
 // otherwise yield the remaining time back to the scheduler.
-#define STREAM_TARGET_INTERVAL_MS 60
+#define STREAM_TARGET_INTERVAL_MS 50
 // Retry cadence for UDP backend discovery while the backend is unreachable.
 // Prevents a dead backend from triggering one broadcast per failed frame.
 #define DISCOVERY_BACKOFF_MIN_MS 1000
