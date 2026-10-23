@@ -47,6 +47,7 @@ char g_backend_ip[32] = {0};
 char g_backend_port[8] = "8080";
 
 static char s_discovered_ip[32] = {0};
+static bool s_nvs_wifi_pass_key_present = false;
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static bool s_wifi_initialized = false;
 static httpd_handle_t s_http_server = NULL;
@@ -124,6 +125,7 @@ static bool is_valid_lan_ip(const char *ip) {
 }
 
 bool wifi_nvs_load_credentials(void) {
+    s_nvs_wifi_pass_key_present = false;
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
     if (err != ESP_OK) {
@@ -138,9 +140,13 @@ bool wifi_nvs_load_credentials(void) {
     }
 
     sz = sizeof(g_wifi_pass);
-    if (nvs_get_str(handle, NVS_KEY_WIFI_PASS, g_wifi_pass, &sz) != ESP_OK) {
+    if (nvs_get_str(handle, NVS_KEY_WIFI_PASS, g_wifi_pass, &sz) == ESP_OK) {
+        s_nvs_wifi_pass_key_present = true;
+    } else {
         sz = sizeof(g_wifi_pass);
-        (void)nvs_get_str(handle, "pass", g_wifi_pass, &sz);
+        if (nvs_get_str(handle, "pass", g_wifi_pass, &sz) == ESP_OK) {
+            s_nvs_wifi_pass_key_present = true;
+        }
     }
 
     sz = sizeof(g_backend_ip);
@@ -156,18 +162,22 @@ bool wifi_nvs_load_credentials(void) {
         }
     }
 
-    if (g_wifi_pass[0] == '\0' || g_wifi_ssid[0] == '\0' || g_backend_ip[0] == '\0') {
+    if (!s_nvs_wifi_pass_key_present || g_wifi_ssid[0] == '\0' || g_backend_ip[0] == '\0') {
         nvs_handle_t legacy;
         if (nvs_open("wifi_config", NVS_READONLY, &legacy) == ESP_OK) {
             if (g_wifi_ssid[0] == '\0') {
                 sz = sizeof(g_wifi_ssid);
                 (void)nvs_get_str(legacy, "ssid", g_wifi_ssid, &sz);
             }
-            if (g_wifi_pass[0] == '\0') {
+            if (!s_nvs_wifi_pass_key_present) {
                 sz = sizeof(g_wifi_pass);
-                if (nvs_get_str(legacy, "pass", g_wifi_pass, &sz) != ESP_OK) {
+                if (nvs_get_str(legacy, "pass", g_wifi_pass, &sz) == ESP_OK) {
+                    s_nvs_wifi_pass_key_present = true;
+                } else {
                     sz = sizeof(g_wifi_pass);
-                    (void)nvs_get_str(legacy, NVS_KEY_WIFI_PASS, g_wifi_pass, &sz);
+                    if (nvs_get_str(legacy, NVS_KEY_WIFI_PASS, g_wifi_pass, &sz) == ESP_OK) {
+                        s_nvs_wifi_pass_key_present = true;
+                    }
                 }
             }
             if (g_backend_ip[0] == '\0') {
@@ -275,8 +285,9 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
         wifi_config_t cfg = {0};
         strncpy((char *)cfg.sta.ssid, g_wifi_ssid, sizeof(cfg.sta.ssid) - 1);
         strncpy((char *)cfg.sta.password, g_wifi_pass, sizeof(cfg.sta.password) - 1);
-        cfg.sta.threshold.authmode = (g_wifi_pass[0] != '\0') ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-        cfg.sta.pmf_cfg.capable = true;
+        cfg.sta.threshold.authmode = (g_wifi_pass[0] != '\0') ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+        cfg.sta.pmf_cfg.capable = false;
+        cfg.sta.pmf_cfg.required = false;
         if (g_wifi_event_group) {
             xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
         }
@@ -298,20 +309,39 @@ uint16_t get_backend_port(void) {
 bool get_backend_ip(char *out_ip, size_t max_len) {
     if (!out_ip || max_len == 0) return false;
 
-    if (is_valid_ipv4(g_backend_ip)) {
-        strncpy(out_ip, g_backend_ip, max_len - 1);
+    // UDP discovery reports the source address that actually reached the backend.
+    // Prefer it over an old NVS/Kconfig address after DHCP or network changes.
+    if (is_same_subnet_ip(s_discovered_ip)) {
+        strncpy(out_ip, s_discovered_ip, max_len - 1);
         out_ip[max_len - 1] = '\0';
         return true;
     }
 
     esp_netif_ip_info_t ip_info;
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.gw.addr != 0) {
-        snprintf(out_ip, max_len, IPSTR, IP2STR(&ip_info.gw));
-        return true;
+    if (get_sta_ip_info(&ip_info)) {
+        if (is_valid_ipv4(g_backend_ip) && is_same_subnet_ip(g_backend_ip)) {
+            strncpy(out_ip, g_backend_ip, max_len - 1);
+            out_ip[max_len - 1] = '\0';
+            return true;
+        }
+        if (is_valid_ipv4(CONFIG_BACKEND_IP) && is_same_subnet_ip(CONFIG_BACKEND_IP)) {
+            strncpy(out_ip, CONFIG_BACKEND_IP, max_len - 1);
+            out_ip[max_len - 1] = '\0';
+            return true;
+        }
+        if (ip_info.gw.addr != 0) {
+            snprintf(out_ip, max_len, IPSTR, IP2STR(&ip_info.gw));
+            return true;
+        }
     }
 
-    if (is_valid_ipv4(CONFIG_BACKEND_IP)) {
+    // Preserve explicitly configured non-local backends when STA has no lease.
+    if (!get_sta_ip_info(&ip_info) && is_valid_ipv4(g_backend_ip)) {
+        strncpy(out_ip, g_backend_ip, max_len - 1);
+        out_ip[max_len - 1] = '\0';
+        return true;
+    }
+    if (!get_sta_ip_info(&ip_info) && is_valid_ipv4(CONFIG_BACKEND_IP)) {
         strncpy(out_ip, CONFIG_BACKEND_IP, max_len - 1);
         out_ip[max_len - 1] = '\0';
         return true;
@@ -394,6 +424,7 @@ static bool wifi_discover_backend(void) {
 
     bool changed = strcmp(g_backend_ip, ip) != 0;
     str_trim_copy(g_backend_ip, sizeof(g_backend_ip), ip);
+    str_trim_copy(s_discovered_ip, sizeof(s_discovered_ip), ip);
 
     cJSON *root = cJSON_Parse(buf);
     if (root) {
@@ -506,6 +537,18 @@ void wifi_init_sta(void) {
         str_trim_copy(g_wifi_pass, sizeof(g_wifi_pass), CONFIG_ESP_WIFI_PASSWORD);
         str_trim_copy(g_backend_ip, sizeof(g_backend_ip), CONFIG_BACKEND_IP);
         str_trim_copy(g_backend_port, sizeof(g_backend_port), CONFIG_BACKEND_PORT);
+    } else {
+        // NVS may have a valid SSID but no password key yet. Fall back per
+        // field instead of treating that partial NVS record as complete.
+        if (!s_nvs_wifi_pass_key_present) {
+            str_trim_copy(g_wifi_pass, sizeof(g_wifi_pass), CONFIG_ESP_WIFI_PASSWORD);
+        }
+        if (g_backend_ip[0] == '\0') {
+            str_trim_copy(g_backend_ip, sizeof(g_backend_ip), CONFIG_BACKEND_IP);
+        }
+        if (g_backend_port[0] == '\0') {
+            str_trim_copy(g_backend_port, sizeof(g_backend_port), CONFIG_BACKEND_PORT);
+        }
     }
 
     esp_err_t netif_err = esp_netif_init();
@@ -531,8 +574,12 @@ void wifi_init_sta(void) {
     strncpy((char *)wifi_cfg.sta.password, g_wifi_pass, sizeof(wifi_cfg.sta.password) - 1);
     wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     wifi_cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-    wifi_cfg.sta.threshold.authmode = (g_wifi_pass[0] != '\0') ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-    wifi_cfg.sta.pmf_cfg.capable = true;
+    wifi_cfg.sta.threshold.authmode = (g_wifi_pass[0] != '\0') ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+    wifi_cfg.sta.pmf_cfg.capable = false;
+    wifi_cfg.sta.pmf_cfg.required = false;
+    ESP_LOGI(TAG, "STA security config: password_present=%s auth_threshold=%d PMF=off",
+             g_wifi_pass[0] != '\0' ? "yes" : "no",
+             (int)wifi_cfg.sta.threshold.authmode);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     if (g_wifi_ssid[0] != '\0') {
@@ -616,6 +663,15 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     if (active >= MJPEG_CLIENT_LIMIT) {
         httpd_resp_set_status(req, "503 Service Unavailable");
         return httpd_resp_sendstr(req, "Maximum MJPEG clients reached");
+    }
+
+    // A stalled browser/backend must not pin this stream task while the camera
+    // keeps capturing. Bound each TCP send to 400 ms so the client reconnects.
+    const struct timeval send_timeout = {.tv_sec = 0, .tv_usec = 400000};
+    const int client_fd = httpd_req_to_sockfd(req);
+    if (client_fd >= 0) {
+        (void)setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO,
+                         &send_timeout, sizeof(send_timeout));
     }
 
     httpd_req_t *async_req = NULL;
@@ -702,6 +758,7 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
         return ESP_FAIL;
     }
     esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Connection", "close");
     esp_http_client_set_header(client, "X-Device-ID", dev_id);
     esp_http_client_set_header(client, "X-Device-Token", CONFIG_DEVICE_AUTH_TOKEN);
     esp_http_client_set_post_field(client, json, (int)strlen(json));
@@ -720,7 +777,12 @@ void WiFi_Server_Task(void *pvParameters) {
 
         char backend_ip[32];
         if (get_backend_ip(backend_ip, sizeof(backend_ip))) {
-            (void)send_telemetry_to_backend(backend_ip, get_backend_port(), NULL);
+            esp_err_t err = send_telemetry_to_backend(backend_ip, get_backend_port(), NULL);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Telemetry to %s:%u failed: %s; refreshing backend discovery",
+                         backend_ip, get_backend_port(), esp_err_to_name(err));
+                wifi_notify_backend_failure();
+            }
         }
     }
 }

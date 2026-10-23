@@ -102,11 +102,15 @@ bool MjpegIngress::shouldStop(uint64_t generation) const {
 }
 
 void MjpegIngress::publishFrame(const uint8_t* data, size_t len) {
-    if (!data || len == 0 || len > 256 * 1024) return;
+    if (!data || len < 4 || len > 256 * 1024 ||
+        data[0] != 0xFF || data[1] != 0xD8 ||
+        data[len - 2] != 0xFF || data[len - 1] != 0xD9) return;
     const uint32_t id = m_frame_id.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (m_producer.writeFrame(id, data, len, 640, 480)) {
-        m_state.updateFrame("ESP32_CAMERA", id, std::vector<uint8_t>(data, data + len), 640, 480);
-    }
+    const std::vector<uint8_t> jpeg(data, data + len);
+    // Count every complete JPEG that reached the backend. The SHM ring only
+    // carries the latest frames; a busy vision worker never queues old work.
+    m_state.updateFrame("ESP32_CAMERA", id, jpeg, 640, 480);
+    (void)m_producer.writeFrame(id, data, len, 640, 480);
 }
 
 void MjpegIngress::run() {

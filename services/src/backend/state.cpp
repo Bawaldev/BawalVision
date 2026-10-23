@@ -7,7 +7,16 @@
 namespace bawal::backend {
 namespace {
 
-constexpr uint64_t kActiveWindowNs = 5'000'000'000ULL;
+constexpr auto kCameraFrameStaleAfter = std::chrono::milliseconds(1500);
+
+bool isValidJpeg(const std::vector<uint8_t>& jpeg) {
+    return jpeg.size() >= 4 && jpeg[0] == 0xFF && jpeg[1] == 0xD8 &&
+           jpeg[jpeg.size() - 2] == 0xFF && jpeg.back() == 0xD9;
+}
+
+bool isMockDeviceId(std::string_view device_id) {
+    return device_id == "MOCK_VIDEO_CAM" || device_id.rfind("MOCK_", 0) == 0;
+}
 
 // Docker bridge / Desktop VM addresses never identify a LAN edge node.
 bool isDockerOrLoopbackAddress(std::string_view ip) {
@@ -42,7 +51,11 @@ uint64_t BackendState::nowNs() noexcept {
 void BackendState::updateFrame(std::string_view device_id, uint32_t frame_id,
                                const std::vector<uint8_t>& jpeg,
                                uint16_t width, uint16_t height) {
-    const uint64_t now = nowNs();
+    if (!isValidJpeg(jpeg)) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
 
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -50,22 +63,13 @@ void BackendState::updateFrame(std::string_view device_id, uint32_t frame_id,
         m_device_id.assign(device_id);
     }
 
-    m_frame_times_ns.push_back(now);
-    constexpr uint64_t kFpsWindowNs = 1'000'000'000ULL;
-    while (m_frame_times_ns.size() > 1 && now - m_frame_times_ns.front() > kFpsWindowNs) {
-        m_frame_times_ns.pop_front();
-    }
-    if (m_frame_times_ns.size() > 1) {
-        const uint64_t span_ns = now - m_frame_times_ns.front();
-        m_fps = span_ns > 0
-            ? static_cast<double>(m_frame_times_ns.size() - 1) * 1.0e9 / static_cast<double>(span_ns)
-            : 0.0;
-        m_fps = std::clamp(m_fps, 0.0, 240.0);
+    if (m_last_frame_time.time_since_epoch().count() != 0) {
+        const double delta_sec = std::chrono::duration<double>(now - m_last_frame_time).count();
+        m_fps = delta_sec > 0.0 && delta_sec <= 1.5 ? 1.0 / delta_sec : 0.0;
     } else {
         m_fps = 0.0;
     }
-    m_prev_frame_ns = now;
-    m_last_frame_ns = now;
+    m_last_frame_time = now;
     m_last_frame_id = frame_id;
     m_frames_total++;
 
@@ -74,8 +78,25 @@ void BackendState::updateFrame(std::string_view device_id, uint32_t frame_id,
         m_height = height;
     }
 
-    if (!jpeg.empty()) {
-        m_latest_jpeg = jpeg;
+    m_latest_jpeg = jpeg;
+
+    if (isMockDeviceId(device_id)) {
+        return;
+    }
+
+    m_live_device_id.assign(device_id);
+    if (m_live_last_frame_time.time_since_epoch().count() != 0) {
+        const double delta_sec = std::chrono::duration<double>(now - m_live_last_frame_time).count();
+        m_live_fps = delta_sec > 0.0 && delta_sec <= 1.5 ? 1.0 / delta_sec : 0.0;
+    } else {
+        m_live_fps = 0.0;
+    }
+    m_live_last_frame_time = now;
+    m_live_last_frame_id = frame_id;
+    m_live_frames_total++;
+    if (width > 0 && height > 0) {
+        m_live_width = width;
+        m_live_height = height;
     }
 }
 
@@ -191,10 +212,14 @@ void BackendState::disconnectDevice(std::string_view device_id) {
 
     const bool all = device_id.empty();
     if (all || device_id == m_device_id) {
-        m_last_frame_ns = 0;
-        m_prev_frame_ns = 0;
+        m_last_frame_time = {};
         m_fps = 0.0;
         m_device_id.clear();
+    }
+    if (all || device_id == m_live_device_id) {
+        m_live_last_frame_time = {};
+        m_live_device_id.clear();
+        m_live_fps = 0.0;
     }
     if (all || device_id == m_telemetry_device_id) {
         m_telemetry_received_ns = 0;
@@ -224,7 +249,9 @@ TelemetryView BackendState::telemetry() const {
     view.firmware_version = m_telemetry_firmware;
     view.camera_model = m_telemetry_camera_model;
     view.connection_mode = m_telemetry_connection_mode;
-    view.ip_address = m_telemetry_ip.empty() ? m_peer_ip : m_telemetry_ip;
+    // The discovery responder observes the current UDP peer directly. Prefer
+    // that DHCP-fresh address over an older IP cached in telemetry.
+    view.ip_address = m_peer_ip.empty() ? m_telemetry_ip : m_peer_ip;
     view.timestamp = m_telemetry_timestamp;
     view.temperature = m_telemetry_temperature;
     view.cpu_temperature = m_telemetry_cpu_temperature;
@@ -249,8 +276,6 @@ TelemetryView BackendState::telemetry() const {
 }
 
 CameraView BackendState::camera() const {
-    const uint64_t now = nowNs();
-
     std::lock_guard<std::mutex> lock(m_mutex);
     CameraView view;
     view.device_id = m_device_id;
@@ -259,13 +284,32 @@ CameraView BackendState::camera() const {
     view.width = m_width;
     view.height = m_height;
 
-    if (m_last_frame_ns != 0 && now >= m_last_frame_ns) {
-        const uint64_t age_ns = now - m_last_frame_ns;
-        view.last_frame_age_ms = age_ns / 1'000'000ULL;
-        view.active = age_ns <= kActiveWindowNs;
+    if (m_last_frame_time.time_since_epoch().count() != 0) {
+        const auto age = std::chrono::steady_clock::now() - m_last_frame_time;
+        view.last_frame_age_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
+        view.active = age <= kCameraFrameStaleAfter;
     }
 
     view.fps = view.active ? m_fps : 0.0;
+    return view;
+}
+
+CameraView BackendState::liveCamera() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    CameraView view;
+    view.device_id = m_live_device_id;
+    view.frames_total = m_live_frames_total;
+    view.frame_id = m_live_last_frame_id;
+    view.width = m_live_width;
+    view.height = m_live_height;
+    if (m_live_last_frame_time.time_since_epoch().count() != 0) {
+        const auto age = std::chrono::steady_clock::now() - m_live_last_frame_time;
+        view.last_frame_age_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
+        view.active = age <= kCameraFrameStaleAfter;
+    }
+    view.fps = view.active ? m_live_fps : 0.0;
     return view;
 }
 

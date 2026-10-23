@@ -164,7 +164,7 @@
             // 2. Camera Status
             const cam = await fetchCameraStatus(systemConfig.backendUrl);
             hasCamera = cam.active;
-            realFps = cam.active ? (cam.fps > 0 ? cam.fps : 20.0) : 0.0;
+            realFps = cam.active ? cam.fps : 0.0;
 
             // 3. Telemetry Ingress from ESP32-S3
             const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
