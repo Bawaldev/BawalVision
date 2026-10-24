@@ -8,7 +8,7 @@ onnxruntime>=1.31.0
 ultralytics>=8.4.174
 pyyaml>=6.0.3
 tqdm>=4.70.1
-icrawler>=0.6.6
+icrawler>=0.6.10
 bing-image-downloader
 opencv-python>=5.0.0.93
 dvc>=3.0.0
