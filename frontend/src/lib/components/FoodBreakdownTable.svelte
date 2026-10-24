@@ -48,6 +48,7 @@
         if (lower.includes('tofu') || lower.includes('tahu')) return '🧈';
         if (lower.includes('banana') || lower.includes('pisang')) return '🍌';
         if (lower.includes('orange') || lower.includes('jeruk')) return '🍊';
+        if (lower.includes('apple') || lower.includes('apel')) return '🍎';
         if (lower.includes('water_spinach') || lower.includes('kangkung')) return '🥬';
         if (lower.includes('spinach') || lower.includes('bayam')) return '🥗';
         return '🍱';

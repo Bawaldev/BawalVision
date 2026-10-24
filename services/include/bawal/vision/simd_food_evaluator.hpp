@@ -42,7 +42,7 @@ static_assert(alignof(TextureMetric) == 4, "TextureMetric must be 4-byte aligned
  * @brief Evaluates color degradation, hue anomalies, and freshness of detected food RoIs using SIMD (AVX2/NEON/OpenMP).
  * 
  * @param food_roi Cropped food bounding box BGR image matrix.
- * @param food_class Detected class name (e.g., "banana", "chicken", "egg", "orange", "rice", "spinach", "tempeh", "tofu", "water_spinach").
+ * @param food_class Detected class name (e.g., "banana", "chicken", "egg", "orange", "rice", "spinach", "tempeh", "tofu", "water_spinach", "apple").
  * @return SpoilageMetric Computed spoilage metrics and visual pass/fail verdict.
  */
 [[nodiscard]] SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view food_class);

@@ -44,6 +44,24 @@ scrap-dataset category="all" target="1000" engine="all" workers="0":
         python3 ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset --threads {{ workers }} || python ml/scrap/scraps.py --category {{ category }} --target-count {{ target }} --engine {{ engine }} --split-output ml/AI1/dataset --threads {{ workers }}
     fi
 
+# Targeted scraper for empty tableware/dishes (hard negatives)
+[group('ML')]
+scrap-dish category="piring" target="1000":
+    #!/usr/bin/env bash
+    cd {{ justfile_directory() }}
+    if [ -f .venv/bin/python3 ]; then
+        .venv/bin/python3 ml/scrap/dish_scraper.py --category {{ category }} --target {{ target }} --inject-negatives
+    elif [ -f .venv/Scripts/python.exe ]; then
+        .venv/Scripts/python.exe ml/scrap/dish_scraper.py --category {{ category }} --target {{ target }} --inject-negatives
+    else
+        python3 ml/scrap/dish_scraper.py --category {{ category }} --target {{ target }} --inject-negatives || python ml/scrap/dish_scraper.py --category {{ category }} --target {{ target }} --inject-negatives
+    fi
+
+# Alias for backward compatibility
+[group('ML')]
+scrap-tray-chicken category="piring" target="1000":
+    just scrap-dish category={{ category }} target={{ target }}
+
 # Split dataset into train/val/test subsets
 [group('ML')]
 split-dataset source=RAW_DATASET output=SPLIT_DATASET workers="0":
@@ -81,6 +99,19 @@ prepare-yolo-ai1 batch="16" workers="0":
         .venv/Scripts/python.exe ml/AI1/prepare_yolo_dataset.py --batch-size {{ batch }} --workers {{ workers }}
     else
         python3 ml/AI1/prepare_yolo_dataset.py --batch-size {{ batch }} --workers {{ workers }} || python ml/AI1/prepare_yolo_dataset.py --batch-size {{ batch }} --workers {{ workers }}
+    fi
+
+# Fine-tune YOLOv8 model from existing checkpoint with layer freezing
+[group('ML')]
+finetune-ai1 weights="ml/AI1/model/yolov8s/best.pt" epochs="30" batch="8" lr="0.0002" freeze="10" workers="0":
+    #!/usr/bin/env bash
+    cd {{ justfile_directory() }}
+    if [ -f .venv/bin/python3 ]; then
+        .venv/bin/python3 ml/AI1/finetune_AI1.py --weights {{ weights }} --epochs {{ epochs }} --batch-size {{ batch }} --lr0 {{ lr }} --freeze {{ freeze }} --workers {{ workers }}
+    elif [ -f .venv/Scripts/python.exe ]; then
+        .venv/Scripts/python.exe ml/AI1/finetune_AI1.py --weights {{ weights }} --epochs {{ epochs }} --batch-size {{ batch }} --lr0 {{ lr }} --freeze {{ freeze }} --workers {{ workers }}
+    else
+        python3 ml/AI1/finetune_AI1.py --weights {{ weights }} --epochs {{ epochs }} --batch-size {{ batch }} --lr0 {{ lr }} --freeze {{ freeze }} --workers {{ workers }} || python ml/AI1/finetune_AI1.py --weights {{ weights }} --epochs {{ epochs }} --batch-size {{ batch }} --lr0 {{ lr }} --freeze {{ freeze }} --workers {{ workers }}
     fi
 
 # Train YOLOv8n detector and export ONNX model
@@ -302,7 +333,7 @@ quantize-ai1:
     fi
 
 # Automated Scrapper via Duckduckgo and export it into ZIP
-zip-scrapper query="nasi bento" limit="50" output="batch_inspection_images.zip":
+zip-scrapper query="nasi bento" limit="30" output="batch_inspection_images.zip":
     #!/usr/bin/env bash
     if [ -f ".venv/bin/python3" ]; then
         .venv/bin/python3 scripts/image_scraper.py -q "{{ query }}" -n {{ limit }} -z "{{ output }}" --clean-after

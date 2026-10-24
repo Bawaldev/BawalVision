@@ -238,6 +238,7 @@
         if (n.includes('bayam') || n.includes('spinach')) return { icon: '🥗', label: 'Spinach' };
         if (n.includes('pisang') || n.includes('banana')) return { icon: '🍌', label: 'Banana' };
         if (n.includes('jeruk') || n.includes('orange')) return { icon: '🍊', label: 'Orange' };
+        if (n.includes('apel') || n.includes('apple')) return { icon: '🍎', label: 'Apple' };
         if (n.includes('ikan') || n.includes('fish') || n.includes('bawal')) return { icon: '🐟', label: 'Fish' };
         return { icon: '🍱', label: name };
     }

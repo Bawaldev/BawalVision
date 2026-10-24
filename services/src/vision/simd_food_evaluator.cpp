@@ -35,7 +35,7 @@ SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view fo
     if (food_class == "rice" || food_class == "tofu" || food_class == "tempeh") {
         base_thresh = 35;
     } else if (food_class == "spinach" || food_class == "water_spinach" ||
-               food_class == "banana"  || food_class == "orange") {
+               food_class == "banana"  || food_class == "orange" || food_class == "apple") {
         base_thresh = 25;
         use_v_channel = true;
     } else if (food_class == "chicken" || food_class == "egg") {

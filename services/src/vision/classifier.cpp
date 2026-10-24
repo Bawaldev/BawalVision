@@ -181,7 +181,8 @@ FoodClassifier::FoodClassifier()
         "spinach",
         "tempeh",
         "tofu",
-        "water_spinach"
+        "water_spinach",
+        "apple"
     },
       m_env(ORT_LOGGING_LEVEL_WARNING, "BawalVisionYOLO") {
 }
