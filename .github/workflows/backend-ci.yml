@@ -49,6 +49,7 @@ jobs:
             cmake \
             ninja-build \
             pkg-config \
+            ccache \
             libopencv-dev \
             libomp-dev \
             libcurl4-openssl-dev \
@@ -59,6 +60,14 @@ jobs:
             nlohmann-json3-dev \
             curl \
             tar
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-backend-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-backend-${{ runner.os }}-
 
       - name: Cache ONNX Runtime v1.19.2 C++
         id: cache-ort
@@ -98,6 +107,7 @@ jobs:
           cmake -B services/build -S services \
             -DCMAKE_BUILD_TYPE=Release \
             -DBAWAL_BUILD_VISION_VIEWER=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DONNXRUNTIME_INCLUDE_DIR=/usr/local/include \
             -DONNXRUNTIME_LIB=/usr/local/lib/libonnxruntime.so
 
