@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  BawalVision serverless ingestion. Deploys the C++ Lambda container image with
+  a single-snapshot endpoint and a 50-100 record telemetry/log batch endpoint.
+  The MJPEG stream never enters Lambda.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image URI for the BawalVision Lambda image
+  StageName:
+    Type: String
+    Default: prod
+    Description: API Gateway stage name
+  MemorySize:
+    Type: Number
+    Default: 3008
+    MinValue: 1024
+    MaxValue: 10240
+    Description: Lambda memory in MB (3008 MB provides about 2 vCPU)
+  Timeout:
+    Type: Number
+    Default: 29
+    MinValue: 3
+    MaxValue: 29
+    Description: Keep below the 29 second API Gateway integration timeout
+  MaxConcurrency:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    Description: Reserved concurrency cap for cost protection
+  LambdaPrewarm:
+    Type: String
+    Default: "0"
+    AllowedValues: ["0", "1"]
+    Description: Set to 1 only for snapshot-only workloads that accept ONNX cold start
+
+Globals:
+  Function:
+    Timeout: !Ref Timeout
+    MemorySize: !Ref MemorySize
+    Tracing: Active
+
+Resources:
+  BawalLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  BawalApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref StageName
+      Description: BawalVision snapshot and telemetry batch ingestion
+      Auth:
+        DefaultAuthorizer: AWS_IAM
+
+  BawalInspectionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-inspect"
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt BawalLambdaRole.Arn
+      Architectures:
+        - x86_64
+      ReservedConcurrentExecutions: !Ref MaxConcurrency
+      Environment:
+        Variables:
+          MODEL_PATH: /var/task/models/yolov8s_int8.onnx
+          LAMBDA_PREWARM: !Ref LambdaPrewarm
+          ENABLE_SR: "0"
+          OMP_NUM_THREADS: "2"
+          OPENCV_LOG_LEVEL: ERROR
+      Events:
+        InspectSnapshot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BawalApi
+            Path: /api/v1/lambda/inspect
+            Method: post
+        InspectAlias:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BawalApi
+            Path: /api/v1/lambda/invoke
+            Method: post
+        BatchSummary:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BawalApi
+            Path: /api/v1/lambda/batch
+            Method: post
+    Metadata:
+      DockerTag: lambda-cpp
+      DockerContext: ..
+      Dockerfile: deploy/Dockerfile.lambda
+
+Outputs:
+  ApiEndpoint:
+    Description: Base URL of the IAM-protected API Gateway endpoint
+    Value: !Sub "https://${BawalApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref BawalInspectionFunction
+  FunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt BawalInspectionFunction.Arn

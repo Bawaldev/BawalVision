@@ -1,10 +1,7 @@
 #pragma once
 
-#include "bawal/lambda/types.hpp"
+#include "bawal/lambda/base64.hpp"
 #include "bawal/lambda/events.hpp"
 #include "bawal/lambda/handler.hpp"
-
-namespace bawal {
-    // Alias to support bawal::lamda syntax
-    namespace lamda = lambda;
-}
+#include "bawal/lambda/runtime.hpp"
+#include "bawal/lambda/types.hpp""

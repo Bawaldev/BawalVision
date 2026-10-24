@@ -21,6 +21,11 @@ struct InspectionResponse {
     std::string image_path;
     double surface_temp{0.0};
     std::vector<DetectionItem> detections;
+    std::string device_id;
+    std::string engine_pipeline;
+    double processing_time_ms{0.0};
+    std::string annotated_image_base64;
+    std::string message;
 };
 
 struct SceneOpticalDto {
@@ -75,6 +80,11 @@ struct LambdaEvent {
     std::string body;
     std::string image_base64;
     bool is_base64_encoded{false};
+    std::string device_id;
+    double confidence_threshold{0.35};
+    bool return_annotated{false};
+    int processing_width{0};
+    int processing_height{0};
 };
 
 struct LambdaProxyHeaders {
@@ -84,6 +94,7 @@ struct LambdaProxyHeaders {
 struct LambdaProxyResponse {
     int status_code{200};
     LambdaProxyHeaders headers;
+    bool is_base64_encoded{false};
     std::string body;
 };
 
@@ -106,7 +117,12 @@ struct glz::meta<bawal::server::InspectionResponse> {
         "status", &T::status,
         "image_path", &T::image_path,
         "surface_temp", &T::surface_temp,
-        "detections", &T::detections);
+        "detections", &T::detections,
+        "device_id", &T::device_id,
+        "engine_pipeline", &T::engine_pipeline,
+        "processing_time_ms", &T::processing_time_ms,
+        "annotated_image_base64", &T::annotated_image_base64,
+        "message", &T::message);
 };
 
 template <>
@@ -178,7 +194,12 @@ struct glz::meta<bawal::server::LambdaEvent> {
         "frame_id", &T::frame_id,
         "body", &T::body,
         "image_base64", &T::image_base64,
-        "isBase64Encoded", &T::is_base64_encoded);
+        "isBase64Encoded", &T::is_base64_encoded,
+        "device_id", &T::device_id,
+        "confidence_threshold", &T::confidence_threshold,
+        "return_annotated", &T::return_annotated,
+        "processing_width", &T::processing_width,
+        "processing_height", &T::processing_height);
 };
 
 template <>
@@ -193,5 +214,6 @@ struct glz::meta<bawal::server::LambdaProxyResponse> {
     static constexpr auto value = glz::object(
         "statusCode", &T::status_code,
         "headers", &T::headers,
+        "isBase64Encoded", &T::is_base64_encoded,
         "body", &T::body);
 };

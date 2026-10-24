@@ -14,6 +14,7 @@
 #include "bawal/backend/mjpeg_ingress.hpp"
 #include "bawal/backend/vision_worker.hpp"
 #include "bawal/ipc/shm_producer.hpp"
+#include "bawal/lambda/handler.hpp"
 #include "bawal/server/rolling_image_store.hpp"
 #include "bawal/vision/classifier.hpp"
 
@@ -85,6 +86,21 @@ int main() {
     bawal::backend::VisionWorker vision(state, model_path, &database, &image_store);
     vision.start();
 
+    // Serverless-compatible inspection handler exposed under
+    // POST /api/v1/lambda/inspect. It owns a separate pipeline and stays lazy
+    // so the always-on backend does not load a second copy of the model until
+    // the endpoint is actually used.
+    bawal::lambda::VisionLambdaHandler lambda_handler;
+    bawal::lambda::LambdaConfig lambda_config;
+    lambda_config.model_path = model_path;
+    lambda_config.enable_prewarm = envOr("BAWAL_LAMBDA_PREWARM", "0") == "1";
+    const std::string lambda_enabled = envOr("BAWAL_LAMBDA_ENABLED", "1");
+    if (lambda_enabled != "0" && lambda_enabled != "false") {
+        if (!lambda_handler.initialize(lambda_config)) {
+            std::cerr << "[WARN] Lambda inspection handler initialization failed\n";
+        }
+    }
+
     // Dedicated classifier for ZIP batch inspection. A separate instance keeps
     // batch jobs from contending with (or racing) the live inference pipeline.
     bawal::vision::FoodClassifier batch_classifier;
@@ -114,6 +130,9 @@ int main() {
     bawal::backend::BackendApp app(state, producer, config, &database, &image_store);
     app.setPeerCallback(peer_callback);
     app.setBatchClassifier(&batch_classifier);
+    if (lambda_enabled != "0" && lambda_enabled != "false") {
+        app.setLambdaHandler(&lambda_handler);
+    }
     app.configure();
 
     // ESP32-S3 nodes locate the backend through this UDP responder when their

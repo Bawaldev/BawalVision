@@ -175,6 +175,23 @@ compose-build service="":
 compose-logs service="":
     cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} logs -f {{ service }}
 
+# --- AWS LAMBDA (container image) ---
+
+# Build the Lambda container image locally (requires Docker)
+[group('Lambda')]
+build-lambda-image tag="bawalvision-lambda:local":
+    cd {{ justfile_directory() }} && docker build --platform linux/amd64 -f deploy/Dockerfile.lambda -t {{ tag }} .
+
+# Run the Lambda image with the Runtime Interface Emulator on :9000
+[group('Lambda')]
+run-lambda port="9000" tag="bawalvision-lambda:local":
+    cd {{ justfile_directory() }} && docker run --rm -p {{ port }}:8080 {{ tag }}
+
+# Build, push to ECR, and deploy with SAM (requires docker, aws, sam)
+[group('Lambda')]
+deploy-lambda:
+    cd {{ justfile_directory() }} && ./scripts/deploy_lambda.sh
+
 # --- NETWORK & FIREWALL UTILITIES ---
 
 # Bridge LAN :8080 to Docker :18080

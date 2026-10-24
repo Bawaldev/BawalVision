@@ -1,0 +1,129 @@
+# syntax=docker/dockerfile:1.7
+
+# ==============================================================================
+# BawalVision AWS Lambda container image (custom C++ runtime)
+#
+# Builds `bootstrap` with aws-lambda-cpp (Runtime Interface Client). The image
+# supports both safe serverless modes:
+#   - single JPEG snapshot: POST /api/v1/lambda/inspect
+#   - telemetry/log batch:  POST /api/v1/lambda/batch (50-100 records)
+#
+# The ONNX model is embedded for snapshot inspection. Batch-only traffic never
+# touches it because LAMBDA_PREWARM defaults to 0 and VisionLambdaHandler stays
+# lazy.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Stage 1: build the custom runtime bootstrap
+# ------------------------------------------------------------------------------
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        git \
+        pkg-config \
+        ca-certificates \
+        curl \
+        libopencv-dev \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        libpq-dev \
+        libfmt-dev \
+        libgomp1 \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ONNX Runtime is not packaged by Ubuntu; use the official CPU release.
+ARG ONNXRUNTIME_VERSION=1.19.2
+RUN mkdir -p /opt/onnxruntime && \
+    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz" \
+        | tar -xz -C /opt/onnxruntime --strip-components=1
+
+# AWS Lambda C++ Runtime Interface Client (provides AWS::aws-lambda-runtime).
+ARG AWS_LAMBDA_CPP_VERSION=v1.0.1
+RUN git clone --depth 1 --branch "${AWS_LAMBDA_CPP_VERSION}" \
+        https://github.com/awslabs/aws-lambda-cpp.git /tmp/aws-lambda-cpp && \
+    cmake -S /tmp/aws-lambda-cpp -B /tmp/aws-lambda-cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake --build /tmp/aws-lambda-cpp/build --parallel "$(nproc)" && \
+    cmake --install /tmp/aws-lambda-cpp/build && \
+    rm -rf /tmp/aws-lambda-cpp
+
+WORKDIR /src
+
+COPY services/ /src/services/
+COPY ml/include/ /src/ml/include/
+COPY ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx /src/models/yolov8s_int8.onnx
+
+RUN cmake -S /src/services -B /src/services/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_AWS_LAMBDA=ON \
+        -DBAWAL_BUILD_BACKEND=OFF \
+        -DBAWAL_BUILD_VISION_VIEWER=OFF \
+        -DBAWAL_ENABLE_NCNN_GENERATOR=OFF \
+        -DCMAKE_PREFIX_PATH=/usr/local \
+        -DONNXRUNTIME_INCLUDE_DIR=/opt/onnxruntime/include \
+        -DONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so \
+    && cmake --build /src/services/build --target bawal_lambda --parallel "$(nproc)"
+
+# ------------------------------------------------------------------------------
+# Stage 2: minimal runtime image
+# ------------------------------------------------------------------------------
+FROM ubuntu:24.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libcurl4t64 \
+        libssl3t64 \
+        libpq5 \
+        libgomp1 \
+        libfmt9 \
+        libopencv-core406t64 \
+        libopencv-imgproc406t64 \
+        libopencv-calib3d406t64 \
+        libopencv-imgcodecs406t64 \
+        libopencv-videoio406t64 \
+        libopencv-dnn406t64 \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# Local testing only: the Runtime Interface Emulator. In real Lambda the
+# platform provides the runtime API and the entrypoint bypasses the emulator.
+ARG RIE_VERSION=v1.37
+RUN curl -fsSL \
+        "https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/download/${RIE_VERSION}/aws-lambda-rie-x86_64" \
+        -o /usr/local/bin/aws-lambda-rie && \
+    chmod 0755 /usr/local/bin/aws-lambda-rie
+
+COPY --from=builder /opt/onnxruntime/lib/ /usr/local/lib/
+RUN ldconfig
+
+WORKDIR /var/task
+
+COPY --from=builder /src/services/build/bin/bootstrap /var/task/bootstrap
+COPY --from=builder /src/models/ /var/task/models/
+COPY deploy/lambda-entrypoint.sh /var/task/lambda-entrypoint.sh
+RUN chmod 0755 /var/task/bootstrap /var/task/lambda-entrypoint.sh
+
+ENV MODEL_PATH=/var/task/models/yolov8s_int8.onnx \
+    LAMBDA_PREWARM=0 \
+    ENABLE_SR=0 \
+    OMP_NUM_THREADS=2 \
+    OPENCV_LOG_LEVEL=ERROR \
+    LD_LIBRARY_PATH=/usr/local/lib
+
+# The entrypoint starts RIE only when AWS_LAMBDA_RUNTIME_API is absent.
+EXPOSE 8080
+ENTRYPOINT ["/var/task/lambda-entrypoint.sh"]

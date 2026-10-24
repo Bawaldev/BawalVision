@@ -91,6 +91,14 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
     m_video_source.target_width = m_width;
     m_video_source.target_height = m_height;
 
+    // Serverless deployments disable SR to keep cold starts and per-frame cost
+    // predictable. Skipping enhancer initialization also avoids probing or
+    // generating NCNN weights that will never be used.
+    if (!m_enable_sr) {
+        std::cout << "[Pipeline] Super-resolution disabled (ENABLE_SR=0)\n";
+        return true;
+    }
+
     // Locate weight directory across Docker container and any local working directory
     const std::vector<std::filesystem::path> weight_candidates = {
         "/app/weights",

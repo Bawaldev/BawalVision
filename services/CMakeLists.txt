@@ -87,6 +87,7 @@ find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui dnn)
 find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(PostgreSQL QUIET)
 find_package(fmt CONFIG QUIET)
 find_package(httplib QUIET)
@@ -211,6 +212,7 @@ target_link_libraries(bawal_crow INTERFACE Threads::Threads)
 file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/main\\.cpp$")
 list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/backend/main_backend\\.cpp$")
+list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/lambda/main_lambda\\.cpp$")
 if(BAWAL_ENABLE_NCNN_GENERATOR AND EXISTS ${ML_GENERATOR_SRC})
     list(APPEND SERVICE_SOURCES ${ML_GENERATOR_SRC})
 else()
@@ -242,6 +244,7 @@ target_link_libraries(bawal_core PUBLIC
     ${OpenCV_LIBS}
     ${ONNXRUNTIME_LIB}
     bawal_crow
+    OpenSSL::Crypto
 )
 
 # Link NCNN library if available
@@ -275,6 +278,11 @@ endif()
 
 target_link_libraries(bawal_core PUBLIC fmt::fmt glaze::glaze)
 target_compile_definitions(bawal_core PUBLIC BAWAL_USE_FMT=1 BAWAL_USE_GLAZE=1)
+
+if(ENABLE_AWS_LAMBDA)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_HAS_AWS_LAMBDA=1)
+    target_link_libraries(bawal_core PUBLIC AWS::aws-lambda-runtime)
+endif()
 
 if(TARGET mimalloc-static)
     target_link_libraries(bawal_core PUBLIC mimalloc-static)
@@ -319,10 +327,14 @@ if(BAWAL_BUILD_VISION_VIEWER)
     add_executable(vision_service src/main.cpp)
     target_link_libraries(vision_service PRIVATE bawal_core)
     target_compile_definitions(vision_service PRIVATE BAWAL_USE_MIMALLOC=1)
-    if(ENABLE_AWS_LAMBDA)
-        target_compile_definitions(vision_service PRIVATE BUILD_AWS_LAMBDA=1)
-        target_link_libraries(vision_service PRIVATE AWS::aws-lambda-runtime)
-        set_target_properties(vision_service PROPERTIES OUTPUT_NAME "bootstrap")
-    endif()
     install(TARGETS vision_service DESTINATION bin)
+endif()
+
+# AWS Lambda custom-runtime bootstrap (`bootstrap` is the reserved filename).
+if(ENABLE_AWS_LAMBDA)
+    add_executable(bawal_lambda src/lambda/main_lambda.cpp)
+    target_link_libraries(bawal_lambda PRIVATE bawal_core AWS::aws-lambda-runtime)
+    target_compile_definitions(bawal_lambda PRIVATE BAWAL_USE_MIMALLOC=1)
+    set_target_properties(bawal_lambda PROPERTIES OUTPUT_NAME "bootstrap")
+    install(TARGETS bawal_lambda DESTINATION bin)
 endif()

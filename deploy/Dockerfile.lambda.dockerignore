@@ -1,0 +1,80 @@
+# ==============================================================================
+# Build-context allowlist for deploy/Dockerfile.lambda
+#
+# BuildKit uses this file instead of the repository-root .dockerignore when the
+# Lambda image is built with `--file deploy/Dockerfile.lambda`.
+# ==============================================================================
+
+# Repository metadata and unrelated subsystems
+.git/
+.github/
+logs/
+assets/
+docs/
+hardware/
+examples/
+frontend/
+edge/
+data/
+scripts/
+aws-infra/
+.venv/
+weights/
+*.zip
+*.md
+OUTPUT.md
+LICENSE
+NOTICE
+SECURITY.md
+GEMINI.md
+
+# Build artifacts
+build/
+services/build/
+services/build-tsan/
+edge/build/
+**/bin/
+*.o
+*.a
+*.so
+*.dylib
+*.elf
+*.bin
+*.map
+compile_commands.json
+*.exe
+*.test
+
+# Keep only the ML headers and the tracked INT8 model used by the Lambda image.
+ml/*
+!ml/include/
+!ml/AI1/
+ml/AI1/*
+!ml/AI1/model/
+ml/AI1/model/*
+!ml/AI1/model/yolov8s_int8/
+ml/AI1/model/yolov8s_int8/*
+!ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx
+
+# Local environment and temp files
+.env
+.env.*
+!.env.example
+.cache_trash/
+tmp/
+*.log
+
+# Node/Python caches
+node_modules/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# IDE/OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

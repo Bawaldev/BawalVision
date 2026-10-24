@@ -9,6 +9,8 @@
 #include "bawal/backend/wifi_probe.hpp"
 #include "bawal/server/rolling_image_store.hpp"
 #include "bawal/report/latex_generator.hpp"
+#include "bawal/lambda/events.hpp"
+#include "bawal/lambda/handler.hpp"
 #include "bawal/vision/classifier.hpp"
 #include "bawal/vision/image/batch_inspector.hpp"
 
@@ -479,6 +481,11 @@ void BackendApp::setBatchClassifier(bawal::vision::FoodClassifier* classifier) n
     m_batch_classifier = classifier;
 }
 
+void BackendApp::setLambdaHandler(
+    bawal::lambda::LambdaRuntimeHandler* handler) noexcept {
+    m_lambda_handler = handler;
+}
+
 void BackendApp::configure() {
     auto& cors = m_app.get_middleware<crow::CORSHandler>();
     cors.global()
@@ -542,6 +549,7 @@ void BackendApp::registerRoutes() {
     registerCompatibilityRoutes();
     registerDeviceRoutes();
     registerSystemRoutes();
+    registerLambdaRoutes();
 }
 
 void BackendApp::registerCameraRoutes() {
@@ -2158,6 +2166,37 @@ void BackendApp::registerSystemRoutes() {
             body["threshold"] = std::round(clamped * 100.0) / 100.0;
             return crow::response(body);
         });
+}
+
+void BackendApp::registerLambdaRoutes() {
+    CROW_ROUTE(m_app, "/api/v1/lambda/health")([this]() {
+        crow::json::wvalue body;
+        body["handler_attached"] = m_lambda_handler != nullptr;
+        body["ready"] = m_lambda_handler != nullptr && m_lambda_handler->ready();
+        body["runtime"] = "bawal::lambda";
+        body["invoke_path"] = "/api/v1/lambda/inspect";
+        return crow::response(body);
+    });
+
+    auto inspect = [this](const crow::request& req) {
+        if (m_lambda_handler == nullptr) {
+            return jsonError(503, "Lambda inspection handler is not attached");
+        }
+
+        const bawal::lambda::LambdaInspectionResponse result =
+            m_lambda_handler->handleEvent(req.body);
+        crow::response response(result.status_code);
+        response.set_header("Content-Type", "application/json");
+        response.body = result.json_payload.empty() ? "{}" : result.json_payload;
+        return response;
+    };
+
+    CROW_ROUTE(m_app, "/api/v1/lambda/inspect")
+        .methods(crow::HTTPMethod::Post)(inspect);
+    CROW_ROUTE(m_app, "/api/v1/lambda/invoke")
+        .methods(crow::HTTPMethod::Post)(inspect);
+    CROW_ROUTE(m_app, "/api/v1/lambda/batch")
+        .methods(crow::HTTPMethod::Post)(inspect);
 }
 
 int BackendApp::run() {

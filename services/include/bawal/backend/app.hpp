@@ -20,6 +20,10 @@ namespace bawal::vision {
 class FoodClassifier;
 }
 
+namespace bawal::lambda {
+class LambdaRuntimeHandler;
+}
+
 namespace bawal::backend {
 
 class Database;
@@ -81,6 +85,15 @@ public:
      */
     void setBatchClassifier(bawal::vision::FoodClassifier* classifier) noexcept;
 
+    /**
+     * @brief Attach the serverless inspection handler exposed under
+     *        `POST /api/v1/lambda/inspect`.
+     *
+     * The pointer must outlive the app. When null the Lambda routes report
+     * 503 so the regular backend can still run without a serverless handler.
+     */
+    void setLambdaHandler(bawal::lambda::LambdaRuntimeHandler* handler) noexcept;
+
     [[nodiscard]] crow::App<crow::CORSHandler>& app() noexcept { return m_app; }
 
 private:
@@ -93,6 +106,7 @@ private:
     void registerCompatibilityRoutes();
     void registerDeviceRoutes();
     void registerSystemRoutes();
+    void registerLambdaRoutes();
 
     BackendState& m_state;
     ipc::ShmProducer& m_producer;
@@ -103,6 +117,7 @@ private:
     std::atomic<double> m_confidence_threshold{0.35};
     std::function<void(const std::string&)> m_peer_callback;
     bawal::vision::FoodClassifier* m_batch_classifier{nullptr};
+    bawal::lambda::LambdaRuntimeHandler* m_lambda_handler{nullptr};
     std::mutex m_batch_mutex; ///< Serializes ZIP batch jobs sharing one classifier.
 };
 
