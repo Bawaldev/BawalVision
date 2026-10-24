@@ -22,7 +22,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
         git \
@@ -82,7 +82,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         libcurl4t64 \
@@ -97,6 +97,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libopencv-videoio406t64 \
         libopencv-dnn406t64 \
         zlib1g \
+    && apt-get purge -y ffmpeg libavdevice* \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Local testing only: the Runtime Interface Emulator. In real Lambda the
