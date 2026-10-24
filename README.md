@@ -52,28 +52,28 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
 
 ## 📦 Subsystems Overview
 
-### 1. Edge Node (`edge/`)
-- **Microcontroller:** ESP32-S3 Dual-Core Xtensa LX7 @ 240 MHz (FreeRTOS ESP-IDF).
-- **Camera:** OV5640 DVP CSP camera delivering MJPEG/RAW frames over HTTP Keep-Alive.
-- **Display:** ST7789/ST7735 $128 \times 160$ SPI TFT with **LVGL 8 RGB Dashboard** showing top HTTP status, Wi-Fi IP, food/core temperatures, and system inspection state.
-- **FreeRTOS Static Allocation:** All tasks (`xTaskCreateStaticPinnedToCore`) and queues (`xQueueCreateStatic`) use static memory buffers for zero heap overhead and deterministic 24/7 reliability.
+| Subsystem | Primary Technologies | Handbook & Documentation | Key Responsibilities |
+| :--- | :--- | :--- | :--- |
+| **Vision & Backend Engine** | C++20, OpenCV 4, ONNX Runtime, OpenMP, Crow, mimalloc | 📖 [`services/README.md`](services/README.md) | High-speed POSIX SHM frame ingress, in-process YOLOv8s INT8 inference, 8-lane AVX2 spoilage evaluation, Crow REST/WebSocket API, and LaTeX PDF audit generation. |
+| **Edge Hardware Node** | ESP32-S3, FreeRTOS, LVGL 8, OV5640 DVP, MLX90614 I2C | 📖 [`edge/README.md`](edge/README.md) | Deterministic static-allocated FreeRTOS firmware, 20 FPS video streaming over HTTP Keep-Alive, UDP auto-discovery, and local SPI TFT RGB dashboard. |
+| **Frontend Web HMI** | SvelteKit 5 (Runes), TypeScript, Vite, Tailwind CSS, DaisyUI | 📖 [`frontend/README.md`](frontend/README.md) | Real-time supervision dashboard, 30+ FPS live inspection stream, high-throughput batch ZIP uploader, interactive PDF report viewer, and USB Wi-Fi provisioning. |
+| **Machine Learning & Pipeline**| PyTorch, Ultralytics YOLOv8, ONNX, Real-ESRGAN | 📖 [`ml/README.md`](ml/README.md) | Autonomous data gathering, dHash deduplication, zero-shot YOLO-World relabeling, FP32 training, and INT8 Post-Training Quantization (PTQ). |
+| **Deployment & Orchestration** | Docker Compose, PostgreSQL 16, Grafana OSS, AWS Lambda | 📖 [`deploy/README.md`](deploy/README.md) | Production Docker stack, automated PostgreSQL telemetry persistence, pre-provisioned Grafana analytics, and serverless AWS Lambda C++ container packaging. |
 
-### 2. Vision Engine (`services/`)
-- **Core:** C++20 with OpenCV 4, ONNX Runtime, OpenMP multi-threading, and AVX2/SIMD acceleration.
-- **Model:** YOLOv8n object detection backbone exporting static fixed-dimension tensors (`[1, 3, 640, 640]`, Opset 17).
-- **Safety:** ThreadSanitizer (TSan) build configurations to detect data races and deadlocks.
+---
 
-### 3. Unified C++ Backend (`services/`)
-- **Engine:** C++20 Crow HTTP server, POSIX SHM frame ingress, in-process ONNX Runtime YOLOv8 pipeline, and libpq PostgreSQL persistence.
-- **Deployment:** Multi-stage Debian bookworm image (`deploy/Dockerfile.backend`) and `deploy/docker-compose.yml` with only `postgres` + `bawal_backend`.
+## ⚡ Vision & System Benchmark Highlights
 
-### 4. Frontend HMI (`frontend/`)
-- **Stack:** SvelteKit 5 (Runes), TypeScript, Vite, Tailwind CSS, DaisyUI, Chart.js.
-- **Features:** Responsive dark mode dashboard, live camera streams, real-time telemetry metrics, and food classification cards.
+*(Full methodology, mathematical vectorization proofs, and scaling charts available in [`services/README.md`](services/README.md#benchmarks--performance-engineering))*
 
-### 5. Machine Learning & YOLO (`ml/`)
-- **Dataset Management:** Multi-engine scrapers with 64-bit perceptual dHash & MD5 deduplication.
-- **Model Optimization:** Automated INT8 Post-Training Quantization and static ONNX tensor export with numerical parity verification.
+| Performance Metric | Baseline / Previous | BawalVision Optimized | Measurement & Performance Gain |
+| :--- | :---: | :---: | :--- |
+| **Single-Frame Vision Latency** | $84.2\text{ ms}$ (Python FP32) | **$28.8\text{ ms}$** (C++20 INT8) | **$2.92\times\text{ faster}$ (Sustains 34.6 FPS real-time)** |
+| **YOLOv8s Model Disk Footprint**| $44.8\text{ MB}$ (FP32) | **$11.6\text{ MB}$** (INT8) | **$74.1\%\text{ weights reduction}$ ($3.86\times$ smaller)** |
+| **SIMD Spoilage & Freshness** | $9.41\text{ ms}$ (Scalar C++) | **$1.74\text{ ms}$** (AVX2 Intrinsics)| **$5.41\times\text{ speedup}$ (8-lane vector math)** |
+| **Batch Inspection Throughput** | $0.70\text{ trays/s}$ (1 Core) | **$6.06\text{ trays/s}$** (12 Cores OpenMP)| **$8.65\times\text{ scaling}$ (30 trays in 4.95 s)** |
+| **Memory Allocator Churn** | $48.2\text{ MB/s}$ (`glibc malloc`) | **$4.1\text{ MB/s}$** (`mimalloc 2.1`)| **$11.7\times\text{ reduction in heap contention}$** |
+| **ESP32-S3 Stream Latency** | $145\text{ ms}$ (JSON poll) | **$57\text{ ms}$** (Keep-Alive Header) | **Zero-overhead in-header telemetry streaming** |
 
 ---
 
@@ -237,12 +237,15 @@ just run-edge /dev/ttyACM0
 ## 👥 Core Contributors & Maintainers
 
 | Contributor | GitHub | Role & Subsystems |
-|:---|:---|:---|
-| **Faris Wirakusuma** | [@fariswirakusuma](https://github.com/fariswirakusuma) | Project Lead, ESP32-S3 Firmware, C++20 Crow Backend, Vision Engine, SvelteKit Frontend |
-| **Rasyakhairi (OurangIlang)** | [@OurangIlang](https://github.com/OurangIlang) | Machine Learning & YOLOv8 Pipeline, Database Migrations, SvelteKit Frontend |
-| **Daffa Rizqy (pondwatr)** | [@pondwatr](https://github.com/pondwatr) | Embedded Hardware Engineering, Electronics Schematics, ESP32-S3 Edge Node |
+## 👥 Core Engineering Team & Contributors
 
-> Subsystem review responsibilities and code ownership are mapped in [`.github/CODEOWNERS`](.github/CODEOWNERS).
+| Member | Role & Ownership | Primary Focus Areas |
+|:---|:---|:---|
+| **Faris Wirakusuma** ([@fariswirakusuma](https://github.com/fariswirakusuma)) | Lead Architect & Backend Lead | C++20 Vision Engine, AVX2 SIMD, POSIX SHM Ingress, Crow REST Backend, AWS Lambda C++ |
+| **Rasya Khairi** ([@OurangIlang](https://github.com/OurangIlang)) | ML & Frontend Lead | YOLO-World Relabeling, YOLOv8 Training, INT8 PTQ Quantization, SvelteKit 5 HMI |
+| **Daffa Rizqy Andika** ([@pondwatr](https://github.com/pondwatr)) | Embedded & Hardware Lead | ESP32-S3 Static FreeRTOS Firmware, OV5640 DVP Camera, ST7789 LVGL Display, I2C Thermal |
+
+> See full team profiles, acknowledgments, and code ownership in [**`CONTRIBUTORS.md`**](CONTRIBUTORS.md) and [`.github/CODEOWNERS`](.github/CODEOWNERS).
 
 ---
 
