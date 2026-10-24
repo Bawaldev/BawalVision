@@ -1,48 +1,148 @@
-[name system]
-Copyright 2026 [team]
+BawalVision — Smart Food Quality & Tray Inspection System
+Copyright 2026 BawalVision Engineering Team (Faris Wirakusuma, Rasya Khairi, Daffa Rizqy Andika)
 
-This product includes software developed at
-[team a].
+This product includes software developed for the OpenCV AI Competition 2026
+by the BawalVision Development Team (https://github.com/Bawaldev/BawalVision).
 
 ================================================================================
-Third-Party Software Attributions
+Third-Party Software Attributions and Licenses
 ================================================================================
 
-1. OpenCV (Open Source Computer Vision Library)
-   Copyright (C) 2000-2026, Intel Corporation, all rights reserved.
-   Copyright (C) 2009-2011, Willow Garage Inc., all rights reserved.
-   Copyright (C) 2009-2016, Itseez Inc., all rights reserved.
-   Copyright (C) 2015-2026, OpenCV Foundation, all rights reserved.
-   Licensed under the Apache License, Version 2.0.
+This project bundles, links, or interacts with open-source third-party software.
+The original copyright notices and license permissions are acknowledged below:
 
-2. IXWebSocket
-   Copyright (c) 2017-2021 Machine Zone, Inc. All rights reserved.
-   Licensed under the BSD 3-Clause License.
+--------------------------------------------------------------------------------
+1. Computer Vision, Machine Learning & Super-Resolution
+--------------------------------------------------------------------------------
 
-3. JSON for Modern C++ (nlohmann/json)
-   Copyright (c) 2013-2026 Niels Lohmann
-   Licensed under the MIT License.
+* OpenCV (Open Source Computer Vision Library)
+  Copyright (C) 2000-2026, Intel Corporation, all rights reserved.
+  Copyright (C) 2009-2011, Willow Garage Inc., all rights reserved.
+  Copyright (C) 2009-2016, Itseez Inc., all rights reserved.
+  Copyright (C) 2015-2026, OpenCV Foundation, all rights reserved.
+  Website: https://opencv.org/
+  Licensed under the Apache License, Version 2.0.
 
-4. pgx (PostgreSQL driver for Go)
-   Copyright (c) 2013-2026 Jack Christensen
-   Licensed under the MIT License.
+* ONNX Runtime (Cross-platform Machine Learning Inference Engine)
+  Copyright (c) Microsoft Corporation. All rights reserved.
+  Website: https://onnxruntime.ai/
+  Licensed under the MIT License.
 
-5. AWS SDK for Go v2
-   Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-   Licensed under the Apache License, Version 2.0.
+* Ultralytics YOLOv8
+  Copyright (c) 2023-2026 Ultralytics Inc.
+  Website: https://github.com/ultralytics/ultralytics
+  Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) / Enterprise.
 
-6. ESP-IDF / Arduino core for ESP32
-   Copyright (C) 2015-2026 Espressif Systems (Shanghai) PTE LTD
-   Licensed under the Apache License, Version 2.0.
+* PyTorch
+  Copyright (c) 2016-2026 Facebook, Inc. / The Linux Foundation.
+  Website: https://pytorch.org/
+  Licensed under the BSD 3-Clause License.
 
-7. Tencent NCNN High-Performance Neural Network Inference Framework
-   Copyright (C) 2017 THL A29 Limited, a Tencent company. All rights reserved.
-   Licensed under the BSD 3-Clause License.
+* Real-ESRGAN (Practical Image/Video Super-Resolution)
+  Copyright (c) 2021-2026 Xintao Wang, Liangbin Xie, Chao Dong, Ying Shan.
+  Website: https://github.com/xinntao/Real-ESRGAN
+  Licensed under the BSD 3-Clause License.
 
-8. Real-ESRGAN (Practical Algorithms for General Image/Video Restoration)
-   Copyright (c) 2021-2026 Xintao Wang, Liangbin Xie, Chao Dong, Ying Shan
-   Licensed under the BSD 3-Clause License.
+* Tencent NCNN (High-Performance Neural Network Inference Framework)
+  Copyright (C) 2017 THL A29 Limited, a Tencent company. All rights reserved.
+  Website: https://github.com/Tencent/ncnn
+  Licensed under the BSD 3-Clause License.
 
-9. Intel RealSense SDK 2.0 (librealsense)
-   Copyright (C) 2017-2026 Intel Corporation. All Rights Reserved.
-   Licensed under the Apache License, Version 2.0.
+--------------------------------------------------------------------------------
+2. C++20 Core Services, Networking, Allocation & Utilities
+--------------------------------------------------------------------------------
+
+* Crow (Fast C++ Microframework for Web & REST APIs)
+  Copyright (c) 2014-2017, ipkn
+  Copyright (c) 2020-2026, CrowCpp
+  Website: https://crowcpp.org/
+  Licensed under the BSD 3-Clause License.
+
+* Asio (Standalone C++ Networking Library)
+  Copyright (c) 2003-2026 Christopher M. Kohlhoff
+  Website: https://think-async.com/Asio/
+  Licensed under the Boost Software License, Version 1.0.
+
+* Microsoft mimalloc (Compact General-Purpose Memory Allocator)
+  Copyright (c) 2019-2026 Microsoft Corporation, Daan Leijen
+  Website: https://github.com/microsoft/mimalloc
+  Licensed under the MIT License.
+
+* Glaze (Extremely Fast, In-Memory JSON/Binary Serialization)
+  Copyright (c) 2022-2026 Stephen Berry
+  Website: https://github.com/stephenberry/glaze
+  Licensed under the MIT License.
+
+* {fmt} (Small, Safe and Fast C++ Formatting Library)
+  Copyright (c) 2012-2026 Victor Zverovich
+  Website: https://fmt.dev/
+  Licensed under the MIT License.
+
+* cpp-httplib (A C++11 Single-File HTTP/HTTPS Client Library)
+  Copyright (c) 2017-2026 Yuji Hirose
+  Website: https://github.com/yhirose/cpp-httplib
+  Licensed under the MIT License.
+
+* JSON for Modern C++ (nlohmann/json)
+  Copyright (c) 2013-2026 Niels Lohmann
+  Website: https://github.com/nlohmann/json
+  Licensed under the MIT License.
+
+* libpq (PostgreSQL C Client Library)
+  Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
+  Portions Copyright (c) 1994, The Regents of the University of California
+  Website: https://www.postgresql.org/
+  Licensed under the PostgreSQL License.
+
+* AWS Lambda C++ Runtime Interface Client (aws-lambda-cpp)
+  Copyright 2018-2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Website: https://github.com/awslabs/aws-lambda-cpp
+  Licensed under the Apache License, Version 2.0.
+
+--------------------------------------------------------------------------------
+3. Embedded & Edge IoT Frameworks
+--------------------------------------------------------------------------------
+
+* ESP-IDF (Espressif IoT Development Framework)
+  Copyright (C) 2015-2026 Espressif Systems (Shanghai) PTE LTD
+  Website: https://github.com/espressif/esp-idf
+  Licensed under the Apache License, Version 2.0.
+
+* FreeRTOS (Real-Time Operating System for Microcontrollers)
+  Copyright (C) 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Website: https://www.freertos.org/
+  Licensed under the MIT License.
+
+* LVGL (Light and Versatile Graphics Library)
+  Copyright (c) 2026 LVGL Kft
+  Website: https://lvgl.io/
+  Licensed under the MIT License.
+
+--------------------------------------------------------------------------------
+4. Web Frontend & User Interface
+--------------------------------------------------------------------------------
+
+* Svelte & SvelteKit
+  Copyright (c) 2016-2026 Rich Harris and Svelte contributors
+  Website: https://kit.svelte.dev/
+  Licensed under the MIT License.
+
+* Tailwind CSS
+  Copyright (c) Tailwind Labs, Inc.
+  Website: https://tailwindcss.com/
+  Licensed under the MIT License.
+
+* DaisyUI (Tailwind CSS Component Library)
+  Copyright (c) 2020-2026 Pouya Saadeghi
+  Website: https://daisyui.com/
+  Licensed under the MIT License.
+
+* Chart.js (Simple yet Flexible JavaScript Charting)
+  Copyright (c) 2014-2026 Chart.js Contributors
+  Website: https://www.chartjs.org/
+  Licensed under the MIT License.
+
+* Vite (Next Generation Frontend Tooling)
+  Copyright (c) 2019-2026 Evan You & Vite Contributors
+  Website: https://vitejs.dev/
+  Licensed under the MIT License.
