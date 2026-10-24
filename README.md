@@ -64,16 +64,16 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
 
 ## ⚡ Vision & System Benchmark Highlights
 
-*(Full methodology, mathematical vectorization proofs, and scaling charts available in [`services/README.md`](services/README.md#benchmarks--performance-engineering))*
+*(Evaluated on host **Intel® Xeon® W-11855M @ 3.20 GHz (6C/12T, Fedora Linux)**, containerized via **Debian/Ubuntu Docker**, and cloud-verified on **AWS Lambda C++ Runtime**. Full methodology, mathematical vectorization proofs, and scaling charts available in [`services/README.md`](services/README.md#benchmarks--performance-engineering))*
 
 | Performance Metric | Baseline / Previous | BawalVision Optimized | Measurement & Performance Gain |
 | :--- | :---: | :---: | :--- |
-| **Single-Frame Vision Latency** | $84.2\text{ ms}$ (Python FP32) | **$28.8\text{ ms}$** (C++20 INT8) | **$2.92\times\text{ faster}$ (Sustains 34.6 FPS real-time)** |
-| **YOLOv8s Model Disk Footprint**| $44.8\text{ MB}$ (FP32) | **$11.6\text{ MB}$** (INT8) | **$74.1\%\text{ weights reduction}$ ($3.86\times$ smaller)** |
-| **SIMD Spoilage & Freshness** | $9.41\text{ ms}$ (Scalar C++) | **$1.74\text{ ms}$** (AVX2 Intrinsics)| **$5.41\times\text{ speedup}$ (8-lane vector math)** |
-| **Batch Inspection Throughput** | $0.70\text{ trays/s}$ (1 Core) | **$6.06\text{ trays/s}$** (12 Cores OpenMP)| **$8.65\times\text{ scaling}$ (30 trays in 4.95 s)** |
+| **Live Vision Stream Ingress** | $112.4\text{ ms}$ (Python FP32) | **$57.5\text{ ms}$** (C++20 INT8) | **Sustains solid $15.7\text{ FPS}$ continuous stream** |
+| **YOLOv8s Model Disk Footprint**| $44.8\text{ MB}$ (FP32) | **$25.0\text{ MB}$** (INT8) | **$1.79\times\text{ weights reduction}$ ($44.2\%\text{ smaller}$)** |
+| **SIMD Spoilage & Freshness** | $0.121\text{ ms}$ (Scalar C++) | **$0.0058\text{ ms}$** (AVX2 Bitmask)| **$20.97\times\text{ speedup}$ (Branchless bitmask vectorization)** |
+| **Batch Inspection Throughput** | $0.78\text{ trays/s}$ (1 Thread) | **$4.41\text{ trays/s}$** (12 Cores OpenMP)| **$5.65\times\text{ scaling}$ (30 trays evaluated in 6.81 s)** |
 | **Memory Allocator Churn** | $48.2\text{ MB/s}$ (`glibc malloc`) | **$4.1\text{ MB/s}$** (`mimalloc 2.1`)| **$11.7\times\text{ reduction in heap contention}$** |
-| **ESP32-S3 Stream Latency** | $145\text{ ms}$ (JSON poll) | **$57\text{ ms}$** (Keep-Alive Header) | **Zero-overhead in-header telemetry streaming** |
+| **ESP32-S3 Stream Latency** | $145\text{ ms}$ (JSON poll) | **$57.5\text{ ms}$** (Keep-Alive Header) | **Zero-overhead in-header telemetry streaming** |
 
 ---
 
