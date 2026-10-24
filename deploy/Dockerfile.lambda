@@ -116,6 +116,7 @@ WORKDIR /var/task
 
 COPY --from=builder /src/services/build/bin/bootstrap /var/task/bootstrap
 COPY --from=builder /src/models/ /var/task/models/
+COPY services/templates/ /var/task/templates/
 COPY deploy/lambda-entrypoint.sh /var/task/lambda-entrypoint.sh
 RUN chmod 0755 /var/task/bootstrap /var/task/lambda-entrypoint.sh
 

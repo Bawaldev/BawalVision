@@ -921,6 +921,9 @@
 
     function handleSubmit(e: SubmitEvent) {
         e.preventDefault();
+        if (typeof window !== 'undefined' && formState.backendUrl) {
+            localStorage.setItem('bawal_backend_url', formState.backendUrl);
+        }
         onSaveConfig(formState);
         isSaved = true;
         setTimeout(() => (isSaved = false), 2500);

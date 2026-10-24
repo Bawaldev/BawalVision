@@ -81,6 +81,18 @@ Resources:
           ENABLE_SR: "0"
           OMP_NUM_THREADS: "2"
           OPENCV_LOG_LEVEL: ERROR
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - "*"
+          AllowMethods:
+            - GET
+            - POST
+            - OPTIONS
+          AllowHeaders:
+            - "*"
+          MaxAge: 3600
       Events:
         InspectSnapshot:
           Type: Api
@@ -106,8 +118,11 @@ Resources:
       Dockerfile: deploy/Dockerfile.lambda
 
 Outputs:
+  FunctionUrl:
+    Description: Base URL of the public $0 Lambda Function URL (direct browser/Vercel integration, zero API Gateway charges)
+    Value: !GetAtt BawalInspectionFunctionUrl.FunctionUrl
   ApiEndpoint:
-    Description: Base URL of the IAM-protected API Gateway endpoint
+    Description: Base URL of the API Gateway endpoint
     Value: !Sub "https://${BawalApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
   FunctionName:
     Description: Lambda function name

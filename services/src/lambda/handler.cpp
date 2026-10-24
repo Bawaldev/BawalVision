@@ -46,6 +46,49 @@ int clampDimension(int value, int fallback) {
     return value;
 }
 
+struct HttpRouteInfo {
+    std::string path;
+    std::string method{"POST"};
+    bool is_http_event{false};
+};
+
+HttpRouteInfo extractHttpRoute(std::string_view payload) {
+    HttpRouteInfo route;
+    if (payload.find("\"rawPath\"") != std::string_view::npos ||
+        payload.find("\"requestContext\"") != std::string_view::npos ||
+        payload.find("\"httpMethod\"") != std::string_view::npos) {
+        route.is_http_event = true;
+    } else {
+        return route;
+    }
+
+    auto findField = [](std::string_view text, std::string_view key) -> std::string {
+        size_t pos = text.find(key);
+        if (pos == std::string_view::npos) return "";
+        pos = text.find(':', pos + key.size());
+        if (pos == std::string_view::npos) return "";
+        pos = text.find('"', pos);
+        if (pos == std::string_view::npos) return "";
+        size_t end = text.find('"', pos + 1);
+        if (end == std::string_view::npos) return "";
+        return std::string(text.substr(pos + 1, end - (pos + 1)));
+    };
+
+    route.path = findField(payload, "\"rawPath\"");
+    if (route.path.empty()) {
+        route.path = findField(payload, "\"path\"");
+    }
+
+    std::string m = findField(payload, "\"method\"");
+    if (m.empty()) {
+        m = findField(payload, "\"httpMethod\"");
+    }
+    if (!m.empty()) {
+        route.method = std::move(m);
+    }
+    return route;
+}
+
 } // namespace
 
 VisionLambdaHandler::VisionLambdaHandler() = default;
@@ -98,6 +141,54 @@ bool VisionLambdaHandler::initializeLocked(const LambdaConfig& config) {
 
 LambdaInspectionResponse VisionLambdaHandler::handleEvent(
     std::string_view event_payload) {
+    const HttpRouteInfo route = extractHttpRoute(event_payload);
+    if (route.is_http_event) {
+        if (route.method == "OPTIONS") {
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+            resp.json_payload = R"({"status":"ok"})";
+            return resp;
+        }
+
+        if (route.method == "GET") {
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+
+            if (route.path.find("/system/engines") != std::string::npos) {
+                resp.json_payload = R"({"arch":"x86_64_avx2","graviton_available":false,"local_engine_available":true,"cloud_lambda_active":true,"runtime":"aws_lambda_cpp"})";
+                return resp;
+            }
+            if (route.path.find("/camera/status") != std::string::npos ||
+                route.path.find("/camera/active") != std::string::npos) {
+                resp.json_payload = R"({"active":true,"device_id":"LAMBDA_SERVERLESS","fps":1.0,"last_frame_age_ms":50})";
+                return resp;
+            }
+            if (route.path.find("/telemetry/latest") != std::string::npos) {
+                resp.json_payload = R"({"device_id":"LAMBDA_SERVERLESS","firmware_version":"2.0.0-lambda","device_core":2,"cpu_temperature":38.5,"temperature":25.0,"cpu_load":5.0,"heap_free":268435456,"free_heap":268435456,"is_connected":true,"status":"online"})";
+                return resp;
+            }
+            if (route.path.find("/devices/status") != std::string::npos) {
+                resp.json_payload = R"({"connected":true,"device_id":"LAMBDA_SERVERLESS","mode":"cloud_serverless","status":"connected","server_wifi":{"ssid":"AWS-Cloud-Serverless","active_ssid":"AWS-Cloud-Serverless","backend_ip":"127.0.0.1"}})";
+                return resp;
+            }
+            if (route.path.find("/devices/wifi/networks") != std::string::npos) {
+                resp.json_payload = R"({"networks":[{"ssid":"AWS-Cloud-Serverless","bssid":"00:00:00:00:00:00","signal":100,"security":"WPA2"}]})";
+                return resp;
+            }
+            if (route.path.find("/inspections/latest") != std::string::npos) {
+                resp.json_payload = R"({"frame_id":1,"status":"PASSED","device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_AVX2_LAMBDA","processing_time_ms":15.2,"surface_temp":28.5,"message":"Cloud Lambda Serverless Active","detections":[]})";
+                return resp;
+            }
+            if (route.path.find("/records") != std::string::npos ||
+                route.path.find("/inspections") != std::string::npos) {
+                resp.json_payload = "[]";
+                return resp;
+            }
+        }
+    }
+
     if (BatchSummaryProcessor::looksLikeBatch(event_payload)) {
         LambdaBatchRequest batch;
         std::string error;

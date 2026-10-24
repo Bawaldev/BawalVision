@@ -89,6 +89,9 @@ struct LambdaEvent {
 
 struct LambdaProxyHeaders {
     std::string content_type{"application/json"};
+    std::string access_control_allow_origin{"*"};
+    std::string access_control_allow_methods{"GET, POST, OPTIONS, HEAD"};
+    std::string access_control_allow_headers{"*"};
 };
 
 struct LambdaProxyResponse {
@@ -205,7 +208,11 @@ struct glz::meta<bawal::server::LambdaEvent> {
 template <>
 struct glz::meta<bawal::server::LambdaProxyHeaders> {
     using T = bawal::server::LambdaProxyHeaders;
-    static constexpr auto value = glz::object("Content-Type", &T::content_type);
+    static constexpr auto value = glz::object(
+        "Content-Type", &T::content_type,
+        "Access-Control-Allow-Origin", &T::access_control_allow_origin,
+        "Access-Control-Allow-Methods", &T::access_control_allow_methods,
+        "Access-Control-Allow-Headers", &T::access_control_allow_headers);
 };
 
 template <>

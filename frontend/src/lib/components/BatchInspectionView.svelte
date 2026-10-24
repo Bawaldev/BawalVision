@@ -2,7 +2,17 @@
     import { onDestroy } from 'svelte';
 
     const MAX_ZIP_BYTES = 15 * 1024 * 1024;
-    const BATCH_ENDPOINT = '/api/v1/inspections/batch-zip';
+    const DEFAULT_BATCH_ENDPOINT = '/api/v1/inspections/batch-zip';
+
+    function getBatchEndpoint(): string {
+        if (typeof window !== 'undefined') {
+            const custom = localStorage.getItem('bawal_backend_url') || localStorage.getItem('backend_url');
+            if (custom && custom.startsWith('http')) {
+                return `${custom.replace(/\/$/, '')}/inspections/batch-zip`;
+            }
+        }
+        return DEFAULT_BATCH_ENDPOINT;
+    }
 
     interface BatchDetection {
         class_name: string;
@@ -220,7 +230,12 @@
         }, 1800);
 
         try {
-            const response = await fetch(BATCH_ENDPOINT, {
+            const endpoint = getBatchEndpoint();
+            if (endpoint.startsWith('/api') && file.size > 4.5 * 1024 * 1024) {
+                throw new Error(`File ZIP (${(file.size / (1024 * 1024)).toFixed(2)} MB) melebihi batas 4.5 MB Vercel Serverless. Gunakan file ZIP di bawah 4.5 MB (contoh: 20 trays) atau set direct Backend/Lambda URL di Settings.`);
+            }
+
+            const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/zip' },
                 body: file
@@ -228,6 +243,9 @@
 
             const payload = (await response.json().catch(() => null)) as BatchSummary | null;
             if (!response.ok || !payload) {
+                if (response.status === 413) {
+                    throw new Error('Server returned 413 (Payload Too Large): Batas upload Vercel Serverless adalah 4.5 MB. Gunakan ZIP di bawah 4.5 MB atau direct Lambda endpoint.');
+                }
                 throw new Error(payload?.error ?? `Server returned ${response.status}`);
             }
 
@@ -351,7 +369,7 @@
             <span class="dropzone-title">
                 {isBusy ? 'Batch in progress...' : 'Drop batch ZIP here or click to browse'}
             </span>
-            <span class="dropzone-hint">.zip archive · max 15 MB · up to 30 tray images</span>
+            <span class="dropzone-hint">.zip archive · max 4.5 MB on Cloud (up to 20-30 trays) / 15 MB on Direct Host</span>
             {#if selectedFileName}
                 <span class="dropzone-file">
                     {selectedFileName}
