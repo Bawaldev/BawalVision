@@ -32,6 +32,15 @@ enum class InvocationSource : uint8_t {
 };
 
 /**
+ * @brief Representation of an incoming HTTP request routed to the serverless function.
+ */
+struct LambdaHttpRoute {
+    std::string path;
+    std::string method{"POST"};
+    bool is_http_event{false};
+};
+
+/**
  * @brief Serverless inspection request representation for event-driven invocation.
  */
 struct LambdaInspectionRequest {

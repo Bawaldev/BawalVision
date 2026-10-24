@@ -136,6 +136,43 @@ InvocationSource LambdaEventParser::detectSource(std::string_view payload) {
     return InvocationSource::DIRECT_INVOKE;
 }
 
+LambdaHttpRoute LambdaEventParser::extractHttpRoute(std::string_view payload) {
+    LambdaHttpRoute route;
+    if (payload.find("\"rawPath\"") != std::string_view::npos ||
+        payload.find("\"requestContext\"") != std::string_view::npos ||
+        payload.find("\"httpMethod\"") != std::string_view::npos) {
+        route.is_http_event = true;
+    } else {
+        return route;
+    }
+
+    auto findField = [](std::string_view text, std::string_view key) -> std::string {
+        size_t pos = text.find(key);
+        if (pos == std::string_view::npos) return "";
+        pos = text.find(':', pos + key.size());
+        if (pos == std::string_view::npos) return "";
+        pos = text.find('"', pos);
+        if (pos == std::string_view::npos) return "";
+        size_t end = text.find('"', pos + 1);
+        if (end == std::string_view::npos) return "";
+        return std::string(text.substr(pos + 1, end - (pos + 1)));
+    };
+
+    route.path = findField(payload, "\"rawPath\"");
+    if (route.path.empty()) {
+        route.path = findField(payload, "\"path\"");
+    }
+
+    std::string m = findField(payload, "\"method\"");
+    if (m.empty()) {
+        m = findField(payload, "\"httpMethod\"");
+    }
+    if (!m.empty()) {
+        route.method = std::move(m);
+    }
+    return route;
+}
+
 bool LambdaEventParser::parseEvent(std::string_view event_payload,
                                    LambdaInspectionRequest& out_request) {
     if (event_payload.empty()) {

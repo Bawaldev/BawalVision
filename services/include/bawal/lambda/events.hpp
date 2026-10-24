@@ -51,6 +51,9 @@ public:
 
     /** Classify an event payload without fully decoding the image. */
     [[nodiscard]] static InvocationSource detectSource(std::string_view event_payload);
+
+    /** Classify and extract HTTP method/path from an invocation event without full decode. */
+    [[nodiscard]] static LambdaHttpRoute extractHttpRoute(std::string_view payload);
 };
 
 /**
