@@ -187,20 +187,32 @@ crow::response jsonError(int code, std::string_view message) {
 
 constexpr std::string_view kBatchTemplateName = "batch_report.tex.in";
 
-/** Locate the multi-page batch LaTeX template relative to the backend CWD. */
+/** Locate the multi-page batch LaTeX template relative to the backend CWD or binary. */
 std::filesystem::path resolveBatchTemplatePath() {
     namespace fs = std::filesystem;
     if (const char* env = std::getenv("BAWAL_BATCH_TEMPLATE");
         env != nullptr && *env != '\0' && fs::is_regular_file(env)) {
         return fs::path(env);
     }
+
+    std::error_code ec;
+    const fs::path exe_dir = fs::canonical("/proc/self/exe", ec).parent_path();
+
     const fs::path candidates[] = {
         fs::path("./services/templates") / kBatchTemplateName,
         fs::path("../services/templates") / kBatchTemplateName,
+        fs::path("../../services/templates") / kBatchTemplateName,
+        fs::path("./templates") / kBatchTemplateName,
+        fs::path("../templates") / kBatchTemplateName,
         fs::path("/app/services/templates") / kBatchTemplateName,
+        exe_dir / "services/templates" / kBatchTemplateName,
+        exe_dir / "templates" / kBatchTemplateName,
+        exe_dir / "../templates" / kBatchTemplateName,
+        exe_dir / "../../templates" / kBatchTemplateName,
+        exe_dir / "../../../services/templates" / kBatchTemplateName,
     };
     for (const fs::path& candidate : candidates) {
-        if (fs::is_regular_file(candidate)) {
+        if (!candidate.empty() && fs::is_regular_file(candidate, ec)) {
             return candidate;
         }
     }

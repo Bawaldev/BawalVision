@@ -60,6 +60,7 @@ services:
       - ../ml/AI1/model:/app/ml/AI1/model:ro
       - ../weights:/app/weights:ro
       - ../examples:/app/examples:ro
+      - ../services/templates:/app/services/templates:ro
       # Wi-Fi scan (nmcli) talks to the host NetworkManager over its system
       # bus. This only works with a native Docker Engine; Docker Desktop runs
       # in a VM and cannot bind the host's Unix socket. On Docker Desktop run
