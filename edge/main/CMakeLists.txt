@@ -5,12 +5,9 @@ idf_component_register(
         "src/system_monitor.c"
         "src/lcd_task.c"
         "src/camera_task.c"
-        "test/test.c"
-        "test/lcd_min_test.c"
     INCLUDE_DIRS 
         "include"
         "src"
-        "test"
     REQUIRES 
         freertos
         log
@@ -22,6 +19,7 @@ idf_component_register(
         nvs_flash
         esp_netif
         esp_http_client
+        esp_http_server
         esp_timer
         driver
         esp_hw_support
@@ -32,6 +30,10 @@ idf_component_register(
         esp32-camera
         esp_lcd_st7735
         esp_driver_tsens
+<<<<<<< HEAD
+=======
+        esp_driver_usb_serial_jtag
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 )
 
 set(ENV_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../.env")

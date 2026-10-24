@@ -4,7 +4,14 @@
     import TopBar from '$lib/components/TopBar.svelte';
     import OverviewView from '$lib/views/OverviewView.svelte';
     import DashboardView from '$lib/views/DashboardView.svelte';
+<<<<<<< HEAD
     import TelemetryResultLogView from '$lib/views/TelemetryResultLogView.svelte';
+=======
+    import InspectionReportsView from '$lib/views/InspectionReportsView.svelte';
+    import BatchInspectionView from '$lib/components/BatchInspectionView.svelte';
+    import TelemetryResultLogView from '$lib/views/TelemetryResultLogView.svelte';
+    import GrafanaDashboardView from '$lib/views/GrafanaDashboardView.svelte';
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     import SettingsView from '$lib/views/SettingsView.svelte';
 
     import {
@@ -40,11 +47,32 @@
     // State Variables
     const VALID_TABS = [
         'Overview',
+<<<<<<< HEAD
         'Dashboard',
         'Telemetry Analytics & Result Log',
         'System & Cloud Settings'
     ];
 
+=======
+        'Live Inspection',
+        'Inspection Reports',
+        'Batch Inspection',
+        'Telemetry & Hardware',
+        'Grafana Dashboard',
+        'Settings'
+    ];
+
+    const TAB_SLUGS: Record<string, string> = {
+        'Overview': 'overview',
+        'Live Inspection': 'live',
+        'Inspection Reports': 'reports',
+        'Batch Inspection': 'batch',
+        'Telemetry & Hardware': 'telemetry',
+        'Grafana Dashboard': 'grafana',
+        'Settings': 'settings'
+    };
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     let activeTab = $state('Overview');
     let transitionDirection = $state<'forward' | 'backward' | 'none'>('none');
     let isHydrated = $state(false);
@@ -64,12 +92,16 @@
         if (typeof window !== 'undefined') {
             try {
                 localStorage.setItem('bawal_active_tab', tab);
+<<<<<<< HEAD
                 const slug = tab === 'Overview'
                     ? 'overview'
                     : (tab === 'Telemetry Analytics & Result Log'
                         ? 'telemetry'
                         : (tab === 'System & Cloud Settings' ? 'settings' : 'live'));
                 window.location.hash = slug;
+=======
+                window.location.hash = TAB_SLUGS[tab] ?? 'live';
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             } catch {}
         }
     }
@@ -164,7 +196,11 @@
             // 2. Camera Status
             const cam = await fetchCameraStatus(systemConfig.backendUrl);
             hasCamera = cam.active;
+<<<<<<< HEAD
             realFps = cam.active ? (cam.fps > 0 ? cam.fps : 20.0) : 0.0;
+=======
+            realFps = cam.active ? cam.fps : 0.0;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
             // 3. Telemetry Ingress from ESP32-S3
             const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
@@ -291,6 +327,7 @@
         try {
             const hash = window.location.hash.toLowerCase();
             let targetTab = 'Overview';
+<<<<<<< HEAD
             if (hash.includes('telemetry') || hash.includes('result')) {
                 targetTab = 'Telemetry Analytics & Result Log';
             } else if (hash.includes('setting')) {
@@ -304,6 +341,22 @@
                 if (savedTab && VALID_TABS.includes(savedTab)) {
                     targetTab = savedTab;
                 }
+=======
+            if (hash.includes('batch')) {
+                targetTab = 'Batch Inspection';
+            } else if (hash.includes('report') || hash.includes('audit')) {
+                targetTab = 'Inspection Reports';
+            } else if (hash.includes('grafana')) {
+                targetTab = 'Grafana Dashboard';
+            } else if (hash.includes('telemetry') || hash.includes('hardware')) {
+                targetTab = 'Telemetry & Hardware';
+            } else if (hash.includes('setting')) {
+                targetTab = 'Settings';
+            } else if (hash.includes('live') || hash.includes('inspect') || hash.includes('dashboard')) {
+                targetTab = 'Live Inspection';
+            } else if (hash.includes('overview')) {
+                targetTab = 'Overview';
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             }
             if (targetTab !== activeTab) {
                 setTabWithTransition(targetTab);
@@ -319,6 +372,10 @@
         if (typeof window !== 'undefined') {
             window.addEventListener('hashchange', syncTabFromLocation);
             window.addEventListener('popstate', syncTabFromLocation);
+<<<<<<< HEAD
+=======
+            window.addEventListener('bawal-clear-detections', handleClearDetections);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         }
 
         // Initial sync of detection threshold from backend (or Docker env default)
@@ -338,11 +395,19 @@
         }, 600);
     });
 
+    function handleClearDetections() {
+        detections = [];
+    }
+
     onDestroy(() => {
         if (pollingTimer) clearInterval(pollingTimer);
         if (typeof window !== 'undefined') {
             window.removeEventListener('hashchange', syncTabFromLocation);
             window.removeEventListener('popstate', syncTabFromLocation);
+<<<<<<< HEAD
+=======
+            window.removeEventListener('bawal-clear-detections', handleClearDetections);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         }
     });
 
@@ -559,8 +624,33 @@
 
             <div 
                 class="view-panel" 
+<<<<<<< HEAD
                 class:is-active={activeTab === 'Dashboard'} 
                 class:is-hidden={activeTab !== 'Dashboard'}
+=======
+                class:is-active={activeTab === 'Inspection Reports'} 
+                class:is-hidden={activeTab !== 'Inspection Reports'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
+                <InspectionReportsView />
+            </div>
+
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Batch Inspection'} 
+                class:is-hidden={activeTab !== 'Batch Inspection'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
+                <BatchInspectionView />
+            </div>
+
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Live Inspection'} 
+                class:is-hidden={activeTab !== 'Live Inspection'}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >
@@ -585,8 +675,13 @@
 
             <div 
                 class="view-panel" 
+<<<<<<< HEAD
                 class:is-active={activeTab === 'Telemetry Analytics & Result Log'} 
                 class:is-hidden={activeTab !== 'Telemetry Analytics & Result Log'}
+=======
+                class:is-active={activeTab === 'Telemetry & Hardware'} 
+                class:is-hidden={activeTab !== 'Telemetry & Hardware'}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >
@@ -598,8 +693,23 @@
 
             <div 
                 class="view-panel" 
+<<<<<<< HEAD
                 class:is-active={activeTab === 'System & Cloud Settings'} 
                 class:is-hidden={activeTab !== 'System & Cloud Settings'}
+=======
+                class:is-active={activeTab === 'Grafana Dashboard'} 
+                class:is-hidden={activeTab !== 'Grafana Dashboard'}
+                class:slide-forward={transitionDirection === 'forward'}
+                class:slide-backward={transitionDirection === 'backward'}
+            >
+                <GrafanaDashboardView />
+            </div>
+
+            <div 
+                class="view-panel" 
+                class:is-active={activeTab === 'Settings'} 
+                class:is-hidden={activeTab !== 'Settings'}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >

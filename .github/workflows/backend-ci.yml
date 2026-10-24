@@ -1,33 +1,74 @@
+<<<<<<< HEAD
 name: Backend Go CI & Static Analysis
+=======
+name: C++ Crow Backend CI
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
 on:
   push:
     branches: [ "main", "master" ]
     paths:
+<<<<<<< HEAD
       - 'backend/**'
+=======
+      - 'services/**'
+      - 'ml/include/**'
+      - 'ml/src/**'
+      - 'deploy/Dockerfile.backend'
+      - 'deploy/postgres/**'
+      - 'deploy/test_api.sh'
+      - '.dockerignore'
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
       - '.github/workflows/backend-ci.yml'
   pull_request:
     branches: [ "main", "master" ]
     paths:
+<<<<<<< HEAD
       - 'backend/**'
       - '.github/workflows/backend-ci.yml'
   workflow_dispatch:
 
+=======
+      - 'services/**'
+      - 'ml/include/**'
+      - 'ml/src/**'
+      - 'deploy/Dockerfile.backend'
+      - 'deploy/postgres/**'
+      - 'deploy/test_api.sh'
+      - '.dockerignore'
+      - '.github/workflows/backend-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 concurrency:
   group: backend-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+<<<<<<< HEAD
   test:
     name: Unit Tests & Race Detector
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
+=======
+  build-and-test:
+    name: Build & API Smoke Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CC: gcc-14
+      CXX: g++-14
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
 
+<<<<<<< HEAD
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -65,3 +106,119 @@ jobs:
           version: v1.64.6
           working-directory: backend
           args: --timeout=5m
+=======
+      - name: Install System Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc-14 g++-14 \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libopencv-dev \
+            libomp-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libpq-dev \
+            libfmt-dev \
+            libcpp-httplib-dev \
+            nlohmann-json3-dev \
+            curl \
+            tar
+
+      - name: Cache ONNX Runtime v1.19.2 C++
+        id: cache-ort
+        uses: actions/cache@v6
+        with:
+          path: /opt/onnxruntime
+          key: onnxruntime-linux-x64-1.19.2
+
+      - name: Install ONNX Runtime C++ Library
+        if: steps.cache-ort.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/onnxruntime
+          sudo curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | \
+            sudo tar -xz -C /opt/onnxruntime --strip-components=1
+          sudo cp -r /opt/onnxruntime/include/* /usr/local/include/
+          sudo cp -r /opt/onnxruntime/lib/* /usr/local/lib/
+          sudo ldconfig
+
+      - name: Setup Cached ONNX Runtime Symlinks
+        if: steps.cache-ort.outputs.cache-hit == 'true'
+        run: |
+          sudo cp -r /opt/onnxruntime/include/* /usr/local/include/
+          sudo cp -r /opt/onnxruntime/lib/* /usr/local/lib/
+          sudo ldconfig
+
+      - name: Verify Architecture Portability (No -march=native)
+        run: |
+          echo "Verifying no machine-specific -march=native flag exists in C++ build scripts..."
+          if grep -rn --exclude-dir=build --exclude-dir=third_party "\-march=native" services/CMakeLists.txt services/include services/src; then
+            echo "::error::Found -march=native in C++ build configuration. Binary must remain portable across CPU architectures."
+            exit 1
+          fi
+          echo "✓ Compiler architecture flags are portable (-mavx2 / -march=armv8.2-a+simd)."
+
+      - name: Configure CMake (Release)
+        run: |
+          cmake -B services/build -S services \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBAWAL_BUILD_VISION_VIEWER=OFF \
+            -DONNXRUNTIME_INCLUDE_DIR=/usr/local/include \
+            -DONNXRUNTIME_LIB=/usr/local/lib/libonnxruntime.so
+
+      - name: Build Crow Backend
+        run: cmake --build services/build --parallel "$(nproc)" --target bawal_backend
+
+      - name: Run API Smoke Test (no PostgreSQL, model fallback)
+        run: |
+          set -euo pipefail
+          mkdir -p data/inspections .cache_trash
+
+          CROW_BIND=127.0.0.1 \
+          CROW_PORT=18080 \
+          DISCOVERY_PORT=18765 \
+          DB_HOST=127.0.0.1 \
+          DB_PORT=1 \
+          ./services/build/bin/bawal_backend > backend.log 2>&1 &
+          backend_pid=$!
+
+          cleanup() {
+            kill "${backend_pid}" 2>/dev/null || true
+            wait "${backend_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS --max-time 2 http://127.0.0.1:18080/api/v1/health >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "${ready}" != "1" ]; then
+            echo "::error::bawal_backend did not become healthy in time"
+            cat backend.log
+            exit 1
+          fi
+
+          curl -fsS http://127.0.0.1:18080/api/v1/health
+          echo
+
+          BASE_URL=http://127.0.0.1:18080/api/v1 \
+          CACHE_DIR=.cache_trash \
+          ./deploy/test_api.sh
+
+      - name: Upload Backend Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-ci-logs
+          path: |
+            backend.log
+            .cache_trash/*.txt
+          if-no-files-found: ignore
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444

@@ -106,12 +106,17 @@
     let mockPushedFrames = $state(0);
     let isPushingFrame = false;
     let pushInterval: any = null;
+<<<<<<< HEAD
+=======
+    let liveRefreshTimer: any = null;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     let mockFrameSeq = 0;
     let isRewound = $state(false);
     let lastVideoTime = 0;
 
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
+<<<<<<< HEAD
     let retryCount = $state(0);
     const MAX_RETRIES = 3;
 
@@ -121,6 +126,73 @@
 
     // Initial mount: restore persisted source mode, selected video, and fetch examples list with unique UUIDs
     onMount(() => {
+=======
+    let discoveredStreamUrl = $state('');
+    let deviceStatusTimer: ReturnType<typeof setInterval> | null = null;
+    let retryCount = $state(0);
+    const MAX_RETRIES = 3;
+    let isTabVisible = $state(true);
+
+    let activeStreamUrl = $derived(
+        !isTabVisible
+            ? ''
+            : (streamUrl || discoveredStreamUrl || `/api/v1/camera/stream?t=${streamEpoch}`)
+    );
+
+    function handleVisibilityChange() {
+        if (typeof document !== 'undefined') {
+            if (document.hidden) {
+                isTabVisible = false;
+                if (liveRefreshTimer !== null) {
+                    clearTimeout(liveRefreshTimer);
+                    liveRefreshTimer = null;
+                }
+            } else {
+                streamEpoch = Date.now();
+                isTabVisible = true;
+            }
+        }
+    }
+
+    function scheduleLiveRefresh() {
+        if (streamUrl || discoveredStreamUrl || sourceMode !== 'live' || !isTabVisible) return;
+        if (liveRefreshTimer !== null) clearTimeout(liveRefreshTimer);
+        // The Crow route sends one snapshot and closes the response. Re-arm
+        // only after that image loaded so slow responses never pile up.
+        liveRefreshTimer = setTimeout(() => {
+            liveRefreshTimer = null;
+            if (sourceMode === 'live' && isTabVisible) streamEpoch = Date.now();
+        }, 100);
+    }
+
+    function handleGlobalSourceMode(event: Event) {
+        const mode = (event as CustomEvent<string>).detail;
+        if (mode === 'mock' || mode === 'live') {
+            void setSourceMode(mode);
+        }
+    }
+
+    // Initial mount: restore persisted source mode, selected video, and fetch examples list with unique UUIDs
+    onMount(() => {
+        window.addEventListener('bawal-source-mode', handleGlobalSourceMode);
+        const refreshDiscoveredStream = () => {
+            fetch('/api/v1/devices/status', { cache: 'no-store' })
+                .then(res => res.ok ? res.json() : null)
+                .then(data => {
+                    const nextUrl = typeof data?.stream_url === 'string' ? data.stream_url : '';
+                    if (nextUrl && nextUrl !== discoveredStreamUrl) {
+                        discoveredStreamUrl = nextUrl;
+                        streamError = false;
+                    }
+                })
+                .catch(() => {});
+        };
+        refreshDiscoveredStream();
+        deviceStatusTimer = setInterval(refreshDiscoveredStream, 2000);
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', handleVisibilityChange);
+        }
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         if (typeof localStorage !== 'undefined') {
             const savedVideo = localStorage.getItem('bawal_mock_selected_video');
             if (savedVideo && savedVideo !== 'custom') {
@@ -160,6 +232,10 @@
             .catch(() => {
                 // Fallback to presets if backend is unavailable
             });
+<<<<<<< HEAD
+=======
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     });
 
     function formatExampleLabel(path: string): string {
@@ -307,6 +383,13 @@
         }
         streamError = false;
         retryCount = 0;
+<<<<<<< HEAD
+=======
+        if (typeof window !== 'undefined') {
+            // Wipe HUD boxes immediately; the backend also clears its snapshot.
+            window.dispatchEvent(new CustomEvent('bawal-clear-detections'));
+        }
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
         if (mode === 'mock') {
             // 1. Immediately request backend mode change and wipe frames/detections
@@ -510,6 +593,23 @@
     }
 
     onDestroy(() => {
+<<<<<<< HEAD
+=======
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('bawal-source-mode', handleGlobalSourceMode);
+        }
+        if (typeof document !== 'undefined') {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        }
+        if (liveRefreshTimer !== null) {
+            clearTimeout(liveRefreshTimer);
+            liveRefreshTimer = null;
+        }
+        if (deviceStatusTimer !== null) {
+            clearInterval(deviceStatusTimer);
+            deviceStatusTimer = null;
+        }
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         stopMockPushing();
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);
@@ -718,10 +818,15 @@
                         src={activeStreamUrl}
                         alt="AI Live Inspection Stream"
                         class="feed-video"
+<<<<<<< HEAD
                         onload={() => { streamError = false; retryCount = 0; }}
                         onerror={() => {
                             if (!hasCamera) streamError = true;
                         }}
+=======
+                        onload={() => { streamError = false; retryCount = 0; scheduleLiveRefresh(); }}
+                        onerror={() => { streamError = true; }}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                     />
                 {:else}
                     <!-- Standby State -->

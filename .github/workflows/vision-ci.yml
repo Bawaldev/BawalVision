@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 name: Native C++20 Vision Build Matrix
+=======
+name: Native C++20 Build Matrix
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
 on:
   push:
@@ -17,14 +21,26 @@ on:
       - '.github/workflows/vision-ci.yml'
   workflow_dispatch:
 
+<<<<<<< HEAD
+=======
+permissions:
+  contents: read
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 concurrency:
   group: vision-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build-vision:
+<<<<<<< HEAD
     name: C++20 Vision Matrix (${{ matrix.compiler.name }})
     runs-on: ubuntu-24.04
+=======
+    name: C++20 Matrix (${{ matrix.compiler.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +68,12 @@ jobs:
             libopencv-dev \
             libomp-dev \
             libcurl4-openssl-dev \
+<<<<<<< HEAD
             libhwy-dev \
+=======
+            libssl-dev \
+            libpq-dev \
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             libfmt-dev \
             libcpp-httplib-dev \
             nlohmann-json3-dev \
@@ -87,7 +108,11 @@ jobs:
       - name: Verify Architecture Portability (No -march=native)
         run: |
           echo "Verifying no machine-specific -march=native flag exists in C++ build scripts..."
+<<<<<<< HEAD
           if grep -rn --exclude-dir=build "\-march=native" services/CMakeLists.txt services/include services/src; then
+=======
+          if grep -rn --exclude-dir=build --exclude-dir=third_party "\-march=native" services/CMakeLists.txt services/include services/src; then
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             echo "::error::Found -march=native in C++ build configuration. Binary must remain portable across CPU architectures."
             exit 1
           fi
@@ -103,6 +128,13 @@ jobs:
             -DONNXRUNTIME_INCLUDE_DIR=/usr/local/include \
             -DONNXRUNTIME_LIB=/usr/local/lib/libonnxruntime.so
 
+<<<<<<< HEAD
       - name: Build Vision Service Binary
         run: cmake --build services/build --parallel $(nproc)
 
+=======
+      - name: Build C++ Targets
+        run: |
+          cmake --build services/build --parallel "$(nproc)" \
+            --target bawal_backend vision_service
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444

@@ -1,3 +1,125 @@
+#ifdef BUILD_AWS_LAMBDA
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <limits>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <aws/lambda-runtime/runtime.h>
+#include <fmt/core.h>
+#include <glaze/glaze.hpp>
+#include <openssl/evp.h>
+
+#include "bawal/server/inspection_dto.hpp"
+#include "bawal/vision/pipeline.hpp"
+
+namespace {
+
+static bawal::vision::InspectionPipeline g_cloud_pipeline;
+
+std::vector<uint8_t> decodeBase64(std::string_view encoded) {
+    if (encoded.empty() || encoded.size() % 4 != 0 ||
+        encoded.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+
+    std::vector<uint8_t> decoded((encoded.size() / 4) * 3);
+    const int written = EVP_DecodeBlock(
+        decoded.data(), reinterpret_cast<const unsigned char*>(encoded.data()),
+        static_cast<int>(encoded.size()));
+    if (written < 0) {
+        return {};
+    }
+
+    size_t padding = 0;
+    if (!encoded.empty() && encoded.back() == '=') ++padding;
+    if (encoded.size() > 1 && encoded[encoded.size() - 2] == '=') ++padding;
+    decoded.resize(static_cast<size_t>(written) - padding);
+    return decoded;
+}
+
+aws::lambda_runtime::invocation_response lambda_handler(
+    aws::lambda_runtime::invocation_request const& request) {
+    try {
+        bawal::server::LambdaEvent event;
+        if (const auto error = glz::read_json(event, request.payload); error) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Malformed JSON event", "InvalidPayload");
+        }
+
+        std::vector<uint8_t> image_bytes;
+        if (!event.image_base64.empty()) {
+            image_bytes = decodeBase64(event.image_base64);
+        } else if (event.is_base64_encoded) {
+            image_bytes = decodeBase64(event.body);
+        } else {
+            image_bytes.assign(event.body.begin(), event.body.end());
+        }
+        if (image_bytes.empty()) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Event did not contain a usable image payload", "InvalidPayload");
+        }
+
+        bawal::vision::InspectionOutput output;
+        if (!g_cloud_pipeline.execute(image_bytes, output)) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Vision pipeline could not process the image", "ExecutionError");
+        }
+
+        bawal::server::InspectionResponse dto;
+        dto.frame_id = event.frame_id;
+        dto.status = "PROCESSED";
+        dto.image_path.clear();
+        // The current model does not estimate food surface temperature.
+        dto.surface_temp = 0.0;
+        dto.detections.reserve(output.detections.size());
+        for (const auto& detection : output.detections) {
+            dto.detections.push_back({
+                std::string(detection.class_name), detection.confidence,
+                {detection.bbox.x, detection.bbox.y,
+                 detection.bbox.width, detection.bbox.height}});
+        }
+
+        std::string body;
+        if (const auto error = glz::write_json(dto, body); error) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Could not serialize inspection result", "SerializationError");
+        }
+        std::string response_payload;
+        const bawal::server::LambdaProxyResponse proxy_response{200, {}, std::move(body)};
+        if (const auto error = glz::write_json(proxy_response, response_payload); error) {
+            return aws::lambda_runtime::invocation_response::failure(
+                "Could not serialize Lambda response", "SerializationError");
+        }
+        return aws::lambda_runtime::invocation_response::success(
+            response_payload, "application/json");
+    } catch (const std::exception& error) {
+        return aws::lambda_runtime::invocation_response::failure(
+            error.what(), "ExecutionError");
+    }
+}
+
+} // namespace
+
+int main() {
+    const char* model_path = std::getenv("MODEL_PATH");
+    if (model_path == nullptr || *model_path == '\0') {
+        model_path = "/app/models/ai1_vision_int8.onnx";
+    }
+    if (!g_cloud_pipeline.initialize(model_path, 640, 480)) {
+        fmt::print(stderr, "[FATAL] Failed to initialize Lambda vision pipeline\n");
+        return 1;
+    }
+    return aws::lambda_runtime::run_handler(lambda_handler);
+}
+
+#else
+
 #include <iostream>
 #include <fstream>
 #include <array>
@@ -22,7 +144,12 @@
 #include "bawal/vision/frame_grabber.hpp"
 #include "bawal/server.hpp"
 #include "bawal/server/async_frame_publisher.hpp"
+<<<<<<< HEAD
 
+=======
+#include "bawal/server/inspection_dto.hpp"
+#include "bawal/ipc.hpp"
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 using namespace bawal::vision;
 using namespace bawal::server;
 
@@ -102,7 +229,11 @@ int main(int argc, char** argv) {
         : (backend_base_url + "/api/v1/camera/latest/raw");
     std::cout << "[INFO] Stream Ingestion URL: " << stream_url << "\n\n";
 
+<<<<<<< HEAD
     // 4. Initialize Inspection Pipeline Orchestrator (Prioritizing YOLOv8s over YOLOv8n)
+=======
+    // 4. Initialize the AI inspection pipeline model
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     std::string model_path = "/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx";
     if (const char* env_model = std::getenv("MODEL_PATH")) {
         if (std::string(env_model).length() > 0) {
@@ -110,11 +241,15 @@ int main(int argc, char** argv) {
         }
     } else {
         const std::vector<std::string> candidate_model_paths = {
+<<<<<<< HEAD
             // Priority 1: YOLOv8s INT8
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             "/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
             "ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
             "../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
             "../../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
+<<<<<<< HEAD
             "../../../ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx",
             "/app/weights/yolov8s_int8.onnx",
             "/app/weights/yolo8s_int8.onnx",
@@ -153,6 +288,14 @@ int main(int argc, char** argv) {
             "ml/AI1/model/yolov8n/ai1_vision.onnx",
             "../ml/AI1/model/yolov8n/ai1_vision.onnx",
             "../../ml/AI1/model/yolov8n/ai1_vision.onnx"
+=======
+            "/app/weights/yolov8s_int8.onnx",
+            "weights/yolov8s_int8.onnx",
+            "/app/ml/AI1/model/yolov8s/ai1_vision.onnx",
+            "ml/AI1/model/yolov8s/ai1_vision.onnx",
+            "/app/ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx",
+            "ml/AI1/model/yolov8n_int8/ai1_vision_int8.onnx"
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         };
         for (const auto& p : candidate_model_paths) {
             std::ifstream check(p.c_str());
@@ -172,15 +315,16 @@ int main(int argc, char** argv) {
               << (pipeline.getEnhancer().isReady() ? "Active (NCNN Vulkan / Multi-Arch SIMD)" : "Standby") 
               << " | Scale: " << pipeline.getEnhancer().params.scale << "x\n";
 
-    CURL* curl_fetch = curl_easy_init();
-    CURL* curl_post = curl_easy_init();
-
     const std::string window_name = "BawalVision AI1 Inspection Pipeline";
     if (!headless) {
         cv::namedWindow(window_name, cv::WINDOW_NORMAL);
         cv::resizeWindow(window_name, 800, 600);
     }
 
+<<<<<<< HEAD
+=======
+    // 5. Initialize ingestion (mock MP4 vs zero-copy POSIX SHM IPC)
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     bool use_video_source = false;
     if (const char* env_video = std::getenv("VIDEO_PATH")) {
         if (std::string(env_video).length() > 0) {
@@ -194,14 +338,70 @@ int main(int argc, char** argv) {
             }
         }
     }
+<<<<<<< HEAD
     if (!use_video_source) {
         (void)pipeline.openVideoSource(SourceMode::ESP32_STREAM, stream_url);
         pipeline.getVideoSource().setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
+=======
+
+    bool use_shm = false;
+    bawal::ipc::ShmFrameConsumer shm_consumer;
+    LatestMatMailbox shm_mailbox(2);
+    std::atomic<bool> shm_worker_running{false};
+    std::atomic<uint32_t> shm_latest_frame_id{0};
+    std::thread shm_worker;
+
+    // Fallback HTTP frame grabber (only active for local video mode or when SHM fails)
+    LatestFrameGrabber frame_grabber(pipeline.getVideoSource());
+
+    if (use_video_source) {
+        frame_grabber.start();
+    } else {
+        // Try to initialize the modular SHM consumer
+        if (shm_consumer.init()) {
+            use_shm = true;
+            shm_worker_running.store(true, std::memory_order_release);
+
+            // Asynchronous ingestion worker: waits for SHM frame signals without blocking the GUI main loop
+            shm_worker = std::thread([&]() {
+                cv::Mat decoded;
+                uint32_t fid = 0;
+                while (shm_worker_running.load(std::memory_order_acquire)) {
+                    try {
+                        if (shm_consumer.waitForNextFrame(decoded, fid)) {
+                            if (!decoded.empty()) {
+                                shm_latest_frame_id.store(fid, std::memory_order_relaxed);
+                                shm_mailbox.publish(decoded);
+                            }
+                        } else {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                        }
+                    } catch (const std::exception& e) {
+                        // A corrupt/torn SHM frame (or allocation failure) must
+                        // not take down the whole vision service.
+                        fmt::print(stderr, "[SHM] frame decode failed: {}\n", e.what());
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    } catch (...) {
+                        fmt::print(stderr, "[SHM] frame decode failed with unknown error\n");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                }
+            });
+            fmt::print("[IPC] POSIX shared memory zero-copy consumer active!\n");
+        } else {
+            fmt::print("[WARN] Failed to enable SHM. Falling back to the HTTP frame grabber.\n");
+            (void)pipeline.openVideoSource(SourceMode::ESP32_STREAM, stream_url);
+            pipeline.getVideoSource().setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
+            frame_grabber.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
+            frame_grabber.start();
+        }
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 
     uint64_t frame_seq = 0;
     auto last_ai_dispatch = std::chrono::steady_clock::now() - std::chrono::seconds(1);
 
+<<<<<<< HEAD
     // Capture (I/O) is fully decoupled from processing and inference. The grabber
     // owns the blocking HTTP/decoder work; the main loop only consumes the newest
     // completed frame.
@@ -211,6 +411,9 @@ int main(int argc, char** argv) {
 
     // Asynchronous background AI worker. It consumes a single-slot mailbox, so
     // frames that arrive while inference is busy are dropped rather than queued.
+=======
+    // Asynchronous AI worker (single-slot decoupled mailbox)
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     std::mutex ai_mutex;
     LatestMatMailbox ai_mailbox(3);
     std::atomic<bool> ai_worker_running{true};
@@ -219,7 +422,10 @@ int main(int argc, char** argv) {
     std::vector<DetectionResult> shared_detections;
     std::string current_device_id = device_id;
 
+<<<<<<< HEAD
     // Non-blocking discovery service (never runs in the frame path).
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     std::mutex discovery_mutex;
     std::string discovered_device_id;
     bool discovery_has_update = false;
@@ -228,9 +434,13 @@ int main(int argc, char** argv) {
     auto last_valid_detection_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     std::thread discovery_worker([&]() {
+<<<<<<< HEAD
         if (use_video_source) {
             return;
         }
+=======
+        if (use_video_source) return;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         while (discovery_running.load(std::memory_order_acquire)) {
             const std::string id = bawal::server::discoverActiveDeviceID(nullptr, backend_base_url);
             {
@@ -273,7 +483,11 @@ int main(int argc, char** argv) {
             if (pipeline.runInference(frame_to_process, detected)) {
                 const double infer_ms = ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
                 
+<<<<<<< HEAD
                 // Periodically synchronize dynamic confidence threshold from backend (every ~3 seconds)
+=======
+                // Sync the dynamic confidence threshold from the backend every 3 seconds
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 const auto now_thresh = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now_thresh - last_thresh_sync).count() >= 3) {
                     last_thresh_sync = now_thresh;
@@ -301,7 +515,6 @@ int main(int argc, char** argv) {
                         last_valid_detection_time = std::chrono::steady_clock::now();
                         ai_detections_updated.store(true);
                     } else {
-                        // Only clear after 1.5s of no detections to avoid HUD flicker
                         const auto now = std::chrono::steady_clock::now();
                         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_valid_detection_time).count();
                         if (elapsed_ms > 1500 && !shared_detections.empty()) {
@@ -322,9 +535,12 @@ int main(int argc, char** argv) {
                     fmt::print("\n");
                 }
 
+<<<<<<< HEAD
                 // State-Change Hysteresis & Selective Sync Gatekeeper:
                 // Only dispatch if the food detection state has changed (new item or status change)
                 // or if 15 seconds have passed (periodic heartbeat). Enforces a minimum debounce.
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 const auto current_time = std::chrono::steady_clock::now();
                 const auto elapsed_since_dispatch = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_dispatch_time).count();
 
@@ -342,6 +558,7 @@ int main(int argc, char** argv) {
                 const bool heartbeat_sync = is_mock_source ? (elapsed_since_dispatch >= 2500) : (elapsed_since_dispatch >= 15000);
                 const bool debounce_ok = (elapsed_since_dispatch >= 800);
 
+<<<<<<< HEAD
                 // Shared YOLO object detection + OpenCV optical/spoilage JSON serializer formatted with fmt::format
                 auto serializeVisionDetectionsJson = [&](std::string& out_body, const std::vector<DetectionResult>& dets) {
                     const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
@@ -420,6 +637,73 @@ int main(int argc, char** argv) {
                     const bool dispatched = is_mock_source
                         ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, payload_json)
                         : bawal::server::postInspectionPayload(curl_db, backend_base_url, payload_json);
+=======
+                auto serializeDto = [](const auto& value) {
+                    std::string json;
+                    if (const auto error = glz::write_json(value, json); error) {
+                        fmt::print(stderr, "[JSON] Glaze serialization failed\n");
+                        return std::string{};
+                    }
+                    return json;
+                };
+
+                auto buildSceneOpticalDto = [](const SceneOpticalMetrics& optical) {
+                    return bawal::server::SceneOpticalDto{
+                        optical.avg_r, optical.avg_g, optical.avg_b,
+                        optical.lux_luminance, optical.color_temperature,
+                        optical.white_balance_status};
+                };
+
+                auto buildDetectionDtos = [](const std::vector<DetectionResult>& dets) {
+                    std::vector<bawal::server::InspectionDetectionDto> result;
+                    result.reserve(dets.size());
+                    for (const auto& detection : dets) {
+                        const float spoilage_pct = std::clamp(
+                            detection.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
+                        const char* status = (detection.spoilage.is_visually_spoiled ||
+                                              spoilage_pct >= 45.0f)
+                            ? "REJECT"
+                            : ((spoilage_pct >= 25.0f || detection.confidence < 0.60f)
+                                   ? "REVIEW" : "PASS");
+                        result.push_back({
+                            std::string(detection.class_name), detection.confidence,
+                            spoilage_pct, status,
+                            {detection.bbox.x, detection.bbox.y,
+                             detection.bbox.width, detection.bbox.height}});
+                    }
+                    return result;
+                };
+
+                auto serializeVisionDetectionsJson = [&](const std::vector<DetectionResult>& dets) {
+                    const auto optical = pipeline.getClassifier().getLastOpticalMetrics();
+                    return optical;
+                };
+
+                if (!valid_detections.empty() && (state_changed || heartbeat_sync) && debounce_ok && !dev_id.empty()) {
+                    const bool is_rewound = video_has_rewound.exchange(false, std::memory_order_relaxed);
+                    const std::string engine_pipeline = fmt::format("{} + OpenCV HSV", pipeline.getModelArchitecture());
+                    const auto optical = serializeVisionDetectionsJson(valid_detections);
+                    const auto scene_optical = buildSceneOpticalDto(optical);
+                    const auto detections = buildDetectionDtos(valid_detections);
+                    std::string payload_json = is_mock_source
+                        ? serializeDto(bawal::server::MockInspectionPayload{
+                              dev_id, dev_id, "mock_video", "MockInspectionRequest",
+                              engine_pipeline, is_rewound, scene_optical, detections})
+                        : serializeDto(bawal::server::LiveInspectionPayload{
+                              dev_id, "live_esp32", is_rewound, scene_optical, detections});
+
+                    if (is_mock_source) {
+                        const std::string mock_telemetry_json = serializeDto(
+                            bawal::server::MockTelemetryPayload{
+                                dev_id, dev_id, "mock_video", "MockTelemetryPayload",
+                                "mock_simulation", engine_pipeline, is_rewound, scene_optical});
+                        (void)bawal::server::postMockTelemetryPayload(backend_base_url, mock_telemetry_json);
+                    }
+
+                    const bool dispatched = !payload_json.empty() && (is_mock_source
+                        ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, payload_json)
+                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, payload_json));
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                     if (dispatched) {
                         last_dispatch_time = current_time;
                         last_state_signature = current_state_sig;
@@ -433,6 +717,7 @@ int main(int argc, char** argv) {
                         );
                     }
                 } else if (should_clear_backend && !dev_id.empty()) {
+<<<<<<< HEAD
                     std::string clear_json = is_mock_source
                         ? fmt::format(
                               R"({{"mock_id":"{}","device_id":"{}","source_type":"mock_video","inspection_struct":"MockInspectionRequest",)",
@@ -449,6 +734,21 @@ int main(int argc, char** argv) {
                     const bool cleared = is_mock_source
                         ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, clear_json)
                         : bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_json);
+=======
+                    const std::vector<DetectionResult> empty_dets;
+                    const auto optical = serializeVisionDetectionsJson(empty_dets);
+                    const auto scene_optical = buildSceneOpticalDto(optical);
+                    std::string clear_json = is_mock_source
+                        ? serializeDto(bawal::server::MockInspectionPayload{
+                              dev_id, dev_id, "mock_video", "MockInspectionRequest",
+                              fmt::format("{} + OpenCV HSV", pipeline.getModelArchitecture()),
+                              false, scene_optical, {}})
+                        : serializeDto(bawal::server::LiveInspectionPayload{
+                              dev_id, "live_esp32", false, scene_optical, {}});
+                    const bool cleared = !clear_json.empty() && (is_mock_source
+                        ? bawal::server::postMockInspectionPayload(curl_db, backend_base_url, clear_json)
+                        : bawal::server::postInspectionPayload(curl_db, backend_base_url, clear_json));
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                     if (cleared) {
                         last_dispatch_time = current_time;
                         last_state_signature.clear();
@@ -456,7 +756,10 @@ int main(int argc, char** argv) {
                 }
             }
 
+<<<<<<< HEAD
             // Return the processed Mat allocation to the mailbox pool.
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             ai_mailbox.recycle(std::move(frame_to_process));
         }
         if (curl_db) curl_easy_cleanup(curl_db);
@@ -465,6 +768,7 @@ int main(int argc, char** argv) {
     AsyncAnnotatedFramePublisher frame_publisher(backend_base_url);
     frame_publisher.start();
 
+<<<<<<< HEAD
     // Event-driven device switch cleanup. Clearing a stale device entry is a rare
     // operation, so it runs in a short-lived isolated worker rather than blocking
     // the capture/processing loop on an HTTP round-trip.
@@ -472,6 +776,10 @@ int main(int argc, char** argv) {
         if (id.empty()) {
             return;
         }
+=======
+    auto postDeviceClearAsync = [backend_base_url](std::string id) {
+        if (id.empty()) return;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         std::thread([backend_base_url, id = std::move(id)]() {
             const bool is_mock = (id == "MOCK_VIDEO_CAM" || id.rfind("MOCK_", 0) == 0);
             const std::string json = is_mock
@@ -487,11 +795,14 @@ int main(int argc, char** argv) {
 
     std::vector<DetectionResult> current_detections;
     current_detections.reserve(32);
+<<<<<<< HEAD
     std::vector<uint8_t> annotated_jpeg;
     static const std::vector<int> kEncodeParams = {
         cv::IMWRITE_JPEG_QUALITY, 94,
         cv::IMWRITE_JPEG_OPTIMIZE, 1
     };
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     InspectionOutput inspection;
 
     while (true) {
@@ -500,6 +811,7 @@ int main(int argc, char** argv) {
         inspection.detections.clear();
         inspection.dark_status = DarkDetectionResult{};
 
+<<<<<<< HEAD
         CapturedFrame captured;
         const auto wait_budget = use_video_source ? std::chrono::milliseconds(50)
                                                   : std::chrono::milliseconds(10);
@@ -516,6 +828,40 @@ int main(int argc, char** argv) {
             pipeline.resetTracker();
             video_has_rewound.store(true, std::memory_order_relaxed);
             fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
+=======
+        cv::Mat frame_to_stream;
+        uint32_t active_fid = 0;
+
+        // INGESTION: POSIX SHM IPC vs HTTP Grabber (Mock Video)
+        if (use_shm) {
+            if (!shm_mailbox.waitTake(frame_to_stream, std::chrono::milliseconds(10)) || frame_to_stream.empty()) {
+                if (!headless) (void)cv::waitKey(1);
+                continue;
+            }
+            active_fid = shm_latest_frame_id.load(std::memory_order_relaxed);
+        } else {
+            CapturedFrame captured;
+            const auto wait_budget = use_video_source ? std::chrono::milliseconds(50)
+                                                      : std::chrono::milliseconds(10);
+            if (!frame_grabber.waitTake(captured, wait_budget) || captured.image.empty()) {
+                if (!headless) (void)cv::waitKey(1);
+                continue;
+            }
+
+            frame_to_stream = std::move(captured.image);
+            active_fid = static_cast<uint32_t>(frame_seq + 1);
+
+            if (captured.rewound) {
+                pipeline.resetTracker();
+                video_has_rewound.store(true, std::memory_order_relaxed);
+                fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
+            }
+
+            const bool detections_changed = ai_detections_updated.exchange(false, std::memory_order_relaxed);
+            if (captured.duplicate && !detections_changed) {
+                continue;
+            }
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         }
 
         if (!use_video_source) {
@@ -531,8 +877,11 @@ int main(int argc, char** argv) {
             }
 
             if (device_id_pinned) {
+<<<<<<< HEAD
                 // An explicitly configured device is authoritative; ignore
                 // discovery churn rather than switching to an unrelated stream.
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 has_discovery_update = false;
             }
 
@@ -553,6 +902,7 @@ int main(int argc, char** argv) {
                 stream_url = device_id.empty()
                     ? fmt::format("{}/api/v1/camera/latest/raw", backend_base_url)
                     : fmt::format("{}/api/v1/camera/latest/{}/raw", backend_base_url, device_id);
+<<<<<<< HEAD
                 frame_grabber.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
                 fmt::print("[INFO] Active camera stream: {}\n", device_id.empty() ? "<none>" : device_id);
                 fmt::print("[INFO] Ingestion URL: {}\n", stream_url);
@@ -568,23 +918,45 @@ int main(int argc, char** argv) {
         inspection.frame_id = static_cast<uint32_t>(frame_seq + 1);
 
         // Get currently active detections (copy under the short-lived lock).
+=======
+                if (!use_shm) {
+                    frame_grabber.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
+                }
+                fmt::print("[INFO] Active camera stream: {}\n", device_id.empty() ? "<none>" : device_id);
+                fmt::print("[INFO] Ingestion URL: {}\n", stream_url);
+            }
+        }
+
+        inspection.frame_id = (active_fid > 0) ? active_fid : static_cast<uint32_t>(frame_seq + 1);
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         {
             std::lock_guard<std::mutex> lock(ai_mutex);
             current_detections.assign(shared_detections.begin(), shared_detections.end());
         }
 
+<<<<<<< HEAD
         // High-Speed Real-Time Video Streaming Pass (Dewarp + Fast ISP + Overlay, < 6 ms)
+=======
+        // Real-Time Video Streaming Pass (Dewarp + Fast ISP + Overlay, < 6 ms)
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         const bool is_mock_video = use_video_source || (device_id.find("MOCK") != std::string::npos);
         if (pipeline.processStream(frame_to_stream, current_detections, inspection, is_mock_video)) {
             frame_ok = true;
             frame_seq++;
 
+<<<<<<< HEAD
             // Dispatch frame to background AI worker with responsive pacing (~11 inferences/sec on YOLOv8s INT8)
             const auto now_ai = std::chrono::steady_clock::now();
             const auto ms_since_ai = std::chrono::duration_cast<std::chrono::milliseconds>(now_ai - last_ai_dispatch).count();
             if (ms_since_ai >= 90) {
                 // Copy into a pooled Mat and hand it over without blocking. If the
                 // AI worker is still busy, the previous pending frame is replaced.
+=======
+            const auto now_ai = std::chrono::steady_clock::now();
+            const auto ms_since_ai = std::chrono::duration_cast<std::chrono::milliseconds>(now_ai - last_ai_dispatch).count();
+            if (ms_since_ai >= 90) {
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 ai_mailbox.publish(inspection.dewarped_image);
                 last_ai_dispatch = now_ai;
             }
@@ -595,6 +967,7 @@ int main(int argc, char** argv) {
                           << current_detections.size() << "\n";
             }
 
+<<<<<<< HEAD
             // Encode on the processing thread (CPU-bound) but hand the blocking
             // HTTP upload to the async publisher. The publisher keeps only the
             // newest frame, so a slow backend can never stall this loop.
@@ -602,18 +975,23 @@ int main(int argc, char** argv) {
                 if (cv::imencode(".jpg", inspection.annotated_image, annotated_jpeg, kEncodeParams)) {
                     (void)frame_publisher.publish(device_id, inspection.frame_id, annotated_jpeg);
                 }
+=======
+            if (!inspection.annotated_image.empty() && !device_id.empty()) {
+                // Encoding + HTTP upload are owned by the publisher worker;
+                // publish() deep-copies so the overlay buffer can be reused.
+                (void)frame_publisher.publish(device_id, inspection.frame_id, inspection.annotated_image);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             }
         }
 
         if (!headless) {
             cv::Mat display_frame;
             if (!frame_ok || inspection.annotated_image.empty()) {
-                // Standby Waiting HUD
                 display_frame = cv::Mat::zeros(480, 640, CV_8UC3);
                 cv::putText(display_frame, "BAWAL VISION AI1 PIPELINE", cv::Point(145, 180),
                             cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
-                cv::putText(display_frame, "Waiting for ESP32-S3 Stream...", cv::Point(145, 230),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
+                cv::putText(display_frame, use_shm ? "Waiting for SHM Frame..." : "Waiting for ESP32-S3 Stream...",
+                            cv::Point(145, 230), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
                 cv::putText(display_frame, "Target Device: " + device_id, cv::Point(145, 265),
                             cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(100, 255, 100), 1, cv::LINE_AA);
                 cv::putText(display_frame, "URL: " + stream_url, cv::Point(145, 295),
@@ -632,8 +1010,22 @@ int main(int argc, char** argv) {
         }
     }
 
+<<<<<<< HEAD
     // Shutdown order: stop producers first, then workers, then network uploader.
     frame_grabber.stop();
+=======
+    // Prosedur Shutdown Urut & Bersih
+    if (use_shm) {
+        shm_worker_running.store(false, std::memory_order_release);
+        if (shm_worker.joinable()) {
+            shm_worker.join();
+        }
+        // shm_consumer otomatis dieksekusi destruktornya (RAII)
+    } else {
+        frame_grabber.stop();
+    }
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     discovery_running.store(false, std::memory_order_release);
     ai_worker_running.store(false, std::memory_order_release);
     if (discovery_worker.joinable()) {
@@ -648,8 +1040,6 @@ int main(int argc, char** argv) {
         cv::destroyAllWindows();
     }
 
-    if (curl_fetch) curl_easy_cleanup(curl_fetch);
-    if (curl_post) curl_easy_cleanup(curl_post);
     if (curl) {
         curl_easy_cleanup(curl);
     }
@@ -658,3 +1048,5 @@ int main(int argc, char** argv) {
     std::cout << "\n[SUCCESS] Vision pipeline service exited cleanly.\n";
     return 0;
 }
+
+#endif // BUILD_AWS_LAMBDA

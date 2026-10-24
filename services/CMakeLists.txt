@@ -87,6 +87,7 @@ find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs highgui dnn)
 find_package(CURL REQUIRED)
+<<<<<<< HEAD
 find_package(hwy QUIET)
 if(NOT TARGET hwy::hwy)
     find_package(PkgConfig QUIET)
@@ -114,7 +115,52 @@ endif()
 find_package(fmt QUIET)
 find_package(httplib QUIET)
 find_package(nlohmann_json QUIET)
+=======
+find_package(PostgreSQL QUIET)
+find_package(fmt CONFIG QUIET)
+find_package(httplib QUIET)
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 find_package(ncnn QUIET)
+
+include(FetchContent)
+
+if(NOT TARGET fmt::fmt)
+    FetchContent_Declare(fmt
+        GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+        GIT_TAG 10.2.1
+        GIT_SHALLOW TRUE
+    )
+    set(FMT_DOC OFF CACHE BOOL "" FORCE)
+    set(FMT_TEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(fmt)
+endif()
+
+if(NOT TARGET glaze::glaze)
+    FetchContent_Declare(glaze
+        GIT_REPOSITORY https://github.com/stephenberry/glaze.git
+        GIT_TAG v4.2.0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(glaze)
+endif()
+
+find_package(mimalloc CONFIG QUIET)
+if(NOT TARGET mimalloc-static AND NOT TARGET mimalloc)
+    FetchContent_Declare(mimalloc
+        GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
+        GIT_TAG v2.1.7
+        GIT_SHALLOW TRUE
+    )
+    set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(mimalloc)
+endif()
+
+option(ENABLE_AWS_LAMBDA "Build vision_service as an AWS Lambda custom runtime" OFF)
+if(ENABLE_AWS_LAMBDA)
+    find_package(aws-lambda-runtime CONFIG REQUIRED)
+endif()
 
 if(NOT TARGET ncnn)
     find_path(NCNN_INCLUDE_DIR  
@@ -169,14 +215,42 @@ endif()
 set(ML_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ml/include)
 set(ML_GENERATOR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../ml/src/ncnn_generator.cpp)
 
+# The upstream generator uses std::format, which requires GCC 13+ / Clang 17+
+# with a matching libstdc++. Debian bookworm ships GCC 12, so container builds
+# substitute a no-op stub and rely on pre-converted NCNN weights instead.
+option(BAWAL_ENABLE_NCNN_GENERATOR
+    "Compile the std::format-based NCNN generator (requires GCC 13+)" ON)
+
+# ---------------------------------------------------------------------------
+# Third-party web stack (Crow + standalone Asio)
+# ---------------------------------------------------------------------------
+# Both are vendored so the Docker image can build without network access.
+set(BAWAL_THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+
+add_library(bawal_crow INTERFACE)
+target_include_directories(bawal_crow SYSTEM INTERFACE
+    ${BAWAL_THIRD_PARTY_DIR}/crow
+    ${BAWAL_THIRD_PARTY_DIR}/asio/include
+)
+target_compile_definitions(bawal_crow INTERFACE ASIO_STANDALONE)
+target_link_libraries(bawal_crow INTERFACE Threads::Threads)
+
+# ---------------------------------------------------------------------------
+# Shared core: vision pipeline + IPC + Crow routes
+# ---------------------------------------------------------------------------
 file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
-if(EXISTS ${ML_GENERATOR_SRC})
+list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/main\\.cpp$")
+list(FILTER SERVICE_SOURCES EXCLUDE REGEX "/src/backend/main_backend\\.cpp$")
+if(BAWAL_ENABLE_NCNN_GENERATOR AND EXISTS ${ML_GENERATOR_SRC})
     list(APPEND SERVICE_SOURCES ${ML_GENERATOR_SRC})
+else()
+    list(APPEND SERVICE_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vision/ncnn_generator_stub.cpp)
 endif()
 
-add_executable(vision_service ${SERVICE_SOURCES})
+add_library(bawal_core STATIC ${SERVICE_SOURCES})
 
-target_include_directories(vision_service PRIVATE
+target_include_directories(bawal_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${ML_INCLUDE_DIR}
@@ -189,41 +263,47 @@ target_include_directories(vision_service PRIVATE
 
 # Add NCNN include directory if not using imported target
 if(NCNN_INCLUDE_DIR)
-    target_include_directories(vision_service PRIVATE ${NCNN_INCLUDE_DIR})
+    target_include_directories(bawal_core PRIVATE ${NCNN_INCLUDE_DIR})
 endif()
 
-target_link_libraries(vision_service PRIVATE
+target_link_libraries(bawal_core PUBLIC
     Threads::Threads
     OpenMP::OpenMP_CXX
     ${OpenCV_LIBS}
     ${ONNXRUNTIME_LIB}
+    bawal_crow
 )
 
 # Link NCNN library if available
 if(TARGET ncnn)
-    target_link_libraries(vision_service PRIVATE ncnn)
-    target_compile_definitions(vision_service PRIVATE HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
+    target_link_libraries(bawal_core PUBLIC ncnn)
+    target_compile_definitions(bawal_core PUBLIC HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
 elseif(NCNN_LIB)
-    target_link_libraries(vision_service PRIVATE ${NCNN_LIB})
-    target_compile_definitions(vision_service PRIVATE HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
+    target_link_libraries(bawal_core PUBLIC ${NCNN_LIB})
+    target_compile_definitions(bawal_core PUBLIC HAVE_NCNN=1 BAWAL_HAVE_NCNN=1)
 endif()
 
 # Link Vulkan if NCNN GPU acceleration is enabled
 if(Vulkan_FOUND AND (TARGET ncnn OR NCNN_LIB))
-    target_link_libraries(vision_service PRIVATE Vulkan::Vulkan)
-    target_compile_definitions(vision_service PRIVATE USE_NCNN_VULKAN=1)
+    target_link_libraries(bawal_core PUBLIC Vulkan::Vulkan)
+    target_compile_definitions(bawal_core PUBLIC USE_NCNN_VULKAN=1)
 endif()
 
 if(TARGET CURL::libcurl)
-    target_link_libraries(vision_service PRIVATE CURL::libcurl)
+    target_link_libraries(bawal_core PUBLIC CURL::libcurl)
 else()
-    target_link_libraries(vision_service PRIVATE ${CURL_LIBRARIES})
+    target_link_libraries(bawal_core PUBLIC ${CURL_LIBRARIES})
 endif()
 
-if(TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(vision_service PRIVATE nlohmann_json::nlohmann_json)
+if(PostgreSQL_FOUND)
+    target_link_libraries(bawal_core PUBLIC PostgreSQL::PostgreSQL)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_HAVE_POSTGRES=1)
+    message(STATUS "PostgreSQL/libpq found - inspection persistence enabled")
+else()
+    message(STATUS "PostgreSQL/libpq not found - inspection persistence disabled")
 endif()
 
+<<<<<<< HEAD
 if(TARGET fmt::fmt)
     target_link_libraries(vision_service PRIVATE fmt::fmt)
     target_compile_definitions(vision_service PRIVATE BAWAL_USE_SYSTEM_FMT=1)
@@ -258,3 +338,58 @@ endif()
 
 
 install(TARGETS vision_service DESTINATION bin)
+=======
+target_link_libraries(bawal_core PUBLIC fmt::fmt glaze::glaze)
+target_compile_definitions(bawal_core PUBLIC BAWAL_USE_FMT=1 BAWAL_USE_GLAZE=1)
+
+if(TARGET mimalloc-static)
+    target_link_libraries(bawal_core PUBLIC mimalloc-static)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_MIMALLOC=1)
+elseif(TARGET mimalloc)
+    target_link_libraries(bawal_core PUBLIC mimalloc)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_MIMALLOC=1)
+else()
+    message(FATAL_ERROR "mimalloc package did not provide mimalloc-static or mimalloc target")
+endif()
+
+if(TARGET httplib::httplib)
+    target_link_libraries(bawal_core PUBLIC httplib::httplib)
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_SYSTEM_HTTPLIB=1)
+endif()
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
+    target_compile_definitions(bawal_core PUBLIC BAWAL_USE_INTEL_ICPX=1)
+endif()
+
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_definitions(bawal_core PUBLIC BAWAL_RELEASE_BUILD=1)
+endif()
+
+# ---------------------------------------------------------------------------
+# Executables
+# ---------------------------------------------------------------------------
+option(BAWAL_BUILD_BACKEND "Build the unified Crow C++ web service" ON)
+option(BAWAL_BUILD_VISION_VIEWER "Build the legacy standalone vision viewer" ON)
+
+# Unified C++ web service: Crow HTTP + in-process SHM vision consumer.
+if(BAWAL_BUILD_BACKEND)
+    add_executable(bawal_backend src/backend/main_backend.cpp)
+    target_link_libraries(bawal_backend PRIVATE bawal_core OpenMP::OpenMP_CXX)
+    target_compile_definitions(bawal_backend PRIVATE BAWAL_USE_MIMALLOC=1)
+    install(TARGETS bawal_backend DESTINATION bin)
+endif()
+
+# Legacy standalone vision viewer kept for the existing `just run-vision`
+# workflow while the Crow backend becomes the primary deployment target.
+if(BAWAL_BUILD_VISION_VIEWER)
+    add_executable(vision_service src/main.cpp)
+    target_link_libraries(vision_service PRIVATE bawal_core)
+    target_compile_definitions(vision_service PRIVATE BAWAL_USE_MIMALLOC=1)
+    if(ENABLE_AWS_LAMBDA)
+        target_compile_definitions(vision_service PRIVATE BUILD_AWS_LAMBDA=1)
+        target_link_libraries(vision_service PRIVATE AWS::aws-lambda-runtime)
+        set_target_properties(vision_service PROPERTIES OUTPUT_NAME "bootstrap")
+    endif()
+    install(TARGETS vision_service DESTINATION bin)
+endif()
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444

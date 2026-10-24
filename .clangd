@@ -1,10 +1,14 @@
+<<<<<<< HEAD
 
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 Diagnostics:
   UnusedIncludes: None
   ClangTidy:
     Remove:
       - readability-magic-numbers
       - modernize-use-trailing-return-type
+<<<<<<< HEAD
 
 ---
 If:
@@ -76,3 +80,5 @@ CompileFlags:
     - -fopenmp
     - -I/usr/include/opencv4
     - -I/usr/include/ncnn
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444

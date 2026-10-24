@@ -32,6 +32,10 @@
             "mode": "thresholds"
           },
           "mappings": [],
+<<<<<<< HEAD
+=======
+          "noValue": "Belum ada data",
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -83,7 +87,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
+<<<<<<< HEAD
           "rawSql": "SELECT COALESCE(ROUND(AVG(similarity_rate) * 100, 1), 0.0) AS \"Avg Confidence\" FROM inspection_foods;",
+=======
+          "rawSql": "SELECT ROUND(AVG(similarity_rate) * 100, 1) AS \"Avg Confidence\" FROM inspection_foods;",
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
           "refId": "A"
         }
       ],
@@ -101,6 +109,10 @@
             "mode": "thresholds"
           },
           "mappings": [],
+<<<<<<< HEAD
+=======
+          "noValue": "Belum ada data",
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -152,7 +164,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
+<<<<<<< HEAD
           "rawSql": "SELECT COALESCE(ROUND((COUNT(*) FILTER (WHERE status = 'PASS')::numeric / NULLIF(COUNT(*), 0) * 100), 1), 100.0) AS \"Fresh Food Rate\" FROM inspection_foods;",
+=======
+          "rawSql": "SELECT ROUND((COUNT(*) FILTER (WHERE status = 'PASS'))::numeric / NULLIF(COUNT(*), 0) * 100, 1) AS \"Fresh Food Rate\" FROM inspection_foods;",
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
           "refId": "A"
         }
       ],
@@ -198,7 +214,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
+<<<<<<< HEAD
           "rawSql": "SELECT i.created_at AS \"Waktu Inferensi\", fi.name AS \"Item Makanan (Class)\", CONCAT(ROUND(ifo.similarity_rate * 100, 1), '%') AS \"Confidence Score\", CONCAT(ifo.spoilage_score, '%') AS \"Tingkat Kebusukan\", ifo.status AS \"Status Deteksi\", i.device_id AS \"Camera Source\" FROM inspection_foods ifo JOIN inspections i ON ifo.inspection_id = i.id JOIN food_items fi ON ifo.food_item_id = fi.id ORDER BY i.created_at DESC LIMIT 50;",
+=======
+          "rawSql": "SELECT i.created_at AS \"Waktu Inferensi\", fi.name AS \"Item Makanan (Class)\", CONCAT(ROUND(ifo.similarity_rate * 100, 1), '%') AS \"Confidence Score\", CONCAT(ifo.spoilage_score, '%') AS \"Tingkat Kebusukan\", ifo.status AS \"Status Deteksi\", i.device_id AS \"Camera Source\" FROM inspection_foods ifo JOIN inspections i ON ifo.inspection_id = i.id JOIN food_items fi ON ifo.food_item_id = fi.id WHERE $__timeFilter(i.created_at) ORDER BY i.created_at DESC LIMIT 50;",
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
           "refId": "A"
         }
       ],
@@ -229,5 +249,9 @@
   "timezone": "browser",
   "title": "BawalVision Telemetry & Quality Analytics",
   "uid": "bawalvision_analytics",
+<<<<<<< HEAD
   "version": 4
+=======
+  "version": 5
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 }

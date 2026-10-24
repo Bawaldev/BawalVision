@@ -18,11 +18,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     build-essential \
     cmake \
     ninja-build \
+    git \
     pkg-config \
     libopencv-dev \
     libcurl4-openssl-dev \
     libomp-dev \
+<<<<<<< HEAD
     libhwy-dev \
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     libfmt-dev \
     libcpp-httplib-dev \
     nlohmann-json3-dev \
@@ -92,7 +96,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libopencv-dev \
     libcurl4 \
     libgomp1 \
+<<<<<<< HEAD
     libhwy-dev \
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     libfmt-dev \
     ca-certificates \
     && useradd -m -s /bin/bash -u 1001 visionuser \

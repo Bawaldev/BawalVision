@@ -1,8 +1,11 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { fetchRecords } from '../api';
+<<<<<<< HEAD
     import CameraStream from '../components/CameraStream.svelte';
     import GrafanaAnalyticsEmbed from '../components/GrafanaAnalyticsEmbed.svelte';
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     import type { InspectionRecord, TelemetryPayload } from '../types';
 
     interface Props {
@@ -18,7 +21,10 @@
     let searchTerm = $state('');
     let statusFilter = $state<'ALL' | 'PASS' | 'REVIEW' | 'REJECT'>('ALL');
     let selectedRecord = $state<InspectionRecord | null>(null);
+<<<<<<< HEAD
     let showCameraInspection = $state(false);
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
     // Hover tooltip state for temperature chart
     let hoveredIdx = $state<number | null>(null);
@@ -66,7 +72,11 @@
     });
 
     // View tab for chart: 'both' (default) | 'cpu' | 'temperature'
+<<<<<<< HEAD
     let activeChartTab = $state<'both' | 'cpu' | 'temperature' | 'grafana'>('both');
+=======
+    let activeChartTab = $state<'both' | 'cpu' | 'temperature'>('both');
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
     // Dual-core helper: extract Core 0 (WiFi/Protocol) and Core 1 (App/Vision)
     function getCoreLoads(pt?: TelemetryPayload | null): { cpu1: number; cpu2: number } {
@@ -136,6 +146,47 @@
 
     let currentCores = $derived(getCoreLoads(currentTelemetry));
 
+<<<<<<< HEAD
+=======
+    // ESP32-S3 memory reference capacities (N16R8: 8 MB PSRAM, ~320 KB usable internal heap).
+    const INTERNAL_HEAP_TOTAL_BYTES = 320 * 1024;
+    const PSRAM_TOTAL_BYTES = 8 * 1024 * 1024;
+
+    type MemoryTone = 'ok' | 'warning' | 'critical' | 'offline';
+
+    function memoryTone(
+        bytes: number | null | undefined,
+        warningBelow: number,
+        criticalBelow: number
+    ): MemoryTone {
+        if (bytes == null) return 'offline';
+        if (bytes < criticalBelow) return 'critical';
+        if (bytes < warningBelow) return 'warning';
+        return 'ok';
+    }
+
+    function formatInternalRam(bytes: number | null | undefined): string {
+        if (bytes == null) return 'N/A';
+        return `${(bytes / 1024).toFixed(1)} KB / ${Math.round(INTERNAL_HEAP_TOTAL_BYTES / 1024)} KB`;
+    }
+
+    function formatPsram(bytes: number | null | undefined): string {
+        if (bytes == null) return 'N/A';
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB / ${Math.round(PSRAM_TOTAL_BYTES / (1024 * 1024))} MB`;
+    }
+
+    let internalMemoryTone = $derived<MemoryTone>(
+        isDeviceConnected
+            ? memoryTone(currentTelemetry?.free_heap_internal, 30 * 1024, 15 * 1024)
+            : 'offline'
+    );
+    let psramMemoryTone = $derived<MemoryTone>(
+        isDeviceConnected
+            ? memoryTone(currentTelemetry?.free_heap_psram, 1024 * 1024, 256 * 1024)
+            : 'offline'
+    );
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     // Chart SVG Coordinates Calculations (Range: 15°C to 65°C, CPU: 0% to 100%)
     const CHART_WIDTH = 1000;
     const CHART_HEIGHT = 280;
@@ -240,8 +291,11 @@
                             telemetry & cpu utilization
                         {:else if activeChartTab === 'cpu'}
                             cpu 1 & cpu 2 load
+<<<<<<< HEAD
                         {:else if activeChartTab === 'grafana'}
                             real-time ai model telemetry (yolov8)
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                         {:else}
                             temperature telemetry
                         {/if}
@@ -278,6 +332,7 @@
                         >
                             🌡️ Temperature
                         </button>
+<<<<<<< HEAD
                         <button
                             type="button"
                             role="tab"
@@ -288,6 +343,8 @@
                         >
                             🤖 AI Model Monitor
                         </button>
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                     </div>
                 </div>
 
@@ -495,11 +552,14 @@
                             </div>
                         </div>
                     </div>
+<<<<<<< HEAD
                 {:else if activeChartTab === 'grafana'}
                     <!-- GRAFANA EMBED: Direct PostgreSQL Real-Time Dashboard -->
                     <div class="grafana-embed-tab-wrapper" style="padding: 0 0.5rem; width: 100%;">
                         <GrafanaAnalyticsEmbed height="560px" />
                     </div>
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 {:else if activeChartTab === 'cpu'}
                     <!-- SINGLE VIEW: Full Height CPU 1 & CPU 2 Chart -->
                     <div class="chart-main-row">
@@ -797,11 +857,49 @@
                         </span>
                     </div>
                 </div>
+<<<<<<< HEAD
+=======
+
+                <div class="metric-row highlight-mem-internal">
+                    <span class="metric-label">
+                        <span class="dot mem-internal-dot"></span> Internal RAM
+                    </span>
+                    <div class="value-box">
+                        <span
+                            class="value-text"
+                            class:offline-val={!isDeviceConnected}
+                            class:mem-ok={internalMemoryTone === 'ok'}
+                            class:mem-warning={internalMemoryTone === 'warning'}
+                            class:mem-critical={internalMemoryTone === 'critical'}
+                        >
+                            {isDeviceConnected ? formatInternalRam(currentTelemetry?.free_heap_internal) : 'Offline'}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="metric-row highlight-mem-psram">
+                    <span class="metric-label">
+                        <span class="dot mem-psram-dot"></span> PSRAM
+                    </span>
+                    <div class="value-box">
+                        <span
+                            class="value-text"
+                            class:offline-val={!isDeviceConnected}
+                            class:mem-ok={psramMemoryTone === 'ok'}
+                            class:mem-warning={psramMemoryTone === 'warning'}
+                            class:mem-critical={psramMemoryTone === 'critical'}
+                        >
+                            {isDeviceConnected ? formatPsram(currentTelemetry?.free_heap_psram) : 'Offline'}
+                        </span>
+                    </div>
+                </div>
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             </div>
         </div>
     </section>
 
     <!-- ========================================================================= -->
+<<<<<<< HEAD
     <!-- CAMERA INSPECTION STRIP (Video & Camera Ingestion Switcher)               -->
     <!-- ========================================================================= -->
     <div class="card telemetry-camera-toggle-card">
@@ -836,6 +934,8 @@
     </div>
 
     <!-- ========================================================================= -->
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     <!-- ROW 2: RESULT LOG (Full-Width Historical Database Table)                 -->
     <!-- ========================================================================= -->
     <section class="card result-log-section">
@@ -1109,6 +1209,7 @@
         letter-spacing: 0.02em;
     }
 
+<<<<<<< HEAD
     /* Telemetry Camera Ingestion Card */
     .telemetry-camera-toggle-card {
         padding: 12px 18px;
@@ -1177,6 +1278,8 @@
         border-top: 1px solid var(--border-subtle);
     }
 
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     /* ------------------------------------------------------------------------- */
     /* TOP ROW: TELEMETRY ANALYTICS                                              */
     /* ------------------------------------------------------------------------- */
@@ -1595,6 +1698,39 @@
         color: #c084fc;
     }
 
+<<<<<<< HEAD
+=======
+    .value-text.mem-ok {
+        color: #22c55e;
+    }
+
+    .value-text.mem-warning {
+        color: #f59e0b;
+    }
+
+    .value-text.mem-critical {
+        color: #ef4444;
+    }
+
+    .mem-internal-dot,
+    .mem-psram-dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        margin-right: 5px;
+        vertical-align: middle;
+    }
+
+    .mem-internal-dot {
+        background: #22c55e;
+    }
+
+    .mem-psram-dot {
+        background: #14b8a6;
+    }
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     .cpu1-dot {
         display: inline-block;
         width: 7px;
@@ -2087,6 +2223,7 @@
             padding-left: 0;
         }
 
+<<<<<<< HEAD
         .toggle-header-row {
             flex-direction: column;
             align-items: stretch;
@@ -2098,6 +2235,8 @@
             text-align: center;
         }
 
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         .result-log-header {
             flex-direction: column;
             align-items: stretch;

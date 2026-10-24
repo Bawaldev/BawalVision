@@ -89,6 +89,11 @@ export interface TelemetryPayload {
     cpu_core1_load?: number | null;
     heap_free?: number | null;
     free_heap?: number | null;
+<<<<<<< HEAD
+=======
+    free_heap_internal?: number | null;
+    free_heap_psram?: number | null;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     rssi?: number | null;
     server_memory_mb?: number | null;
     camera_model?: string | null;
@@ -113,6 +118,35 @@ export interface MockTelemetryPayload {
     connection_mode: 'mock_simulation';
     engine_pipeline: string;
     scene_optical?: SceneOpticalMetrics;
+<<<<<<< HEAD
+=======
+}
+
+export interface InspectionAuditDetection {
+    class_name: string;
+    confidence: number;
+    bbox: [number, number, number, number];
+    freshness_score: number;
+    portion_ratio: number;
+}
+
+export interface InspectionAuditRecord {
+    frame_id: number;
+    timestamp: string;
+    device_id?: string;
+    engine_pipeline?: string;
+    verdict: 'ACCEPTED' | 'REJECTED' | string;
+    surface_temp: number;
+    lux_luminance?: number;
+    color_temperature?: number;
+    white_balance_status?: string;
+    spoilage_risk?: number;
+    tray_coverage?: number;
+    image_path: string;
+    detections: InspectionAuditDetection[];
+    t_safe_hours: number;
+    checksum_sha256: string;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 }
 
 export interface InferenceLogEntry {
@@ -190,6 +224,10 @@ export interface DeviceHardwareStatus {
     device_id: string;
     firmware_version: string;
     ip_address: string;
+<<<<<<< HEAD
+=======
+    detected_host_ip?: string;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     usb_ports: USBPortInfo[];
     esp_usb_status?: {
         port: string;
@@ -197,12 +235,25 @@ export interface DeviceHardwareStatus {
         current_ssid: string;
         wifi_connected: boolean;
         temperature: number;
+<<<<<<< HEAD
+=======
+        /** 'serial' = recent BAWAL_ACK probe, 'telemetry' = fallback estimate. */
+        status_source?: string;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     };
     wifi_networks?: WiFiNetworkInfo[];
     server_wifi: {
         ssid: string;
+<<<<<<< HEAD
         has_password: boolean;
         backend_ip: string;
+=======
+        /** SSID the host is actually associated with (live nmcli). */
+        active_ssid?: string;
+        has_password: boolean;
+        backend_ip: string;
+        detected_host_ip?: string;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         backend_port: string;
     };
 }
@@ -217,6 +268,10 @@ export interface EspConnectionResult {
     ipAddress?: string;
     usbPort?: string;
     provisionedSsid?: string;
+<<<<<<< HEAD
+=======
+    gatewayHostIp?: string;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     wifiConnected?: boolean;
     connectionMode?: 'wifi_lan' | 'usb_serial' | 'disconnected';
     message?: string;

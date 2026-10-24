@@ -1,0 +1,52 @@
+# ==============================================================================
+# Dockerfile-specific ignore for the SvelteKit frontend image.
+#
+# BuildKit resolves <Dockerfile>.dockerignore next to deploy/Dockerfile.frontend
+# and uses it instead of the repository-root .dockerignore. This lets the root
+# file stay strict for the backend while shipping frontend/ to this build.
+# ==============================================================================
+
+# Repository metadata and non-frontend directories
+.git/
+.github/
+logs/
+assets/
+.venv/
+edge/
+docs/
+hardware/
+examples/
+ml/
+aws-infra/
+scripts/
+services/
+weights/
+node_modules/
+*.md
+*.png
+*.pt
+a.out
+build/
+*.log
+
+# Heavy frontend artifacts that npm must regenerate inside the image
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+
+# Local env and temporary files
+.env
+.env.*
+!.env.example
+.cache_trash/
+tmp/
+OUTPUT.md
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.elf
+*.map
+compile_commands.json

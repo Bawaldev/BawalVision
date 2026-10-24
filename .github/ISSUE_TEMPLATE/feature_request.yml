@@ -14,8 +14,12 @@ body:
       label: Target Subsystem
       description: Where does this feature belong?
       options:
+<<<<<<< HEAD
         - "C++20 SIMD / OpenCV Pipeline (services/)"
         - "Go Backend Gateway & Streaming (backend/)"
+=======
+        - "C++20 Crow Backend & SIMD / OpenCV Pipeline (services/)"
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         - "Edge Firmware & Sensors (edge/)"
         - "Frontend Dashboard & Telemetry UI (frontend/)"
         - "AI Model / Super-Resolution / Spoilage Evaluator (ml/)"

@@ -376,7 +376,10 @@ bool FoodClassifier::detect(const cv::Mat& frame,
 
         // Pure per-row pixel transformation: no shared container writes.
         // schedule(runtime) lets the runtime adapt to hybrid/homogeneous CPUs.
+<<<<<<< HEAD
         #pragma omp parallel for schedule(runtime)
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         for (int h = 0; h < target_h; ++h) {
             const auto* __restrict row_ptr = m_resized_buffer.ptr<cv::Vec3b>(h);
             const int row_offset = h * target_w;
@@ -553,8 +556,11 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         nms_indices.clear();
         cv::dnn::NMSBoxes(boxes, confidences, conf_threshold, nms_threshold, nms_indices);
 
-        // If YOLO detects no candidates this frame, age existing tracks instead of clearing immediately
-        if (nms_indices.empty()) {
+        // Age existing tracks for one frame and emit the still-visible ones.
+        // Used both when YOLO has no candidates and when all candidates are
+        // filtered out (flat texture/size), so a single bad frame does not
+        // wipe a stable track.
+        auto age_tracks_and_emit = [&]() {
             for (auto& item : m_tracked_items) {
                 item.lost_frames++;
                 item.result.confidence *= 0.90f;
@@ -576,6 +582,35 @@ bool FoodClassifier::detect(const cv::Mat& frame,
                 }
             }
             return true;
+        };
+
+        // If YOLO detects no candidates this frame, age existing tracks instead of clearing immediately
+        if (nms_indices.empty()) {
+<<<<<<< HEAD
+            for (auto& item : m_tracked_items) {
+                item.lost_frames++;
+                item.result.confidence *= 0.90f;
+            }
+            m_tracked_items.erase(
+                std::remove_if(m_tracked_items.begin(), m_tracked_items.end(),
+                               [](const TrackedItem& item) { return item.lost_frames > 2; }),
+                m_tracked_items.end());
+
+            out_count = 0;
+            const size_t max_capacity = out_buffer.size();
+            for (const auto& item : m_tracked_items) {
+                if (item.lost_frames <= 1) {
+                    if (out_count < max_capacity) {
+                        out_buffer[out_count++] = item.result;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            return true;
+=======
+            return age_tracks_and_emit();
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         }
 
         std::vector<DetectionResult>& current_detections = m_scratch_detections;
@@ -619,9 +654,13 @@ bool FoodClassifier::detect(const cv::Mat& frame,
         }
 
         if (current_detections.empty()) {
+<<<<<<< HEAD
             m_tracked_items.clear();
             out_count = 0;
             return true;
+=======
+            return age_tracks_and_emit();
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         }
 
         // 8. Temporal Tracking & Smoothing (Stabilizes Bounding Boxes & Suppresses Flicker)

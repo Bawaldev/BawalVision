@@ -2,6 +2,7 @@
 
 #include <opencv2/core.hpp>
 #include <string_view>
+#include <cstddef>
 #include <cstdint>
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -45,5 +46,40 @@ static_assert(alignof(TextureMetric) == 4, "TextureMetric must be 4-byte aligned
  * @return SpoilageMetric Computed spoilage metrics and visual pass/fail verdict.
  */
 [[nodiscard]] SpoilageMetric evaluateSpoilageAVX2(const cv::Mat& food_roi, std::string_view food_class);
+
+/**
+ * @brief Batch quality vector statistics reduced in one SIMD pass.
+ *
+ * Used by the ZIP batch inspector to fold hundreds of detection scores into
+ * per-tray, per-class and per-batch aggregates without scalar loops.
+ */
+struct QualityVectorStats {
+    float mean_similarity{0.0f}; ///< Mean detector confidence in [0, 1].
+    float mean_quality{0.0f};    ///< Mean SIMD freshness score in [0, 100].
+    float std_quality{0.0f};     ///< Population standard deviation of quality.
+    float min_quality{0.0f};     ///< Lowest freshness score in the window.
+    float max_quality{0.0f};     ///< Highest freshness score in the window.
+};
+
+static_assert(sizeof(QualityVectorStats) == 20,
+              "QualityVectorStats must stay a packed 5 x float POD: no padding added");
+static_assert(alignof(QualityVectorStats) == 4,
+              "QualityVectorStats must be 4-byte aligned (scalar float access only)");
+
+/**
+ * @brief Reduces parallel similarity/quality score arrays with AVX2 (8 floats
+ *        per iteration) or an OpenMP SIMD fallback on non-AVX2 targets.
+ *
+ * Both spans must hold `count` floats; they are read with unaligned loads and
+ * never written. Returns zero-initialized statistics when `count == 0`.
+ *
+ * @param similarity Contiguous detector confidence array.
+ * @param quality Contiguous freshness score array in [0, 100].
+ * @param count Number of valid entries in both arrays.
+ * @return QualityVectorStats Mean/stddev/min/max quality and mean similarity.
+ */
+[[nodiscard]] QualityVectorStats computeQualityStatsSIMD(const float* similarity,
+                                                         const float* quality,
+                                                         size_t count);
 
 } // namespace bawal::vision

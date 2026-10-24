@@ -1,2 +1,17 @@
 CompileFlags:
   CompilationDatabase: build
+<<<<<<< HEAD
+=======
+  Add:
+    - -std=c++20
+    - -Iservices/include
+    - -Iservices/src
+    - -Iml/include
+    - -mavx2
+    - -mfma
+    - -fopenmp
+    - -I/opt/onnxruntime/include
+    - -I/usr/local/include
+    - -I/usr/include/opencv4
+    - -I/usr/include/ncnn
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444

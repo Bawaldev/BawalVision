@@ -1,0 +1,71 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+
+\definecolor{acceptedgreen}{HTML}{16A34A}
+\definecolor{rejectedred}{HTML}{DC2626}
+\definecolor{deepnavy}{HTML}{0F172A}
+\definecolor{slatebg}{HTML}{F1F5F9}
+
+\setlength{\parindent}{0pt}
+\pagestyle{empty}
+
+\begin{document}
+
+{\Huge\bfseries BawalVision \textcolor{deepnavy}{Inspection Audit}}\\[2mm]
+{\large MBG Food Quality \& Freshness Compliance Report}
+
+\vspace{4mm}
+\hrule
+\vspace{4mm}
+
+\begin{tabular}{@{}ll@{}}
+\textbf{Frame ID} & #@FRAME_ID@ \\
+\textbf{Device} & #@DEVICE_ID@ \\
+\textbf{Timestamp} & #@TIMESTAMP@ \\
+\textbf{Engine} & #@ENGINE_PIPELINE@ \\
+\textbf{Checksum (SHA-256)} & \texttt{#@CHECKSUM@}\ldots \\
+\end{tabular}
+
+\vspace{4mm}
+{\large\bfseries Verdict: \textcolor{#@VERDICT_BG@}{#@VERDICT@}}
+
+\vspace{4mm}
+\begin{center}
+\IfFileExists{#@IMAGE_PATH@}{%
+  \includegraphics[width=0.86\linewidth]{#@IMAGE_PATH@}%
+}{%
+  \fbox{\parbox[c][4.5cm][c]{0.86\linewidth}{\centering No annotated frame available for this inspection.}}%
+}
+\end{center}
+
+\vspace{3mm}
+\begin{tabular}{@{}llll@{}}
+\textbf{Surface Temperature} & #@SURFACE_TEMP@\,$^\circ$C &
+\textbf{Ambient Lux} & #@LUX_LUMINANCE@\,lx \\
+\textbf{Color Temperature} & #@COLOR_TEMP@\,K &
+\textbf{White Balance} & #@WHITE_BALANCE@ \\
+\textbf{Spoilage Risk} & #@SPOILAGE_RISK@\,\% &
+\textbf{Tray Coverage} & #@TRAY_COVERAGE@\,\% \\
+\textbf{Safe-Hours Estimate} & #@T_SAFE_HOURS@\,h & & \\
+\end{tabular}
+
+\vspace{5mm}
+{\large\bfseries Detection Log}
+
+\vspace{2mm}
+\begin{tabular}{@{}r l c c c l@{}}
+\hline
+\textbf{\#} & \textbf{Class} & \textbf{BBox [x,y,w,h]} & \textbf{Confidence} & \textbf{Freshness} & \textbf{Status} \\
+\hline
+#@DETECTIONS_ROWS@
+\hline
+\end{tabular}
+
+\vfill
+{\footnotesize Generated automatically by the BawalVision C++ audit engine. This document is a machine-generated compliance artifact.}
+
+\end{document}

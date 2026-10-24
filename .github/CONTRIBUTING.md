@@ -11,8 +11,12 @@ BawalVision is structured as a polyglot monorepo:
 | Directory | Subsystem | Language / Stack |
 | --------- | --------- | ---------------- |
 | [`edge/`](../edge) | IoT Edge Sensor Node & Display | C, ESP-IDF v5/v6, FreeRTOS, LVGL |
+<<<<<<< HEAD
 | [`services/`](../services) | Machine Vision & Inference Pipeline | C++20, OpenCV, ONNX Runtime, OpenMP, SIMD |
 | [`backend/`](../backend) | Real-time Ingestion Gateway & Orchestrator | Go 1.24, Fiber v2, GORM, PostgreSQL |
+=======
+| [`services/`](../services) | Crow REST Backend, Machine Vision & Inference Pipeline | C++20, Crow, OpenCV, ONNX Runtime, libpq, OpenMP |
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 | [`frontend/`](../frontend) | SCADA & Operator HMI Dashboard | SvelteKit 5, TypeScript, Vite |
 | [`ml/`](../ml) | AI Model Training & Super-Resolution | Python 3.11+, PyTorch, YOLOv8, RealESRGAN |
 | [`deploy/`](../deploy) | Container Deployment & Infrastructure | Docker Compose, Multi-stage Dockerfiles |
@@ -40,6 +44,7 @@ just build-vision
 just run-vision-tsan
 ```
 
+<<<<<<< HEAD
 ### 2. Go Backend
 ```bash
 # Run unit tests and concurrency race detector
@@ -47,6 +52,18 @@ just test-backend
 
 # Launch local gateway server
 just run-gateway
+=======
+### 2. C++20 Crow Backend
+```bash
+# Compile the unified Crow backend (HTTP + in-process vision)
+just build-backend
+
+# Run against the Docker PostgreSQL instance (host process, Wi-Fi scan capable)
+just run-backend
+
+# Exercise the HTTP API against a live backend
+just test-api
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 ```
 
 ### 3. ESP32-S3 Firmware
@@ -100,6 +117,10 @@ We enforce the [Conventional Commits](https://www.conventionalcommits.org/) stan
 
 1. **Keep Commits Clean**: Never commit `.env`, Wi-Fi secrets, private keys, or raw image datasets.
 2. **Architecture Portability**: Do NOT use `-march=native` in C++ code; use explicit feature detection (`-mavx2`, `__AVX2__`, NEON intrinsics) to ensure portability.
+<<<<<<< HEAD
 3. **Run CI Checks Locally**: Before opening a PR, ensure `just test-backend` and `just build-vision` pass locally.
+=======
+3. **Run CI Checks Locally**: Before opening a PR, ensure `just build-backend`, `just build-vision`, `just test-api`, and `just check-frontend` pass locally.
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 4. **Link Issues**: Reference related issues in the PR description (e.g. `Fixes #42`).
 

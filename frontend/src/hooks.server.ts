@@ -2,8 +2,8 @@ import type { Handle } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 
 export const handle: Handle = async ({ event, resolve }) => {
-    if (event.url.pathname.startsWith('/api/')) {
-        const backendUrl = env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://backend:8080';
+    if (event.url.pathname.startsWith('/api/') || event.url.pathname.startsWith('/inspections/')) {
+        const backendUrl = env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080';
         const target = `${backendUrl}${event.url.pathname}${event.url.search}`;
 
         try {

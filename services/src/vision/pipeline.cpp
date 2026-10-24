@@ -1,4 +1,5 @@
 #include "bawal/vision/pipeline.hpp"
+
 #include "bawal/vision/simd_food_evaluator.hpp"
 #include "bawal/ml/ncnn_generator.hpp"
 #include <chrono>
@@ -203,11 +204,14 @@ bool InspectionPipeline::execute(const std::vector<uint8_t>& raw_frame_bytes, In
 }
 
 void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
-    if (src.empty()) {
+    if (src.empty()) { dst = src; return; }
+
+    if (!m_enable_enhance) {
         dst = src;
         return;
     }
 
+<<<<<<< HEAD
     if (!m_enable_enhance) {
         dst = src;
         return;
@@ -215,6 +219,35 @@ void InspectionPipeline::enhanceImage(const cv::Mat& src, cv::Mat& dst) {
 
     // Adaptive illumination, Retinex dynamic range, and noise restoration.
     IlluminationEnhancerAI::process(src, dst, m_clahe);
+=======
+    // 1. Gray-World AWB
+    cv::Scalar mean_bgr = cv::mean(src);
+    const double gray_target = (mean_bgr[0] + mean_bgr[1] + mean_bgr[2]) / 3.0;
+    const float gain_b = static_cast<float>((mean_bgr[0] > 1.0) ? (gray_target / mean_bgr[0]) : 1.0f);
+    const float gain_g = static_cast<float>((mean_bgr[1] > 1.0) ? (gray_target / mean_bgr[1]) : 1.0f);
+    const float gain_r = static_cast<float>((mean_bgr[2] > 1.0) ? (gray_target / mean_bgr[2]) : 1.0f);
+
+    // Reuse per-thread work buffers. A thread-local CLAHE instance also avoids
+    // sharing its mutable histogram state if callers run pipelines in parallel.
+    thread_local IspScratch scratch;
+    cv::split(src, scratch.bgr_planes);
+    scratch.bgr_planes[0].convertTo(scratch.bgr_planes[0], -1, gain_b, 0);
+    scratch.bgr_planes[1].convertTo(scratch.bgr_planes[1], -1, gain_g, 0);
+    scratch.bgr_planes[2].convertTo(scratch.bgr_planes[2], -1, gain_r, 0);
+    cv::merge(scratch.bgr_planes, scratch.balanced);
+
+    // 2. CLAHE on the L* channel (lifts dark shadows without blowing out bright ceiling lights)
+    cv::cvtColor(scratch.balanced, scratch.lab, cv::COLOR_BGR2Lab);
+    cv::split(scratch.lab, scratch.lab_planes);
+    scratch.clahe->apply(scratch.lab_planes[0], scratch.lab_planes[0]);
+    cv::merge(scratch.lab_planes, scratch.lab);
+    cv::cvtColor(scratch.lab, scratch.contrast, cv::COLOR_Lab2BGR);
+
+    // OpenCV dispatches addWeighted to its optimized SIMD implementation
+    // (including AVX2 when available), without requiring non-portable compiler flags.
+    cv::GaussianBlur(scratch.contrast, scratch.blurred, cv::Size(0, 0), 1.75);
+    cv::addWeighted(scratch.contrast, 1.25, scratch.blurred, -0.25, 0, dst);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 }
 
 bool InspectionPipeline::processStream(const cv::Mat& frame,
@@ -235,6 +268,7 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     const int64_t t_start = cv::getTickCount();
     out_inspection.is_valid = false;
 
+<<<<<<< HEAD
     // Camera orientation from environment (applies to physical ESP32-S3 hardware sensor mount, not mock MP4 files).
     cv::Mat oriented;
     if (!is_mock_video) {
@@ -245,6 +279,10 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     } else {
         oriented = normalized_frame;
     }
+=======
+    // Orientation is locked in the sensor driver (set_vflip/set_hmirror).
+    cv::Mat oriented = normalized_frame;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
     // Lens dewarping: Only active if explicitly requested (ENABLE_DEWARP=1) or perspective map is calibrated
     cv::Mat dewarped;
@@ -255,6 +293,7 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
     out_inspection.raw_image = dewarped;
 
+<<<<<<< HEAD
     // SIMD low-light & underexposure evaluation via Google Highway
     out_inspection.dark_status = m_dark_detector.detect(dewarped);
 
@@ -269,6 +308,19 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     out_inspection.dewarped_image = enhanced;
     out_inspection.detections = active_detections;
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
+=======
+    // OpenCV mean-based low-light & underexposure evaluation
+    out_inspection.dark_status = m_dark_detector.detect(dewarped);
+
+    // Stream thread: no ISP/SR/CLAHE. AI worker owns all heavy lifting.
+    out_inspection.dewarped_image = dewarped;
+    out_inspection.detections = active_detections;
+    out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
+    // Publish the partial latency before rendering so the HUD bar can display
+    // the current frame's processing time.
+    out_inspection.processing_time_ms =
+        ((cv::getTickCount() - t_start) * 1000.0) / cv::getTickFrequency();
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
     const int64_t t_end = cv::getTickCount();
@@ -352,21 +404,33 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
 
     const int64_t t_start = cv::getTickCount();
 
+<<<<<<< HEAD
     cv::Mat oriented;
     if (m_vflip && m_hflip) cv::flip(normalized_frame, oriented, -1);
     else if (m_vflip) cv::flip(normalized_frame, oriented, 0);
     else if (m_hflip) cv::flip(normalized_frame, oriented, 1);
     else oriented = normalized_frame;
+=======
+    // Orientation is locked in the sensor driver (set_vflip/set_hmirror).
+    cv::Mat oriented = normalized_frame;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
     // Lens dewarping
     cv::Mat dewarped;
     if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented;
     out_inspection.raw_image = dewarped;
 
+<<<<<<< HEAD
     // SIMD low-light & underexposure evaluation via Google Highway
     out_inspection.dark_status = m_dark_detector.detect(dewarped);
 
     // ISP enhancement
+=======
+    // OpenCV mean-based low-light & underexposure evaluation
+    out_inspection.dark_status = m_dark_detector.detect(dewarped);
+
+    // Lightweight SIMD ISP (zero-copy passthrough for well-lit scenes).
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     cv::Mat enhanced;
     enhanceImage(dewarped, enhanced);
     out_inspection.dewarped_image = enhanced;
@@ -379,6 +443,14 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     }
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
 
+<<<<<<< HEAD
+=======
+    // Publish the partial latency before rendering so the HUD bar can display
+    // the current frame's processing time.
+    out_inspection.processing_time_ms =
+        ((cv::getTickCount() - t_start) * 1000.0) / cv::getTickFrequency();
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     // Single-pass render overlay at the very end (zero duplicate clone)
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
@@ -395,6 +467,7 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
 
     const float conf_threshold = m_conf_threshold.load(std::memory_order_relaxed);
 
+<<<<<<< HEAD
     // Fast path: nothing to draw. Return a shallow reference, never a clone.
     if (inspection.detections.empty() &&
         !inspection.dark_status.is_dark &&
@@ -403,6 +476,8 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
         return;
     }
 
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     // Reuse one pre-allocated HUD buffer instead of cloning a full frame each time.
     if (m_overlay_buffer.size() != inspection.dewarped_image.size() ||
         m_overlay_buffer.type() != inspection.dewarped_image.type()) {
@@ -411,10 +486,40 @@ void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::M
     inspection.dewarped_image.copyTo(m_overlay_buffer);
     out_display = m_overlay_buffer;
 
+<<<<<<< HEAD
     // Low-light underexposure or backlight hotspot conflict banner
     if (inspection.dark_status.is_dark) {
         char dark_txt[96];
         std::snprintf(dark_txt, sizeof(dark_txt), "LOW LIGHT [Hwy SIMD] Gain: %.1fx",
+=======
+    // Active detections are the ones that will actually be drawn.
+    std::size_t active_detections = 0;
+    for (const auto& det : inspection.detections) {
+        if (det.class_id >= 0 && det.confidence >= conf_threshold &&
+            det.class_name != "no_food" && det.class_name != "no_model") {
+            ++active_detections;
+        }
+    }
+
+    // Top HUD status bar: frame id, latency, and active detections.
+    {
+        char hud[128];
+        std::snprintf(hud, sizeof(hud), "FRAME #%u | %.1f ms | %zu DETECTIONS",
+                      inspection.frame_id,
+                      inspection.processing_time_ms,
+                      active_detections);
+        cv::rectangle(out_display, cv::Rect(0, 0, out_display.cols, 26),
+                      cv::Scalar(24, 24, 24), cv::FILLED);
+        cv::putText(out_display, hud, cv::Point(10, 18),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.46, cv::Scalar(235, 235, 235),
+                    1, cv::LINE_AA);
+    }
+
+    // Low-light underexposure or backlight hotspot conflict banner
+    if (inspection.dark_status.is_dark) {
+        char dark_txt[96];
+        std::snprintf(dark_txt, sizeof(dark_txt), "LOW LIGHT [OpenCV] Gain: %.1fx",
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                       static_cast<double>(inspection.dark_status.suggested_boost_gain));
         int base = 0;
         cv::Size tsz = cv::getTextSize(dark_txt, cv::FONT_HERSHEY_SIMPLEX, 0.40, 1, &base);

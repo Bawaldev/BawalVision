@@ -38,8 +38,13 @@
         totalPlates = 0,
         passRate = 0.0,
         isOnline = true,
+<<<<<<< HEAD
         hasCamera = true,
         realFps = 20.0,
+=======
+        hasCamera = false,
+        realFps = 0.0,
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         realLatencyMs = 42.5,
         serverMemoryMB = 340,
         parallelCores = 4,
@@ -244,7 +249,11 @@
             </div>
             <div class="kpi-footer">
                 <span class="status-indicator live" class:offline={!isOnline && !hasCamera}></span>
+<<<<<<< HEAD
                 <span class="kpi-subtext">Continuous Ingestion @ {realFps > 0 ? realFps.toFixed(0) : (hasCamera ? '20' : '0')} FPS</span>
+=======
+                <span class="kpi-subtext">Continuous Ingestion @ {hasCamera ? realFps.toFixed(0) : '0'} FPS</span>
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             </div>
         </div>
 
@@ -479,7 +488,11 @@
                     <div class="hw-metrics">
                         <div class="hw-metric-item">
                             <span class="hw-metric-label">Throughput Frame</span>
+<<<<<<< HEAD
                             <span class="hw-metric-val mono">{realFps > 0 ? realFps.toFixed(1) : (hasCamera ? '20.0' : '0.0')} FPS</span>
+=======
+                            <span class="hw-metric-val mono">{hasCamera ? realFps.toFixed(1) : '0.0'} FPS</span>
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                         </div>
                         <div class="hw-metric-item">
                             <span class="hw-metric-label">End-to-End Latency</span>
@@ -520,21 +533,33 @@
                 <button
                     type="button"
                     class="action-pill-btn primary"
+<<<<<<< HEAD
                     onclick={() => onNavigateTab('Dashboard')}
+=======
+                    onclick={() => onNavigateTab('Live Inspection')}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 >
                     📹 Open Live Inspection
                 </button>
                 <button
                     type="button"
                     class="action-pill-btn secondary"
+<<<<<<< HEAD
                     onclick={() => onNavigateTab('Telemetry Analytics & Result Log')}
+=======
+                    onclick={() => onNavigateTab('Telemetry & Hardware')}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 >
                     📈 Full Analytics & Logs
                 </button>
                 <button
                     type="button"
                     class="action-pill-btn secondary"
+<<<<<<< HEAD
                     onclick={() => onNavigateTab('System & Cloud Settings')}
+=======
+                    onclick={() => onNavigateTab('Settings')}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 >
                     ⚙️ Calibrate Confidence Gate
                 </button>
@@ -554,7 +579,11 @@
                 <button
                     type="button"
                     class="view-all-link"
+<<<<<<< HEAD
                     onclick={() => onNavigateTab('Telemetry Analytics & Result Log')}
+=======
+                    onclick={() => onNavigateTab('Telemetry & Hardware')}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 >
                     View All Logs ↗
                 </button>
@@ -606,7 +635,11 @@
                                     <button
                                         type="button"
                                         class="inspect-direct-btn"
+<<<<<<< HEAD
                                         onclick={() => onNavigateTab('Telemetry Analytics & Result Log')}
+=======
+                                        onclick={() => onNavigateTab('Telemetry & Hardware')}
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                                     >
                                         Inspect Audit Record ↗
                                     </button>

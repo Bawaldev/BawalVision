@@ -1,6 +1,7 @@
 CompileFlags:
   CompilationDatabase: build
   Add:
+<<<<<<< HEAD
     - -std=gnu17
     - -D__XTENSA__=1
     - -DESP_PLATFORM=1
@@ -36,3 +37,32 @@ Diagnostics:
     - drv_unknown_argument
     - drv_unknown_argument_with_suggestion
     - pp_expr_bad_token_lparen
+=======
+    - -Iedge/main/include
+    - -Iedge/main/src
+    - -Iedge/main
+    - -Iedge/managed_components/waveshare__esp_lcd_st7735/include
+    - -iquoteedge/main/include
+    - -iquoteedge/main/src
+    - --target=riscv32
+    - -std=gnu17
+    - -D__XTENSA__=1
+    - -DESP_PLATFORM=1
+  Remove:
+    - -fno-tree-switch-conversion
+    - -fno-shrink-wrap
+    - -fstrict-volatile-bitfields
+    - -mtext-section-literals
+    - -mlongcalls
+    - -mlong-calls
+    - -mdisable-hardware-atomics
+    - -fzero-init-padding-bits=all
+    - -fno-malloc-dce
+    - -fno-jump-tables
+    - -fno-rtti
+    - -fno-exceptions
+    - --target=xtensa-esp32s3-elf
+    - -target
+    - xtensa-esp32s3-elf
+    - -fno-reorder-blocks
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444

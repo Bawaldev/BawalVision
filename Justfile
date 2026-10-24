@@ -8,10 +8,7 @@ import 'scripts/backend.just'
 import 'scripts/edge.just'
 import 'scripts/ml.just'
 
+[private]
 default:
     @just --list
 
-merge-compile-commands:
-    python3 scripts/combine_compile_commands.py
-
-configure-all: configure-vision configure-edge merge-compile-commands

@@ -11,7 +11,11 @@
         grafanaHost = 'http://localhost:3002',
         panelId = null,
         height = '480px',
+<<<<<<< HEAD
         theme = 'dark',
+=======
+        theme = 'light',
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         kiosk = true
     }: Props = $props();
 
@@ -38,7 +42,11 @@
     }
 
     function openFullGrafana() {
+<<<<<<< HEAD
         window.open(`${grafanaHost}/d/bawalvision_analytics/_`, '_blank');
+=======
+        window.open(`${grafanaHost}/d/bawalvision_analytics/_?theme=light`, '_blank');
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 </script>
 
@@ -86,14 +94,23 @@
 
 <style>
     .grafana-embed-card {
+<<<<<<< HEAD
         background: #111827;
         border: 1px solid #1F2937;
+=======
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         border-radius: 12px;
         overflow: hidden;
         display: flex;
         flex-direction: column;
         margin-top: 0.5rem;
+<<<<<<< HEAD
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+=======
+        box-shadow: var(--shadow-card);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 
     .embed-header {
@@ -101,8 +118,13 @@
         align-items: center;
         justify-content: space-between;
         padding: 0.6rem 1rem;
+<<<<<<< HEAD
         background: #1F2937;
         border-bottom: 1px solid #374151;
+=======
+        background: var(--bg-inset);
+        border-bottom: 1px solid var(--border-card);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 
     .header-left {
@@ -117,7 +139,11 @@
         gap: 0.4rem;
         font-size: 0.82rem;
         font-weight: 600;
+<<<<<<< HEAD
         color: #10B981;
+=======
+        color: var(--text-primary);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 
     .grafana-icon {
@@ -127,22 +153,37 @@
     }
 
     .live-pill {
+<<<<<<< HEAD
         background: rgba(16, 185, 129, 0.15);
         color: #10B981;
+=======
+        background: rgba(16, 185, 129, 0.12);
+        color: #0f8a63;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         font-size: 0.7rem;
         padding: 0.15rem 0.5rem;
         border-radius: 9999px;
         font-weight: 500;
+<<<<<<< HEAD
         border: 1px solid rgba(16, 185, 129, 0.3);
+=======
+        border: 1px solid rgba(16, 185, 129, 0.35);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 
     .action-btn {
         display: inline-flex;
         align-items: center;
         gap: 0.4rem;
+<<<<<<< HEAD
         background: #374151;
         color: #E5E7EB;
         border: 1px solid #4B5563;
+=======
+        background: var(--bg-card);
+        color: var(--text-primary);
+        border: 1px solid var(--border-card);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         padding: 0.35rem 0.75rem;
         border-radius: 6px;
         font-size: 0.75rem;
@@ -151,9 +192,15 @@
     }
 
     .action-btn:hover {
+<<<<<<< HEAD
         background: #4B5563;
         color: #FFFFFF;
         border-color: #6B7280;
+=======
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
+        border-color: var(--accent-blue);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 
     .btn-icon {
@@ -164,7 +211,11 @@
     .embed-canvas {
         position: relative;
         width: 100%;
+<<<<<<< HEAD
         background: #0B0F19;
+=======
+        background: #ffffff;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 
     iframe {
@@ -177,13 +228,21 @@
     .loading-overlay {
         position: absolute;
         inset: 0;
+<<<<<<< HEAD
         background: rgba(11, 15, 25, 0.85);
+=======
+        background: rgba(255, 255, 255, 0.9);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
         gap: 0.5rem;
+<<<<<<< HEAD
         color: #9CA3AF;
+=======
+        color: var(--text-muted);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         font-size: 0.85rem;
         z-index: 10;
     }
@@ -199,12 +258,21 @@
 
     .sub-hint {
         font-size: 0.72rem;
+<<<<<<< HEAD
         color: #6B7280;
     }
 
     .sub-hint code {
         background: #1F2937;
         color: #10B981;
+=======
+        color: var(--text-muted);
+    }
+
+    .sub-hint code {
+        background: var(--bg-chip);
+        color: var(--accent-blue-num);
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         padding: 0.1rem 0.3rem;
         border-radius: 4px;
     }

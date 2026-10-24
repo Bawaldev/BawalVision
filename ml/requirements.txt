@@ -1,15 +1,24 @@
 pillow>=10.0.0
 numpy>=1.24.0
 --extra-index-url https://download.pytorch.org/whl/cu121
-torch>=2.2.0
+torch>=2.14.1
 torchvision>=0.17.0
+<<<<<<< HEAD
 onnx>=1.15.0
 onnxruntime>=1.16.0
+=======
+onnx>=1.23.2
+onnxruntime>=1.31.0
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 ultralytics>=8.4.174
 pyyaml>=6.0.3
 tqdm>=4.70.1
 icrawler>=0.6.6
 bing-image-downloader
+<<<<<<< HEAD
 opencv-python>=4.8.0
+=======
+opencv-python>=5.0.0.93
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 dvc>=3.0.0
 mlflow>=3.0.0

@@ -7,6 +7,12 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+<<<<<<< HEAD
+=======
+permissions:
+  contents: read
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 concurrency:
   group: security-${{ github.ref }}
   cancel-in-progress: true

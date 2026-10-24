@@ -1,24 +1,48 @@
+<<<<<<< HEAD
 name: Multi-Arch Docker Build & Validation
+=======
+name: Docker Image Build Matrix
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
 on:
   push:
     branches: [ "main", "master" ]
     paths:
       - 'deploy/**'
+<<<<<<< HEAD
       - 'backend/**'
       - 'services/**'
       - 'ml/**'
+=======
+      - 'services/**'
+      - 'ml/**'
+      - 'frontend/**'
+      - '.dockerignore'
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
       - '.github/workflows/docker-ci.yml'
   pull_request:
     branches: [ "main", "master" ]
     paths:
       - 'deploy/**'
+<<<<<<< HEAD
       - 'backend/**'
       - 'services/**'
       - 'ml/**'
       - '.github/workflows/docker-ci.yml'
   workflow_dispatch:
 
+=======
+      - 'services/**'
+      - 'ml/**'
+      - 'frontend/**'
+      - '.dockerignore'
+      - '.github/workflows/docker-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 concurrency:
   group: docker-ci-${{ github.ref }}
   cancel-in-progress: true
@@ -27,6 +51,10 @@ jobs:
   docker-build:
     name: Build ${{ matrix.target.name }}
     runs-on: ubuntu-24.04
+<<<<<<< HEAD
+=======
+    timeout-minutes: 60
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +63,11 @@ jobs:
             dockerfile: deploy/Dockerfile.backend
           - name: bawal-vision
             dockerfile: deploy/Dockerfile.vision
+<<<<<<< HEAD
+=======
+          - name: bawal-frontend
+            dockerfile: deploy/Dockerfile.frontend
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     steps:
       - name: Checkout Monorepo
         uses: actions/checkout@v7
@@ -50,4 +83,7 @@ jobs:
           push: false
           cache-from: type=gha,scope=${{ matrix.target.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target.name }}
+<<<<<<< HEAD
 
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444

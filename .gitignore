@@ -3,7 +3,7 @@
 # =========================================================================
 
 # -------------------------------------------------------------------------
-# Build & Binary Outputs (C++, Go, Embedded)
+# Build & Binary Outputs (C++, Embedded)
 # -------------------------------------------------------------------------
 build/
 bin/
@@ -12,7 +12,6 @@ bin/
 cmake-build-*/
 _deps/
 services/build/
-backend/bin/
 ml/ncnn_generator
 
 # CMake Artifacts
@@ -50,7 +49,7 @@ idf_py_stdout_*
 edge/main/include/wifi_credentials.h
 
 # -------------------------------------------------------------------------
-# Backend & Databases (backend/)
+# Generic Binary & Database Artifacts
 # -------------------------------------------------------------------------
 *.exe
 *.exe~
@@ -208,3 +207,21 @@ usb_stream
 OUTPUT.md
 daffa.md
 
+<<<<<<< HEAD
+=======
+data/inspections
+
+
+# ==========================================
+# Batch Inspection & Scraper Archives
+# ==========================================
+*.zip
+*.tar.gz
+
+# Direktori unduhan sementara dari image scraper
+downloaded_images/
+
+# Direktori kerja sementara pemrosesan batch bawal
+/tmp/bawal_batches/
+/tmp/bawal_reports/
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444

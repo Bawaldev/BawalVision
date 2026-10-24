@@ -37,7 +37,7 @@ class YoloCalibrationDataReader(CalibrationDataReader):
         self.input_name = input_name
         self.img_size = img_size
         self.data_iter = iter(self.image_paths)
-        print(f"[+] Menyiapkan {len(self.image_paths)} sampel kalibrasi acak dari: {image_folder}")
+        print(f"[+] Preparing {len(self.image_paths)} random calibration samples from: {image_folder}")
 
     def get_next(self):
         img_path = next(self.data_iter, None)
@@ -83,13 +83,22 @@ CALIB_DIR = SCRIPT_DIR / "yolo_dataset" / "images" / "train"
 
 def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
     """
+<<<<<<< HEAD
     Kecualikan seluruh node di Detection Head (model.22) + lacak mundur 5 lapis
     dari output utama agar presisi bbox & confidence tetap 100% FP32.
+=======
+    Exclude every node in the detection head (model.22) and trace back 5 layers
+    from the main output so bbox and confidence precision stays 100% FP32.
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     """
     model_proto = onnx.load(str(model_path))
     exclude_set = set()
 
+<<<<<<< HEAD
     # 1. Backward traversal 5 lapis dari output0 agar Concat/Sigmoid/Mul akhir murni FP32
+=======
+    # 1. Backward traversal 5 layers from output0 so the final Concat/Sigmoid/Mul stay pure FP32
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     frontier = {out.name for out in model_proto.graph.output}
     for _ in range(5):
         next_frontier = set()
@@ -99,7 +108,11 @@ def get_head_nodes_to_exclude(model_path: Path) -> list[str]:
                 next_frontier.update(node.input)
         frontier = next_frontier
 
+<<<<<<< HEAD
     # 2. Kecualikan Detection Head (model.22) dan transisi Neck-ke-Head
+=======
+    # 2. Exclude the detection head (model.22) and the neck-to-head transition
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     sensitive_prefixes = ("model.22", "dfl", "model.15", "model.18", "model.21")
     for node in model_proto.graph.node:
         name_l = node.name.lower()
@@ -153,12 +166,20 @@ def main():
     upgraded_onnx.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"[+] Target Architecture: {model_flavor.upper()} (Source: {input_onnx})")
+<<<<<<< HEAD
     print(f"[+] Memeriksa & meng-upgrade ONNX Opset (>= 13) + pre-processing...")
+=======
+    print(f"[+] Checking and upgrading the ONNX opset (>= 13) + pre-processing...")
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     try:
         orig_model = onnx.load(str(input_onnx))
         current_opset = orig_model.opset_import[0].version if orig_model.opset_import else 12
         if current_opset < 13:
+<<<<<<< HEAD
             print(f" -> Mengonversi ONNX Opset {current_opset} -> Opset 13 untuk dukungan Per-Channel QDQ...")
+=======
+            print(f" -> Converting ONNX opset {current_opset} -> opset 13 for per-channel QDQ support...")
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             orig_model = onnx.version_converter.convert_version(orig_model, 13)
         onnx.save(orig_model, str(upgraded_onnx))
         del orig_model
@@ -171,7 +192,11 @@ def main():
         )
         quant_source = preproc_onnx
     except Exception as e:
+<<<<<<< HEAD
         print(f"[!] Pre-process dilewati ({e}), menggunakan model Opset 13 langsung.")
+=======
+        print(f"[!] Pre-process skipped ({e}); using the opset 13 model directly.")
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         quant_source = upgraded_onnx if upgraded_onnx.exists() else input_onnx
 
     sess_fp32 = ort.InferenceSession(str(input_onnx), providers=["CPUExecutionProvider"])
@@ -180,9 +205,15 @@ def main():
     gc.collect()
 
     nodes_to_exclude = get_head_nodes_to_exclude(quant_source)
+<<<<<<< HEAD
     print(f"[+] Mengecualikan {len(nodes_to_exclude)} node sensitif/head agar presisi bbox & confidence tetap FP32.")
 
     # Gunakan sampel acak untuk kalibrasi MinMax
+=======
+    print(f"[+] Excluding {len(nodes_to_exclude)} sensitive/head nodes so bbox and confidence precision stays FP32.")
+
+    # Use random samples for MinMax calibration
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     calib_samples = max(10, args.samples)
     reader = YoloCalibrationDataReader(CALIB_DIR, input_name, img_size=640, max_samples=calib_samples)
 
@@ -192,16 +223,28 @@ def main():
         model_output=str(output_onnx),
         calibration_data_reader=reader,
         quant_format=QuantFormat.QDQ,
+<<<<<<< HEAD
         per_channel=True,                          # Presisi tinggi per filter untuk AVX2
         reduce_range=False,                        # 8-bit penuh agar confidence tidak drop
         calibrate_method=CalibrationMethod.MinMax, # Ringan (<400MB RAM), anti-crash VS Code
         weight_type=QuantType.QInt8,               # Signed INT8 untuk bobot di VPMADDUBSW
         activation_type=QuantType.QUInt8,          # Unsigned INT8 untuk aktivasi di VPMADDUBSW
+=======
+        per_channel=True,                          # High per-filter precision for AVX2
+        reduce_range=False,                        # Full 8-bit range so confidence does not drop
+        calibrate_method=CalibrationMethod.MinMax, # Lightweight (<400 MB RAM), avoids VS Code crashes
+        weight_type=QuantType.QInt8,               # Signed INT8 for weights in VPMADDUBSW
+        activation_type=QuantType.QUInt8,          # Unsigned INT8 for activations in VPMADDUBSW
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         nodes_to_exclude=nodes_to_exclude,
         extra_options={
             "WeightSymmetric": True,
             "ActivationSymmetric": False,
+<<<<<<< HEAD
             "CalibMovingAverage": True,            # Meredam outlier di AVX2 tanpa boros RAM!
+=======
+            "CalibMovingAverage": True,            # Dampens AVX2 outliers without wasting RAM!
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             "CalibMovingAverageConstant": 0.01,
         },
     )
@@ -263,8 +306,13 @@ def main():
     conf_fp32 = float(np.max(out_fp32[0, 4:, :]))
     conf_int8 = float(np.max(out_int8[0, 4:, :]))
 
+<<<<<<< HEAD
     print(f" -> Sampel Uji Max Confidence (FP32) : {conf_fp32:.4f}")
     print(f" -> Sampel Uji Max Confidence (INT8) : {conf_int8:.4f}")
+=======
+    print(f" -> Test Sample Max Confidence (FP32) : {conf_fp32:.4f}")
+    print(f" -> Test Sample Max Confidence (INT8) : {conf_int8:.4f}")
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     print(f" -> Output Tensor Type (INT8)        : {sess_int8.get_outputs()[0].type}")
 
 

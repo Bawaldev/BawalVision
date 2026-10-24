@@ -114,7 +114,10 @@ bool RealESRGANEngine::processOpenCVDNN(const cv::Mat& input, cv::Mat& output) {
             const float* b_plane = prob.ptr<float>(0, 2);
 
             // Rows are spatially independent; no shared writes inside the loop.
+<<<<<<< HEAD
             #pragma omp parallel for schedule(runtime)
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             for (int y = 0; y < out_h; ++y) {
                 auto* row = output.ptr<cv::Vec3b>(y);
                 const int offset = y * out_w;

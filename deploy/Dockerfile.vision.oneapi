@@ -18,7 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopencv-dev \
     libcurl4-openssl-dev \
     nlohmann-json3-dev \
+<<<<<<< HEAD
     libhwy-dev \
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     libfmt-dev \
     libcpp-httplib-dev \
     curl \
@@ -62,7 +65,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopencv-dnn406 \
     libcurl4 \
     ca-certificates \
+<<<<<<< HEAD
     libhwy-dev \
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     libfmt-dev \
     && rm -rf /var/lib/apt/lists/*
 

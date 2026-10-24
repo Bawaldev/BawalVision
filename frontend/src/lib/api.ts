@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import type { InspectionRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult, DeviceHardwareStatus, WiFiNetworkInfo } from './types';
+=======
+import type { InspectionRecord, InspectionAuditRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult, DeviceHardwareStatus, WiFiNetworkInfo } from './types';
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
 const BASE_URL = '/api/v1';
 
@@ -35,14 +39,53 @@ export async function fetchRecords(baseUrl = BASE_URL): Promise<InspectionRecord
     }
 }
 
+<<<<<<< HEAD
+export async function fetchCameraStatus(baseUrl = BASE_URL): Promise<{ active: boolean; deviceId: string; fps: number }> {
+=======
+export async function fetchInspectionAuditRecords(
+    limit = 100,
+    baseUrl = BASE_URL
+): Promise<InspectionAuditRecord[]> {
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
+    try {
+        const response = await fetch(`${baseUrl}/inspections?limit=${limit}`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error ${response.status}`);
+        }
+        const data = await response.json();
+        return Array.isArray(data) ? data as InspectionAuditRecord[] : [];
+    } catch (err) {
+        console.warn('[API] Could not fetch inspection audit records:', err);
+        return [];
+    }
+}
+
 export async function fetchCameraStatus(baseUrl = BASE_URL): Promise<{ active: boolean; deviceId: string; fps: number }> {
     try {
-        const response = await fetch(`${baseUrl}/camera/active`);
+        // /camera/status reports whichever source is active (live ESP32 or mock
+        // video); fall back to the live-only endpoint for older backends.
+        let response = await fetch(`${baseUrl}/camera/status`, { cache: 'no-store' });
+        if (!response.ok) {
+            response = await fetch(`${baseUrl}/camera/active`, { cache: 'no-store' });
+        }
         if (response.ok) {
             const data = await response.json();
+<<<<<<< HEAD
             if (data.device_id) {
                 return { active: true, deviceId: data.device_id, fps: Number(data.fps) || 0.0 };
             }
+=======
+            const ageMs = Number(data.last_frame_age_ms);
+            const active = data.active === true && Number.isFinite(ageMs) && ageMs <= 1500;
+            const fps = Number(data.fps);
+            return {
+                active,
+                deviceId: active && typeof data.device_id === 'string' ? data.device_id : '',
+                fps: active && Number.isFinite(fps) && fps > 0 ? fps : 0.0
+            };
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         }
     } catch {
         // network or offline error
@@ -69,6 +112,11 @@ export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<Telemetr
                 cpu_load: isConnected && data.cpu_load != null ? Number(data.cpu_load) : null,
                 heap_free: isConnected && (data.heap_free != null || data.free_heap != null) ? Number(data.heap_free ?? data.free_heap) : null,
                 free_heap: isConnected && (data.heap_free != null || data.free_heap != null) ? Number(data.heap_free ?? data.free_heap) : null,
+<<<<<<< HEAD
+=======
+                free_heap_internal: isConnected && data.free_heap_internal != null ? Number(data.free_heap_internal) : null,
+                free_heap_psram: isConnected && data.free_heap_psram != null ? Number(data.free_heap_psram) : null,
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
                 rssi: isConnected && data.rssi != null ? Number(data.rssi) : null,
                 timestamp: data.timestamp
                     ? Number(data.timestamp)
@@ -228,7 +276,11 @@ export async function provisionEspViaUsb(
     ssid: string,
     password: string,
     baseUrl = BASE_URL,
+<<<<<<< HEAD
     backendIp = ''
+=======
+    gatewayHostIp = ''
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 ): Promise<EspConnectionResult> {
     try {
         const response = await fetch(`${baseUrl}/devices/usb/provision`, {
@@ -241,7 +293,12 @@ export async function provisionEspViaUsb(
                 usb_port: usbPort,
                 ssid,
                 password,
+<<<<<<< HEAD
                 backend_ip: backendIp
+=======
+                backend_ip: gatewayHostIp,
+                gateway_host_ip: gatewayHostIp
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             })
         });
         const data = await response.json().catch(() => ({}));
@@ -254,9 +311,16 @@ export async function provisionEspViaUsb(
                 ipAddress: data.usb_port || usbPort,
                 usbPort: data.usb_port || usbPort,
                 provisionedSsid: data.provisioned_ssid || ssid,
+<<<<<<< HEAD
                 wifiConnected: !!data.wifi_connected,
                 connectionMode: 'usb_serial',
                 message: data.message || `Provisioned server Wi-Fi '${ssid}' over ${usbPort}`
+=======
+                gatewayHostIp: data.gateway_host_ip || data.backend_ip || gatewayHostIp,
+                wifiConnected: !!data.wifi_connected,
+                connectionMode: 'usb_serial',
+                message: data.message || `Provisioned Wi-Fi '${ssid}' over ${usbPort}`
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             };
         }
         return {
@@ -301,6 +365,10 @@ export async function fetchWiFiNetworks(baseUrl = BASE_URL): Promise<WiFiNetwork
         });
         if (response.ok) {
             const data = await response.json();
+<<<<<<< HEAD
+=======
+            if (Array.isArray(data)) return data as WiFiNetworkInfo[];
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
             return data.networks || [];
         }
     } catch {

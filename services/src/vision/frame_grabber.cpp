@@ -61,8 +61,11 @@ void LatestFrameGrabber::run() {
         frame.sequence = ++m_sequence;
         frame.rewound = m_source.didRewind();
         frame.duplicate = m_source.is_duplicate_frame;
+<<<<<<< HEAD
         const bool duplicate = frame.duplicate;
 
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             // Single-slot mailbox: the previous unconsumed frame is dropped.
@@ -71,9 +74,15 @@ void LatestFrameGrabber::run() {
         }
         m_cv.notify_one();
 
+<<<<<<< HEAD
         // Yield briefly so a live HTTP poll cannot monopolise a CPU core or
         // hammer the backend when it keeps returning the same cached frame.
         std::this_thread::sleep_for(std::chrono::milliseconds(duplicate ? 8 : 1));
+=======
+        // Cap backend polling at ~20 FPS. The old 1 ms hot loop produced up to
+        // 1000 GETs/s and starved the backend's raw frame ingest socket.
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);

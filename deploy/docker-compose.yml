@@ -11,22 +11,27 @@ services:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../backend/internal/data/templates/shema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./postgres/shema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
     networks:
       - bawal-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-bawal_vision}"]
       interval: 3s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  backend:
+  bawal_backend:
     image: bawal-backend:latest
     build:
       context: ..
       dockerfile: deploy/Dockerfile.backend
     container_name: bawal_backend
     restart: unless-stopped
+    # The default stack leaves the backend to `just run-backend` on the host
+    # so nmcli can scan the host's Wi-Fi. On a native Docker Engine (not
+    # Docker Desktop) start it explicitly: `just compose-up bawal_backend`.
+    profiles:
+      - docker-backend
     ports:
       - "8080:8080"
       - "8765:8765/udp"
@@ -34,6 +39,7 @@ services:
       - path: ../.env
         required: false
     environment:
+<<<<<<< HEAD
       - PORT=8080
       - DB_HOST=postgres
       - DB_USER=${POSTGRES_USER:-postgres}
@@ -85,10 +91,51 @@ services:
       - ../ml/AI1/model:/app/ml/AI1/model:ro
       - ../ml/AI1/runs:/app/ml/AI1/runs:ro
       - ../examples:/app/examples:ro
+=======
+      CROW_PORT: "8080"
+      CROW_BIND: "0.0.0.0"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DB_NAME: ${POSTGRES_DB:-bawal_vision}
+      DB_SSLMODE: disable
+      MODEL_PATH: ${MODEL_PATH:-/app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx}
+      OMP_NUM_THREADS: "4"
+      OMP_WAIT_POLICY: PASSIVE
+      OMP_SCHEDULE: static
+      OMP_PROC_BIND: "true"
+      CAMERA_VFLIP: ${CAMERA_VFLIP:-1}
+      CAMERA_HFLIP: ${CAMERA_HFLIP:-0}
+      CONF_THRESHOLD: ${CONF_THRESHOLD:-0.35}
+      ENABLE_SR: "0"
+    volumes:
+      - ../ml/AI1/model:/app/ml/AI1/model:ro
+      - ../weights:/app/weights:ro
+      - ../examples:/app/examples:ro
+      # Wi-Fi scan (nmcli) talks to the host NetworkManager over its system
+      # bus. This only works with a native Docker Engine; Docker Desktop runs
+      # in a VM and cannot bind the host's Unix socket. On Docker Desktop run
+      # `just run-backend` on the host instead (see README).
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      # Expose host serial nodes so /api/v1/devices/status can enumerate
+      # /dev/ttyACM* and /dev/ttyUSB* instead of only the container's /dev.
+      - /dev:/dev:ro
+      - /sys:/sys:ro
+    # Fedora's SELinux policy blocks container_t from connecting to the
+    # system D-Bus socket; disabling the container label lets nmcli through.
+    security_opt:
+      - label=disable
+    # The host /dev bind above is read-only; SHM producer still needs a
+    # writable /dev/shm for shm_open()/frame transport.
+    tmpfs:
+      - /dev/shm:size=256m
+    depends_on:
+      postgres:
+        condition: service_healthy
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     networks:
       - bawal-net
-    depends_on:
-      - backend
 
   frontend:
     image: bawal-frontend:latest
@@ -100,13 +147,44 @@ services:
     ports:
       - "${FRONTEND_PORT:-3001}:3000"
     environment:
-      - BACKEND_URL=http://backend:8080
-      - HOST=0.0.0.0
-      - PORT=3000
+      # host.docker.internal also reaches a backend running natively on the
+      # host (required for Wi-Fi scanning under Docker Desktop).
+      BACKEND_URL: ${FRONTEND_BACKEND_URL:-http://host.docker.internal:8080}
+      HOST: 0.0.0.0
+      PORT: "3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Intentionally no depends_on: the frontend must also be startable while
+    # the backend runs as a host process (`just run-backend`).
+    networks:
+      - bawal-net
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: bawal_grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3002}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: "light"
+      GF_AUTH_ANONYMOUS_ORG_NAME: Main Org.
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-bawal_vision}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - bawal-net
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
 
   grafana:
     image: grafana/grafana-oss:latest

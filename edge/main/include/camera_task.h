@@ -6,7 +6,6 @@
 
 #include "data.h"
 #include "esp_err.h"
-#include "esp_camera.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -16,37 +15,66 @@ extern "C" {
 
 #define DEFAULT_FRAME_WIDTH  640
 #define DEFAULT_FRAME_HEIGHT 480
+<<<<<<< HEAD
 #define INITIAL_BUF_CAPACITY (256 * 1024) /* 256 KB PSRAM buffer */
 #define DEVICE_ID            "ESP32-S3-BENCH-01"
 /* 15 FPS keeps the ~7 KB JPEG stream within weak-AP airtime budgets and
    leaves room for telemetry/control traffic. The vision service is the
    downstream bottleneck anyway. */
 #define STREAM_FPS           15
+=======
+#define DEFAULT_FPS          30.0f
+#define STREAM_FPS           20
+#define INITIAL_BUF_CAPACITY (256 * 1024)
+
+/** Double-buffered frame slot: metadata header plus a heap/PSRAM pixel buffer. */
+typedef struct __attribute__((aligned(8))) {
+  camera_frame_header_t header;
+  uint8_t *data;
+} frame_slot_t;
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
 /**
- * 
- * @brief Initialize UVC camera hardware, PSRAM buffers, and FreeRTOS synchronization mutex.
- * 
- * @return esp_err_t ESP_OK on success, or appropriate error code.
+ * @brief Initialize the OV5640-compatible camera in crisp JPEG VGA mode (640x480).
+ *
+ * @return esp_err_t ESP_OK on success, or the esp_camera error code.
  */
 esp_err_t camera_task_init(void);
 
 /**
- * @brief Spawns the FreeRTOS Camera Capture Task pinned to the specified core.
- * 
- * @param priority Task priority (e.g., 5).
- * @param core_id CPU Core ID (0 or 1).
- * @return TaskHandle_t Handle of the created FreeRTOS task.
+ * @brief Return true when the camera driver initialized successfully.
+ */
+bool camera_task_is_ready(void);
+
+/**
+ * @brief Return the detected camera sensor model name (for example "OV5640").
+ */
+const char *camera_get_sensor_name(void);
+
+/**
+ * @brief Copy latest frame from double-buffering slot to destination.
+ */
+esp_err_t camera_copy_latest_frame(camera_frame_buffer_t *out_frame);
+
+/** Copy the current latest frame without consuming its availability flag. */
+esp_err_t camera_copy_current_frame(camera_frame_buffer_t *out_frame);
+
+/**
+ * @brief Return whether camera is streaming.
+ */
+bool is_camera_streaming(void);
+
+/**
+ * @brief Start camera capture static task.
  */
 TaskHandle_t camera_task_start(UBaseType_t priority, BaseType_t core_id);
 
 /**
- * @brief Worker task for UVC video stream ingestion.
- * 
- * @param pvParameters Optional FreeRTOS task arguments.
+ * @brief Camera capture task function.
  */
 void Camera_Capture_Task(void *pvParameters);
 
+<<<<<<< HEAD
 /**
  * @brief FreeRTOS task to continuously stream JPEG frames to the backend REST API via HTTP POST.
  * 
@@ -76,6 +104,8 @@ bool is_camera_streaming(void);
  */
 const char *camera_get_sensor_name(void);
 
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 #ifdef __cplusplus
 }
 #endif

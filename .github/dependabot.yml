@@ -11,6 +11,7 @@ updates:
     labels:
       - "dependencies"
       - "ci/cd"
+<<<<<<< HEAD
     open-pull-requests-limit: 5
     groups:
       github-actions:
@@ -33,6 +34,8 @@ updates:
       backend-dependencies:
         patterns:
           - "*"
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
   # Maintain Frontend SvelteKit / npm dependencies
   - package-ecosystem: "npm"
@@ -45,16 +48,22 @@ updates:
     labels:
       - "dependencies"
       - "frontend"
+<<<<<<< HEAD
     open-pull-requests-limit: 5
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
     ignore:
       - dependency-name: "@sveltejs/adapter-auto"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@sveltejs/kit"
         update-types: ["version-update:semver-major"]
+<<<<<<< HEAD
     groups:
       frontend-dependencies:
         patterns:
           - "*"
+=======
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
 
   # Maintain Python ML dependencies
   - package-ecosystem: "pip"
@@ -67,6 +76,7 @@ updates:
     labels:
       - "dependencies"
       - "ml"
+<<<<<<< HEAD
     open-pull-requests-limit: 5
     groups:
       ml-dependencies:
@@ -74,6 +84,10 @@ updates:
           - "*"
 
   # Maintain Docker Container Base Images
+=======
+
+  # Maintain Docker Base Images (Debian, Postgres, Node)
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
   - package-ecosystem: "docker"
     directory: "/deploy"
     schedule:
@@ -83,6 +97,7 @@ updates:
       include: "scope"
     labels:
       - "dependencies"
+<<<<<<< HEAD
       - "docker"
     open-pull-requests-limit: 5
     groups:
@@ -91,3 +106,6 @@ updates:
           - "*"
 
 
+=======
+      - "docker"
+>>>>>>> 1d20cdc2a15f3f4b16c7f19615855235ce9d8444
