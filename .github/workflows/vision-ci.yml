@@ -43,7 +43,7 @@ jobs:
             pkg: clang-18
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Install System Build Dependencies
         run: |
@@ -67,7 +67,7 @@ jobs:
 
       - name: Cache ONNX Runtime v1.19.2 C++
         id: cache-ort
-        uses: actions/cache@v6
+        uses: actions/cache@v4
         with:
           path: /opt/onnxruntime
           key: onnxruntime-linux-x64-1.19.2
