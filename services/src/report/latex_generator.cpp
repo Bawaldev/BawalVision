@@ -58,7 +58,7 @@ fs::path envPath(const char* key) {
     return fs::path(value);
 }
 
-/** Find the report template relative to the backend working directory. */
+/** Find the report template relative to the backend working directory or binary. */
 fs::path resolveTemplatePath(const fs::path& provided) {
     if (!provided.empty() && fs::is_regular_file(provided)) {
         return provided;
@@ -67,14 +67,26 @@ fs::path resolveTemplatePath(const fs::path& provided) {
         !from_env.empty() && fs::is_regular_file(from_env)) {
         return from_env;
     }
+
+    std::error_code ec;
+    const fs::path exe_dir = fs::canonical("/proc/self/exe", ec).parent_path();
+
     const fs::path candidates[] = {
         fs::path("./services/templates") / kTemplateName,
         fs::path("../services/templates") / kTemplateName,
+        fs::path("../../services/templates") / kTemplateName,
+        fs::path("./templates") / kTemplateName,
+        fs::path("../templates") / kTemplateName,
         fs::path("/app/services/templates") / kTemplateName,
+        exe_dir / "services/templates" / kTemplateName,
+        exe_dir / "templates" / kTemplateName,
+        exe_dir / "../templates" / kTemplateName,
+        exe_dir / "../../templates" / kTemplateName,
+        exe_dir / "../../../services/templates" / kTemplateName,
         provided,
     };
     for (const fs::path& candidate : candidates) {
-        if (!candidate.empty() && fs::is_regular_file(candidate)) {
+        if (!candidate.empty() && fs::is_regular_file(candidate, ec)) {
             return candidate;
         }
     }
