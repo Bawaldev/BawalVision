@@ -30,8 +30,8 @@ services:
     # The default stack leaves the backend to `just run-backend` on the host
     # so nmcli can scan the host's Wi-Fi. On a native Docker Engine (not
     # Docker Desktop) start it explicitly: `just compose-up bawal_backend`.
-    profiles:
-      - docker-backend
+    # profiles:
+    #   - docker-backend
     ports:
       - "8080:8080"
       - "8765:8765/udp"
