@@ -332,11 +332,14 @@ quantize-ai1:
         python3 ml/AI1/quantize_int8.py || python ml/AI1/quantize_int8.py
     fi
 
-# Automated Scrapper via Duckduckgo and export it into ZIP
-zip-scrapper query="nasi bento" limit="30" output="batch_inspection_images.zip":
+# Automated multi-engine scraper and lightweight ZIP archiver
+[no-cd]
+zip-scraper query="bento lunch box tray" limit="30" output="batch_inspection_images.zip":
     #!/usr/bin/env bash
     if [ -f ".venv/bin/python3" ]; then
         .venv/bin/python3 scripts/image_scraper.py -q "{{ query }}" -n {{ limit }} -z "{{ output }}" --clean-after
     else
         python3 scripts/image_scraper.py -q "{{ query }}" -n {{ limit }} -z "{{ output }}" --clean-after
     fi
+
+alias zip-scrapper := zip-scraper

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Autonomous Multi-Engine Image Scraper & Auto-Archiver (ZIP)
+Autonomous Multi-Engine Image Scraper & Lightweight ZIP Archiver
 BawalVision / Industrial Food Dataset Utility
 """
 
@@ -31,21 +31,21 @@ HEADERS = {
 }
 
 DEFAULT_QUERIES = [
-    "nasi bento",
-    "pisang segar di piring",
-    "ayam goreng baki",
-    "sayur bayam mangkok",
-    "tahu goreng piring",
+    "bento lunch box tray",
+    "fresh banana on plate",
+    "fried chicken meal tray",
+    "boiled spinach bowl",
+    "fried tofu dish",
 ]
 
 
 def sanitize_filename(name: str) -> str:
-    """Membersihkan nama query agar aman dijadikan folder atau nama file."""
+    """Sanitize query string into a safe folder and file name."""
     return "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in name).strip("_")
 
 
 def fetch_bing_image_urls(query: str, limit: int = 30) -> List[str]:
-    """Mengambil URL citra resolusi penuh dari endpoint async Bing Images."""
+    """Fetch full-resolution image URLs from Bing Images async endpoint."""
     urls: List[str] = []
     encoded_query = urllib.parse.quote(query)
     search_url = f"https://www.bing.com/images/async?q={encoded_query}&first=0&count={limit * 3}&adlt=off"
@@ -61,13 +61,13 @@ def fetch_bing_image_urls(query: str, limit: int = 30) -> List[str]:
                 if len(urls) >= limit * 3:
                     break
     except Exception as err:
-        print(f"[!] Gagal menghubungi mesin Bing: {err}")
+        print(f"[!] Bing search query failed: {err}")
 
     return urls
 
 
 def fetch_yahoo_image_urls(query: str, limit: int = 30) -> List[str]:
-    """Fallback mesin pencari Yahoo Images jika Bing mengalami limitasi/koneksi macet."""
+    """Fallback search engine using Yahoo Images if Bing is throttled or blocked."""
     urls: List[str] = []
     encoded_query = urllib.parse.quote(query)
     search_url = f"https://images.search.yahoo.com/search/images?p={encoded_query}&imgsz=medium"
@@ -83,13 +83,19 @@ def fetch_yahoo_image_urls(query: str, limit: int = 30) -> List[str]:
                 if len(urls) >= limit * 2:
                     break
     except Exception as err:
-        print(f"[!] Gagal menghubungi mesin Yahoo: {err}")
+        print(f"[!] Yahoo search query failed: {err}")
 
     return urls
 
 
-def download_single_image(url: str, save_path: Path, timeout: int = 8) -> bool:
-    """Mengunduh satu gambar, memverifikasi integritas via Pillow, dan menyimpan sebagai JPEG RGB."""
+def download_single_image(
+    url: str,
+    save_path: Path,
+    timeout: int = 8,
+    max_dimension: int = 800,
+    quality: int = 82,
+) -> bool:
+    """Download single image, verify integrity via Pillow, resize, and save as optimized RGB JPEG."""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=timeout, stream=True)
         if resp.status_code != 200:
@@ -110,8 +116,10 @@ def download_single_image(url: str, save_path: Path, timeout: int = 8) -> bool:
 
             with Image.open(temp_path) as img:
                 rgb_img = img.convert("RGB")
+                if max(rgb_img.size) > max_dimension:
+                    rgb_img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
                 final_path = save_path.with_suffix(".jpg")
-                rgb_img.save(final_path, "JPEG", quality=90)
+                rgb_img.save(final_path, "JPEG", quality=quality, optimize=True)
 
             if temp_path.exists():
                 temp_path.unlink()
@@ -125,22 +133,29 @@ def download_single_image(url: str, save_path: Path, timeout: int = 8) -> bool:
         return False
 
 
-def scrape_category(query: str, target_dir: Path, limit: int = 30, max_workers: int = 8) -> int:
-    """Scraping gambar kategori baki makanan menggunakan strategi dual-engine kebal blokir ISP."""
+def scrape_category(
+    query: str,
+    target_dir: Path,
+    limit: int = 30,
+    max_workers: int = 8,
+    max_dimension: int = 800,
+    quality: int = 82,
+) -> int:
+    """Scrape meal tray images using an anti-blocking dual-engine strategy."""
     target_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\n[+] Mengumpulkan {limit} gambar untuk query: '{query}'...")
+    print(f"\n[+] Collecting {limit} images for query: '{query}'...")
 
     image_urls = fetch_bing_image_urls(query, limit=limit)
 
     if not image_urls:
-        print("    [!] Bing tidak memberikan hasil. Beralih ke mesin cadangan (Yahoo)...")
+        print("    [!] Bing returned no results. Switching to fallback search engine (Yahoo)...")
         image_urls = fetch_yahoo_image_urls(query, limit=limit)
 
     if not image_urls:
-        print(f"    [!] Tidak ditemukan tautan gambar valid untuk query '{query}'.")
+        print(f"    [!] No valid image URLs found for query '{query}'.")
         return 0
 
-    print(f"    [+] Terkumpul {len(image_urls)} kandidat URL. Memulai unduhan paralel ({max_workers} thread)...")
+    print(f"    [+] Found {len(image_urls)} candidate URLs. Starting parallel downloads ({max_workers} threads)...")
     downloaded = 0
     futures = {}
 
@@ -148,81 +163,100 @@ def scrape_category(query: str, target_dir: Path, limit: int = 30, max_workers: 
         for idx, url in enumerate(image_urls):
             file_stem = f"{idx:04d}_{sanitize_filename(query)[:18]}"
             dest_path = target_dir / file_stem
-            future = executor.submit(download_single_image, url, dest_path)
+            future = executor.submit(
+                download_single_image,
+                url,
+                dest_path,
+                8,
+                max_dimension,
+                quality,
+            )
             futures[future] = url
 
         for future in concurrent.futures.as_completed(futures):
             if future.result():
                 downloaded += 1
-                print(f"    [OK] ({downloaded}/{limit}) Gambar terverifikasi & disimpan", end="\r")
+                print(f"    [OK] ({downloaded}/{limit}) Image verified & saved", end="\r")
                 if downloaded >= limit:
                     for f in futures:
                         f.cancel()
                     break
 
-    print(f"\n[✓] Sukses mengunduh & memvalidasi {downloaded} gambar untuk '{query}'.")
+    print(f"\n[✓] Successfully downloaded & validated {downloaded} images for '{query}'.")
     return downloaded
 
 
 def make_zip_archive(source_dir: Path, zip_output_path: Path) -> Path:
-    """Mengemas folder unduhan ke arsip .zip bersih."""
-    print(f"\n[+] Mengompres direktori '{source_dir}' ke berkas ZIP...")
+    """Package downloaded folder into a compressed .zip archive."""
+    print(f"\n[+] Compressing directory '{source_dir}' into ZIP archive...")
     zip_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(zip_output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+    with zipfile.ZipFile(zip_output_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
         file_count = 0
         for root, _, files in os.walk(source_dir):
-            for file in files:
+            for file in sorted(files):
                 file_path = Path(root) / file
                 arcname = file_path.relative_to(source_dir)
                 zipf.write(file_path, arcname)
                 file_count += 1
 
     size_mb = zip_output_path.stat().st_size / (1024 * 1024)
-    print(f"[✓] Berkas ZIP selesai dibuat: '{zip_output_path.resolve()}'")
-    print(f"    - Total Citra Baki : {file_count} file")
-    print(f"    - Ukuran Berkas    : {size_mb:.2f} MB")
+    print(f"[✓] ZIP archive created successfully: '{zip_output_path.resolve()}'")
+    print(f"    - Total Food Tray Images: {file_count} files")
+    print(f"    - File Size             : {size_mb:.2f} MB")
     return zip_output_path
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dual-Engine Image Scraper & Auto-ZIP Archiver (Anti-ISP Blocking)"
+        description="Dual-Engine Image Scraper & Lightweight ZIP Archiver (Anti-ISP Blocking)"
     )
     parser.add_argument(
         "-q", "--queries",
         nargs="+",
         default=DEFAULT_QUERIES,
-        help="Daftar kata kunci pencarian (misal: 'nasi bento' 'ayam goreng baki')"
+        help="List of search query keywords (e.g. 'bento lunch box tray' 'fried chicken meal tray')"
     )
     parser.add_argument(
         "-n", "--limit",
         type=int,
         default=25,
-        help="Jumlah target citra valid per kategori (default: 25)"
+        help="Target number of valid images per category (default: 25)"
     )
     parser.add_argument(
         "-o", "--outdir",
         type=str,
         default="downloaded_images",
-        help="Direktori penyimpanan lokal gambar sebelum di-zip (default: downloaded_images)"
+        help="Local directory to store downloaded images before archiving (default: downloaded_images)"
     )
     parser.add_argument(
         "-z", "--zipname",
         type=str,
         default="batch_inspection_images.zip",
-        help="Nama berkas arsip zip keluaran (default: batch_inspection_images.zip)"
+        help="Output ZIP archive file name (default: batch_inspection_images.zip)"
     )
     parser.add_argument(
         "-w", "--workers",
         type=int,
         default=8,
-        help="Jumlah thread pekerja paralel (default: 8)"
+        help="Number of concurrent worker threads (default: 8)"
+    )
+    parser.add_argument(
+        "--max-dim",
+        type=int,
+        default=800,
+        help="Maximum width/height dimension in pixels for image compression (default: 800)"
+    )
+    parser.add_argument(
+        "--quality",
+        type=int,
+        default=82,
+        help="JPEG compression quality 1-100 (default: 82 for lightweight serverless ZIPs)"
     )
     parser.add_argument(
         "--clean-after",
         action="store_true",
-        help="Hapus direktori gambar sementara setelah file ZIP selesai dibuat"
+        help="Delete temporary downloaded image directory after ZIP archive is created"
     )
 
     args = parser.parse_args()
@@ -237,31 +271,39 @@ def main():
     print("=" * 65)
     print("   BAWALVISION IMAGE SCRAPER & AUTO-ZIP ARCHIVER (ANTI-ISP BLOCK)")
     print("=" * 65)
-    print(f"Target Kategori : {len(args.queries)} query -> {args.queries}")
-    print(f"Limit / Kategori: {args.limit} citra")
-    print(f"Target Output   : {zip_path.resolve()}")
+    print(f"Target Categories: {len(args.queries)} queries -> {args.queries}")
+    print(f"Limit / Category : {args.limit} images")
+    print(f"Max Dimension    : {args.max_dim}px (JPEG Quality: {args.quality}%)")
+    print(f"Target Output    : {zip_path.resolve()}")
 
     for query in args.queries:
         folder_name = sanitize_filename(query)
         cat_dir = base_output / folder_name
-        count = scrape_category(query, cat_dir, limit=args.limit, max_workers=args.workers)
+        count = scrape_category(
+            query,
+            cat_dir,
+            limit=args.limit,
+            max_workers=args.workers,
+            max_dimension=args.max_dim,
+            quality=args.quality,
+        )
         total_all += count
 
     if total_all == 0:
-        print("\n[!] Tidak ada citra yang berhasil diunduh. Berkas ZIP dibatalkan.")
+        print("\n[!] No images were successfully downloaded. ZIP creation aborted.")
         sys.exit(1)
 
     make_zip_archive(base_output, zip_path)
 
     if args.clean_after:
-        print(f"[+] Menghapus folder sementara '{base_output}' (--clean-after aktif)...")
+        print(f"[+] Removing temporary directory '{base_output}' (--clean-after active)...")
         shutil.rmtree(base_output, ignore_errors=True)
 
     elapsed = time.time() - start_time
     print("\n" + "=" * 65)
-    print(f"[✓] PIPELINE SELESAI DALAM {elapsed:.1f} DETIK!")
-    print(f"[✓] Total citra baki valid: {total_all}")
-    print(f"[✓] Berkas ZIP siap pakai  : {zip_path.name}")
+    print(f"[✓] PIPELINE COMPLETED IN {elapsed:.1f} SECONDS!")
+    print(f"[✓] Total Valid Tray Images : {total_all}")
+    print(f"[✓] Ready-to-Use ZIP Archive: {zip_path.name}")
     print("=" * 65)
 
 
