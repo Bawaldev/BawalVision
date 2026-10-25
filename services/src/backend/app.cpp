@@ -40,6 +40,7 @@
 #include <vector>
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/core/version.hpp>
 
 namespace bawal::backend {
 namespace {
@@ -1734,6 +1735,9 @@ void BackendApp::registerCompatibilityRoutes() {
         body["arch"] = "x86_64";
         body["graviton_available"] = false;
         body["local_engine_available"] = true;
+        body["opencv_version"] = CV_VERSION;
+        body["opencv_major"] = CV_VERSION_MAJOR;
+        body["opencv_pipeline"] = "OpenCV 4 Modern C++20 (AVX2 + OpenMP)";
         body["parallel_cores"] = static_cast<uint32_t>(cores);
         body["num_cpu"] = static_cast<uint32_t>(cores);
         body["server_mem_sys_mb"] = 0;

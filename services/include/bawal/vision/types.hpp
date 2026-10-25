@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 #include <opencv2/core.hpp>
+#include <opencv2/core/version.hpp>
+
+static_assert(CV_VERSION_MAJOR >= 4, "BawalVision strictly requires OpenCV 4+ architecture.");
 
 namespace bawal::vision {
 

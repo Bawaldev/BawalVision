@@ -17,6 +17,9 @@
 #include <curl/curl.h>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/core/version.hpp>
+
+static_assert(CV_VERSION_MAJOR >= 4, "BawalVision vision_service strictly requires OpenCV 4+.");
 
 #include "bawal/vision.hpp"
 #include "bawal/vision/frame_grabber.hpp"
@@ -30,6 +33,9 @@ using namespace bawal::server;
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
+
+    fmt::print("[INFO] BawalVision vision_service initializing...\n");
+    fmt::print("[INFO] OpenCV Version: {} (Verified OpenCV4 Modern Pipeline)\n", CV_VERSION);
 
     curl_global_init(CURL_GLOBAL_ALL);
     CURL* curl = curl_easy_init();

@@ -17,6 +17,9 @@
 #include "bawal/lambda/handler.hpp"
 #include "bawal/server/rolling_image_store.hpp"
 #include "bawal/vision/classifier.hpp"
+#include <opencv2/core/version.hpp>
+
+static_assert(CV_VERSION_MAJOR >= 4, "BawalVision backend strictly requires OpenCV 4+.");
 
 namespace {
 
@@ -56,6 +59,9 @@ uint16_t envPortOrDefault(const char* key, uint16_t fallback) {
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
+
+    std::cout << "[INFO] BawalVision C++ Backend initializing...\n";
+    std::cout << "[INFO] OpenCV Version: " << CV_VERSION << " (Verified OpenCV4 Modern Pipeline)\n";
 
     bawal::backend::ServerConfig config;
     config.bind_address = envOr("CROW_BIND", "0.0.0.0");
