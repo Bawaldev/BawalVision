@@ -97,6 +97,8 @@ private:
     std::atomic<bool> m_initialized{false};
     std::atomic<bool> m_configured{false};
     std::string m_last_inspection_json;
+    std::string m_last_telemetry_json;
+    std::chrono::steady_clock::time_point m_last_telemetry_time{};
 };
 
 } // namespace bawal::lambda

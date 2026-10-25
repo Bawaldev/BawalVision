@@ -108,6 +108,38 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             return resp;
         }
 
+        if (route.method == "POST" && route.path.find("/telemetry") != std::string::npos) {
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+
+            std::string body_content;
+            const size_t body_pos = event_payload.find("\"body\":");
+            if (body_pos != std::string_view::npos) {
+                const size_t start = event_payload.find('"', body_pos + 7);
+                if (start != std::string_view::npos) {
+                    size_t end = event_payload.find('"', start + 1);
+                    while (end != std::string_view::npos && event_payload[end - 1] == '\\') {
+                        end = event_payload.find('"', end + 1);
+                    }
+                    if (end != std::string_view::npos) {
+                        body_content = std::string(event_payload.substr(start + 1, end - start - 1));
+                    }
+                }
+            } else {
+                body_content = std::string(event_payload);
+            }
+
+            if (!body_content.empty()) {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_last_telemetry_json = std::move(body_content);
+                m_last_telemetry_time = std::chrono::steady_clock::now();
+            }
+
+            resp.json_payload = R"({"status":"success","message":"Real-time ESP32 hardware telemetry recorded"})";
+            return resp;
+        }
+
         if (route.method == "GET") {
             LambdaInspectionResponse resp;
             resp.status_code = 200;
@@ -119,15 +151,36 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             }
             if (route.path.find("/camera/status") != std::string::npos ||
                 route.path.find("/camera/active") != std::string::npos) {
-                resp.json_payload = R"({"active":true,"device_id":"LAMBDA_SERVERLESS","fps":1.0,"last_frame_age_ms":50})";
+                std::lock_guard<std::mutex> lock(m_mutex);
+                const auto now = std::chrono::steady_clock::now();
+                const auto age_sec = std::chrono::duration_cast<std::chrono::seconds>(now - m_last_telemetry_time).count();
+                if (!m_last_telemetry_json.empty() && age_sec <= 45) {
+                    resp.json_payload = R"({"active":true,"device_id":"ESP32S3_LIVE","fps":1.0,"last_frame_age_ms":50})";
+                } else {
+                    resp.json_payload = R"({"active":false,"device_id":"NO_ESP32_NODE","fps":0.0,"last_frame_age_ms":0})";
+                }
                 return resp;
             }
             if (route.path.find("/telemetry/latest") != std::string::npos) {
-                resp.json_payload = R"({"device_id":"LAMBDA_SERVERLESS","firmware_version":"2.0.0-lambda","device_core":2,"cpu_temperature":38.5,"temperature":25.0,"cpu_load":5.0,"heap_free":268435456,"free_heap":268435456,"is_connected":true,"status":"online"})";
+                std::lock_guard<std::mutex> lock(m_mutex);
+                const auto now = std::chrono::steady_clock::now();
+                const auto age_sec = std::chrono::duration_cast<std::chrono::seconds>(now - m_last_telemetry_time).count();
+                if (!m_last_telemetry_json.empty() && age_sec <= 45) {
+                    resp.json_payload = m_last_telemetry_json;
+                } else {
+                    resp.json_payload = R"({"device_id":"NO_ESP32_NODE","firmware_version":"offline","device_core":0,"cpu_temperature":null,"temperature":null,"cpu_load":null,"heap_free":null,"free_heap":null,"is_connected":false,"status":"offline","message":"Awaiting real-time ESP32-S3 hardware telemetry heartbeat"})";
+                }
                 return resp;
             }
             if (route.path.find("/devices/status") != std::string::npos) {
-                resp.json_payload = R"({"connected":true,"device_id":"LAMBDA_SERVERLESS","mode":"cloud_serverless","status":"connected","server_wifi":{"ssid":"AWS-Cloud-Serverless","active_ssid":"AWS-Cloud-Serverless","backend_ip":"127.0.0.1"}})";
+                std::lock_guard<std::mutex> lock(m_mutex);
+                const auto now = std::chrono::steady_clock::now();
+                const auto age_sec = std::chrono::duration_cast<std::chrono::seconds>(now - m_last_telemetry_time).count();
+                if (!m_last_telemetry_json.empty() && age_sec <= 45) {
+                    resp.json_payload = R"({"connected":true,"device_id":"ESP32S3_LIVE","mode":"esp32_hardware","status":"connected"})";
+                } else {
+                    resp.json_payload = R"({"connected":false,"device_id":"NO_ESP32_NODE","mode":"offline","status":"disconnected","message":"No ESP32 hardware streaming"})";
+                }
                 return resp;
             }
             if (route.path.find("/devices/wifi/networks") != std::string::npos) {
