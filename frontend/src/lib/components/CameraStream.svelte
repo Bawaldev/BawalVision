@@ -182,12 +182,45 @@
         isLiveFeedActive = false;
     }
 
-    function connectLocalBackendStream() {
-        discoveredStreamUrl = 'http://localhost:8080/api/v1/camera/stream';
-        isAttemptingLocalStream = true;
-        streamError = false;
-        retryCount = 0;
-        streamEpoch = Date.now();
+    let isProbingLocal = $state(false);
+    let localBackendNotice = $state('');
+
+    async function connectLocalBackendStream() {
+        isProbingLocal = true;
+        localBackendNotice = 'Probing local backend at http://localhost:8080...';
+
+        const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 1500);
+            const res = await fetch('http://localhost:8080/api/v1/health', {
+                signal: controller.signal,
+                cache: 'no-store'
+            }).catch(err => {
+                throw err;
+            });
+            clearTimeout(timeout);
+
+            if (res.ok) {
+                discoveredStreamUrl = 'http://localhost:8080/api/v1/camera/stream';
+                isAttemptingLocalStream = true;
+                streamError = false;
+                retryCount = 0;
+                streamEpoch = Date.now();
+                localBackendNotice = '✓ Local C++ backend connected! Loading MJPEG stream...';
+            } else {
+                localBackendNotice = '⚠️ Backend at localhost:8080 responded with an error. Verify bawal_backend is running.';
+            }
+        } catch {
+            if (isHttps) {
+                localBackendNotice = '⚠️ <strong>Mixed Content Blocked</strong>: Browser (Chrome/Brave) memblokir koneksi HTTP localhost dari domain HTTPS Vercel.<br/><strong>Solusi:</strong> Jalankan <code>just run-frontend</code> di terminal dan buka <a href="http://localhost:5173" target="_blank" rel="noopener">http://localhost:5173</a>, atau jalankan backend via <code>just compose-up bawal_backend</code>.';
+            } else {
+                localBackendNotice = '⚠️ <strong>Local backend tidak aktif di port 8080</strong>. Jalankan backend C++ dengan perintah: <code>just compose-up bawal_backend</code> atau <code>just run-backend</code>.';
+            }
+        } finally {
+            isProbingLocal = false;
+        }
     }
 
     function captureAndPushLiveFrame() {
@@ -1147,14 +1180,25 @@
                         </div>
                         <h4>ESP32-S3 Live Stream Awaiting Signal</h4>
                         <p>No active MJPEG stream received on <code>/api/v1/camera/stream</code>. The physical camera node is either in standby or on a local subnet.</p>
+
+                        {#if localBackendNotice}
+                            <div class="local-backend-alert">
+                                <span>{@html localBackendNotice}</span>
+                            </div>
+                        {/if}
+
                         <div class="standby-actions-row">
                             <button type="button" class="switch-mock-btn" onclick={() => { setSourceMode('mock'); togglePlayPause(); }}>
                                 🎬 Switch to Mock Video (Simulation)
                             </button>
-                            <button type="button" class="local-backend-btn" onclick={connectLocalBackendStream}>
-                                🔌 Connect Localhost Backend (:8080)
+                            <button type="button" class="local-backend-btn" onclick={connectLocalBackendStream} disabled={isProbingLocal}>
+                                {#if isProbingLocal}
+                                    <span class="btn-spinner"></span> Checking :8080...
+                                {:else}
+                                    🔌 Connect Localhost Backend (:8080)
+                                {/if}
                             </button>
-                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
+                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); localBackendNotice = ''; }}>
                                 ↻ Reconnect Camera
                             </button>
                         </div>
@@ -1919,6 +1963,24 @@
     .local-backend-btn:hover {
         transform: translateY(-1px);
         filter: brightness(1.1);
+    }
+
+    .local-backend-alert {
+        background: rgba(239, 68, 68, 0.12);
+        border: 1px solid rgba(239, 68, 68, 0.35);
+        color: #fca5a5;
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 0.78rem;
+        line-height: 1.4;
+        max-width: 520px;
+        margin: 10px auto 4px auto;
+        text-align: center;
+    }
+
+    .local-backend-alert a {
+        color: #93c5fd;
+        text-decoration: underline;
     }
 
     .retry-btn {

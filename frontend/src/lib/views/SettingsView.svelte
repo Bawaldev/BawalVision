@@ -231,16 +231,22 @@
     async function handleDetectLocalBackend() {
         detectingLocalBackend = true;
         localBackendMessage = 'Searching for the local C++ backend...';
+        const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
         try {
             const detected = await detectLocalBackend(1800);
             if (detected) {
                 formState.backendUrl = detected;
-                localBackendMessage = `Local live backend connected: ${detected}`;
+                localBackendMessage = `✓ Local live backend connected: ${detected}`;
                 await refreshHardwareStatus();
             } else {
                 formState.backendUrl = getConfiguredApiBase();
-                localBackendMessage =
-                    'No local C++ backend found. Live MJPEG/SIMD needs the host backend; the cloud/Lambda backend only serves reports and snapshots.';
+                if (isHttps) {
+                    localBackendMessage =
+                        'Browser HTTPS memblokir probe ke localhost HTTP. Buka frontend lokal di http://localhost:5173 (jalankan "just run-frontend"), atau masukkan LAN IP laptop.';
+                } else {
+                    localBackendMessage =
+                        'Tidak ditemukan backend C++ di port 8080. Jalankan backend lokal dengan "just compose-up bawal_backend" atau "just run-backend" di terminal.';
+                }
             }
         } finally {
             detectingLocalBackend = false;
