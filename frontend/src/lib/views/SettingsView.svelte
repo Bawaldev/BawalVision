@@ -335,7 +335,7 @@
         }
         if (gatewayIpToUse && !isValidGatewayIp(gatewayIpToUse)) {
             connectError =
-                'IP gateway tidak valid (Docker/loopback). Gunakan IP WiFi laptop, atau kosongkan agar ESP menemukan backend via UDP discovery.';
+                'Invalid gateway IP (Docker/loopback). Use host Wi-Fi IP, or leave blank so the ESP discovers the backend via UDP.';
             isConnectingWifi = false;
             return;
         }
@@ -742,7 +742,7 @@
             if (backendIp && !isValidGatewayIp(backendIp)) {
                 webSerialStatus = 'error';
                 webSerialMsg =
-                    'IP gateway tidak valid (Docker/loopback). Gunakan IP WiFi laptop, atau kosongkan agar ESP menemukan backend via UDP discovery.';
+                    'Invalid gateway IP (Docker/loopback). Use host Wi-Fi IP, or leave blank so the ESP discovers the backend via UDP.';
                 return;
             }
             if (!backendIp) {
@@ -1356,7 +1356,7 @@
                                         placeholder={detectedHostIp || 'Auto-detect laptop Wi-Fi IP'}
                                     />
                                     {#if gatewayHostIp && !isValidGatewayIp(gatewayHostIp)}
-                                        <span class="gateway-ip-error">IP Docker/loopback tidak diizinkan. Gunakan IP WiFi laptop atau kosongkan.</span>
+                                        <span class="gateway-ip-error">Docker/loopback IP is not allowed. Use host Wi-Fi IP or leave blank.</span>
                                     {/if}
                                 </div>
                             </div>

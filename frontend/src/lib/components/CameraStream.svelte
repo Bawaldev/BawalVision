@@ -828,7 +828,7 @@
                 {/if}
             {:else}
                 <!-- Live Stream Mode (Unified MJPEG Ingress from ESP32-S3 Camera) -->
-                {#if hasCamera || !streamError}
+                {#if hasCamera && !streamError}
                     <img
                         src={activeStreamUrl}
                         alt="AI Live Inspection Stream"
@@ -836,17 +836,63 @@
                         onload={() => { streamError = false; retryCount = 0; scheduleLiveRefresh(); }}
                         onerror={() => { streamError = true; }}
                     />
+
+                    <!-- Dynamic AI Bounding Box HUD Overlay for Live ESP Stream -->
+                    {#if !isSwitchingMode && detections && detections.length > 0}
+                        <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
+                            {#each detections as det}
+                                {#if det.box && det.box.length === 4}
+                                    {@const [bx, by, bw, bh] = det.box}
+                                    {@const status = getItemStatus(det)}
+                                    {@const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444')}
+                                    <rect
+                                        x={bx}
+                                        y={by}
+                                        width={bw}
+                                        height={bh}
+                                        fill="none"
+                                        stroke={strokeColor}
+                                        stroke-width="2.5"
+                                        rx="4"
+                                    />
+                                    <rect
+                                        x={bx}
+                                        y={Math.max(0, by - 20)}
+                                        width={Math.max(60, (det.food_name || '').length * 8 + 36)}
+                                        height="20"
+                                        fill={strokeColor}
+                                        rx="3"
+                                    />
+                                    <text
+                                        x={bx + 4}
+                                        y={Math.max(14, by - 5)}
+                                        fill="#ffffff"
+                                        font-size="11"
+                                        font-weight="bold"
+                                        font-family="sans-serif"
+                                    >
+                                        {det.food_name} {Math.round((det.similarity_rate || 0) * (det.similarity_rate <= 1 ? 100 : 1))}%
+                                    </text>
+                                {/if}
+                            {/each}
+                        </svg>
+                    {/if}
                 {:else}
                     <!-- Standby State -->
                     <div class="standby-box">
-                        <span class="standby-icon">📷</span>
-                        <h4>No Camera Stream Connected</h4>
-                        <p>Awaiting ESP32-S3 Camera Feed on /api/v1/camera/stream</p>
-                        {#if streamError}
-                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
-                                ↻ Reconnect Stream
+                        <div class="standby-radar-ring">
+                            <span class="standby-icon">📷</span>
+                        </div>
+                        <h4>ESP32-S3 Live Stream Awaiting Signal</h4>
+                        <p>No active MJPEG stream received on <code>/api/v1/camera/stream</code>. The physical camera node is either in standby or on a local subnet.</p>
+                        <div class="standby-actions-row">
+                            <button type="button" class="switch-mock-btn" onclick={() => { setSourceMode('mock'); togglePlayPause(); }}>
+                                🎬 Switch to Mock Video (Simulation)
                             </button>
-                        {/if}
+                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
+                                ↻ Reconnect Camera
+                            </button>
+                        </div>
                     </div>
                 {/if}
             {/if}
@@ -1542,21 +1588,67 @@
         color: var(--text-muted);
     }
 
-    .retry-btn {
-        margin-top: 8px;
-        background: var(--accent-blue);
-        color: #0f172a;
+    .standby-radar-ring {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: rgba(56, 189, 248, 0.1);
+        border: 1px solid rgba(56, 189, 248, 0.25);
+        animation: radarPulse 2.4s infinite ease-in-out;
+    }
+
+    @keyframes radarPulse {
+        0%, 100% { transform: scale(1); opacity: 0.9; }
+        50% { transform: scale(1.08); opacity: 1; }
+    }
+
+    .standby-actions-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .switch-mock-btn {
+        background: var(--accent-emerald, #10b981);
+        color: #ffffff;
         font-weight: 700;
-        font-size: 0.75rem;
+        font-size: 0.78rem;
         border: none;
-        padding: 6px 14px;
+        padding: 8px 16px;
         border-radius: var(--radius-pill);
         cursor: pointer;
-        transition: opacity 0.15s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: transform 0.15s ease, filter 0.15s ease;
+        box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+    }
+
+    .switch-mock-btn:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.1);
+    }
+
+    .retry-btn {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text-primary);
+        font-weight: 600;
+        font-size: 0.75rem;
+        border: 1px solid var(--border-card);
+        padding: 7px 14px;
+        border-radius: var(--radius-pill);
+        cursor: pointer;
+        transition: background 0.15s ease;
     }
 
     .retry-btn:hover {
-        opacity: 0.9;
+        background: rgba(255, 255, 255, 0.14);
     }
 
     .viewport-footer {
