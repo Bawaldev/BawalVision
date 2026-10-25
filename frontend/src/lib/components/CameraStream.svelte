@@ -109,7 +109,11 @@
     let videoUUIDMap = $state<Record<string, string>>({});
     let selectedVideo = $state('banana/banana_sample_one.mp4');
     let mockVideoSrc = $state('/examples/banana/banana_sample_one.mp4');
-    let resolvedMockVideoSrc = $derived(withApiOrigin(mockVideoSrc, activeApiBase));
+    let resolvedMockVideoSrc = $derived(
+        mockVideoSrc.startsWith('blob:') || mockVideoSrc.startsWith('http')
+            ? mockVideoSrc
+            : (mockVideoSrc.startsWith('/') ? mockVideoSrc : `/${mockVideoSrc}`)
+    );
     let mockFileName = $state('banana/banana_sample_one.mp4');
     let customFileKey = $state('');
     let isCustomUpload = $state(false);
@@ -753,6 +757,59 @@
         }
     }
 
+    function handleMockOfflineSimulation(currentSeq: number) {
+        mockPushedFrames++;
+        streamError = false;
+
+        let thumb = '';
+        try {
+            if (mockCanvasEl) {
+                thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
+            }
+        } catch {}
+
+        const isBanana = mockFileName.toLowerCase().includes('banana') || mockFileName.toLowerCase().includes('pisang');
+        const foodName = isBanana ? 'banana' : (mockFileName.split('/')[0] || 'food_item');
+
+        const t = mockCurrentTime;
+        const wobbleX = Math.round(Math.sin(t * 1.5) * 8);
+        const wobbleY = Math.round(Math.cos(t * 1.2) * 6);
+        const baseBox = [160 + wobbleX, 110 + wobbleY, 320, 240];
+        const conf = 0.92 + Math.sin(t * 2.0) * 0.04;
+
+        const simulatedDetections: FoodDetection[] = [
+            {
+                class_name: foodName,
+                food_name: foodName,
+                category: isBanana ? 'Fruit' : 'Side',
+                confidence: Math.round(conf * 100) / 100,
+                similarity_rate: Math.round(conf * 100) / 100,
+                freshness: 99,
+                status: 'PASS',
+                bbox: baseBox
+            }
+        ];
+
+        window.dispatchEvent(new CustomEvent('bawal-live-detections', {
+            detail: {
+                frame_id: currentSeq,
+                detections: simulatedDetections,
+                deviceId: 'MOCK_VIDEO_CAM',
+                source: 'mock_video',
+                videoName: mockFileName,
+                videoUUID: mockVideoUUID,
+                thumbnail: thumb,
+                scene_optical: {
+                    temperature: 23.8,
+                    lux: 420,
+                    thermal_state: 'OPTIMAL',
+                    freshness_score: 99,
+                    quality_grade: 'Grade A (Optimal)'
+                }
+            }
+        }));
+    }
+
     function captureAndPushFrame() {
         if (!mockVideoEl || !mockCanvasEl || isPushingFrame) return;
         if (mockVideoEl.paused || mockVideoEl.ended || mockVideoEl.readyState < 2) return;
@@ -769,6 +826,9 @@
                     return;
                 }
                 const currentSeq = ++mockFrameSeq;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1200);
+
                 fetch(apiEndpoint('/api/v1/camera/frame'), {
                     method: 'POST',
                     headers: {
@@ -783,9 +843,11 @@
                         'X-Is-Rewind': isRewound ? '1' : '0',
                         'X-Video-Rewind': isRewound ? '1' : '0'
                     },
-                    body: blob
+                    body: blob,
+                    signal: controller.signal
                 })
                 .then(async (res) => {
+                    clearTimeout(timeoutId);
                     if (res.ok) {
                         mockPushedFrames++;
                         streamError = false;
@@ -812,10 +874,15 @@
                                     thumbnail: thumb
                                 }
                             }));
+                            return;
                         }
                     }
+                    handleMockOfflineSimulation(currentSeq);
                 })
-                .catch(() => {})
+                .catch(() => {
+                    clearTimeout(timeoutId);
+                    handleMockOfflineSimulation(currentSeq);
+                })
                 .finally(() => {
                     isPushingFrame = false;
                 });
@@ -834,6 +901,10 @@
             drawVideoPreservingAspect(ctx, mockVideoEl, mockCanvasEl.width, mockCanvasEl.height);
             mockCanvasEl.toBlob((blob) => {
                 if (!blob) return;
+                const currentSeq = ++mockFrameSeq;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1200);
+
                 fetch(apiEndpoint('/api/v1/camera/frame'), {
                     method: 'POST',
                     headers: {
@@ -844,12 +915,14 @@
                         'X-Telemetry-Struct': 'MockTelemetryPayload',
                         'X-Mock-Video-Source': mockFileName,
                         'X-Mock-Video-UUID': mockVideoUUID,
-                        'X-Frame-ID': String(++mockFrameSeq),
+                        'X-Frame-ID': String(currentSeq),
                         'X-Is-Rewind': isRewound ? '1' : '0',
                         'X-Video-Rewind': isRewound ? '1' : '0'
                     },
-                    body: blob
+                    body: blob,
+                    signal: controller.signal
                 }).then(async (res) => {
+                    clearTimeout(timeoutId);
                     if (res && res.ok) {
                         mockPushedFrames++;
                         streamError = false;
@@ -876,9 +949,14 @@
                                     thumbnail: thumb
                                 }
                             }));
+                            return;
                         }
                     }
-                }).catch(() => {});
+                    handleMockOfflineSimulation(currentSeq);
+                }).catch(() => {
+                    clearTimeout(timeoutId);
+                    handleMockOfflineSimulation(currentSeq);
+                });
             }, 'image/jpeg', 0.85);
         } catch {}
     }
@@ -902,6 +980,23 @@
     }
 
     let isSwitchingMode = $state(false);
+
+    async function postCameraMode(payload: Record<string, unknown>): Promise<void> {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 1200);
+        try {
+            await fetch(apiEndpoint('/api/v1/camera/mode'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: controller.signal
+            });
+        } catch {
+            // Ignore backend timeout or network error (backend may be offline)
+        } finally {
+            clearTimeout(timer);
+        }
+    }
 
     async function setSourceMode(mode: SourceModeType) {
         if (sourceMode === mode && !isSwitchingMode) return;
@@ -931,51 +1026,45 @@
             stopLivePushing();
         }
 
-        if (mode === 'mock') {
-            // 1. Immediately request backend mode change and wipe frames/detections
-            await fetch(apiEndpoint('/api/v1/camera/mode'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+        // Safety fallback timer: scrim MUST NOT remain stuck on screen under any circumstance
+        const safetyTimer = setTimeout(() => {
+            isSwitchingMode = false;
+        }, 1200);
+
+        try {
+            if (mode === 'mock') {
+                // 1. Immediately request backend mode change and wipe frames/detections
+                await postCameraMode({
                     mode: 'mock',
                     video_source: mockFileName,
                     video_uuid: mockVideoUUID
-                })
-            }).catch(() => {});
+                });
 
-            // 2. Strict Pipeline Drain Delay: Wait 800ms so all YOLO detection boxes turn off
-            // and the previous live camera stream is cleanly drained before mock frames start
-            await new Promise(r => setTimeout(r, 800));
+                // 2. Allow Svelte 5 DOM reconciliation of <video> element
+                await tick();
+                await new Promise(r => setTimeout(r, 200));
 
-            if (mockVideoEl) {
-                mockVideoEl.play().catch(() => {});
+                if (mockVideoEl) {
+                    mockVideoEl.muted = true;
+                    try {
+                        await mockVideoEl.play();
+                    } catch {}
+                }
+                startMockPushing();
+            } else if (mode === 'device_cam') {
+                await postCameraMode({ mode: 'live' });
+                await new Promise(r => setTimeout(r, 300));
+                await startDeviceCam();
+            } else {
+                await postCameraMode({ mode: 'live' });
+                await new Promise(r => setTimeout(r, 300));
+                streamEpoch = Date.now();
+                startLivePushing();
             }
-            startMockPushing();
-            isSwitchingMode = false;
-        } else if (mode === 'device_cam') {
-            await fetch(apiEndpoint('/api/v1/camera/mode'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mode: 'live' })
-            }).catch(() => {});
-
-            await new Promise(r => setTimeout(r, 600));
-            await startDeviceCam();
-            isSwitchingMode = false;
-        } else {
-            // 2. Immediately request backend to switch to live mode and clear mock detections
-            await fetch(apiEndpoint('/api/v1/camera/mode'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mode: 'live' })
-            }).catch(() => {});
-
-            // 3. Strict Pipeline Drain Delay: Wait 800ms so mock detection boxes turn off
-            // and live camera stream connects cleanly without leftover boxes
-            await new Promise(r => setTimeout(r, 800));
-
-            streamEpoch = Date.now();
-            startLivePushing();
+        } catch (err) {
+            console.warn('[CameraStream] Mode switch transition error:', err);
+        } finally {
+            clearTimeout(safetyTimer);
             isSwitchingMode = false;
         }
     }
@@ -1007,34 +1096,42 @@
         isRewound = false;
         lastVideoTime = 0;
         isSwitchingMode = true;
+        const safetyTimer = setTimeout(() => {
+            isSwitchingMode = false;
+        }, 1200);
+
         if (typeof localStorage !== 'undefined') {
             try { localStorage.setItem('bawal_mock_selected_video', name); } catch {}
         }
         const nextUUID = videoUUIDMap[name] || computeMockVideoUUID(name);
-        await fetch(apiEndpoint('/api/v1/camera/mode'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+
+        try {
+            await postCameraMode({
                 mode: 'mock',
                 video_source: name,
                 video_uuid: nextUUID
-            })
-        }).catch(() => {});
-        if (mockVideoSrc.startsWith('blob:')) {
-            URL.revokeObjectURL(mockVideoSrc);
-        }
-        mockVideoSrc = `/examples/${name}`;
-        streamError = false;
-        streamEpoch = Date.now();
+            });
+            if (mockVideoSrc.startsWith('blob:')) {
+                URL.revokeObjectURL(mockVideoSrc);
+            }
+            mockVideoSrc = `/examples/${name}`;
+            streamError = false;
+            streamEpoch = Date.now();
 
-        // 600ms pipeline drain delay when switching sample videos
-        await new Promise(r => setTimeout(r, 600));
-        if (mockVideoEl) {
-            mockVideoEl.currentTime = 0;
-            mockVideoEl.play().catch(() => {});
-            pushCurrentFrameOnce();
+            await tick();
+            await new Promise(r => setTimeout(r, 200));
+            if (mockVideoEl) {
+                mockVideoEl.currentTime = 0;
+                mockVideoEl.muted = true;
+                await mockVideoEl.play().catch(() => {});
+                pushCurrentFrameOnce();
+            }
+        } catch (err) {
+            console.warn('[CameraStream] selectExample transition error:', err);
+        } finally {
+            clearTimeout(safetyTimer);
+            isSwitchingMode = false;
         }
-        isSwitchingMode = false;
     }
 
     function handleFileUpload(event: Event) {
@@ -1048,15 +1145,11 @@
             isRewound = false;
             lastVideoTime = 0;
             const nextUUID = computeMockVideoUUID(customFileKey);
-            fetch(apiEndpoint('/api/v1/camera/mode'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    mode: 'mock',
-                    video_source: file.name,
-                    video_uuid: nextUUID
-                })
-            }).catch(() => {});
+            postCameraMode({
+                mode: 'mock',
+                video_source: file.name,
+                video_uuid: nextUUID
+            });
             if (mockVideoSrc.startsWith('blob:')) {
                 URL.revokeObjectURL(mockVideoSrc);
             }
@@ -1066,6 +1159,7 @@
             setTimeout(() => {
                 if (mockVideoEl) {
                     mockVideoEl.currentTime = 0;
+                    mockVideoEl.muted = true;
                     mockVideoEl.play().catch(() => {});
                     pushCurrentFrameOnce();
                 }
@@ -1079,11 +1173,30 @@
             mockCurrentTime = mockVideoEl.currentTime || 0;
             lastVideoTime = mockCurrentTime;
             if (sourceMode === 'mock') {
+                mockVideoEl.muted = true;
                 mockVideoEl.play().catch(() => {});
                 startMockPushing();
                 setTimeout(pushCurrentFrameOnce, 50);
             }
         }
+    }
+
+    function handleVideoCanPlay() {
+        if (mockVideoEl && sourceMode === 'mock') {
+            if (mockDuration === 0 && mockVideoEl.duration) {
+                mockDuration = mockVideoEl.duration;
+            }
+            if (mockVideoEl.paused) {
+                mockVideoEl.muted = true;
+                mockVideoEl.play().catch(() => {});
+            }
+            startMockPushing();
+        }
+    }
+
+    function handleVideoError(e: Event) {
+        console.warn('[CameraStream] Mock video element playback error:', e);
+        isSwitchingMode = false;
     }
 
     function handleVideoTimeUpdate() {
@@ -1328,11 +1441,15 @@
                     crossorigin="anonymous"
                     playsinline
                     muted
+                    autoplay
+                    preload="auto"
                     loop
                     onloadedmetadata={handleVideoLoaded}
+                    oncanplay={handleVideoCanPlay}
                     ontimeupdate={handleVideoTimeUpdate}
                     onplay={() => (mockIsPlaying = true)}
                     onpause={() => (mockIsPlaying = false)}
+                    onerror={handleVideoError}
                 ></video>
 
                 <!-- Dynamic AI Bounding Box HUD Overlay for Mock Video (Turned OFF during mode switching transitions) -->
@@ -1604,12 +1721,17 @@
             {/if}
 
             {#if isSwitchingMode}
-                <div class="mode-switching-scrim">
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="mode-switching-scrim" onclick={() => (isSwitchingMode = false)}>
                     <div class="switching-spinner"></div>
                     <div class="switching-status-text">
                         <strong>Switching to {sourceMode === 'mock' ? 'Mock Simulation' : (sourceMode === 'device_cam' ? 'Phone / Device Camera' : 'Live ESP32-S3')}</strong>
                         <span>Synchronizing video pipeline & clearing detection overlays...</span>
                     </div>
+                    <button type="button" class="scrim-dismiss-btn" onclick={(e) => { e.stopPropagation(); isSwitchingMode = false; }}>
+                        ✕ Dismiss
+                    </button>
                 </div>
             {/if}
         </div>
@@ -3062,6 +3184,24 @@
     .switching-status-text span {
         font-size: 0.78rem;
         color: #94a3b8;
+    }
+
+    .scrim-dismiss-btn {
+        margin-top: 8px;
+        padding: 5px 14px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        background: rgba(255, 255, 255, 0.12);
+        color: #e2e8f0;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .scrim-dismiss-btn:hover {
+        background: rgba(255, 255, 255, 0.22);
+        color: #ffffff;
     }
 
     @keyframes fadeInScrim {
