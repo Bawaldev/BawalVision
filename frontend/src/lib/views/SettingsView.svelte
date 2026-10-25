@@ -193,20 +193,24 @@
         }
 
         const inPairingGrace = Date.now() < pairingGraceUntil;
-        if (hw.connected && !inPairingGrace) {
+        const serialWifi = hw.esp_usb_status?.wifi_connected === true;
+        if ((hw.connected || serialWifi) && !inPairingGrace) {
+            const serialOnly = !hw.connected && serialWifi;
             connectionStatus = 'connected';
             lastConnDetails = {
                 success: true,
-                deviceId: hw.device_id || formState.deviceId,
+                deviceId: hw.device_id || hw.esp_usb_status?.device_id || formState.deviceId,
                 firmwareVersion: hw.firmware_version || '1.0.0',
-                ipAddress: hw.ip_address || serverBackendIp || 'LAN',
-                connectionMode: hw.connection_mode,
-                latencyMs: hw.connection_mode === 'usb_serial' ? 4 : 9,
-                message: hw.connection_mode === 'usb_serial'
-                    ? `Connected via USB Serial (${hw.ip_address}) — Server Wi-Fi Synced`
-                    : `Connected on shared Wi-Fi network (${hw.ip_address || 'LAN'})`
+                ipAddress: hw.ip_address || (serialOnly ? hw.esp_usb_status?.port : '') || serverBackendIp || 'LAN',
+                connectionMode: serialOnly ? 'usb_serial' : hw.connection_mode,
+                latencyMs: serialOnly || hw.connection_mode === 'usb_serial' ? 4 : 9,
+                message: serialOnly
+                    ? `Connected via USB Serial — ESP32-S3 on Wi-Fi "${hw.esp_usb_status?.current_ssid || 'unknown'}"`
+                    : hw.connection_mode === 'usb_serial'
+                        ? `Connected via USB Serial (${hw.ip_address}) — Server Wi-Fi Synced`
+                        : `Connected on shared Wi-Fi network (${hw.ip_address || 'LAN'})`
             };
-        } else if (!hw.connected && connectionStatus === 'connected' && !inPairingGrace) {
+        } else if (!hw.connected && !serialWifi && connectionStatus === 'connected' && !inPairingGrace) {
             connectionStatus = 'disconnected';
         }
     }
