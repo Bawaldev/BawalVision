@@ -2318,6 +2318,37 @@ void BackendApp::registerLambdaRoutes() {
         .methods(crow::HTTPMethod::Post)(inspect);
     CROW_ROUTE(m_app, "/api/v1/lambda/batch")
         .methods(crow::HTTPMethod::Post)(inspect);
+
+    CROW_ROUTE(m_app, "/api/v1/lambda/report")
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (m_lambda_handler == nullptr) {
+                return jsonError(503, "Lambda inspection handler is not attached");
+            }
+            crow::json::wvalue event;
+            event["rawPath"] = "/api/v1/lambda/report";
+            event["httpMethod"] = "POST";
+            event["body"] = req.body;
+            event["isBase64Encoded"] = false;
+            event["requestContext"] = crow::json::wvalue::object();
+
+            const bawal::lambda::LambdaInspectionResponse result =
+                m_lambda_handler->handleEvent(event.dump());
+            if (!result.is_binary || result.binary_body.empty()) {
+                crow::response response(result.status_code);
+                response.set_header("Content-Type", "application/json");
+                response.body = result.json_payload.empty() ? "{}" : result.json_payload;
+                return response;
+            }
+
+            crow::response response(result.status_code);
+            response.set_header("Content-Type", result.content_type);
+            response.set_header("Content-Disposition", result.content_disposition);
+            response.set_header("X-Report-Format", "pdf");
+            response.body.assign(
+                reinterpret_cast<const char*>(result.binary_body.data()),
+                result.binary_body.size());
+            return response;
+        });
 }
 
 int BackendApp::run() {

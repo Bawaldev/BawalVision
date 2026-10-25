@@ -5,7 +5,6 @@
 #include <chrono>
 #include <filesystem>
 #include <map>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -18,6 +17,7 @@
 #include "bawal/lambda/report.hpp"
 #include "bawal/lambda/runtime.hpp"
 #include "bawal/report/markdown_pdf.hpp"
+#include "bawal/report/report_builder.hpp"
 #include "bawal/server/inspection_dto.hpp"
 #include "bawal/vision/pipeline.hpp"
 
@@ -49,6 +49,99 @@ int clampDimension(int value, int fallback) {
         return fallback;
     }
     return value;
+}
+
+std::string trimView(std::string_view value) {
+    std::size_t begin = 0;
+    while (begin < value.size() &&
+           std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin &&
+           std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+    return std::string(value.substr(begin, end - begin));
+}
+
+std::string sanitizePdfFilename(std::string filename) {
+    std::string safe;
+    const std::string base = std::filesystem::path(std::move(filename))
+                                 .filename()
+                                 .string();
+    for (const char c : base) {
+        if (std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' ||
+            c == '_' || c == '.') {
+            safe.push_back(c);
+        } else {
+            safe.push_back('_');
+        }
+    }
+    if (safe.empty()) safe = "BawalVision-Report";
+    if (!safe.ends_with(".pdf")) safe += ".pdf";
+    return safe;
+}
+
+std::string extractHttpBody(std::string_view payload) {
+    bawal::server::LambdaEvent event;
+    if (glz::read<glz::opts{.error_on_unknown_keys = false}>(event, payload)) {
+        return std::string(payload);
+    }
+    if (event.body.empty()) {
+        return std::string(payload);
+    }
+    if (!event.is_base64_encoded) {
+        return event.body;
+    }
+    const std::vector<uint8_t> decoded = decodeBase64(event.body);
+    return std::string(decoded.begin(), decoded.end());
+}
+
+bool parseReportRequest(std::string_view raw, LambdaReportRequest& request,
+                        std::string& error) {
+    const std::string body = trimView(raw);
+    if (body.empty()) {
+        error = "Empty Markdown payload";
+        return false;
+    }
+
+    if (body.front() == '{') {
+        LambdaReportRequest parsed;
+        if (!glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, body) &&
+            !parsed.markdown.empty()) {
+            request = std::move(parsed);
+        } else {
+            request.markdown = body;
+        }
+    } else {
+        request.markdown = body;
+    }
+
+    if (request.markdown.empty()) {
+        error = "Markdown document is empty";
+        return false;
+    }
+    if (request.title.empty()) {
+        request.title = "BawalVision Inspection Report";
+    }
+    request.filename = sanitizePdfFilename(request.filename);
+    return true;
+}
+
+LambdaInspectionResponse makePdfResponse(std::vector<uint8_t> pdf,
+                                         std::string filename,
+                                         Clock::time_point start) {
+    LambdaInspectionResponse response;
+    response.status_code = 200;
+    response.is_success = true;
+    response.execution_time_ms = elapsedMs(start);
+    response.is_binary = true;
+    response.content_type = "application/pdf";
+    response.binary_body = std::move(pdf);
+    response.content_disposition =
+        "attachment; filename=\"" + std::move(filename) + "\"";
+    return response;
 }
 
 } // namespace
@@ -111,6 +204,57 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             resp.is_success = true;
             resp.json_payload = R"({"status":"ok"})";
             return resp;
+        }
+
+        const bool markdown_report_route =
+            route.path.find("/reports/pdf") != std::string::npos ||
+            route.path.find("/reports/markdown/pdf") != std::string::npos ||
+            route.path.find("/lambda/report") != std::string::npos;
+        if (route.method == "POST" && markdown_report_route) {
+            const Clock::time_point start = Clock::now();
+            LambdaReportRequest request;
+            std::string error;
+            const std::string body = extractHttpBody(event_payload);
+            if (!parseReportRequest(body, request, error)) {
+                return errorResponse(400, std::move(error), start);
+            }
+
+            bawal::report::MarkdownPdfOptions options;
+            options.title = request.title;
+            options.subject = "BawalVision Markdown Report";
+            const std::vector<uint8_t> pdf =
+                bawal::report::MarkdownPdfGenerator::render(request.markdown,
+                                                             options);
+            if (pdf.empty()) {
+                return errorResponse(500, "Markdown PDF rendering failed", start);
+            }
+            return makePdfResponse(pdf, std::move(request.filename), start);
+        }
+
+        if (route.method == "GET" &&
+            route.path.find("/inspections/") != std::string::npos &&
+            route.path.find("report.pdf") != std::string::npos) {
+            const Clock::time_point start = Clock::now();
+            std::string markdown;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                markdown = m_last_inspection_markdown;
+            }
+            if (markdown.empty()) {
+                return errorResponse(404,
+                                     "No Lambda inspection snapshot available",
+                                     start);
+            }
+
+            bawal::report::MarkdownPdfOptions options;
+            options.title = "BawalVision Lambda Inspection Audit";
+            options.subject = "Serverless inspection compliance report";
+            const std::vector<uint8_t> pdf =
+                bawal::report::MarkdownPdfGenerator::render(markdown, options);
+            if (pdf.empty()) {
+                return errorResponse(500, "Inspection PDF rendering failed", start);
+            }
+            return makePdfResponse(pdf, "BawalVision-Lambda-Report.pdf", start);
         }
 
         if (route.method == "POST" && route.path.find("/telemetry") != std::string::npos) {
@@ -233,6 +377,25 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
         }
     }
 
+    if (event_payload.find("\"markdown\"") != std::string_view::npos) {
+        const Clock::time_point start = Clock::now();
+        LambdaReportRequest request;
+        std::string error;
+        if (!parseReportRequest(event_payload, request, error)) {
+            return errorResponse(400, std::move(error), start);
+        }
+        bawal::report::MarkdownPdfOptions options;
+        options.title = request.title;
+        options.subject = "BawalVision Markdown Report";
+        const std::vector<uint8_t> pdf =
+            bawal::report::MarkdownPdfGenerator::render(request.markdown,
+                                                         options);
+        if (pdf.empty()) {
+            return errorResponse(500, "Markdown PDF rendering failed", start);
+        }
+        return makePdfResponse(pdf, std::move(request.filename), start);
+    }
+
     if (BatchSummaryProcessor::looksLikeBatch(event_payload)) {
         LambdaBatchRequest batch;
         std::string error;
@@ -342,6 +505,8 @@ LambdaInspectionResponse VisionLambdaHandler::handleLocked(
         return errorResponse(500, "Could not serialize inspection result", start);
     }
     m_last_inspection_json = response.json_payload;
+    m_last_inspection_markdown =
+        bawal::report::buildLambdaInspectionMarkdown(dto);
     return response;
 }
 

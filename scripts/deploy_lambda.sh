@@ -93,4 +93,6 @@ API_ENDPOINT="$(aws cloudformation describe-stacks --region "$REGION" \
 echo "[SUCCESS] Deployed ${STACK_NAME}"
 echo "[INFO] Snapshot: ${API_ENDPOINT}/api/v1/lambda/inspect"
 echo "[INFO] Batch:    ${API_ENDPOINT}/api/v1/lambda/batch"
-echo "[INFO] Both routes require AWS_IAM SigV4 authorization."
+echo "[INFO] PDF:      ${API_ENDPOINT}/api/v1/reports/pdf"
+echo "[INFO] PDF alias: ${API_ENDPOINT}/api/v1/lambda/report"
+echo "[INFO] All routes require AWS_IAM SigV4 authorization."

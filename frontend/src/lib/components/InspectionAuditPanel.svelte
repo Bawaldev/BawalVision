@@ -5,6 +5,7 @@
     import {
         copyMarkdown,
         downloadMarkdown,
+        downloadMarkdownPdf,
         generateBatchInspectionMarkdown,
         generateInspectionMarkdown
     } from '../utils/reportGenerator';
@@ -12,6 +13,8 @@
     let records = $state<InspectionAuditRecord[]>([]);
     let isLoading = $state(true);
     let isDownloadingPdf = $state<Record<number, boolean>>({});
+    let isConvertingPdf = $state<Record<string, boolean>>({});
+    let isBatchPdfing = $state(false);
     let selectedRecord = $state<InspectionAuditRecord | null>(null);
     let failedImages = $state<Record<string, boolean>>({});
     let toast = $state('');
@@ -80,6 +83,49 @@
         showToast(`Batch report (${records.length} records) downloaded`);
     }
 
+    async function reportRecordPdf(record: InspectionAuditRecord) {
+        const key = `frame-${record.frame_id}`;
+        if (isConvertingPdf[key]) return;
+        isConvertingPdf = { ...isConvertingPdf, [key]: true };
+        showToast(`Converting frame #${record.frame_id} Markdown to PDF...`);
+        try {
+            const markdown = generateInspectionMarkdown(record);
+            await downloadMarkdownPdf(
+                `MBG-REPORT-${record.frame_id}.pdf`,
+                markdown,
+                { title: `MBG Inspection Report - Frame ${record.frame_id}` }
+            );
+            showToast(`PDF report #${record.frame_id} ready`);
+        } catch (err) {
+            showToast(err instanceof Error ? err.message : 'Markdown to PDF conversion failed');
+        } finally {
+            isConvertingPdf = { ...isConvertingPdf, [key]: false };
+        }
+    }
+
+    async function reportBatchPdf() {
+        if (records.length === 0) {
+            showToast('No inspection records to export');
+            return;
+        }
+        if (isBatchPdfing) return;
+        isBatchPdfing = true;
+        showToast(`Converting ${records.length} audit records to PDF...`);
+        try {
+            const markdown = generateBatchInspectionMarkdown(records);
+            await downloadMarkdownPdf(
+                `MBG-REPORT-BATCH-${records.length}.pdf`,
+                markdown,
+                { title: `MBG Inspection Batch Report (${records.length} records)` }
+            );
+            showToast(`Batch PDF report (${records.length} records) ready`);
+        } catch (err) {
+            showToast(err instanceof Error ? err.message : 'Batch Markdown to PDF conversion failed');
+        } finally {
+            isBatchPdfing = false;
+        }
+    }
+
     async function copyRecord(record: InspectionAuditRecord) {
         const markdown = generateInspectionMarkdown(record);
         const copied = await copyMarkdown(markdown);
@@ -96,6 +142,11 @@
     function reportSelected() {
         if (!selectedRecord) return;
         reportRecord(selectedRecord);
+    }
+
+    function reportSelectedPdf() {
+        if (!selectedRecord) return;
+        reportRecordPdf(selectedRecord);
     }
 
     function clearAuditRecords() {
@@ -157,7 +208,15 @@
         <div class="audit-actions">
             <button type="button" class="action-btn" onclick={loadRecords}>↻ Refresh</button>
             <button type="button" class="action-btn" onclick={clearAuditRecords}>🗑️ Clear Records</button>
-            <button type="button" class="action-btn primary" onclick={reportBatch}>📄 Export Batch (.md)</button>
+            <button
+                type="button"
+                class="action-btn primary"
+                disabled={isBatchPdfing}
+                onclick={reportBatchPdf}
+            >
+                {isBatchPdfing ? '⏳ Converting...' : '📑 Export Batch (PDF)'}
+            </button>
+            <button type="button" class="action-btn" onclick={reportBatch}>📄 Export Batch (.md)</button>
         </div>
     </div>
 
@@ -280,17 +339,17 @@
                             <button
                                 type="button"
                                 class="action-btn pdf-btn"
-                                disabled={isDownloadingPdf[record.frame_id]}
-                                onclick={() => downloadBackendReport(record.frame_id, 'pdf')}
+                                disabled={isConvertingPdf[`frame-${record.frame_id}`]}
+                                onclick={() => reportRecordPdf(record)}
                             >
-                                {isDownloadingPdf[record.frame_id] ? '⏳ Compiling...' : '📑 PDF (LaTeX)'}
+                                {isConvertingPdf[`frame-${record.frame_id}`] ? '⏳ Converting...' : '📑 PDF (Markdown)'}
                             </button>
                             <button
                                 type="button"
                                 class="action-btn"
                                 onclick={() => downloadBackendReport(record.frame_id, 'tex')}
                             >
-                                Source (.tex)
+                                LaTeX (.tex)
                             </button>
                             <button type="button" class="action-btn" onclick={() => reportRecord(record)}>
                                 📄 Markdown (.md)
@@ -457,10 +516,10 @@
                     <button
                         type="button"
                         class="action-btn pdf-btn"
-                        disabled={isDownloadingPdf[selectedRecord.frame_id]}
-                        onclick={() => downloadBackendReport(selectedRecord?.frame_id ?? 0, 'pdf')}
+                        disabled={isConvertingPdf[`frame-${selectedRecord.frame_id}`]}
+                        onclick={reportSelectedPdf}
                     >
-                        {isDownloadingPdf[selectedRecord.frame_id] ? '⏳ Compiling PDF...' : '📑 Export PDF (LaTeX)'}
+                        {isConvertingPdf[`frame-${selectedRecord.frame_id}`] ? '⏳ Converting PDF...' : '📑 Export PDF (Markdown)'}
                     </button>
                     <button
                         type="button"

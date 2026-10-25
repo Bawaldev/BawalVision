@@ -66,7 +66,7 @@ echo -e "[INFO] Test frame: ${FRAME_FILE} ($(wc -c < "${FRAME_FILE}") bytes)\n"
 # ------------------------------------------------------------------------------
 # STEP 1: HEALTH
 # ------------------------------------------------------------------------------
-echo -e "${YELLOW}[1/7] GET /health${NC}"
+echo -e "${YELLOW}[1/8] GET /health${NC}"
 HEALTH=$(curl_json GET "${BASE_URL}/health")
 assert_contains "${HEALTH}" '"status":"ok"' "Crow health endpoint"
 assert_contains "${HEALTH}" '"service":"bawal-crow-backend"' "Crow service identity"
@@ -74,14 +74,14 @@ assert_contains "${HEALTH}" '"service":"bawal-crow-backend"' "Crow service ident
 # ------------------------------------------------------------------------------
 # STEP 2: CAMERA ACTIVE (before ingress)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[2/7] GET /camera/active${NC}"
+echo -e "\n${YELLOW}[2/8] GET /camera/active${NC}"
 ACTIVE_BEFORE=$(curl_json GET "${BASE_URL}/camera/active")
 assert_contains "${ACTIVE_BEFORE}" '"active"' "Camera active snapshot"
 
 # ------------------------------------------------------------------------------
 # STEP 3: FRAME INGRESS (raw JPEG bytes + JSON/base64 compatibility)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[3/7] POST /camera/frame (raw JPEG -> POSIX SHM)${NC}"
+echo -e "\n${YELLOW}[3/8] POST /camera/frame (raw JPEG -> POSIX SHM)${NC}"
 FRAME_RESP=$(curl_json POST "${BASE_URL}/camera/frame" \
   -H "Content-Type: image/jpeg" \
   -H "X-Device-ID: ${DEVICE_ID}" \
@@ -103,7 +103,7 @@ sleep 1
 # ------------------------------------------------------------------------------
 # STEP 4: CAMERA ACTIVE (after ingress)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[4/7] GET /camera/active (after ingress)${NC}"
+echo -e "\n${YELLOW}[4/8] GET /camera/active (after ingress)${NC}"
 ACTIVE_AFTER=$(curl_json GET "${BASE_URL}/camera/active")
 assert_contains "${ACTIVE_AFTER}" '"active":true' "Camera marked active"
 if [[ "${ACTIVE_AFTER}" == *"\"device_id\":\"${DEVICE_ID}\""* ]]; then
@@ -122,7 +122,7 @@ fi
 # ------------------------------------------------------------------------------
 # STEP 5: MJPEG STREAM + RAW FRAME
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[5/7] GET /camera/stream + /camera/latest/<device>/raw${NC}"
+echo -e "\n${YELLOW}[5/8] GET /camera/stream + /camera/latest/<device>/raw${NC}"
 STREAM_HEADERS="${CACHE_DIR}/crow_stream_headers.txt"
 STREAM_CODE=$(curl -sS --max-time 15 -D "${STREAM_HEADERS}" -o "${CACHE_DIR}/crow_stream_body.bin" \
   -w '%{http_code}' "${BASE_URL}/camera/stream")
@@ -149,7 +149,7 @@ echo -e "${GREEN}✓ Raw frame endpoint (HTTP 200, image/jpeg)${NC}"
 # ------------------------------------------------------------------------------
 # STEP 6: TELEMETRY (in-memory, no Postgres)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[6/7] GET /telemetry/latest${NC}"
+echo -e "\n${YELLOW}[6/8] GET /telemetry/latest${NC}"
 TELEMETRY=$(curl_json GET "${BASE_URL}/telemetry/latest")
 assert_contains "${TELEMETRY}" '"telemetry_struct":"TelemetryIngressPayload"' "Telemetry payload shape"
 assert_contains "${TELEMETRY}" '"vision_ready":true' "Vision thread ready"
@@ -157,7 +157,7 @@ assert_contains "${TELEMETRY}" '"vision_ready":true' "Vision thread ready"
 # ------------------------------------------------------------------------------
 # STEP 7: LATEST INSPECTION (YOLO detections from memory)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[7/7] GET /inspections/latest${NC}"
+echo -e "\n${YELLOW}[7/8] GET /inspections/latest${NC}"
 INSPECTION=$(curl_json GET "${BASE_URL}/inspections/latest")
 assert_contains "${INSPECTION}" '"inspection_struct":"InspectionRecord"' "Inspection payload shape"
 assert_contains "${INSPECTION}" '"detections":[' "Detection SoA serialized"
@@ -165,6 +165,27 @@ assert_contains "${INSPECTION}" '"engine_pipeline"' "YOLO engine metadata"
 
 echo -e "\n${BLUE}Inspection snapshot:${NC}"
 echo "${INSPECTION:0:900}"
+
+# ------------------------------------------------------------------------------
+# STEP 8: MARKDOWN -> PDF REPORT (portable C++ engine, no TeX required)
+# ------------------------------------------------------------------------------
+echo -e "\n${YELLOW}[8/8] POST /reports/pdf (Markdown -> PDF)${NC}"
+REPORT_HEADERS="${CACHE_DIR}/crow_report_headers.txt"
+REPORT_BODY="${CACHE_DIR}/crow_report.pdf"
+REPORT_CODE=$(curl -sS --max-time 30 -D "${REPORT_HEADERS}" -o "${REPORT_BODY}" \
+  -w '%{http_code}' -X POST "${BASE_URL}/reports/pdf" \
+  -H "Content-Type: application/json" \
+  -d '{"markdown":"# BawalVision API Test\n\n| Metric | Value |\n| --- | --- |\n| Verdict | ACCEPTED |\n| PDF Engine | C++ |\n","title":"BawalVision API Test","filename":"api-test.pdf"}')
+if [[ "${REPORT_CODE}" != "200" ]] || ! head -c 4 "${REPORT_BODY}" | grep -q '%PDF'; then
+  echo -e "${RED}✗ Markdown -> PDF report endpoint${NC} (HTTP ${REPORT_CODE})"
+  exit 1
+fi
+if ! grep -qi 'x-report-format: pdf' "${REPORT_HEADERS}" || \
+   ! grep -qi 'content-type: application/pdf' "${REPORT_HEADERS}"; then
+  echo -e "${RED}✗ PDF report headers${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Markdown -> PDF report endpoint (HTTP 200, %PDF artifact)${NC}"
 
 echo -e "\n${GREEN}======================================================${NC}"
 echo -e "${GREEN}  All Crow C++ Backend API Tests Passed!             ${NC}"

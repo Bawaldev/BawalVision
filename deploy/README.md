@@ -94,8 +94,15 @@ docker run --rm -p 8080:8080 bawal-lambda:latest
 # 3. In another terminal, invoke a test inspection snapshot via curl
 curl -XPOST "http://localhost:8080/2015-03-31/functions/function/invocations" \
      -d '{"image_base64": "'"$(base64 -w0 examples/0001_nasi_bento.jpg)"'"}'
+
+# 4. Render any Markdown audit report to PDF (no TeX installation required)
+curl -XPOST "http://localhost:8080/api/v1/reports/pdf" \
+     -H "Content-Type: application/json" \
+     -d '{"markdown":"# BawalVision Audit\n\n| Metric | Value |\n| --- | --- |\n| Verdict | ACCEPTED |","filename":"audit.pdf"}' \
+     --output audit.pdf
 ```
 
+* **Portable PDF Engine**: Lambda renders Markdown reports with an embedded C++ PDF writer, so `pdflatex`/`tectonic` are not required in the serverless image.
 * **Security Hardening**: `deploy/Dockerfile.lambda` runs `apt-get upgrade -y` and purges unused FFmpeg video device capture packages (`libavdevice*`), ensuring **zero Critical or High CVEs** during AWS ECR Inspector scans.
 * **Cold-Start Pre-Warming**: Model loading occurs during initialization before the first request, yielding warm execution times under $30\text{ ms}$.
 

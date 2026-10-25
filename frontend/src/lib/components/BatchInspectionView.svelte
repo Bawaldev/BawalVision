@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
+    import { downloadMarkdown, downloadMarkdownPdf } from '../utils/reportGenerator';
 
     const MAX_ZIP_BYTES = 15 * 1024 * 1024;
     const DEFAULT_BATCH_ENDPOINT = '/api/v1/inspections/batch-zip';
@@ -643,16 +644,18 @@
                     `## Per-Tray Inspection Audit Log`,
                     ...((summary.items || []).map(it => `- Tray #${it.index} [${it.filename}]: ${it.accepted ? 'ACCEPTED (PASS)' : 'REJECTED'} - ${it.detections.map(d => `${d.class_name} (${Math.round(d.confidence*100)}%)`).join(', ')}`))
                 ];
-                const blob = new Blob([mdLines.join('\n')], { type: 'text/markdown' });
-                const blobUrl = window.URL.createObjectURL(blob);
-                const anchor = document.createElement('a');
-                anchor.href = blobUrl;
-                anchor.download = `BawalVision-Batch-${summary.batch_id}.md`;
-                document.body.appendChild(anchor);
-                anchor.click();
-                document.body.removeChild(anchor);
-                window.URL.revokeObjectURL(blobUrl);
-                noticeMessage = `Batch report for ${summary.batch_id} downloaded.`;
+                const markdown = mdLines.join('\n');
+                try {
+                    await downloadMarkdownPdf(
+                        `BawalVision-Batch-${summary.batch_id}.pdf`,
+                        markdown,
+                        { title: `BawalVision Batch ${summary.batch_id}` }
+                    );
+                    noticeMessage = `Batch PDF report for ${summary.batch_id} downloaded.`;
+                } catch {
+                    downloadMarkdown(`BawalVision-Batch-${summary.batch_id}.md`, markdown);
+                    noticeMessage = `PDF conversion unavailable; Markdown report for ${summary.batch_id} downloaded.`;
+                }
                 return;
             }
 

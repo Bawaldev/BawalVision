@@ -1,4 +1,6 @@
 #include "bawal/vision/image/batch_inspector.hpp"
+#include "bawal/report/markdown_pdf.hpp"
+#include "bawal/report/report_builder.hpp"
 #include "bawal/vision/simd_food_evaluator.hpp"
 
 #include <algorithm>
@@ -625,6 +627,15 @@ BatchReportSummary BatchInspector::processZipBuffer(
 
     if (fs::is_regular_file(master_pdf)) {
         summary.master_pdf_path = master_pdf.string();
+    } else {
+        bawal::report::MarkdownPdfOptions options;
+        options.title = fmt::format("BawalVision Batch Audit - {}", summary.batch_id);
+        options.subject = "Batch food tray quality and freshness compliance";
+        const std::string portable = bawal::report::MarkdownPdfGenerator::generatePdfFile(
+            bawal::report::buildBatchMarkdown(summary), master_pdf, options);
+        if (!portable.empty()) {
+            summary.master_pdf_path = portable;
+        }
     }
 
     return summary;

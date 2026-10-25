@@ -24,7 +24,7 @@ function imageUrl(record: InspectionAuditRecord, host?: string): string {
     if (!record.image_path) {
         return '';
     }
-    if (/^https?:\/\//i.test(record.image_path)) {
+    if (/^(https?:|data:)/i.test(record.image_path)) {
         return record.image_path;
     }
     return `${backendBaseUrl(host)}${record.image_path}`;
@@ -233,6 +233,67 @@ export function downloadMarkdown(filename: string, markdownContent: string): voi
     link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
+}
+
+function reportPdfEndpoint(host?: string): string {
+    if (host) {
+        return `${host.replace(/\/+$/, '')}/api/v1/reports/pdf`;
+    }
+    return '/api/v1/reports/pdf';
+}
+
+function downloadBlob(filename: string, blob: Blob): void {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+export interface MarkdownPdfResult {
+    blob: Blob;
+    filename: string;
+}
+
+export async function downloadMarkdownPdf(
+    filename: string,
+    markdownContent: string,
+    options: ReportOptions & { title?: string } = {}
+): Promise<MarkdownPdfResult> {
+    const safeName = filename.toLowerCase().endsWith('.pdf') ? filename : `${filename}.pdf`;
+    const response = await fetch(reportPdfEndpoint(options.host), {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/pdf'
+        },
+        body: JSON.stringify({
+            markdown: markdownContent,
+            title: options.title ?? 'BawalVision Inspection Report',
+            filename: safeName
+        })
+    });
+
+    if (!response.ok) {
+        let detail = `PDF conversion failed (${response.status})`;
+        try {
+            const payload = await response.json();
+            if (payload?.error) detail = String(payload.error);
+        } catch {
+            // keep the status-based message
+        }
+        throw new Error(detail);
+    }
+
+    const blob = await response.blob();
+    if (blob.size === 0) {
+        throw new Error('PDF conversion returned an empty document');
+    }
+    downloadBlob(safeName, blob);
+    return { blob, filename: safeName };
 }
 
 export async function copyMarkdown(markdownContent: string): Promise<boolean> {

@@ -2,8 +2,9 @@ AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
   BawalVision serverless ingestion. Deploys the C++ Lambda container image with
-  a single-snapshot endpoint and a 50-100 record telemetry/log batch endpoint.
-  The MJPEG stream never enters Lambda.
+  a single-snapshot endpoint, a 50-100 record telemetry/log batch endpoint, and
+  a dependency-free Markdown-to-PDF audit report endpoint. The MJPEG stream
+  never enters Lambda.
 
 Parameters:
   ImageUri:
@@ -60,7 +61,9 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref StageName
-      Description: BawalVision snapshot and telemetry batch ingestion
+      Description: BawalVision snapshot, telemetry batch, and PDF report ingestion
+      BinaryMediaTypes:
+        - application/pdf
       Auth:
         DefaultAuthorizer: AWS_IAM
 
@@ -111,6 +114,18 @@ Resources:
           Properties:
             RestApiId: !Ref BawalApi
             Path: /api/v1/lambda/batch
+            Method: post
+        MarkdownPdf:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BawalApi
+            Path: /api/v1/reports/pdf
+            Method: post
+        MarkdownPdfAlias:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BawalApi
+            Path: /api/v1/lambda/report
             Method: post
     Metadata:
       DockerTag: lambda-cpp

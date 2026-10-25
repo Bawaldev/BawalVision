@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -584,6 +585,125 @@ std::vector<uint8_t> readBinaryFile(const fs::path& path) {
     return bytes;
 }
 
+int base64Value(unsigned char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+std::vector<uint8_t> decodeDataUriImage(std::string_view target) {
+    if (!startsWith(target, "data:")) return {};
+    const std::size_t comma = target.find(',');
+    if (comma == std::string_view::npos) return {};
+    const std::string_view header = target.substr(0, comma);
+    if (header.find(";base64") == std::string_view::npos) return {};
+
+    const std::string_view encoded = target.substr(comma + 1);
+    std::vector<uint8_t> out;
+    out.reserve(encoded.size() * 3 / 4);
+    uint32_t accumulator = 0;
+    int bits = -8;
+    for (const unsigned char c : encoded) {
+        if (c == '=') break;
+        const int value = base64Value(c);
+        if (value < 0) continue;
+        accumulator = (accumulator << 6U) | static_cast<uint32_t>(value);
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back(static_cast<uint8_t>((accumulator >> bits) & 0xFFU));
+            bits -= 8;
+        }
+    }
+    return out;
+}
+
+std::vector<fs::path> allowedImageRoots() {
+    std::vector<fs::path> roots;
+    if (const char* configured = std::getenv("BAWAL_IMAGE_DIR");
+        configured != nullptr && *configured != '\0') {
+        roots.emplace_back(configured);
+    }
+    roots.emplace_back("./data/inspections");
+    roots.emplace_back("/app/data/inspections");
+    roots.emplace_back("/tmp/bawal_batches");
+    return roots;
+}
+
+bool isWithinRoot(const fs::path& candidate, const fs::path& root) {
+    std::error_code ec;
+    const fs::path canonical_candidate = fs::weakly_canonical(candidate, ec);
+    if (ec) return false;
+    const fs::path canonical_root = fs::weakly_canonical(root, ec);
+    if (ec) return false;
+
+    auto candidate_it = canonical_candidate.begin();
+    for (auto root_it = canonical_root.begin(); root_it != canonical_root.end();
+         ++root_it, ++candidate_it) {
+        if (candidate_it == canonical_candidate.end() ||
+            *candidate_it != *root_it) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isAllowedImagePath(const fs::path& candidate) {
+    for (const auto& root : allowedImageRoots()) {
+        if (isWithinRoot(candidate, root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<fs::path> resolveImageTarget(std::string_view target) {
+    if (target.empty() || startsWith(target, "data:")) {
+        return std::nullopt;
+    }
+
+    std::string path_text(target);
+    if (startsWith(path_text, "http://") || startsWith(path_text, "https://")) {
+        const std::size_t scheme = path_text.find("://");
+        const std::size_t slash =
+            scheme == std::string::npos ? std::string::npos
+                                        : path_text.find('/', scheme + 3);
+        if (slash == std::string::npos) {
+            return std::nullopt;
+        }
+        path_text = path_text.substr(slash);
+    }
+
+    const std::size_t query = path_text.find_first_of("?#");
+    if (query != std::string::npos) {
+        path_text.erase(query);
+    }
+
+    std::error_code ec;
+    const fs::path direct(path_text);
+    if (fs::is_regular_file(direct, ec)) {
+        const fs::path absolute = fs::absolute(direct, ec);
+        if (!ec && isAllowedImagePath(absolute)) {
+            return absolute;
+        }
+    }
+
+    const std::string filename = direct.filename().string();
+    if (filename.empty()) {
+        return std::nullopt;
+    }
+
+    for (const auto& directory : allowedImageRoots()) {
+        const fs::path candidate = directory / filename;
+        if (fs::is_regular_file(candidate, ec)) {
+            return fs::absolute(candidate);
+        }
+    }
+    return std::nullopt;
+}
+
 class Renderer {
 public:
     explicit Renderer(MarkdownPdfOptions options) : m_options(std::move(options)) {
@@ -1151,20 +1271,14 @@ private:
     }
 
     void renderImage(const std::string& alt, const std::string& target) {
-        if (startsWith(target, "http://") || startsWith(target, "https://") ||
-            startsWith(target, "data:")) {
-            renderSpans(parseInline(alt.empty() ? "[Remote image omitted]"
-                                                : "[Image: " + alt + "]",
-                                    Face::Italic),
-                        9.5, 0.0, kMuted);
-            m_cursor += 3.0;
-            return;
+        std::vector<uint8_t> bytes;
+        if (const std::optional<fs::path> resolved = resolveImageTarget(target);
+            resolved.has_value()) {
+            bytes = readBinaryFile(*resolved);
+        } else {
+            bytes = decodeDataUriImage(target);
         }
-
-        std::error_code ec;
-        const fs::path path(target);
-        if (!target.empty() && fs::is_regular_file(path, ec)) {
-            std::vector<uint8_t> bytes = readBinaryFile(path);
+        if (!bytes.empty()) {
             const std::vector<int> size = jpegDimensions(bytes);
             if (size.size() == 3) {
                 const double max_height = 290.0;

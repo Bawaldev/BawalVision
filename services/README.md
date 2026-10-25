@@ -57,7 +57,7 @@ flowchart TD
         Spoilage --> AuditRoll["Rolling Image Store<br/>(./data/inspections)"]
         Spoilage --> LatencyCalc["Statistical Reducer & Cryptographic Audit<br/>(FNV-1a 64-bit Checksum)"]
         LatencyCalc --> PG[("PostgreSQL 16 DB<br/>(Audit Trail & Metrics)")]
-        LatencyCalc --> LaTeX["LaTeX Master Audit Engine<br/>(pdflatex / tectonic PDF)"]
+        LatencyCalc --> LaTeX["Portable Markdown-to-PDF Audit Engine<br/>(built-in C++ writer, optional LaTeX source)"]
         LaTeX --> UI["SvelteKit HMI & Web Audit Stream"]
     end
 ```
@@ -143,7 +143,7 @@ Measured on the actual 30-tray industrial meal dataset (`batch_inspection_images
 | **8 Threads** | $7,840\text{ ms}$ | $3.85\text{ trays/s}$ | $61.7\%$ |
 | **12 Threads (Full Xeon Load)**| **$6,808\text{ ms}$** | **$4.41\text{ trays/s}$** | **$56.5\%$** |
 
-> Each batch run includes complete ZIP extraction in RAM, full-resolution JPEG decoding, YOLOv8s INT8 inference, 8-lane AVX2 SIMD freshness checks, FNV-1a 64-bit checksum calculation, and compilation of the master LaTeX audit PDF report (`report.pdf`).
+> Each batch run includes complete ZIP extraction in RAM, full-resolution JPEG decoding, YOLOv8s INT8 inference, 8-lane AVX2 SIMD freshness checks, FNV-1a 64-bit checksum calculation, and generation of the master audit PDF report (`report.pdf`) through the built-in Markdown PDF engine (LaTeX source is still available).
 
 ```
 Throughput Scaling (Trays per Second)
@@ -225,7 +225,7 @@ services/
 │   ├── backend/                   # Crow HTTP app, state, USB discovery, Wi-Fi probe
 │   ├── ipc/                       # POSIX SHM reader/writer ring buffer
 │   ├── lambda/                    # Serverless event parser, runtime handler, types
-│   ├── report/                    # LaTeX audit PDF generator engine
+│   ├── report/                    # Markdown-to-PDF engine, report builders, LaTeX source generator
 │   ├── server/                    # HTTP client utilities, rolling JPEG cache, DTOs
 │   └── vision/                    # Core CV pipeline, YOLO classifier, AVX2 SIMD evaluator
 ├── src/                           # Implementation files matching include hierarchy
