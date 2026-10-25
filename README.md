@@ -57,7 +57,7 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
 | **Vision & Backend Engine** | C++20, OpenCV 4, ONNX Runtime, OpenMP, Crow, mimalloc | 📖 [`services/README.md`](services/README.md) | High-speed POSIX SHM frame ingress, in-process YOLOv8s INT8 inference, 8-lane AVX2 spoilage evaluation, Crow REST/WebSocket API, and LaTeX PDF audit generation. |
 | **Edge Hardware Node** | ESP32-S3, FreeRTOS, LVGL 8, OV5640 DVP, MLX90614 I2C | 📖 [`edge/README.md`](edge/README.md) | Deterministic static-allocated FreeRTOS firmware, 20 FPS video streaming over HTTP Keep-Alive, UDP auto-discovery, and local SPI TFT RGB dashboard. |
 | **Frontend Web HMI** | SvelteKit 5 (Runes), TypeScript, Vite, Tailwind CSS, DaisyUI | 📖 [`frontend/README.md`](frontend/README.md) | Real-time supervision dashboard, 30+ FPS live inspection stream, high-throughput batch ZIP uploader, interactive PDF report viewer, and USB Wi-Fi provisioning. |
-| **Machine Learning & Pipeline**| PyTorch, Ultralytics YOLOv8, ONNX, Real-ESRGAN | 📖 [`ml/README.md`](ml/README.md) | Autonomous data gathering, dHash deduplication, zero-shot YOLO-World relabeling, FP32 training, and INT8 Post-Training Quantization (PTQ). |
+| **Machine Learning & Pipeline**| PyTorch, Ultralytics YOLOv8, ONNX, Real-ESRGAN | 📖 [`ml/README.md`](ml/README.md) | Autonomous data gathering, dHash deduplication, zero-shot YOLO-World relabeling, YOLOv8s training, layer-frozen incremental fine-tuning, and INT8 Post-Training Quantization (PTQ). |
 | **Deployment & Orchestration** | Docker Compose, PostgreSQL 16, Grafana OSS, AWS Lambda | 📖 [`deploy/README.md`](deploy/README.md) | Production Docker stack, automated PostgreSQL telemetry persistence, pre-provisioned Grafana analytics, and serverless AWS Lambda C++ container packaging. |
 
 ---
@@ -112,7 +112,9 @@ This project uses [just](https://github.com/casey/just) as a centralized, cross-
 | `just split-dataset [src] [out] [w]` | Multi-threaded stratified dataset splitter (70/15/15) with perceptual hashing |
 | `just augment-train [target] [dir] [w]` | Multi-threaded domain-specific augmentation applied strictly to train split |
 | `just prepare-yolo-ai1 [batch] [w]` | Batched zero-shot YOLO annotation generator using YOLO-World foundation model |
-| `just train-ai1 [epochs] [batch] [w]` | Train YOLOv8n object detector, export static ONNX, and verify numerical parity |
+| `just train-ai1 [epochs] [batch] [w]` | Train YOLOv8s object detector, export static ONNX, and verify numerical parity |
+| `just finetune-ai1 [w] [e] [b] [lr] [fz]` | **Incremental transfer learning with backbone layer freezing (0-9)** to prevent catastrophic forgetting |
+| `just scrap-dish [cat] [target]` | Hard-negative tableware scraper (clean plates) with automatic 0-byte negative label injection |
 | `just pipeline-ai1 [w] [batch] [epochs]` | **End-to-end autonomous ML pipeline** (gather $\to$ split $\to$ augment $\to$ annotate $\to$ train $\to$ deploy) |
 | `just yolo-train [model] [data] ...` | Flexible YOLO training CLI via Ultralytics module |
 | `just yolo-val [model] [data] ...` | Evaluate and compute mAP50 / mAP50-95 metrics on validation set |
@@ -223,8 +225,11 @@ just setup-ml
 
 # Run end-to-end parallel training pipeline
 just pipeline-ai1
+
+# Or incrementally fine-tune an existing checkpoint with layer freezing
+just finetune-ai1
 ```
-The trained model will be automatically validated and saved as `ml/AI1/model/yolov8n/ai1_vision.onnx`.
+The trained model will be automatically validated and saved as `ml/AI1/model/yolov8s/ai1_vision.onnx` (and `ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx`).
 
 ### 4. Build & Flash Edge Firmware
 ```bash
@@ -234,15 +239,12 @@ just run-edge /dev/ttyACM0
 
 ---
 
-## 👥 Core Contributors & Maintainers
-
-| Contributor | GitHub | Role & Subsystems |
 ## 👥 Core Engineering Team & Contributors
 
 | Member | Role & Ownership | Primary Focus Areas |
 |:---|:---|:---|
 | **Faris Wirakusuma** ([@fariswirakusuma](https://github.com/fariswirakusuma)) | Lead Architect & Backend Lead | C++20 Vision Engine, AVX2 SIMD, POSIX SHM Ingress, Crow REST Backend, AWS Lambda C++ |
-| **Rasya Khairi** ([@OurangIlang](https://github.com/OurangIlang)) | ML & Frontend Lead | YOLO-World Relabeling, YOLOv8 Training, INT8 PTQ Quantization, SvelteKit 5 HMI |
+| **Rasya Khairi** ([@OurangIlang](https://github.com/OurangIlang)) | ML & Frontend Lead | YOLO-World Relabeling, YOLOv8 Training & Layer-Frozen Fine-Tuning, INT8 PTQ Quantization, SvelteKit 5 HMI |
 | **Daffa Rizqy Andika** ([@pondwatr](https://github.com/pondwatr)) | Embedded & Hardware Lead | ESP32-S3 Static FreeRTOS Firmware, OV5640 DVP Camera, ST7789 LVGL Display, I2C Thermal |
 
 > See full team profiles, acknowledgments, and code ownership in [**`CONTRIBUTORS.md`**](CONTRIBUTORS.md) and [`.github/CODEOWNERS`](.github/CODEOWNERS).
