@@ -500,6 +500,13 @@
         return typeof navigator !== 'undefined' && 'serial' in navigator;
     }
 
+    function wifiProvisionErrorMessage(ack: any, ssid: string): string {
+        const status = ack?.status || 'unknown';
+        const connected = ack?.wifi_connected ? 'board Wi-Fi is connected' : 'board Wi-Fi is still offline';
+        return `ESP32-S3 could not join "${ssid}" (status '${status}', ${connected}). ` +
+            'Check the password and make sure the access point broadcasts on 2.4 GHz, then retry.';
+    }
+
     // Direct browser-to-board provisioning. Essential when the backend runs in
     // Docker Desktop, where the daemon VM cannot see host /dev/ttyACM* nodes.
     async function provisionViaBrowserSerial(
@@ -567,7 +574,7 @@
             if (!ack || (ack.status !== 'wifi_provisioned' && ack.status !== 'ok')) {
                 return failure(
                     ack
-                        ? `ESP32-S3 returned status '${ack.status || 'unknown'}'.`
+                        ? wifiProvisionErrorMessage(ack, ssid)
                         : 'No BAWAL_ACK received from ESP32-S3. Close idf.py monitor or any other serial tool and retry.'
                 );
             }
@@ -841,7 +848,7 @@
                 await refreshHardwareStatus();
             } else {
                 const message = ack
-                    ? `ESP32-S3 returned status '${ack.status || 'unknown'}'.`
+                    ? wifiProvisionErrorMessage(ack, serverWifiSsid)
                     : 'No BAWAL_ACK received from ESP32-S3. Check USB permissions and that idf.py monitor is closed.';
                 if (allowBackendFallback) {
                     await provisionViaServer(targetPort, serverWifiSsid);

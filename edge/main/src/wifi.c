@@ -53,6 +53,7 @@ static char s_discovered_ip[32] = {0};
 static bool s_nvs_wifi_pass_key_present = false;
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static bool s_wifi_initialized = false;
+static volatile bool s_provisioning_active = false;
 static httpd_handle_t s_http_server = NULL;
 static atomic_int s_mjpeg_clients = 0;
 
@@ -263,6 +264,18 @@ bool wifi_nvs_save_credentials(const char *ssid, const char *pass) {
     return wifi_nvs_save_full_config(ssid, pass, NULL, NULL);
 }
 
+static esp_err_t wifi_set_sta_config(const char *ssid, const char *pass) {
+    wifi_config_t cfg = {0};
+    strncpy((char *)cfg.sta.ssid, ssid, sizeof(cfg.sta.ssid) - 1);
+    strncpy((char *)cfg.sta.password, pass, sizeof(cfg.sta.password) - 1);
+    cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    cfg.sta.threshold.authmode = (pass[0] != '\0') ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+    cfg.sta.pmf_cfg.capable = false;
+    cfg.sta.pmf_cfg.required = false;
+    return esp_wifi_set_config(WIFI_IF_STA, &cfg);
+}
+
 bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
                                     const char *backend_ip, const char *backend_port) {
     if (!ssid || ssid[0] == '\0') return false;
@@ -329,29 +342,63 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
                                          g_backend_ip, g_backend_port);
     }
 
-    wifi_config_t cfg = {0};
-    strncpy((char *)cfg.sta.ssid, g_wifi_ssid, sizeof(cfg.sta.ssid) - 1);
-    strncpy((char *)cfg.sta.password, g_wifi_pass, sizeof(cfg.sta.password) - 1);
-    cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-    cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-    cfg.sta.threshold.authmode = (g_wifi_pass[0] != '\0') ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
-    cfg.sta.pmf_cfg.capable = false;
-    cfg.sta.pmf_cfg.required = false;
-
+    s_provisioning_active = true;
+    if (s_reconnect_timer != NULL) {
+        (void)esp_timer_stop(s_reconnect_timer);
+    }
     if (g_wifi_event_group) {
-        xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+        xEventGroupClearBits(g_wifi_event_group,
+                             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+    }
+
+    (void)esp_wifi_disconnect();
+    // Let the STA leave an in-flight connect/retry before changing credentials.
+    // Otherwise esp_wifi_connect() returns ESP_ERR_WIFI_STATE and the new AP is
+    // never attempted until the old retry cycle finishes. The disconnect event
+    // signals WIFI_FAIL_BIT; fall back to a bounded delay for the already-idle
+    // case where no event is emitted.
+    if (g_wifi_event_group) {
+        (void)xEventGroupWaitBits(g_wifi_event_group, WIFI_FAIL_BIT, pdTRUE,
+                                  pdFALSE, pdMS_TO_TICKS(1200));
     }
     (void)esp_wifi_disconnect();
-    esp_err_t set_err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
-    if (set_err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(set_err));
+    vTaskDelay(pdMS_TO_TICKS(120));
+
+    esp_err_t set_err = ESP_ERR_WIFI_STATE;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        set_err = wifi_set_sta_config(g_wifi_ssid, g_wifi_pass);
+        if (set_err == ESP_OK) break;
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
-    (void)esp_wifi_connect();
+    if (set_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to apply new Wi-Fi config: %s",
+                 esp_err_to_name(set_err));
+        str_trim_copy(g_wifi_ssid, sizeof(g_wifi_ssid), old_ssid);
+        str_trim_copy(g_wifi_pass, sizeof(g_wifi_pass), old_pass);
+        str_trim_copy(g_backend_ip, sizeof(g_backend_ip), old_ip);
+        str_trim_copy(g_backend_port, sizeof(g_backend_port), old_port);
+        s_provisioning_active = false;
+        if (s_reconnect_timer != NULL && old_ssid[0] != '\0') {
+            (void)esp_timer_start_once(s_reconnect_timer, 3000000ULL);
+        }
+        return false;
+    }
+
+    esp_err_t connect_err = esp_wifi_connect();
+    for (int attempt = 0; attempt < 10 && connect_err == ESP_ERR_WIFI_STATE;
+         ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        connect_err = esp_wifi_connect();
+    }
+    if (connect_err != ESP_OK && connect_err != ESP_ERR_WIFI_STATE) {
+        ESP_LOGW(TAG, "esp_wifi_connect returned %s",
+                 esp_err_to_name(connect_err));
+    }
 
     bool connected = false;
     if (g_wifi_event_group) {
         EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group, WIFI_CONNECTED_BIT,
-                                               pdFALSE, pdTRUE, pdMS_TO_TICKS(20000));
+                                               pdFALSE, pdTRUE, pdMS_TO_TICKS(25000));
         connected = (bits & WIFI_CONNECTED_BIT) != 0;
     }
 
@@ -362,22 +409,24 @@ bool wifi_apply_runtime_credentials(const char *ssid, const char *pass,
         str_trim_copy(g_backend_ip, sizeof(g_backend_ip), old_ip);
         str_trim_copy(g_backend_port, sizeof(g_backend_port), old_port);
         if (g_wifi_event_group) {
-            xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+            xEventGroupClearBits(g_wifi_event_group,
+                                 WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
         }
+        (void)esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(120));
         if (old_ssid[0] != '\0') {
-            wifi_config_t old_cfg = {0};
-            strncpy((char *)old_cfg.sta.ssid, old_ssid, sizeof(old_cfg.sta.ssid) - 1);
-            strncpy((char *)old_cfg.sta.password, old_pass, sizeof(old_cfg.sta.password) - 1);
-            old_cfg.sta.threshold.authmode = (old_pass[0] != '\0') ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
-            old_cfg.sta.pmf_cfg.capable = false;
-            old_cfg.sta.pmf_cfg.required = false;
-            (void)esp_wifi_disconnect();
-            (void)esp_wifi_set_config(WIFI_IF_STA, &old_cfg);
-            (void)esp_wifi_connect();
+            (void)wifi_set_sta_config(g_wifi_ssid, g_wifi_pass);
+        }
+        s_provisioning_active = false;
+        // Leave the STA idle briefly so a retry from the UI can apply new
+        // credentials instead of racing a background reconnect to the old AP.
+        if (s_reconnect_timer != NULL && old_ssid[0] != '\0') {
+            (void)esp_timer_start_once(s_reconnect_timer, 3000000ULL);
         }
         return false;
     }
 
+    s_provisioning_active = false;
     if (!wifi_nvs_save_full_config(g_wifi_ssid, pass != NULL ? g_wifi_pass : NULL,
                                    g_backend_ip, g_backend_port)) {
         ESP_LOGW(TAG, "Connected but failed to persist credentials to NVS");
@@ -459,6 +508,7 @@ bool wifi_camera_stream_is_healthy(void) {
 
 static void wifi_reconnect_timer_cb(void *arg) {
     (void)arg;
+    if (s_provisioning_active) return;
     if (g_wifi_ssid[0] != '\0') {
         (void)esp_wifi_connect();
     }
@@ -602,9 +652,15 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGW(TAG, "Connection lost (reason %d)", dis ? dis->reason : -1);
         if (g_wifi_event_group) {
             xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+            xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
         }
         lcd_update_wifi_status(false, NULL);
         lcd_update_http_status("WIFI LOST", true);
+        if (s_provisioning_active) {
+            // Provisioning owns the STA state machine; a background retry here
+            // would race the new credentials and produce a spurious 'error'.
+            return;
+        }
         g_wifi_retry_num++;
         uint32_t delay_ms = (g_wifi_retry_num < 5) ? 1000 : 3000;
         if (s_reconnect_timer != NULL) {
@@ -624,6 +680,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         (void)esp_wifi_set_ps(WIFI_PS_NONE);
         if (g_wifi_event_group) {
             xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_DISCOVERY_BIT);
+            xEventGroupClearBits(g_wifi_event_group, WIFI_FAIL_BIT);
         }
         lcd_update_wifi_status(true, ip_str);
         lcd_update_http_status("WIFI READY", false);
