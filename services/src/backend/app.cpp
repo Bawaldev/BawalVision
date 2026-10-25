@@ -1427,31 +1427,33 @@ void BackendApp::registerInspectionRoutes() {
 }
 
 void BackendApp::registerImageRoutes() {
-    CROW_ROUTE(m_app, "/inspections/<string>")
-        ([](const crow::request&, crow::response& res, const std::string& filename) {
-            namespace fs = std::filesystem;
+    const auto serve_inspection_image = [](const crow::request&, crow::response& res, const std::string& filename) {
+        namespace fs = std::filesystem;
 
-            if (filename.empty() ||
-                filename.find("..") != std::string::npos ||
-                filename.find('/') != std::string::npos ||
-                filename.find('\\') != std::string::npos) {
-                res.code = 400;
-                res.end("Bad Request");
-                return;
-            }
+        if (filename.empty() ||
+            filename.find("..") != std::string::npos ||
+            filename.find('/') != std::string::npos ||
+            filename.find('\\') != std::string::npos) {
+            res.code = 400;
+            res.end("Bad Request");
+            return;
+        }
 
-            const fs::path file_path = fs::path("./data/inspections") / filename;
-            std::error_code ec;
-            if (!fs::is_regular_file(file_path, ec)) {
-                res.code = 404;
-                res.end("Image Not Found");
-                return;
-            }
+        const fs::path file_path = fs::path("./data/inspections") / filename;
+        std::error_code ec;
+        if (!fs::is_regular_file(file_path, ec)) {
+            res.code = 404;
+            res.end("Image Not Found");
+            return;
+        }
 
-            res.set_static_file_info(file_path.string(), "image/jpeg");
-            res.add_header("Cache-Control", "public, max-age=3600");
-            res.end();
-        });
+        res.set_static_file_info_unsafe(file_path.string(), "image/jpeg");
+        res.add_header("Cache-Control", "public, max-age=3600");
+        res.end();
+    };
+
+    CROW_ROUTE(m_app, "/inspections/<string>")(serve_inspection_image);
+    CROW_ROUTE(m_app, "/api/v1/inspections/image/<string>")(serve_inspection_image);
 }
 
 void BackendApp::registerExampleRoutes() {
