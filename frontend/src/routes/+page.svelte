@@ -137,20 +137,32 @@
 
     let pollingTimer: any = null;
     let lastSlowPoll = 0;
+    let isPolling = false;
+    let isDestroyed = false;
 
     // Real Backend Polling Step
     async function pollBackendData() {
+        if (isPolling) return;
+        isPolling = true;
         const pollStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
         const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        const shouldRunSlowPoll = (nowMs - lastSlowPoll) >= 2500;
+        const shouldRunSlowPoll = (nowMs - lastSlowPoll) >= 3000;
         if (shouldRunSlowPoll) {
             lastSlowPoll = nowMs;
         }
 
         try {
-            // 1. Hardware Engine Status (Polled periodically every 2.5s to minimize backend load)
-            if (shouldRunSlowPoll) {
-                const engines = await fetchEngineStatus(systemConfig.backendUrl);
+            // Parallel fetch: engine status, camera status, telemetry, and live inspections
+            const [engines, cam, tel, latestLive, allRecords] = await Promise.all([
+                shouldRunSlowPoll ? fetchEngineStatus(systemConfig.backendUrl) : Promise.resolve(null),
+                fetchCameraStatus(systemConfig.backendUrl),
+                fetchLatestTelemetry(systemConfig.backendUrl),
+                fetchLatestInspection(systemConfig.backendUrl),
+                shouldRunSlowPoll ? fetchRecords(systemConfig.backendUrl) : Promise.resolve(null)
+            ]);
+
+            // 1. Hardware Engine Status
+            if (engines) {
                 gravitonAvailable = engines.graviton_available;
                 localEngineAvailable = engines.local_engine_available;
                 systemConfig.gravitonEngineAvailable = engines.graviton_available;
@@ -173,12 +185,10 @@
             }
 
             // 2. Camera Status
-            const cam = await fetchCameraStatus(systemConfig.backendUrl);
             hasCamera = cam.active;
             realFps = cam.active ? cam.fps : 0.0;
 
             // 3. Telemetry Ingress from ESP32-S3
-            const tel = await fetchLatestTelemetry(systemConfig.backendUrl);
             if (tel) {
                 telemetry = {
                     ...tel,
@@ -205,7 +215,6 @@
             }
 
             // 4. Live Real-time Inspections & Dynamic Bounding Boxes
-            const latestLive: any = await fetchLatestInspection(systemConfig.backendUrl);
             let hasLiveDetections = false;
             const isLiveStreamActive = Boolean(latestLive?.is_live) || cam.active;
             if (latestLive && latestLive.scene_optical) {
@@ -236,13 +245,11 @@
                         };
                     });
             } else if (isLiveStreamActive) {
-                // Live camera stream is active with 0 detected food items -> clear HUD panel immediately
                 detections = [];
             }
 
-            // 5. Inspections & Records from DB (Polled every 2.5s for KPI counters; only populate detections fallback if offline)
-            if (shouldRunSlowPoll || (!hasLiveDetections && !isLiveStreamActive)) {
-                const allRecords = await fetchRecords(systemConfig.backendUrl);
+            // 5. Inspections & Records from DB
+            if (allRecords) {
                 const seenKeys = new Set<string>();
                 const dedupedRecords = (allRecords || []).filter(r => {
                     if (!r.inspection_foods || r.inspection_foods.length === 0) return false;
@@ -294,6 +301,7 @@
         } finally {
             const pollEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
             realLatencyMs = Math.max(0.5, Math.round((pollEnd - pollStart) * 10) / 10);
+            isPolling = false;
         }
     }
 
@@ -342,13 +350,15 @@
             }
         } catch {}
 
-        // Initial polling
-        await pollBackendData();
-
-        // Continuous real-time backend synchronization loop (every 600ms for responsive HUD & detections)
-        pollingTimer = setInterval(async () => {
+        // Controlled, non-blocking polling loop (prevents request stacking on cloud endpoints)
+        async function runPollingLoop() {
+            if (isDestroyed) return;
             await pollBackendData();
-        }, 600);
+            if (!isDestroyed) {
+                pollingTimer = setTimeout(runPollingLoop, 1500);
+            }
+        }
+        runPollingLoop();
     });
 
     function handleClearDetections() {
@@ -356,7 +366,8 @@
     }
 
     onDestroy(() => {
-        if (pollingTimer) clearInterval(pollingTimer);
+        isDestroyed = true;
+        if (pollingTimer) clearTimeout(pollingTimer);
         if (typeof window !== 'undefined') {
             window.removeEventListener('hashchange', syncTabFromLocation);
             window.removeEventListener('popstate', syncTabFromLocation);

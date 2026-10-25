@@ -340,12 +340,12 @@
 
     function startMockPushing() {
         stopMockPushing();
-        // Run continuous ~16 FPS frame capture into AI vision pipeline
+        // Run continuous frame capture into AI vision pipeline (optimized for network/serverless ingress)
         pushInterval = setInterval(() => {
             if (sourceMode === 'mock') {
                 captureAndPushFrame();
             }
-        }, 60);
+        }, 250);
     }
 
     function stopMockPushing() {
