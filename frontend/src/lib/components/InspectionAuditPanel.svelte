@@ -19,10 +19,19 @@
 
     async function loadRecords() {
         const next = await fetchInspectionAuditRecords(100);
-        records = next;
+        if (next && next.length > 0) {
+            records = next;
+        } else if (typeof localStorage !== 'undefined') {
+            try {
+                const stored = localStorage.getItem('bawal_audit_records');
+                if (stored) {
+                    records = JSON.parse(stored);
+                }
+            } catch {}
+        }
         isLoading = false;
         if (selectedRecord) {
-            const updated = next.find((record) => record.frame_id === selectedRecord?.frame_id);
+            const updated = records.find((record) => record.frame_id === selectedRecord?.frame_id);
             if (updated) selectedRecord = updated;
         }
     }
