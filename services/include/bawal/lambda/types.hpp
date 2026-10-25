@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -7,12 +8,23 @@
 
 namespace bawal::lambda {
 
+inline constexpr std::size_t kMaxEventPayloadBytes = 6U * 1024U * 1024U;
+inline constexpr std::size_t kMaxImageBytes = 8U * 1024U * 1024U;
+inline constexpr std::size_t kMaxMarkdownBytes = 2U * 1024U * 1024U;
+inline constexpr std::size_t kMaxTelemetryBytes = 64U * 1024U;
+inline constexpr std::size_t kMaxJsonResponseBytes = 4U * 1024U * 1024U;
+inline constexpr std::size_t kMaxBinaryResponseBytes = 4U * 1024U * 1024U;
+inline constexpr int kMaxImageDimension = 8192;
+inline constexpr std::uint64_t kMaxImagePixels = 16'000'000ULL;
+
 /**
  * @brief Configuration parameters for the AWS Lambda serverless runtime.
  */
 struct LambdaConfig {
     std::string runtime_api_endpoint;   ///< AWS_LAMBDA_RUNTIME_API (e.g. 127.0.0.1:9001)
     std::string model_path;             ///< Path to the quantized INT8 YOLOv8 model
+    std::string auth_token;             ///< Shared bearer token for HTTP invocations
+    bool enforce_http_auth{true};       ///< Require token/IAM auth for HTTP events
     float confidence_threshold{0.35f};  ///< Detection confidence threshold (0.25 - 0.98)
     int processing_width{640};          ///< Target width for frame normalization
     int processing_height{480};         ///< Target height for frame normalization

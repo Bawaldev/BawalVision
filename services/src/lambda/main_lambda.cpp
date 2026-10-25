@@ -59,6 +59,8 @@ int main() {
     config.runtime_api_endpoint = envOr("AWS_LAMBDA_RUNTIME_API", "");
     config.model_path = envOr(
         "MODEL_PATH", "ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx");
+    config.auth_token = envOr("BAWAL_LAMBDA_AUTH_TOKEN", "");
+    config.enforce_http_auth = true;
     config.confidence_threshold = envFloat("CONF_THRESHOLD", 0.35f);
     config.processing_width = envInt("PROCESSING_WIDTH", 640);
     config.processing_height = envInt("PROCESSING_HEIGHT", 480);
@@ -75,10 +77,11 @@ int main() {
 
     fmt::print(stderr,
                "[INFO] BawalVision Lambda bootstrap starting (model={}, {}x{}, "
-               "threads={}, prewarm={})\n",
+               "threads={}, prewarm={}, auth={})\n",
                config.model_path, config.processing_width,
                config.processing_height, config.num_threads,
-               config.enable_prewarm ? "on" : "off");
+               config.enable_prewarm ? "on" : "off",
+               config.auth_token.empty() ? "missing" : "configured");
 
     bawal::lambda::VisionLambdaHandler handler;
     if (!handler.initialize(config)) {

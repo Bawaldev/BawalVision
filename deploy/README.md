@@ -103,6 +103,7 @@ curl -XPOST "http://localhost:8080/api/v1/reports/pdf" \
 ```
 
 * **Portable PDF Engine**: Lambda renders Markdown reports with an embedded C++ PDF writer, so `pdflatex`/`tectonic` are not required in the serverless image.
+* **HTTP Authentication**: Set `BAWAL_LAMBDA_AUTH_TOKEN` (32+ characters) for `deploy_lambda.sh` and the Vercel/server proxy. The Lambda handler rejects HTTP invocations without a matching `X-Bawal-Token` (or `Authorization: Bearer <token>`); direct AWS invocations remain IAM-protected. Browser clients must call the SvelteKit `/api` proxy (or the Local Agent), not the raw Function URL, because the token is injected server-side.
 * **Security Hardening**: `deploy/Dockerfile.lambda` runs `apt-get upgrade -y` and purges unused FFmpeg video device capture packages (`libavdevice*`), ensuring **zero Critical or High CVEs** during AWS ECR Inspector scans.
 * **Cold-Start Pre-Warming**: Model loading occurs during initialization before the first request, yielding warm execution times under $30\text{ ms}$.
 

@@ -1,6 +1,9 @@
 import type { Handle } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 
+let warnedMissingLambdaToken = false;
+let warnedApiGatewaySigV4 = false;
+
 export const handle: Handle = async ({ event, resolve }) => {
     if (event.request.method === 'OPTIONS') {
         return new Response(null, {
@@ -23,8 +26,19 @@ export const handle: Handle = async ({ event, resolve }) => {
 
     if (event.url.pathname.startsWith('/api/') || event.url.pathname.startsWith('/inspections/')) {
         const backendUrl = env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080';
+        const lambdaAuthToken = env.BAWAL_LAMBDA_AUTH_TOKEN ||
+            (globalThis as any).process?.env?.BAWAL_LAMBDA_AUTH_TOKEN || '';
+        const isLambdaBackend = backendUrl.includes('execute-api') || backendUrl.includes('lambda-url');
+        if (isLambdaBackend && !lambdaAuthToken && !warnedMissingLambdaToken) {
+            warnedMissingLambdaToken = true;
+            console.warn('[PROXY] BAWAL_LAMBDA_AUTH_TOKEN is not configured; Lambda HTTP invocations will be rejected.');
+        }
+        if (backendUrl.includes('execute-api') && !warnedApiGatewaySigV4) {
+            warnedApiGatewaySigV4 = true;
+            console.warn('[PROXY] API Gateway is configured with AWS_IAM, but this proxy does not sign requests with SigV4. Use the Lambda Function URL with BAWAL_LAMBDA_AUTH_TOKEN instead.');
+        }
         let targetPath = event.url.pathname;
-        if (backendUrl.includes('execute-api') || backendUrl.includes('lambda-url')) {
+        if (isLambdaBackend) {
             if (targetPath === '/api/v1/camera/frame') {
                 targetPath = '/api/v1/lambda/inspect';
             }
@@ -36,14 +50,36 @@ export const handle: Handle = async ({ event, resolve }) => {
             'Access-Control-Allow-Origin': '*'
         };
 
+        const proxyHeaders = new Headers(event.request.headers);
+        proxyHeaders.delete('host');
+        proxyHeaders.delete('content-length');
+        if (lambdaAuthToken) {
+            proxyHeaders.set('x-bawal-token', lambdaAuthToken);
+        }
+        let requestBody: ArrayBuffer | undefined;
+        try {
+            requestBody = ['GET', 'HEAD'].includes(event.request.method)
+                ? undefined
+                : await event.request.arrayBuffer();
+        } catch {
+            return new Response(JSON.stringify({
+                error: 'Failed to read request body'
+            }), { status: 400, headers: jsonHeaders });
+        }
+        if (isLambdaBackend && requestBody && requestBody.byteLength > 6 * 1024 * 1024) {
+            return new Response(JSON.stringify({
+                error: 'Request body exceeds the 6 MiB Lambda limit'
+            }), { status: 413, headers: jsonHeaders });
+        }
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3500);
 
         try {
             const res = await fetch(target, {
                 method: event.request.method,
-                headers: event.request.headers,
-                body: ['GET', 'HEAD'].includes(event.request.method) ? undefined : await event.request.arrayBuffer(),
+                headers: proxyHeaders,
+                body: requestBody,
                 signal: controller.signal
             });
             clearTimeout(timeoutId);
@@ -81,10 +117,10 @@ export const handle: Handle = async ({ event, resolve }) => {
             }
             if (path.includes('/devices/disconnect')) {
                 return new Response(JSON.stringify({
-                    success: true,
-                    status: 'disconnected',
-                    message: 'Device disconnected'
-                }), { status: 200, headers: jsonHeaders });
+                    success: false,
+                    status: 'unsupported',
+                    message: 'Serverless backend cannot disconnect local hardware; use the Local Agent.'
+                }), { status: 501, headers: jsonHeaders });
             }
             if (path.includes('/devices/usb/ports')) {
                 return new Response(JSON.stringify({
@@ -144,13 +180,14 @@ export const handle: Handle = async ({ event, resolve }) => {
             }
             if (path.includes('/inspections/latest')) {
                 return new Response(JSON.stringify({
-                    frame_id: 1,
-                    status: 'PASSED',
+                    frame_id: 0,
+                    status: 'NO_DATA',
                     device_id: 'CLOUD_SERVERLESS',
                     engine_pipeline: 'ONNX_INT8_CLOUD',
-                    processing_time_ms: 19.5,
-                    surface_temp: 28.0,
-                    message: 'Cloud Serverless Active',
+                    processing_time_ms: 0,
+                    surface_temp: 0,
+                    message: 'No live inspection data (backend unreachable)',
+                    is_live: false,
                     detections: []
                 }), { status: 200, headers: jsonHeaders });
             }

@@ -9,6 +9,8 @@
 
 namespace bawal::lambda {
 
+[[nodiscard]] bool validateImagePayload(const std::vector<uint8_t>& image);
+
 /**
  * @brief Abstract parser interface for decoding AWS Lambda invocation events.
  */
@@ -54,6 +56,13 @@ public:
 
     /** Classify and extract HTTP method/path from an invocation event without full decode. */
     [[nodiscard]] static LambdaHttpRoute extractHttpRoute(std::string_view payload);
+
+    /** Read a case-insensitive HTTP header from an API Gateway/Function URL event. */
+    [[nodiscard]] static std::string extractHeader(std::string_view payload,
+                                                   std::string_view name);
+
+    /** True when API Gateway already authenticated the request with AWS_IAM. */
+    [[nodiscard]] static bool isIamAuthorized(std::string_view payload);
 };
 
 /**

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -99,6 +100,7 @@ private:
     std::string m_last_inspection_json;
     std::string m_last_inspection_markdown;
     std::string m_last_telemetry_json;
+    std::chrono::steady_clock::time_point m_last_inspection_time{};
     std::chrono::steady_clock::time_point m_last_telemetry_time{};
 };
 

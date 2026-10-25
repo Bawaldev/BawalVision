@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -33,6 +34,12 @@ constexpr double kMarginRight = 46.0;
 constexpr double kMarginTop = 46.0;
 constexpr double kMarginBottom = 48.0;
 constexpr double kContentWidth = kPageWidth - kMarginLeft - kMarginRight;
+constexpr std::size_t kMaxMarkdownBytes = 2U * 1024U * 1024U;
+constexpr std::size_t kMaxEmbeddedImages = 32;
+constexpr std::size_t kMaxEmbeddedImageBytes = 4U * 1024U * 1024U;
+constexpr std::size_t kMaxDataUriImageBytes = 1U * 1024U * 1024U;
+constexpr int kMaxImageDimension = 8192;
+constexpr std::uint64_t kMaxImagePixels = 16'000'000ULL;
 
 struct Rgb {
     double r{0.0};
@@ -577,7 +584,10 @@ std::vector<uint8_t> readBinaryFile(const fs::path& path) {
     if (!file.is_open()) return {};
     file.seekg(0, std::ios::end);
     const std::streamoff size = file.tellg();
-    if (size <= 0) return {};
+    if (size <= 0 ||
+        size > static_cast<std::streamoff>(kMaxEmbeddedImageBytes)) {
+        return {};
+    }
     file.seekg(0, std::ios::beg);
     std::vector<uint8_t> bytes(static_cast<std::size_t>(size));
     file.read(reinterpret_cast<char*>(bytes.data()), size);
@@ -602,6 +612,11 @@ std::vector<uint8_t> decodeDataUriImage(std::string_view target) {
     if (header.find(";base64") == std::string_view::npos) return {};
 
     const std::string_view encoded = target.substr(comma + 1);
+    const std::size_t max_encoded =
+        (kMaxDataUriImageBytes / 3U + 1U) * 4U;
+    if (encoded.size() > max_encoded) {
+        return {};
+    }
     std::vector<uint8_t> out;
     out.reserve(encoded.size() * 3 / 4);
     uint32_t accumulator = 0;
@@ -1301,6 +1316,12 @@ private:
     }
 
     void renderImage(const std::string& alt, const std::string& target) {
+        if (m_images.size() >= kMaxEmbeddedImages) {
+            renderSpans(parseInline("[Image limit reached]", Face::Italic),
+                        9.5, 0.0, kMuted);
+            m_cursor += 3.0;
+            return;
+        }
         std::vector<uint8_t> bytes;
         if (const std::optional<fs::path> resolved = resolveImageTarget(target);
             resolved.has_value()) {
@@ -1308,9 +1329,14 @@ private:
         } else {
             bytes = decodeDataUriImage(target);
         }
-        if (!bytes.empty()) {
+        if (!bytes.empty() && bytes.size() <= kMaxEmbeddedImageBytes) {
             const std::vector<int> size = jpegDimensions(bytes);
-            if (size.size() == 3) {
+            if (size.size() == 3 && size[0] > 0 && size[1] > 0 &&
+                size[0] <= kMaxImageDimension &&
+                size[1] <= kMaxImageDimension &&
+                static_cast<std::uint64_t>(size[0]) *
+                        static_cast<std::uint64_t>(size[1]) <=
+                    kMaxImagePixels) {
                 const double max_height = 290.0;
                 const double scale = std::min(
                     {kContentWidth / static_cast<double>(size[0]),
@@ -1368,6 +1394,9 @@ std::mutex& fileMutex() {
 
 std::vector<uint8_t> MarkdownPdfGenerator::render(
     std::string_view markdown, const MarkdownPdfOptions& options) {
+    if (markdown.size() > kMaxMarkdownBytes) {
+        return {};
+    }
     Renderer renderer(options);
     renderer.render(markdown);
     return renderer.finish();

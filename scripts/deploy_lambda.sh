@@ -17,6 +17,7 @@ set -euo pipefail
 #   LAMBDA_TIMEOUT   (default: 29)
 #   MAX_CONCURRENCY  (default: 5)
 #   LAMBDA_PREWARM   (default: 0)
+#   BAWAL_LAMBDA_AUTH_TOKEN (required, 32+ characters)
 #   DOCKER_PLATFORM  (default: linux/amd64, matching the SAM architecture)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,6 +30,7 @@ MEMORY_SIZE="${MEMORY_SIZE:-3008}"
 LAMBDA_TIMEOUT="${LAMBDA_TIMEOUT:-29}"
 MAX_CONCURRENCY="${MAX_CONCURRENCY:-5}"
 LAMBDA_PREWARM="${LAMBDA_PREWARM:-0}"
+LAMBDA_AUTH_TOKEN="${BAWAL_LAMBDA_AUTH_TOKEN:-}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
 for tool in docker aws sam; do
@@ -37,6 +39,11 @@ for tool in docker aws sam; do
         exit 1
     fi
 done
+
+if [[ ${#LAMBDA_AUTH_TOKEN} -lt 32 ]]; then
+    echo "[ERROR] BAWAL_LAMBDA_AUTH_TOKEN must be at least 32 characters." >&2
+    exit 1
+fi
 
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
@@ -83,7 +90,8 @@ sam deploy \
         "MemorySize=${MEMORY_SIZE}" \
         "Timeout=${LAMBDA_TIMEOUT}" \
         "MaxConcurrency=${MAX_CONCURRENCY}" \
-        "LambdaPrewarm=${LAMBDA_PREWARM}"
+        "LambdaPrewarm=${LAMBDA_PREWARM}" \
+        "AuthToken=${LAMBDA_AUTH_TOKEN}"
 
 API_ENDPOINT="$(aws cloudformation describe-stacks --region "$REGION" \
     --stack-name "$STACK_NAME" \
@@ -95,4 +103,5 @@ echo "[INFO] Snapshot: ${API_ENDPOINT}/api/v1/lambda/inspect"
 echo "[INFO] Batch:    ${API_ENDPOINT}/api/v1/lambda/batch"
 echo "[INFO] PDF:      ${API_ENDPOINT}/api/v1/reports/pdf"
 echo "[INFO] PDF alias: ${API_ENDPOINT}/api/v1/lambda/report"
-echo "[INFO] All routes require AWS_IAM SigV4 authorization."
+echo "[INFO] API Gateway routes require AWS_IAM SigV4 authorization."
+echo "[INFO] Function URL/HTTP invocations require X-Bawal-Token: set BAWAL_LAMBDA_AUTH_TOKEN in the proxy."

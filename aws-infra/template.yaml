@@ -36,6 +36,11 @@ Parameters:
     Default: "0"
     AllowedValues: ["0", "1"]
     Description: Set to 1 only for snapshot-only workloads that accept ONNX cold start
+  AuthToken:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Shared bearer token required by the Lambda handler for HTTP events
 
 Globals:
   Function:
@@ -81,6 +86,7 @@ Resources:
         Variables:
           MODEL_PATH: /var/task/models/yolov8s_int8.onnx
           LAMBDA_PREWARM: !Ref LambdaPrewarm
+          BAWAL_LAMBDA_AUTH_TOKEN: !Ref AuthToken
           ENABLE_SR: "0"
           OMP_NUM_THREADS: "2"
           OPENCV_LOG_LEVEL: ERROR

@@ -99,6 +99,8 @@ int main() {
     bawal::lambda::VisionLambdaHandler lambda_handler;
     bawal::lambda::LambdaConfig lambda_config;
     lambda_config.model_path = model_path;
+    lambda_config.auth_token = envOr("BAWAL_LAMBDA_AUTH_TOKEN", "");
+    lambda_config.enforce_http_auth = false;
     lambda_config.enable_prewarm = envOr("BAWAL_LAMBDA_PREWARM", "0") == "1";
     const std::string lambda_enabled = envOr("BAWAL_LAMBDA_ENABLED", "1");
     if (lambda_enabled != "0" && lambda_enabled != "false") {

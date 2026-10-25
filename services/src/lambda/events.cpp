@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cctype>
+#include <cstring>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -65,6 +67,97 @@ std::string_view detectContentType(const std::vector<uint8_t>& image) {
     return "application/octet-stream";
 }
 
+uint32_t readBigEndian32(const unsigned char* data) {
+    return (static_cast<uint32_t>(data[0]) << 24U) |
+           (static_cast<uint32_t>(data[1]) << 16U) |
+           (static_cast<uint32_t>(data[2]) << 8U) |
+           static_cast<uint32_t>(data[3]);
+}
+
+bool jpegDimensions(std::string_view bytes, int& width, int& height) {
+    const auto* data = reinterpret_cast<const unsigned char*>(bytes.data());
+    if (bytes.size() < 4 || data[0] != 0xFF || data[1] != 0xD8) {
+        return false;
+    }
+    std::size_t offset = 2;
+    while (offset + 3 < bytes.size()) {
+        if (data[offset] != 0xFF) {
+            ++offset;
+            continue;
+        }
+        const unsigned char marker = data[offset + 1];
+        offset += 2;
+        if (marker == 0xD8 || marker == 0xD9 || marker == 0x01 ||
+            (marker >= 0xD0 && marker <= 0xD7)) {
+            continue;
+        }
+        if (offset + 1 >= bytes.size()) {
+            return false;
+        }
+        const std::size_t length =
+            (static_cast<std::size_t>(data[offset]) << 8U) |
+            static_cast<std::size_t>(data[offset + 1]);
+        if (length < 2 || offset + length > bytes.size()) {
+            return false;
+        }
+        if (marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 &&
+            marker != 0xC8 && marker != 0xCC) {
+            if (length < 7 || offset + 7 > bytes.size()) {
+                return false;
+            }
+            height = (static_cast<int>(data[offset + 3]) << 8) |
+                     static_cast<int>(data[offset + 4]);
+            width = (static_cast<int>(data[offset + 5]) << 8) |
+                    static_cast<int>(data[offset + 6]);
+            return width > 0 && height > 0;
+        }
+        offset += length;
+    }
+    return false;
+}
+
+bool pngDimensions(std::string_view bytes, int& width, int& height) {
+    static constexpr unsigned char signature[8] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+    if (bytes.size() < 24 ||
+        std::memcmp(bytes.data(), signature, sizeof(signature)) != 0 ||
+        std::memcmp(bytes.data() + 12, "IHDR", 4) != 0) {
+        return false;
+    }
+    const auto* data = reinterpret_cast<const unsigned char*>(bytes.data());
+    const uint32_t parsed_width = readBigEndian32(data + 16);
+    const uint32_t parsed_height = readBigEndian32(data + 20);
+    if (parsed_width == 0 || parsed_height == 0 ||
+        parsed_width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        parsed_height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    width = static_cast<int>(parsed_width);
+    height = static_cast<int>(parsed_height);
+    return true;
+}
+
+bool imageWithinLimits(const std::vector<uint8_t>& bytes) {
+    if (bytes.empty() || bytes.size() > kMaxImageBytes) {
+        return false;
+    }
+    int width = 0;
+    int height = 0;
+    const std::string_view view(
+        reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (!jpegDimensions(view, width, height) &&
+        !pngDimensions(view, width, height)) {
+        return false;
+    }
+    if (width <= 0 || height <= 0 || width > kMaxImageDimension ||
+        height > kMaxImageDimension) {
+        return false;
+    }
+    return static_cast<std::uint64_t>(width) *
+               static_cast<std::uint64_t>(height) <=
+           kMaxImagePixels;
+}
+
 std::optional<bawal::server::LambdaEvent> unwrapGatewayEvent(
     const bawal::server::LambdaEvent& outer) {
     if (outer.body.empty()) {
@@ -123,6 +216,10 @@ std::vector<uint8_t> extractImageBytes(const bawal::server::LambdaEvent& event) 
 
 } // namespace
 
+bool validateImagePayload(const std::vector<uint8_t>& image) {
+    return imageWithinLimits(image);
+}
+
 InvocationSource LambdaEventParser::detectSource(std::string_view payload) {
     if (payload.find("lambda-url") != std::string_view::npos ||
         payload.find("Lambda-URL") != std::string_view::npos) {
@@ -173,9 +270,105 @@ LambdaHttpRoute LambdaEventParser::extractHttpRoute(std::string_view payload) {
     return route;
 }
 
+namespace {
+
+const glz::json_t* findJsonMember(const glz::json_t& object,
+                                  std::string_view key) {
+    const auto* map = object.get_if<glz::json_t::object_t>();
+    if (map == nullptr) {
+        return nullptr;
+    }
+    const auto it = map->find(key);
+    if (it == map->end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+bool hasArn(const glz::json_t* value) {
+    if (value == nullptr) {
+        return false;
+    }
+    const auto* text = value->get_if<std::string>();
+    return text != nullptr && text->rfind("arn:aws:", 0) == 0;
+}
+
+} // namespace
+
+bool LambdaEventParser::isIamAuthorized(std::string_view payload) {
+    glz::json_t root;
+    if (glz::read<glz::opts{.error_on_unknown_keys = false}>(root, payload)) {
+        return false;
+    }
+    const glz::json_t* request_context = findJsonMember(root, "requestContext");
+    if (request_context == nullptr) {
+        return false;
+    }
+    if (const glz::json_t* identity =
+            findJsonMember(*request_context, "identity");
+        identity != nullptr) {
+        if (hasArn(findJsonMember(*identity, "userArn")) ||
+            hasArn(findJsonMember(*identity, "caller"))) {
+            return true;
+        }
+    }
+    if (const glz::json_t* authorizer =
+            findJsonMember(*request_context, "authorizer");
+        authorizer != nullptr) {
+        if (const glz::json_t* iam = findJsonMember(*authorizer, "iam");
+            iam != nullptr) {
+            if (hasArn(findJsonMember(*iam, "userArn")) ||
+                hasArn(findJsonMember(*iam, "caller"))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::string LambdaEventParser::extractHeader(std::string_view payload,
+                                             std::string_view name) {
+    glz::json_t root;
+    if (glz::read<glz::opts{.error_on_unknown_keys = false}>(root, payload)) {
+        return {};
+    }
+    const auto* object = root.get_if<glz::json_t::object_t>();
+    if (object == nullptr) {
+        return {};
+    }
+    const auto headers_it = object->find("headers");
+    if (headers_it == object->end()) {
+        return {};
+    }
+    const auto* headers = headers_it->second.get_if<glz::json_t::object_t>();
+    if (headers == nullptr) {
+        return {};
+    }
+    for (const auto& [key, value] : *headers) {
+        if (key.size() != name.size()) {
+            continue;
+        }
+        bool matches = true;
+        for (std::size_t i = 0; i < key.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(key[i])) !=
+                std::tolower(static_cast<unsigned char>(name[i]))) {
+                matches = false;
+                break;
+            }
+        }
+        if (!matches) {
+            continue;
+        }
+        if (const auto* text = value.get_if<std::string>()) {
+            return *text;
+        }
+    }
+    return {};
+}
+
 bool LambdaEventParser::parseEvent(std::string_view event_payload,
                                    LambdaInspectionRequest& out_request) {
-    if (event_payload.empty()) {
+    if (event_payload.empty() || event_payload.size() > kMaxEventPayloadBytes) {
         return false;
     }
 
@@ -218,7 +411,9 @@ bool LambdaEventParser::parseEvent(std::string_view event_payload,
         }
     }
 
-    if (out_request.raw_image_bytes.empty()) {
+    if (out_request.raw_image_bytes.empty() ||
+        out_request.raw_image_bytes.size() > kMaxImageBytes ||
+        !imageWithinLimits(out_request.raw_image_bytes)) {
         return false;
     }
     out_request.image_content_type =

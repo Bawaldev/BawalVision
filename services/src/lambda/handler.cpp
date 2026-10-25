@@ -26,8 +26,25 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+constexpr auto kInspectionTtl = std::chrono::seconds(60);
+
 double elapsedMs(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
+
+bool constantTimeEquals(std::string_view lhs, std::string_view rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    unsigned char difference = 0;
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+        difference |= static_cast<unsigned char>(lhs[i] ^ rhs[i]);
+    }
+    return difference == 0;
+}
+
+std::string noInspectionPayload() {
+    return R"({"frame_id":0,"status":"NO_DATA","device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_LAMBDA","processing_time_ms":0,"surface_temp":0,"message":"No live inspection snapshot available","is_live":false,"detections":[]})";
 }
 
 LambdaInspectionResponse errorResponse(int status_code, std::string message,
@@ -122,6 +139,10 @@ bool parseReportRequest(std::string_view raw, LambdaReportRequest& request,
         error = "Markdown document is empty";
         return false;
     }
+    if (request.markdown.size() > kMaxMarkdownBytes) {
+        error = "Markdown payload exceeds the 2 MiB limit";
+        return false;
+    }
     if (request.title.empty()) {
         request.title = "BawalVision Inspection Report";
     }
@@ -196,7 +217,31 @@ bool VisionLambdaHandler::initializeLocked(const LambdaConfig& config) {
 
 LambdaInspectionResponse VisionLambdaHandler::handleEvent(
     std::string_view event_payload) {
+    const Clock::time_point request_start = Clock::now();
+    if (event_payload.size() > kMaxEventPayloadBytes) {
+        return errorResponse(413, "Event payload exceeds the 6 MiB limit",
+                             request_start);
+    }
+
     const LambdaHttpRoute route = LambdaEventParser::extractHttpRoute(event_payload);
+    if (route.is_http_event && route.method != "OPTIONS" &&
+        m_config.enforce_http_auth &&
+        !LambdaEventParser::isIamAuthorized(event_payload)) {
+        if (m_config.auth_token.empty()) {
+            return errorResponse(503, "Lambda auth token is not configured",
+                                 request_start);
+        }
+        const std::string authorization = trimView(
+            LambdaEventParser::extractHeader(event_payload, "authorization"));
+        const std::string header_token = trimView(
+            LambdaEventParser::extractHeader(event_payload, "x-bawal-token"));
+        const std::string expected = "Bearer " + m_config.auth_token;
+        if (!constantTimeEquals(authorization, expected) &&
+            !constantTimeEquals(header_token, m_config.auth_token)) {
+            return errorResponse(401, "Unauthorized", request_start);
+        }
+    }
+
     if (route.is_http_event) {
         if (route.method == "OPTIONS") {
             LambdaInspectionResponse resp;
@@ -215,6 +260,10 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             LambdaReportRequest request;
             std::string error;
             const std::string body = extractHttpBody(event_payload);
+            if (body.size() > kMaxMarkdownBytes) {
+                return errorResponse(413, "Markdown payload exceeds the 2 MiB limit",
+                                     start);
+            }
             if (!parseReportRequest(body, request, error)) {
                 return errorResponse(400, std::move(error), start);
             }
@@ -228,6 +277,10 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             if (pdf.empty()) {
                 return errorResponse(500, "Markdown PDF rendering failed", start);
             }
+            if (pdf.size() > kMaxBinaryResponseBytes) {
+                return errorResponse(413, "PDF report exceeds the 4 MiB response limit",
+                                     start);
+            }
             return makePdfResponse(pdf, std::move(request.filename), start);
         }
 
@@ -238,11 +291,15 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             std::string markdown;
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
-                markdown = m_last_inspection_markdown;
+                if (!m_last_inspection_markdown.empty() &&
+                    m_last_inspection_time != Clock::time_point{} &&
+                    Clock::now() - m_last_inspection_time <= kInspectionTtl) {
+                    markdown = m_last_inspection_markdown;
+                }
             }
             if (markdown.empty()) {
                 return errorResponse(404,
-                                     "No Lambda inspection snapshot available",
+                                     "No live Lambda inspection snapshot available",
                                      start);
             }
 
@@ -254,10 +311,15 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             if (pdf.empty()) {
                 return errorResponse(500, "Inspection PDF rendering failed", start);
             }
+            if (pdf.size() > kMaxBinaryResponseBytes) {
+                return errorResponse(413, "PDF report exceeds the 4 MiB response limit",
+                                     start);
+            }
             return makePdfResponse(pdf, "BawalVision-Lambda-Report.pdf", start);
         }
 
         if (route.method == "POST" && route.path.find("/telemetry") != std::string::npos) {
+            const Clock::time_point start = Clock::now();
             LambdaInspectionResponse resp;
             resp.status_code = 200;
             resp.is_success = true;
@@ -279,6 +341,10 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
                 body_content = std::string(event_payload);
             }
 
+            if (body_content.size() > kMaxTelemetryBytes) {
+                return errorResponse(413, "Telemetry payload exceeds the 64 KiB limit",
+                                     start);
+            }
             if (!body_content.empty()) {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 m_last_telemetry_json = std::move(body_content);
@@ -323,9 +389,9 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
 
         if (route.method == "POST" && route.path.find("/devices/disconnect") != std::string::npos) {
             LambdaInspectionResponse resp;
-            resp.status_code = 200;
-            resp.is_success = true;
-            resp.json_payload = R"({"success":true,"status":"disconnected","message":"Device disconnected"})";
+            resp.status_code = 501;
+            resp.is_success = false;
+            resp.json_payload = R"({"success":false,"status":"unsupported","message":"Serverless Lambda cannot disconnect local hardware; use the Local Agent."})";
             return resp;
         }
 
@@ -383,10 +449,14 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             }
             if (route.path.find("/inspections/latest") != std::string::npos) {
                 std::lock_guard<std::mutex> lock(m_mutex);
-                if (!m_last_inspection_json.empty()) {
+                if (!m_last_inspection_json.empty() &&
+                    m_last_inspection_time != Clock::time_point{} &&
+                    Clock::now() - m_last_inspection_time <= kInspectionTtl) {
                     resp.json_payload = m_last_inspection_json;
                 } else {
-                    resp.json_payload = R"({"frame_id":1,"status":"PASSED","device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_AVX2_LAMBDA","processing_time_ms":15.2,"surface_temp":28.5,"message":"Cloud Lambda Serverless Active","detections":[]})";
+                    m_last_inspection_json.clear();
+                    m_last_inspection_markdown.clear();
+                    resp.json_payload = noInspectionPayload();
                 }
                 return resp;
             }
@@ -414,6 +484,10 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
         if (pdf.empty()) {
             return errorResponse(500, "Markdown PDF rendering failed", start);
         }
+        if (pdf.size() > kMaxBinaryResponseBytes) {
+            return errorResponse(413, "PDF report exceeds the 4 MiB response limit",
+                                 start);
+        }
         return makePdfResponse(pdf, std::move(request.filename), start);
     }
 
@@ -424,7 +498,12 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             const Clock::time_point start = Clock::now();
             return errorResponse(400, std::move(error), start);
         }
-        return m_batch_processor.process(batch);
+        LambdaInspectionResponse response = m_batch_processor.process(batch);
+        if (response.json_payload.size() > kMaxJsonResponseBytes) {
+            return errorResponse(413, "Batch response exceeds the 4 MiB limit",
+                                 Clock::now());
+        }
+        return response;
     }
 
     LambdaEventParser parser;
@@ -452,6 +531,11 @@ LambdaInspectionResponse VisionLambdaHandler::handleLocked(
 
     if (request.raw_image_bytes.empty()) {
         return errorResponse(400, "Event did not contain a usable image payload", start);
+    }
+    if (request.raw_image_bytes.size() > kMaxImageBytes ||
+        !validateImagePayload(request.raw_image_bytes)) {
+        return errorResponse(413, "Image payload exceeds the Lambda image limits",
+                             start);
     }
 
     if (!m_initialized.load(std::memory_order_acquire) || !m_pipeline) {
@@ -511,14 +595,12 @@ LambdaInspectionResponse VisionLambdaHandler::handleLocked(
             fresh});
     }
 
-    if (!output.annotated_image.empty()) {
+    const bool want_annotated = request.return_annotated || m_config.return_annotated;
+    if (want_annotated && !output.annotated_image.empty()) {
         std::vector<uchar> jpeg;
         const std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 85};
         if (cv::imencode(".jpg", output.annotated_image, jpeg, params)) {
             dto.annotated_image_base64 = encodeBase64(jpeg.data(), jpeg.size());
-            if (dto.image_path.empty()) {
-                dto.image_path = "data:image/jpeg;base64," + dto.annotated_image_base64;
-            }
         }
     }
 
@@ -529,9 +611,25 @@ LambdaInspectionResponse VisionLambdaHandler::handleLocked(
     if (const auto error = glz::write_json(dto, response.json_payload); error) {
         return errorResponse(500, "Could not serialize inspection result", start);
     }
+    if (response.json_payload.size() > kMaxJsonResponseBytes &&
+        !dto.annotated_image_base64.empty()) {
+        dto.annotated_image_base64.clear();
+        if (const auto error = glz::write_json(dto, response.json_payload); error) {
+            return errorResponse(500, "Could not serialize inspection result", start);
+        }
+    }
+    if (response.json_payload.size() > kMaxJsonResponseBytes) {
+        return errorResponse(413, "Inspection response exceeds the 4 MiB limit", start);
+    }
+    const Clock::time_point completed = Clock::now();
     m_last_inspection_json = response.json_payload;
+    if (!dto.annotated_image_base64.empty()) {
+        dto.image_path = "data:image/jpeg;base64," + dto.annotated_image_base64;
+    }
     m_last_inspection_markdown =
         bawal::report::buildLambdaInspectionMarkdown(dto);
+    dto.image_path.clear();
+    m_last_inspection_time = completed;
     return response;
 }
 
