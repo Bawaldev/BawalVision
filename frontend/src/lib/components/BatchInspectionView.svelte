@@ -30,6 +30,7 @@
         surface_temp: number;
         t_safe_hours: number;
         annotated_url: string;
+        annotated_data_url?: string;
         detections: BatchDetection[];
         avg_similarity?: number;
         avg_quality?: number;
@@ -258,8 +259,11 @@
         return files;
     }
 
-    async function createAnnotatedImage(blob: Blob, detections: BatchDetection[]): Promise<string> {
-        if (typeof document === 'undefined') return URL.createObjectURL(blob);
+    async function createAnnotatedImage(blob: Blob, detections: BatchDetection[]): Promise<{ blobUrl: string; dataUrl: string }> {
+        if (typeof document === 'undefined') {
+            const fallback = URL.createObjectURL(blob);
+            return { blobUrl: fallback, dataUrl: '' };
+        }
         return new Promise((resolve) => {
             const img = new Image();
             const url = URL.createObjectURL(blob);
@@ -270,7 +274,7 @@
                     canvas.height = img.naturalHeight || 480;
                     const ctx = canvas.getContext('2d');
                     if (!ctx) {
-                        resolve(url);
+                        resolve({ blobUrl: url, dataUrl: '' });
                         return;
                     }
                     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
@@ -322,21 +326,50 @@
                         ctx.fillText(label, rawX + 6, badgeY + badgeHeight / 2);
                     }
 
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
                     canvas.toBlob((annotatedBlob) => {
                         if (annotatedBlob) {
                             URL.revokeObjectURL(url);
-                            resolve(URL.createObjectURL(annotatedBlob));
+                            resolve({ blobUrl: URL.createObjectURL(annotatedBlob), dataUrl });
                         } else {
-                            resolve(url);
+                            resolve({ blobUrl: url, dataUrl });
                         }
-                    }, 'image/jpeg', 0.90);
+                    }, 'image/jpeg', 0.85);
                 } catch {
-                    resolve(url);
+                    resolve({ blobUrl: url, dataUrl: '' });
                 }
             };
-            img.onerror = () => resolve(url);
+            img.onerror = () => resolve({ blobUrl: url, dataUrl: '' });
             img.src = url;
         });
+    }
+
+    async function ensureDataUrl(it: BatchItem): Promise<string> {
+        if (it.annotated_data_url && it.annotated_data_url.startsWith('data:')) {
+            return it.annotated_data_url;
+        }
+        if (it.annotated_url && it.annotated_url.startsWith('data:')) {
+            return it.annotated_url;
+        }
+        if (it.annotated_url && typeof fetch !== 'undefined') {
+            try {
+                const res = await fetch(it.annotated_url);
+                const blob = await res.blob();
+                return await new Promise<string>((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const resUrl = (reader.result as string) || '';
+                        it.annotated_data_url = resUrl;
+                        resolve(resUrl);
+                    };
+                    reader.onerror = () => resolve(it.annotated_url);
+                    reader.readAsDataURL(blob);
+                });
+            } catch {
+                return it.annotated_url;
+            }
+        }
+        return it.annotated_url;
     }
 
     async function processBatchWithClientExtraction(file: File, startedAt: number) {
@@ -484,7 +517,7 @@
                     classMap.set(d.class_name, cur);
                 }
 
-                const annotatedUrl = await createAnnotatedImage(entry.blob, detections);
+                const ann = await createAnnotatedImage(entry.blob, detections);
 
                 items.push({
                     index: idx,
@@ -492,7 +525,8 @@
                     accepted: isAccepted,
                     surface_temp: 25.0,
                     t_safe_hours: 8.0,
-                    annotated_url: annotatedUrl,
+                    annotated_url: ann.blobUrl,
+                    annotated_data_url: ann.dataUrl,
                     detections,
                     avg_similarity: detections.length > 0 ? itemSim / detections.length : 0.8,
                     avg_quality: 95.0,
@@ -696,8 +730,9 @@
                         `Avg similarity: ${simPct}% | Avg quality: ${qualPct}% | Detections: ${it.detections.length} (P ${it.pass_detections} / R ${it.review_detections} / X ${it.reject_detections})`,
                         ''
                     );
-                    if (it.annotated_url) {
-                        mdLines.push(`![Tray #${it.index} Evidence](${it.annotated_url})`, '');
+                    const evidenceTarget = await ensureDataUrl(it);
+                    if (evidenceTarget) {
+                        mdLines.push(`![Tray #${it.index} Evidence](${evidenceTarget})`, '');
                     }
                     mdLines.push(
                         '| No | Item | Bounding Box | Similarity | SIMD Quality | Status |',

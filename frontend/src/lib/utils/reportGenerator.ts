@@ -24,7 +24,7 @@ function imageUrl(record: InspectionAuditRecord, host?: string): string {
     if (!record.image_path) {
         return '';
     }
-    if (/^(https?:|data:)/i.test(record.image_path)) {
+    if (/^(https?:|data:|blob:)/i.test(record.image_path)) {
         return record.image_path;
     }
     return `${backendBaseUrl(host)}${record.image_path}`;
@@ -318,11 +318,43 @@ export interface MarkdownPdfResult {
     filename: string;
 }
 
+export async function resolveMarkdownImages(markdown: string): Promise<string> {
+    if (typeof window === 'undefined' || !markdown.includes('blob:')) {
+        return markdown;
+    }
+    const blobRegex = /!\[([^\]]*)\]\((blob:[^)]+)\)/g;
+    let match;
+    const replacements: Array<{ full: string; alt: string; blobUrl: string }> = [];
+    while ((match = blobRegex.exec(markdown)) !== null) {
+        replacements.push({ full: match[0], alt: match[1], blobUrl: match[2] });
+    }
+    if (replacements.length === 0) return markdown;
+
+    let resolved = markdown;
+    for (const item of replacements) {
+        try {
+            const res = await fetch(item.blobUrl);
+            const blob = await res.blob();
+            const dataUrl = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve((reader.result as string) || item.blobUrl);
+                reader.onerror = () => resolve(item.blobUrl);
+                reader.readAsDataURL(blob);
+            });
+            resolved = resolved.replaceAll(item.full, `![${item.alt}](${dataUrl})`);
+        } catch {
+            // Keep original if fetch fails
+        }
+    }
+    return resolved;
+}
+
 export async function downloadMarkdownPdf(
     filename: string,
     markdownContent: string,
     options: ReportOptions & { title?: string } = {}
 ): Promise<MarkdownPdfResult> {
+    const finalMarkdown = await resolveMarkdownImages(markdownContent);
     const safeName = filename.toLowerCase().endsWith('.pdf') ? filename : `${filename}.pdf`;
     const response = await fetch(reportPdfEndpoint(options.host), {
         method: 'POST',
@@ -331,7 +363,7 @@ export async function downloadMarkdownPdf(
             'Accept': 'application/pdf'
         },
         body: JSON.stringify({
-            markdown: markdownContent,
+            markdown: finalMarkdown,
             title: options.title ?? 'BawalVision Inspection Report',
             filename: safeName
         })
