@@ -214,9 +214,9 @@
             }
         } catch {
             if (isHttps) {
-                localBackendNotice = '⚠️ <strong>Mixed Content Blocked</strong>: Browser (Chrome/Brave) memblokir koneksi HTTP localhost dari domain HTTPS Vercel.<br/><strong>Solusi:</strong> Jalankan <code>just run-frontend</code> di terminal dan buka <a href="http://localhost:5173" target="_blank" rel="noopener">http://localhost:5173</a>, atau jalankan backend via <code>just compose-up bawal_backend</code>.';
+                localBackendNotice = '⚠️ <strong>Mixed Content Blocked</strong>: Your browser (Chrome/Brave) blocks insecure HTTP localhost connections from an HTTPS domain (Vercel).<br/><strong>Solution:</strong> Run <code>just run-frontend</code> in your terminal and open <a href="http://localhost:5173" target="_blank" rel="noopener">http://localhost:5173</a>, or switch to <strong>Mock Video (Simulation)</strong> above for cloud AI inspection.';
             } else {
-                localBackendNotice = '⚠️ <strong>Local backend tidak aktif di port 8080</strong>. Jalankan backend C++ dengan perintah: <code>just compose-up bawal_backend</code> atau <code>just run-backend</code>.';
+                localBackendNotice = '⚠️ <strong>Local backend is not active on port 8080</strong>. Start the C++ backend using: <code>just compose-up bawal_backend</code> or <code>just run-backend</code> in your terminal.';
             }
         } finally {
             isProbingLocal = false;

@@ -203,7 +203,7 @@ BatchReportSummary BatchInspector::processZipBuffer(
         item.filename = image_files[i].filename().string();
 
         if (!loaded_frames[i].empty()) {
-            // Reset tracker bawaan classifier agar frame independen tidak saling memengaruhi
+            // Reset internal classifier tracker so independent frames do not influence each other
             classifier.resetTracker();
 
             std::vector<bawal::vision::DetectionResult> detections;

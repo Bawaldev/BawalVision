@@ -242,10 +242,10 @@
                 formState.backendUrl = getConfiguredApiBase();
                 if (isHttps) {
                     localBackendMessage =
-                        'Browser HTTPS memblokir probe ke localhost HTTP. Buka frontend lokal di http://localhost:5173 (jalankan "just run-frontend"), atau masukkan LAN IP laptop.';
+                        'Browser HTTPS blocks HTTP localhost probes. Open the local frontend at http://localhost:5173 (run "just run-frontend"), or enter your laptop LAN IP.';
                 } else {
                     localBackendMessage =
-                        'Tidak ditemukan backend C++ di port 8080. Jalankan backend lokal dengan "just compose-up bawal_backend" atau "just run-backend" di terminal.';
+                        'No C++ backend found on port 8080. Start the local backend with "just compose-up bawal_backend" or "just run-backend" in your terminal.';
                 }
             }
         } finally {
