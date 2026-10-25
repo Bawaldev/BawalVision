@@ -5,6 +5,10 @@ export interface FoodDetection {
     status?: 'PASS' | 'REVIEW' | 'REJECT';
     box?: [number, number, number, number]; // [x, y, width, height]
     category?: 'Carbohydrate' | 'Protein' | 'Vegetable' | 'Fruit' | 'Side';
+    class_name?: string;
+    confidence?: number;
+    freshness?: number;
+    bbox?: number[];
 }
 
 export interface SceneOpticalMetrics {

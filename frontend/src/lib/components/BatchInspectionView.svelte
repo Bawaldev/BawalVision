@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
-    import { resolveApiBase } from '../backendConfig';
+    import { resolveApiBase, resolveApiOrigin } from '../backendConfig';
     import { downloadMarkdown, downloadMarkdownPdf } from '../utils/reportGenerator';
 
     const MAX_ZIP_BYTES = 15 * 1024 * 1024;
@@ -25,6 +25,7 @@
         t_safe_hours: number;
         annotated_url: string;
         annotated_data_url?: string;
+        local_blob_url?: string;
         detections: BatchDetection[];
         avg_similarity?: number;
         avg_quality?: number;
@@ -343,12 +344,13 @@
         if (it.annotated_data_url && it.annotated_data_url.startsWith('data:')) {
             return it.annotated_data_url;
         }
-        if (it.annotated_url && it.annotated_url.startsWith('data:')) {
-            return it.annotated_url;
+        const candidateUrl = it.annotated_url || it.local_blob_url;
+        if (candidateUrl && candidateUrl.startsWith('data:')) {
+            return candidateUrl;
         }
-        if (it.annotated_url && typeof fetch !== 'undefined') {
+        if (candidateUrl && typeof fetch !== 'undefined') {
             try {
-                const res = await fetch(it.annotated_url);
+                const res = await fetch(candidateUrl);
                 const blob = await res.blob();
                 return await new Promise<string>((resolve) => {
                     const reader = new FileReader();
@@ -357,14 +359,32 @@
                         it.annotated_data_url = resUrl;
                         resolve(resUrl);
                     };
-                    reader.onerror = () => resolve(it.annotated_url);
+                    reader.onerror = () => resolve(candidateUrl);
                     reader.readAsDataURL(blob);
                 });
             } catch {
-                return it.annotated_url;
+                if (it.local_blob_url && it.local_blob_url !== candidateUrl) {
+                    try {
+                        const res = await fetch(it.local_blob_url);
+                        const blob = await res.blob();
+                        return await new Promise<string>((resolve) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                const resUrl = (reader.result as string) || '';
+                                it.annotated_data_url = resUrl;
+                                resolve(resUrl);
+                            };
+                            reader.onerror = () => resolve(candidateUrl);
+                            reader.readAsDataURL(blob);
+                        });
+                    } catch {
+                        return candidateUrl;
+                    }
+                }
+                return candidateUrl;
             }
         }
-        return it.annotated_url;
+        return candidateUrl || '';
     }
 
     async function processBatchWithClientExtraction(file: File, startedAt: number) {
@@ -651,6 +671,30 @@
             }
 
             clearTimers();
+
+            // Extract local blobs from the uploaded ZIP so we have instant client-side thumbnail fallback
+            try {
+                const arrayBuf = await file.arrayBuffer();
+                const extracted = await extractImagesFromZip(arrayBuf);
+                const fileBlobMap = new Map<string, string>();
+                for (const ex of extracted) {
+                    const base = ex.filename.split('/').pop() || ex.filename;
+                    fileBlobMap.set(base, URL.createObjectURL(ex.blob));
+                }
+                const origin = resolveApiOrigin();
+                for (const it of payload.items || []) {
+                    const base = it.filename.split('/').pop() || it.filename;
+                    if (fileBlobMap.has(base)) {
+                        it.local_blob_url = fileBlobMap.get(base);
+                    }
+                    if (it.annotated_url && it.annotated_url.startsWith('/') && origin) {
+                        it.annotated_url = `${origin}${it.annotated_url}`;
+                    }
+                }
+            } catch (zipExtractErr) {
+                console.warn('Could not extract local blobs for thumbnail fallback:', zipExtractErr);
+            }
+
             summary = payload;
             elapsedMs = payload.processing_time_ms;
             stage = 'done';
@@ -1130,6 +1174,12 @@
                                         loading="lazy"
                                         onerror={() => markImageFailed(item.annotated_url)}
                                     />
+                                {:else if item.local_blob_url || item.annotated_data_url}
+                                    <img
+                                        src={item.local_blob_url || item.annotated_data_url}
+                                        alt={`Tray ${item.filename}`}
+                                        loading="lazy"
+                                    />
                                 {:else}
                                     <div class="thumb-fallback">
                                         <span class="fallback-icon">🗂️</span>
@@ -1137,8 +1187,8 @@
                                     </div>
                                 {/if}
 
-                                <!-- Dynamic AI Bounding Box HUD Overlay for Batch Extracted Tray (Only if image is not pre-annotated) -->
-                                {#if !item.annotated_url && item.detections && item.detections.length > 0}
+                                <!-- Dynamic AI Bounding Box HUD Overlay for Batch Extracted Tray (Only if image is not pre-annotated or if backend annotated image failed to load) -->
+                                {#if (!item.annotated_url || failedImages[item.annotated_url]) && (item.local_blob_url || item.annotated_data_url) && item.detections && item.detections.length > 0}
                                     <svg class="batch-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
                                         {#each item.detections as det, detIdx}
                                             {@const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null)}
