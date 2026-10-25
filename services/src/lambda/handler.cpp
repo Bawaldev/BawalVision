@@ -501,10 +501,14 @@ LambdaInspectionResponse VisionLambdaHandler::handleLocked(
         if (detection.class_name == "no_food" || detection.class_name == "no_model") {
             continue;
         }
+        const float spoilage = std::clamp(detection.spoilage.discoloration_ratio * 100.0f, 0.0f, 100.0f);
+        const float fresh = std::clamp(100.0f - spoilage, 0.0f, 100.0f);
         dto.detections.push_back({
             std::string(detection.class_name), detection.confidence,
             {detection.bbox.x, detection.bbox.y,
-             detection.bbox.width, detection.bbox.height}});
+             detection.bbox.width, detection.bbox.height},
+            spoilage,
+            fresh});
     }
 
     if (!output.annotated_image.empty()) {

@@ -13,6 +13,8 @@ struct DetectionItem {
     std::string class_name;
     float confidence{0.0F};
     std::array<int, 4> bbox{}; // x, y, width, height
+    float spoilage_score{0.0F};
+    float freshness{100.0F};
 };
 
 struct InspectionResponse {
@@ -111,7 +113,9 @@ struct glz::meta<bawal::server::DetectionItem> {
     static constexpr auto value = glz::object(
         "class_name", &T::class_name,
         "confidence", &T::confidence,
-        "bbox", &T::bbox);
+        "bbox", &T::bbox,
+        "spoilage_score", &T::spoilage_score,
+        "freshness", &T::freshness);
 };
 
 template <>
