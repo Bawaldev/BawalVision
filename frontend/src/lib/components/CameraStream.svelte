@@ -188,7 +188,29 @@
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
     let discoveredStreamUrl = $state('');
+    let manualEspStreamUrl = $state('');
     let isAttemptingLocalStream = $state(true);
+    let isHttpsDomain = $derived(typeof window !== 'undefined' && window.location.protocol === 'https:');
+
+    function connectManualEspStream() {
+        if (!manualEspStreamUrl.trim()) return;
+        let url = manualEspStreamUrl.trim();
+        if (!/^https?:\/\//i.test(url)) {
+            url = `http://${url}`;
+        }
+        if (!url.includes('/stream') && !url.includes(':8080')) {
+            url = url.replace(/\/+$/, '') + '/stream';
+        }
+        manualEspStreamUrl = url;
+        if (typeof localStorage !== 'undefined') {
+            try { localStorage.setItem('bawal_esp32_stream_url', url); } catch {}
+        }
+        discoveredStreamUrl = url;
+        streamError = false;
+        retryCount = 0;
+        streamEpoch = Date.now();
+        localBackendNotice = `Connecting to stream at <code>${url}</code>... If blocked on HTTPS, allow Insecure Content in site settings.`;
+    }
     let liveImgEl = $state<HTMLImageElement | null>(null);
     let isLiveFeedActive = $state(false);
     let isPushingLiveFrame = false;
@@ -429,6 +451,13 @@
             document.addEventListener('visibilitychange', handleVisibilityChange);
         }
         if (typeof localStorage !== 'undefined') {
+            const savedEspUrl = localStorage.getItem('bawal_esp32_stream_url');
+            if (savedEspUrl) {
+                manualEspStreamUrl = savedEspUrl;
+                if (!discoveredStreamUrl) {
+                    discoveredStreamUrl = savedEspUrl;
+                }
+            }
             const savedVideo = localStorage.getItem('bawal_mock_selected_video');
             if (savedVideo && savedVideo !== 'custom') {
                 selectedVideo = savedVideo;
@@ -1358,6 +1387,29 @@
                             </div>
                         {/if}
 
+                        <div class="esp-ip-connect-bar">
+                            <input
+                                type="text"
+                                bind:value={manualEspStreamUrl}
+                                placeholder="Enter ESP32 IP (e.g. 192.168.43.50 or http://192.168.43.50/stream)"
+                                class="esp-ip-input"
+                            />
+                            <button type="button" class="esp-ip-btn" onclick={connectManualEspStream}>
+                                ⚡ Connect ESP IP
+                            </button>
+                        </div>
+
+                        {#if isHttpsDomain}
+                            <div class="bypass-card">
+                                <h5>💡 Viewing Local ESP32 Stream on HTTPS Vercel (Mobile Chrome / Brave):</h5>
+                                <ol>
+                                    <li>Tap the <strong>Site Settings icon (tune / lock)</strong> beside <code>bawal-vision.vercel.app</code> in your phone address bar.</li>
+                                    <li>Tap <strong>Site settings</strong> &rarr; <strong>Insecure content</strong> &rarr; change to <strong>Allow</strong>.</li>
+                                    <li>Refresh the page. The ESP32 camera stream will load immediately without browser blocking!</li>
+                                </ol>
+                            </div>
+                        {/if}
+
                         <div class="standby-actions-row">
                             <button type="button" class="switch-mock-btn" onclick={() => setSourceMode('device_cam')}>
                                 📱 Use Phone Camera
@@ -2155,6 +2207,74 @@
     .local-backend-alert a {
         color: #93c5fd;
         text-decoration: underline;
+    }
+
+    .esp-ip-connect-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        max-width: 520px;
+        margin: 14px auto 4px auto;
+    }
+
+    .esp-ip-input {
+        flex: 1;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        color: #ffffff;
+        padding: 9px 12px;
+        font-size: 0.8rem;
+        border-radius: var(--radius-sm);
+        outline: none;
+        transition: border-color 0.15s ease;
+    }
+
+    .esp-ip-input:focus {
+        border-color: #38bdf8;
+    }
+
+    .esp-ip-btn {
+        background: #0284c7;
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 0.78rem;
+        border: none;
+        padding: 9px 16px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.15s ease, transform 0.15s ease;
+    }
+
+    .esp-ip-btn:hover {
+        background: #0369a1;
+        transform: translateY(-1px);
+    }
+
+    .bypass-card {
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        border-radius: var(--radius-sm);
+        padding: 12px 16px;
+        margin: 10px auto 6px auto;
+        max-width: 520px;
+        text-align: left;
+        font-size: 0.76rem;
+        color: #e2e8f0;
+    }
+
+    .bypass-card h5 {
+        margin: 0 0 6px 0;
+        color: #38bdf8;
+        font-size: 0.8rem;
+        font-weight: 700;
+    }
+
+    .bypass-card ol {
+        margin: 0;
+        padding-left: 20px;
+        line-height: 1.55;
     }
 
     .retry-btn {
