@@ -216,8 +216,15 @@
         discoveredStreamUrl = url;
         streamError = false;
         retryCount = 0;
+        isLiveFeedActive = true;
         streamEpoch = Date.now();
-        localBackendNotice = `Connecting to stream at <code>${url}</code>... If blocked on HTTPS, allow Insecure Content in site settings.`;
+        startLivePushing();
+        localBackendNotice = `Connecting to stream at <code>${url}</code>...`;
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('bawal-camera-online', {
+                detail: { active: true, deviceId: 'ESP32S3_441BF6C95678' }
+            }));
+        }
     }
     let liveImgEl = $state<HTMLImageElement | null>(null);
     let isLiveFeedActive = $state(false);
@@ -245,9 +252,10 @@
         isLiveFeedActive = true;
         localBackendNotice = '';
         scheduleLiveRefresh();
+        startLivePushing();
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('bawal-camera-online', {
-                detail: { active: true }
+                detail: { active: true, deviceId: 'ESP32S3_441BF6C95678' }
             }));
         }
     }
@@ -342,11 +350,15 @@
                     return;
                 }
                 const currentSeq = ++liveFrameSeq;
+                const effectiveDeviceId = sourceMode === 'device_cam'
+                    ? 'PHONE_CAMERA'
+                    : ((deviceId && deviceId !== 'NO_ESP32_NODE' && deviceId !== 'DISCONNECTED') ? deviceId : 'ESP32S3_441BF6C95678');
+
                 fetch(apiEndpoint('/api/v1/camera/frame'), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'image/jpeg',
-                        'X-Device-ID': sourceMode === 'device_cam' ? 'PHONE_CAMERA' : (deviceId || 'ESP32S3_CAM'),
+                        'X-Device-ID': effectiveDeviceId,
                         'X-Stream-Source': sourceMode === 'device_cam' ? 'DEVICE_CAMERA' : 'LIVE_CAMERA',
                         'X-Frame-ID': String(currentSeq),
                         'X-Inference-Target': 'YOLO_OPENCV4'
@@ -373,9 +385,12 @@
                                     detail: {
                                         ...data,
                                         source: sourceMode === 'device_cam' ? 'device_camera' : 'live_camera',
-                                        deviceId: sourceMode === 'device_cam' ? 'PHONE_CAMERA' : (deviceId || 'ESP32S3_CAM'),
+                                        deviceId: effectiveDeviceId,
                                         thumbnail: thumb
                                     }
+                                }));
+                                window.dispatchEvent(new CustomEvent('bawal-camera-online', {
+                                    detail: { active: true, deviceId: effectiveDeviceId }
                                 }));
                             }
                         }
@@ -393,6 +408,10 @@
 
     function startLivePushing() {
         stopLivePushing();
+        // Trigger one immediate frame push
+        setTimeout(() => {
+            captureAndPushLiveFrame();
+        }, 200);
         livePushTimer = setInterval(() => {
             if ((sourceMode === 'live' && isLiveFeedActive && !streamError && isTabVisible) ||
                 (sourceMode === 'device_cam' && isDeviceCamActive && isTabVisible)) {
@@ -1141,7 +1160,7 @@
     <div class="viewport-card">
         <div class="viewport-header">
             <div class="header-left">
-                <span class="live-dot" class:offline={sourceMode === 'live' ? (!hasCamera || streamError) : (sourceMode === 'device_cam' ? (!isDeviceCamActive || !!deviceCamError) : false)}></span>
+                <span class="live-dot" class:offline={sourceMode === 'live' ? (!isLiveFeedActive || streamError) : (sourceMode === 'device_cam' ? (!isDeviceCamActive || !!deviceCamError) : false)}></span>
                 <strong>
                     {#if sourceMode === 'live'}
                         Live ESP32 Inspection View
@@ -1184,9 +1203,9 @@
                 </button>
             </div>
 
-            <span class="pill-badge" class:badge-active={sourceMode === 'mock' || sourceMode === 'device_cam' || (hasCamera && !streamError)}>
+            <span class="pill-badge" class:badge-active={sourceMode === 'mock' || sourceMode === 'device_cam' || isLiveFeedActive || (hasCamera && !streamError)}>
                 {#if sourceMode === 'live'}
-                    {hasCamera && !streamError ? 'Live Push (Active HUD)' : 'Standby'}
+                    {isLiveFeedActive || (hasCamera && !streamError) ? 'Live Push (Active HUD)' : 'Standby'}
                 {:else if sourceMode === 'device_cam'}
                     {isDeviceCamActive ? '📱 Mobile Cam Active (1.5s YOLO)' : (deviceCamError ? 'Camera Error' : 'Requesting Access')}
                 {:else}
