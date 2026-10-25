@@ -167,13 +167,21 @@
 
     // Computed Stats for Upper-Right Card (Unavailable when ESP32-S3 is offline)
     let avgTemp = $derived.by(() => {
-        if (!isDeviceConnected || !displayHistory || displayHistory.length === 0) return null;
+        if (!isDeviceConnected) return null;
+        if (currentTelemetry?.temperature != null) {
+            return currentTelemetry.temperature.toFixed(1);
+        }
+        if (!displayHistory || displayHistory.length === 0) return null;
         const sum = displayHistory.reduce((acc, pt) => acc + (pt.temperature ?? 0), 0);
         return (sum / displayHistory.length).toFixed(1);
     });
 
     let avgCpu = $derived.by(() => {
-        if (!isDeviceConnected || !displayHistory || displayHistory.length === 0) return null;
+        if (!isDeviceConnected) return null;
+        if (currentTelemetry?.cpu_load != null) {
+            return String(currentTelemetry.cpu_load);
+        }
+        if (!displayHistory || displayHistory.length === 0) return null;
         const sum = displayHistory.reduce((acc, pt) => acc + (pt.cpu_load ?? 0), 0);
         return (sum / displayHistory.length).toFixed(0);
     });
@@ -798,7 +806,7 @@
                     <span class="metric-label">Device</span>
                     <div class="value-box mono">
                         <span class="value-text" class:offline-val={!isDeviceConnected}>
-                            {isDeviceConnected ? (currentTelemetry?.device_id || 'ESP32-S3').slice(0, 14) : 'Disconnected'}
+                            {isDeviceConnected ? (currentTelemetry?.device_id || 'ESP32-S3') : 'Disconnected'}
                         </span>
                     </div>
                 </div>

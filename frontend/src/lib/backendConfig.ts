@@ -82,7 +82,21 @@ export async function detectLocalBackend(timeoutMs = 1500): Promise<string | nul
         candidates.add(stored);
     }
 
-    // 2. Prioritize local C++ backend on port 8080 (where real ESP32 telemetry arrives)
+    // 2. Check stream URL host stored in localStorage (e.g. from camera stream connection)
+    try {
+        const streamUrl = localStorage.getItem('bawal_esp32_stream_url');
+        if (streamUrl) {
+            const match = streamUrl.match(/https?:\/\/([^/:]+)/i);
+            if (match && match[1]) {
+                candidates.add(`http://${match[1]}:8080/api/v1`);
+            }
+        }
+    } catch {}
+
+    // 3. Known host Wi-Fi/Hotspot IP where C++ backend & ESP32 telemetry run
+    candidates.add('http://10.105.56.144:8080/api/v1');
+
+    // 4. Prioritize local C++ backend on port 8080 (where real ESP32 telemetry arrives)
     candidates.add('http://localhost:8080/api/v1');
     candidates.add('http://127.0.0.1:8080/api/v1');
 

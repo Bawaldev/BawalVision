@@ -225,6 +225,39 @@
                 detail: { active: true, deviceId: 'ESP32S3_441BF6C95678' }
             }));
         }
+
+        // Concurrently probe the active C++ backend on port 8080 to sync real ESP-IDF hardware telemetry
+        const hostMatch = url.match(/https?:\/\/([^/:]+)/i);
+        const host = hostMatch ? hostMatch[1] : '';
+        const backendCandidates = [
+            host ? `http://${host}:8080/api/v1` : '',
+            'http://10.105.56.144:8080/api/v1',
+            'http://localhost:8080/api/v1',
+            'http://127.0.0.1:8080/api/v1'
+        ].filter(Boolean);
+
+        (async () => {
+            for (const cand of backendCandidates) {
+                try {
+                    const c = new AbortController();
+                    const to = setTimeout(() => c.abort(), 1200);
+                    const r = await fetch(`${cand}/telemetry/latest`, { signal: c.signal, cache: 'no-store' });
+                    clearTimeout(to);
+                    if (r.ok) {
+                        const data = await r.json().catch(() => null);
+                        if (data && (data.is_connected || data.temperature != null)) {
+                            setConfiguredApiBase(cand);
+                            activeApiBase = cand;
+                            if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('bawal-backend-updated', { detail: cand }));
+                            }
+                            localBackendNotice = `✓ Live camera stream connected! Real ESP-IDF hardware telemetry active from <code>${cand}</code> (${data.device_id || 'ESP32S3_441BF6C95678'}).`;
+                            break;
+                        }
+                    }
+                } catch {}
+            }
+        })();
     }
     let liveImgEl = $state<HTMLImageElement | null>(null);
     let isLiveFeedActive = $state(false);

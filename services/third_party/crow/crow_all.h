@@ -13672,6 +13672,7 @@ namespace crow
             set_header_no_override("Access-Control-Allow-Headers", headers_, res);
             set_header_no_override("Access-Control-Expose-Headers", exposed_headers_, res);
             set_header_no_override("Access-Control-Max-Age", max_age_, res);
+            set_header_no_override("Access-Control-Allow-Private-Network", "true", res);
 
             bool origin_set = false;
 

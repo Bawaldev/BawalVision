@@ -264,13 +264,31 @@
 
         try {
             // Parallel fetch: engine status, camera status, telemetry, and live inspections
-            const [engines, cam, tel, latestLive, allRecords] = await Promise.all([
+            let [engines, cam, tel, latestLive, allRecords] = await Promise.all([
                 shouldRunSlowPoll ? fetchEngineStatus(systemConfig.backendUrl) : Promise.resolve(null),
                 fetchCameraStatus(systemConfig.backendUrl),
                 fetchLatestTelemetry(systemConfig.backendUrl),
                 fetchLatestInspection(systemConfig.backendUrl),
                 shouldRunSlowPoll ? fetchRecords(systemConfig.backendUrl) : Promise.resolve(null)
             ]);
+
+            // If current backend returned no active telemetry, probe local/LAN C++ backends where real ESP32-S3 data arrives
+            if ((!tel || !tel.is_connected || tel.temperature == null) && typeof window !== 'undefined') {
+                const localBase = await detectLocalBackend(1000);
+                if (localBase && localBase !== systemConfig.backendUrl) {
+                    systemConfig.backendUrl = localBase;
+                    const [localTel, localLive] = await Promise.all([
+                        fetchLatestTelemetry(localBase),
+                        fetchLatestInspection(localBase)
+                    ]);
+                    if (localTel && (localTel.is_connected || localTel.temperature != null)) {
+                        tel = localTel;
+                    }
+                    if (localLive) {
+                        latestLive = localLive;
+                    }
+                }
+            }
 
             // 1. Hardware Engine Status
             if (engines) {
@@ -319,11 +337,11 @@
                 isOnline = cam.active || isCameraStreamingActive;
                 telemetry = {
                     ...telemetry,
-                    device_id: isCameraStreamingActive ? 'ESP32S3_441BF6C95678' : (cam.active && cam.deviceId ? cam.deviceId : 'DISCONNECTED'),
-                    temperature: isCameraStreamingActive ? (telemetry.temperature || 28.5) : null,
-                    cpu_temperature: isCameraStreamingActive ? (telemetry.cpu_temperature || 50.8) : null,
-                    cpu_load: isCameraStreamingActive ? (telemetry.cpu_load || 18) : null,
-                    is_connected: isCameraStreamingActive
+                    device_id: isCameraStreamingActive ? (telemetry.device_id || 'ESP32S3_441BF6C95678') : (cam.active && cam.deviceId ? cam.deviceId : 'DISCONNECTED'),
+                    temperature: telemetry.temperature ?? null,
+                    cpu_temperature: telemetry.cpu_temperature ?? null,
+                    cpu_load: telemetry.cpu_load ?? null,
+                    is_connected: isCameraStreamingActive && telemetry.temperature != null
                 };
             }
 

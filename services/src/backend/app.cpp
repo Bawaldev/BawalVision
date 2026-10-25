@@ -497,7 +497,7 @@ void BackendApp::configure() {
                  "X-ESP-Temp", "X-ESP-CPU-Load", "X-Camera-Model",
                  "X-Stream-Source", "X-Telemetry-Struct", "X-Inspection-Source",
                  "X-Inspection-Struct", "X-Mock-Video-Source", "X-Mock-Video-UUID",
-                 "X-Is-Rewind", "X-Video-Rewind")
+                 "X-Is-Rewind", "X-Video-Rewind", "Access-Control-Request-Private-Network")
         .expose("X-Stream-Source", "X-Telemetry-Struct", "X-Mock-Video-UUID",
                 "X-Report-Format");
 
