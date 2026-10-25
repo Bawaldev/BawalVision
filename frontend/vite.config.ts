@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
 			sveltekit()
 		],
 		server: {
+			host: true,
 			proxy: {
 				'/api': {
 					target: env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080',
@@ -29,6 +30,7 @@ export default defineConfig(({ mode }) => {
 			}
 		},
 		preview: {
+			host: true,
 			proxy: {
 				'/api': {
 					target: backendTarget,
