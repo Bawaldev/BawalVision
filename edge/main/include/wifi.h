@@ -40,7 +40,7 @@ extern "C" {
 #endif
 
 #ifndef CONFIG_DEVICE_AUTH_TOKEN
-#define CONFIG_DEVICE_AUTH_TOKEN "bawal_secure_token_prod"
+#define CONFIG_DEVICE_AUTH_TOKEN ""
 #endif
 
 #define URL_BUFFER_SIZE 128

@@ -165,6 +165,15 @@ void MjpegIngress::run() {
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &context);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+
+        struct curl_slist* headers = nullptr;
+        const char* device_token = std::getenv("BAWAL_DEVICE_TOKEN");
+        if (device_token != nullptr && *device_token != '\0') {
+            const std::string header_str = std::string("X-Device-Token: ") + device_token;
+            headers = curl_slist_append(headers, header_str.c_str());
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        }
+
         // The ESP32 may accept TCP and then send nothing (camera stalled or
         // client limit reached). Drop that connection quickly instead of
         // holding the only pull slot forever.
@@ -176,6 +185,9 @@ void MjpegIngress::run() {
         const CURLcode result = curl_easy_perform(curl);
         long http_status = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+        if (headers != nullptr) {
+            curl_slist_free_all(headers);
+        }
         if (!shouldStop(generation) && !m_state.mockMode()) {
             if (result != CURLE_OK) {
                 std::cerr << "[WARN] MJPEG pull from " << peer << " stopped: "

@@ -63,9 +63,26 @@ int main() {
     std::cout << "[INFO] BawalVision C++ Backend initializing...\n";
     std::cout << "[INFO] OpenCV Version: " << CV_VERSION << " (Verified OpenCV4 Modern Pipeline)\n";
 
+    const bool lan_mode = (envOr("BAWAL_LAN_MODE", "0") == "1");
     bawal::backend::ServerConfig config;
-    config.bind_address = envOr("CROW_BIND", "0.0.0.0");
+    config.lan_mode = lan_mode;
+    const std::string default_bind = lan_mode ? "0.0.0.0" : "127.0.0.1";
+    config.bind_address = envOr("CROW_BIND", default_bind.c_str());
     config.port = envPort();
+    config.device_token = envOr("BAWAL_DEVICE_TOKEN", "");
+    config.admin_token = envOr("BAWAL_ADMIN_TOKEN", "");
+
+    if (lan_mode) {
+        std::cout << "[INFO] LAN Mode enabled: binding " << config.bind_address << " for IoT nodes\n";
+    } else {
+        std::cout << "[INFO] Localhost Mode: binding " << config.bind_address << " (set BAWAL_LAN_MODE=1 for LAN ingress)\n";
+    }
+    if (!config.device_token.empty()) {
+        std::cout << "[INFO] Device auth enabled: X-Device-Token verification active\n";
+    }
+    if (!config.admin_token.empty()) {
+        std::cout << "[INFO] Admin auth enabled: X-Admin-Token verification active for control endpoints\n";
+    }
 
     bawal::ipc::ShmProducer producer;
     if (!producer.init()) {

@@ -4,16 +4,62 @@ import { env } from '$env/dynamic/private';
 let warnedMissingLambdaToken = false;
 let warnedApiGatewaySigV4 = false;
 
+function getAllowedOrigin(requestOrigin: string | null, requestUrl: URL): string | null {
+    if (!requestOrigin) return null;
+    try {
+        const originUrl = new URL(requestOrigin);
+        // Allow same host (e.g. deployed domain)
+        if (originUrl.host === requestUrl.host) {
+            return requestOrigin;
+        }
+        // Allow local dev origins
+        if (originUrl.hostname === 'localhost' || originUrl.hostname === '127.0.0.1') {
+            return requestOrigin;
+        }
+    } catch {
+        return null;
+    }
+    return null;
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
+    const originHeader = event.request.headers.get('origin');
+    const allowedOrigin = getAllowedOrigin(originHeader, event.url);
+
+    // Preflight OPTIONS handler with strict origin check (No wildcard '*')
     if (event.request.method === 'OPTIONS') {
+        const effectiveOrigin = allowedOrigin || event.url.origin;
         return new Response(null, {
             status: 204,
             headers: {
-                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Origin': effectiveOrigin,
                 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS, HEAD',
-                'Access-Control-Allow-Headers': '*'
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token, X-Device-Token, X-Requested-With',
+                'Vary': 'Origin'
             }
         });
+    }
+
+    // CSRF & Cross-Site protection for mutating methods
+    const isMutatingMethod = ['POST', 'PUT', 'DELETE', 'PATCH'].includes(event.request.method);
+    if (isMutatingMethod) {
+        const secFetchSite = event.request.headers.get('sec-fetch-site');
+        if (secFetchSite === 'cross-site') {
+            return new Response(JSON.stringify({
+                error: 'Forbidden: Cross-site requests are rejected by CSRF protection'
+            }), {
+                status: 403,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+        if (originHeader && !allowedOrigin) {
+            return new Response(JSON.stringify({
+                error: 'Forbidden: Cross-origin mutating requests blocked'
+            }), {
+                status: 403,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
     }
 
     if (event.url.pathname.startsWith('/api/v1/examples/file/')) {
@@ -28,6 +74,9 @@ export const handle: Handle = async ({ event, resolve }) => {
         const backendUrl = env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080';
         const lambdaAuthToken = env.BAWAL_LAMBDA_AUTH_TOKEN ||
             (globalThis as any).process?.env?.BAWAL_LAMBDA_AUTH_TOKEN || '';
+        const adminToken = env.BAWAL_ADMIN_TOKEN ||
+            (globalThis as any).process?.env?.BAWAL_ADMIN_TOKEN || '';
+
         const isLambdaBackend = backendUrl.includes('execute-api') || backendUrl.includes('lambda-url');
         if (isLambdaBackend && !lambdaAuthToken && !warnedMissingLambdaToken) {
             warnedMissingLambdaToken = true;
@@ -45,10 +94,13 @@ export const handle: Handle = async ({ event, resolve }) => {
         }
         const target = `${backendUrl}${targetPath}${event.url.search}`;
 
-        const jsonHeaders = {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
+        const jsonHeaders: Record<string, string> = {
+            'Content-Type': 'application/json'
         };
+        if (allowedOrigin) {
+            jsonHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
+            jsonHeaders['Vary'] = 'Origin';
+        }
 
         const proxyHeaders = new Headers(event.request.headers);
         proxyHeaders.delete('host');
@@ -56,6 +108,10 @@ export const handle: Handle = async ({ event, resolve }) => {
         if (lambdaAuthToken) {
             proxyHeaders.set('x-bawal-token', lambdaAuthToken);
         }
+        if (adminToken) {
+            proxyHeaders.set('x-admin-token', adminToken);
+        }
+
         let requestBody: ArrayBuffer | undefined;
         try {
             requestBody = ['GET', 'HEAD'].includes(event.request.method)
@@ -95,7 +151,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 
             const headers = new Headers(res.headers);
             headers.delete('content-encoding');
-            headers.set('Access-Control-Allow-Origin', '*');
+            headers.delete('access-control-allow-origin');
+            if (allowedOrigin) {
+                headers.set('Access-Control-Allow-Origin', allowedOrigin);
+                headers.set('Vary', 'Origin');
+            }
 
             return new Response(res.body, {
                 status: res.status,

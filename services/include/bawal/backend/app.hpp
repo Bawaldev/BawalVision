@@ -29,8 +29,11 @@ namespace bawal::backend {
 class Database;
 
 struct ServerConfig {
-    std::string bind_address{"0.0.0.0"};
+    std::string bind_address{"127.0.0.1"};
     uint16_t port{8080};
+    bool lan_mode{false};
+    std::string device_token;
+    std::string admin_token;
 };
 
 /**
@@ -93,6 +96,12 @@ public:
      * 503 so the regular backend can still run without a serverless handler.
      */
     void setLambdaHandler(bawal::lambda::LambdaRuntimeHandler* handler) noexcept;
+
+    /** Verify device token for frame and telemetry ingress. */
+    [[nodiscard]] bool verifyDeviceAuth(const crow::request& req) const noexcept;
+
+    /** Verify admin token for hardware actuation, config changes, and device resets. */
+    [[nodiscard]] bool verifyAdminAuth(const crow::request& req) const noexcept;
 
     [[nodiscard]] crow::App<crow::CORSHandler>& app() noexcept { return m_app; }
 

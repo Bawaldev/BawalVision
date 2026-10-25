@@ -488,11 +488,49 @@ void BackendApp::setLambdaHandler(
     m_lambda_handler = handler;
 }
 
+bool BackendApp::verifyDeviceAuth(const crow::request& req) const noexcept {
+    if (m_config.device_token.empty()) {
+        return true;
+    }
+    const std::string dev_token = req.get_header_value("X-Device-Token");
+    if (!dev_token.empty() && dev_token == m_config.device_token) {
+        return true;
+    }
+    const std::string auth = req.get_header_value("Authorization");
+    if (auth.rfind("Bearer ", 0) == 0 && auth.substr(7) == m_config.device_token) {
+        return true;
+    }
+    if (!m_config.admin_token.empty()) {
+        const std::string admin_token = req.get_header_value("X-Admin-Token");
+        if ((!admin_token.empty() && admin_token == m_config.admin_token) ||
+            (auth.rfind("Bearer ", 0) == 0 && auth.substr(7) == m_config.admin_token)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool BackendApp::verifyAdminAuth(const crow::request& req) const noexcept {
+    if (m_config.admin_token.empty()) {
+        return true;
+    }
+    const std::string admin_token = req.get_header_value("X-Admin-Token");
+    if (!admin_token.empty() && admin_token == m_config.admin_token) {
+        return true;
+    }
+    const std::string auth = req.get_header_value("Authorization");
+    if (auth.rfind("Bearer ", 0) == 0 && auth.substr(7) == m_config.admin_token) {
+        return true;
+    }
+    return false;
+}
+
 void BackendApp::configure() {
     auto& cors = m_app.get_middleware<crow::CORSHandler>();
     cors.global()
         .methods(crow::HTTPMethod::Get, crow::HTTPMethod::Post, crow::HTTPMethod::Options)
         .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Device-ID",
+                 "X-Device-Token", "X-Admin-Token", "X-Frame-ID", "X-Width", "X-Height",
                  "X-Device-Token", "X-Frame-ID", "X-Width", "X-Height",
                  "X-ESP-Temp", "X-ESP-CPU-Load", "X-Camera-Model",
                  "X-Stream-Source", "X-Telemetry-Struct", "X-Inspection-Source",
@@ -557,6 +595,10 @@ void BackendApp::registerRoutes() {
 void BackendApp::registerCameraRoutes() {
     CROW_ROUTE(m_app, "/api/v1/camera/frame")
         .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyDeviceAuth(req)) {
+                return jsonError(401, "Unauthorized: missing or invalid X-Device-Token");
+            }
+
             const auto parsed = parseFrameIngress(req);
             if (!parsed) {
                 return jsonError(400, "Empty frame body or invalid image payload");
@@ -888,6 +930,10 @@ void BackendApp::registerTelemetryRoutes() {
 
     CROW_ROUTE(m_app, "/api/v1/telemetry")
         .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyDeviceAuth(req)) {
+                return jsonError(401, "Unauthorized: missing or invalid X-Device-Token");
+            }
+
             const auto doc = crow::json::load(req.body);
             if (!doc) {
                 return jsonError(400, "Invalid JSON telemetry payload");
@@ -1656,6 +1702,10 @@ void BackendApp::registerExampleRoutes() {
 
 void BackendApp::registerCompatibilityRoutes() {
     const auto camera_mode = [this](const crow::request& req) {
+        if (!verifyAdminAuth(req)) {
+            return jsonError(401, "Unauthorized: missing or invalid X-Admin-Token");
+        }
+
         std::string mode = "live";
         try {
             const auto doc = crow::json::load(req.body);
@@ -1685,7 +1735,11 @@ void BackendApp::registerCompatibilityRoutes() {
         .methods(crow::HTTPMethod::Post)(camera_mode);
 
     CROW_ROUTE(m_app, "/api/v1/devices/mock/reset")
-        .methods(crow::HTTPMethod::Post)([this]() {
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyAdminAuth(req)) {
+                return jsonError(401, "Unauthorized: missing or invalid X-Admin-Token");
+            }
+
             m_state.requestTrackerReset();
             crow::json::wvalue body;
             body["success"] = true;
@@ -1693,7 +1747,11 @@ void BackendApp::registerCompatibilityRoutes() {
             return crow::response(body);
         });
 
-    const auto manual_inspection = [this](const crow::request&) {
+    const auto manual_inspection = [this](const crow::request& req) {
+        if (!verifyAdminAuth(req)) {
+            return jsonError(401, "Unauthorized: missing or invalid X-Admin-Token");
+        }
+
         const InspectionView inspection = m_state.inspection();
         bool saved = false;
         if (m_database != nullptr && inspection.valid) {
@@ -1949,7 +2007,11 @@ void BackendApp::registerDeviceRoutes() {
     CROW_ROUTE(m_app, "/api/v1/devices/wifi/scan")(wifi_networks_handler);
 
     CROW_ROUTE(m_app, "/api/v1/devices/usb/probe")
-        .methods(crow::HTTPMethod::Post)([](const crow::request& req) {
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyAdminAuth(req)) {
+                return jsonError(401, "Unauthorized: missing or invalid X-Admin-Token");
+            }
+
             std::string requested;
             const auto doc = crow::json::load(req.body);
             if (doc && doc.has("port") && doc["port"].t() == crow::json::type::String) {
@@ -2012,6 +2074,10 @@ void BackendApp::registerDeviceRoutes() {
 
     CROW_ROUTE(m_app, "/api/v1/devices/connect")
         .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyAdminAuth(req)) {
+                return jsonError(401, "Unauthorized: missing or invalid X-Admin-Token");
+            }
+
             std::string requested_id;
             std::string requested_port;
             const auto doc = crow::json::load(req.body);
@@ -2110,7 +2176,11 @@ void BackendApp::registerDeviceRoutes() {
         });
 
     CROW_ROUTE(m_app, "/api/v1/devices/usb/provision")
-        .methods(crow::HTTPMethod::Post)([](const crow::request& req) {
+        .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyAdminAuth(req)) {
+                return jsonError(401, "Unauthorized: missing or invalid X-Admin-Token");
+            }
+
             std::string port;
             std::string ssid;
             std::string password;
@@ -2248,6 +2318,10 @@ void BackendApp::registerDeviceRoutes() {
 
     CROW_ROUTE(m_app, "/api/v1/devices/disconnect")
         .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyAdminAuth(req)) {
+                return jsonError(401, "Unauthorized: missing or invalid X-Admin-Token");
+            }
+
             std::string device_id;
             const auto doc = crow::json::load(req.body);
             if (doc && doc.has("device_id") && doc["device_id"].t() == crow::json::type::String) {

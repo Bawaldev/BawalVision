@@ -876,7 +876,42 @@ static void mjpeg_stream_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+static bool is_request_authorized(httpd_req_t *req) {
+    if (CONFIG_DEVICE_AUTH_TOKEN[0] == '\0') {
+        return true;
+    }
+    char buf[128] = {0};
+    if (httpd_req_get_hdr_value_str(req, "X-Device-Token", buf, sizeof(buf)) == ESP_OK) {
+        if (strcmp(buf, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
+            return true;
+        }
+    }
+    if (httpd_req_get_hdr_value_str(req, "Authorization", buf, sizeof(buf)) == ESP_OK) {
+        if (strncmp(buf, "Bearer ", 7) == 0 && strcmp(buf + 7, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
+            return true;
+        }
+    }
+    size_t query_len = httpd_req_get_url_query_len(req);
+    if (query_len > 0 && query_len < sizeof(buf)) {
+        if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+            char param[64] = {0};
+            if (httpd_query_key_value(buf, "token", param, sizeof(param)) == ESP_OK) {
+                if (strcmp(param, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 static esp_err_t stream_handler(httpd_req_t *req) {
+    if (!is_request_authorized(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"error\":\"Unauthorized: missing or invalid device token\"}");
+    }
+
     int active = atomic_load(&s_mjpeg_clients);
     if (active >= MJPEG_CLIENT_LIMIT) {
         httpd_resp_set_status(req, "503 Service Unavailable");
@@ -979,6 +1014,12 @@ static esp_err_t status_handler(httpd_req_t *req) {
 }
 
 static esp_err_t config_handler(httpd_req_t *req) {
+    if (!is_request_authorized(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"error\":\"Unauthorized: missing or invalid device token\"}");
+    }
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
