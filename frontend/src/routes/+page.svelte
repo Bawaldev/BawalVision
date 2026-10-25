@@ -437,6 +437,7 @@
             window.addEventListener('bawal-clear-detections', handleClearDetections);
             window.addEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
             window.addEventListener('bawal-camera-online', handleCameraOnline as EventListener);
+            window.addEventListener('bawal-backend-updated', handleBackendUpdated as EventListener);
         }
 
         // Prefer a local C++ backend for live camera/SIMD when the cloud UI can
@@ -514,6 +515,14 @@
         }
     }
 
+    function handleBackendUpdated(e: Event) {
+        const url = (e as CustomEvent<string>).detail;
+        if (url) {
+            systemConfig.backendUrl = url;
+            void pollBackendData();
+        }
+    }
+
     function handleClearDetections() {
         detections = [];
     }
@@ -527,6 +536,7 @@
             window.removeEventListener('bawal-clear-detections', handleClearDetections);
             window.removeEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
             window.removeEventListener('bawal-camera-online', handleCameraOnline as EventListener);
+            window.removeEventListener('bawal-backend-updated', handleBackendUpdated as EventListener);
         }
     });
 

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
-    import { resolveApiBase } from '../backendConfig';
+    import { resolveApiBase, setConfiguredApiBase } from '../backendConfig';
     import type { FoodDetection, SceneOpticalMetrics } from '../types';
 
     interface Props {
@@ -294,12 +294,18 @@
             clearTimeout(timeout);
 
             if (res.ok) {
+                setConfiguredApiBase('http://localhost:8080/api/v1');
                 discoveredStreamUrl = 'http://localhost:8080/api/v1/camera/stream';
                 isAttemptingLocalStream = true;
                 streamError = false;
                 retryCount = 0;
                 streamEpoch = Date.now();
-                localBackendNotice = '✓ Local C++ backend connected! Loading MJPEG stream...';
+                localBackendNotice = '✓ Local C++ backend connected! Live MJPEG stream and real hardware telemetry active.';
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('bawal-backend-updated', {
+                        detail: 'http://localhost:8080/api/v1'
+                    }));
+                }
             } else {
                 localBackendNotice = '⚠️ Backend at localhost:8080 responded with an error. Verify bawal_backend is running.';
             }

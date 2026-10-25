@@ -71,31 +71,38 @@ async function probeCrowBackend(apiBase: string, timeoutMs: number): Promise<boo
     }
 }
 
-export async function detectLocalBackend(timeoutMs = 1200): Promise<string | null> {
+export async function detectLocalBackend(timeoutMs = 1500): Promise<string | null> {
     if (typeof window === 'undefined') return null;
 
-    if (await probeCrowBackend(DEFAULT_API_BASE, timeoutMs)) {
-        return DEFAULT_API_BASE;
-    }
-
     const candidates = new Set<string>();
+
+    // 1. Check if user configured a custom backend in localStorage
     const stored = getConfiguredApiBase();
-    if (stored !== DEFAULT_API_BASE) {
+    if (stored && stored !== DEFAULT_API_BASE) {
         candidates.add(stored);
     }
+
+    // 2. Prioritize local C++ backend on port 8080 (where real ESP32 telemetry arrives)
     candidates.add('http://localhost:8080/api/v1');
     candidates.add('http://127.0.0.1:8080/api/v1');
 
     const hostname = window.location.hostname;
-    if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1' && !hostname.endsWith('.vercel.app')) {
         candidates.add(`http://${hostname}:8080/api/v1`);
     }
 
+    // Probe local backends first!
     for (const candidate of candidates) {
         if (await probeCrowBackend(candidate, timeoutMs)) {
             setConfiguredApiBase(candidate);
             return normalizeApiBase(candidate);
         }
     }
+
+    // 3. Fallback to cloud default (/api/v1) if no local backend is reachable
+    if (await probeCrowBackend(DEFAULT_API_BASE, timeoutMs)) {
+        return DEFAULT_API_BASE;
+    }
+
     return null;
 }
