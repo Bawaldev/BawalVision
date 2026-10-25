@@ -98,10 +98,12 @@ export const handle: Handle = async ({ event, resolve }) => {
             }
             if (path.includes('/system/engines')) {
                 return new Response(JSON.stringify({
-                    arch: 'cloud-serverless',
-                    graviton_available: false,
-                    local_engine_available: true,
-                    cloud_mode: true
+                    arch: 'aarch64_graviton3',
+                    graviton_available: true,
+                    local_engine_available: false,
+                    cloud_lambda_active: true,
+                    cloud_mode: true,
+                    runtime: 'aws_lambda_cpp'
                 }), { status: 200, headers: jsonHeaders });
             }
             if (path.includes('/camera/status') || path.includes('/camera/active')) {

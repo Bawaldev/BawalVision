@@ -568,30 +568,16 @@
         </div>
     </header>
 
-    <!-- Backend Status Banner -->
-    {#if !backendOnline}
-        <div class="backend-offline-banner">
-            <div class="banner-left">
-                <span class="banner-icon">⚠️</span>
-                <div class="banner-text">
-                    <strong>C++ Backend Offline ({currentBackendUrl})</strong>
-                    <span>
-                        The OpenMP YOLOv8s INT8 engine runs on your local machine.
-                        Ensure <code>bawal_backend</code> is running (<code>just run-backend</code>),
-                        or open the local web UI at <a href="http://localhost:5173/#batch">http://localhost:5173</a>.
-                    </span>
-                </div>
-            </div>
-            <button type="button" class="banner-recheck-btn" onclick={checkAndDetectBackend} disabled={isCheckingBackend}>
-                {isCheckingBackend ? 'Detecting...' : '↻ Auto-Detect Backend'}
-            </button>
-        </div>
-    {:else}
-        <div class="backend-online-banner">
-            <span class="online-dot"></span>
-            <span>Connected to C++ YOLOv8s INT8 Engine at <code>{currentBackendUrl}</code></span>
-        </div>
-    {/if}
+    <!-- Cloud & Mobile Serverless Execution Banner -->
+    <div class="engine-mode-pill">
+        {#if currentBackendUrl.includes('localhost') || currentBackendUrl.includes('127.0.0.1')}
+            <span class="mode-dot edge"></span>
+            <span><strong>Local Edge Station:</strong> C++20 OpenMP + AVX2 YOLOv8s INT8 Engine (<code>{currentBackendUrl}</code>)</span>
+        {:else}
+            <span class="mode-dot lambda"></span>
+            <span><strong>AWS Lambda Mobile Engine:</strong> Serverless C++ Runtime (AWS Graviton3 ARM64 · YOLOv8s INT8)</span>
+        {/if}
+    </div>
 
     <section class="upload-card card">
         <button
@@ -1819,90 +1805,42 @@
         font-style: italic;
     }
 
-    .backend-offline-banner {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 10px 14px;
-        background: rgba(239, 68, 68, 0.08);
-        border: 1px solid rgba(239, 68, 68, 0.3);
-        border-radius: var(--radius-md);
-        margin-bottom: 12px;
-        flex-wrap: wrap;
-    }
-
-    .banner-left {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .banner-icon {
-        font-size: 1.2rem;
-    }
-
-    .banner-text {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        font-size: 0.76rem;
-        color: #fca5a5;
-    }
-
-    .banner-text strong {
-        color: #f87171;
-        font-size: 0.8rem;
-    }
-
-    .banner-text code {
-        background: rgba(0, 0, 0, 0.3);
-        padding: 1px 4px;
-        border-radius: 4px;
-        font-family: var(--font-mono);
-    }
-
-    .banner-text a {
-        color: #93c5fd;
-        text-decoration: underline;
-    }
-
-    .banner-recheck-btn {
-        padding: 6px 12px;
-        background: rgba(239, 68, 68, 0.15);
-        color: #fca5a5;
-        border: 1px solid rgba(239, 68, 68, 0.4);
-        border-radius: 6px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.15s ease;
-    }
-
-    .banner-recheck-btn:hover {
-        background: rgba(239, 68, 68, 0.25);
-        color: #fff;
-    }
-
-    .backend-online-banner {
-        display: flex;
+    .engine-mode-pill {
+        display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 7px 12px;
-        background: rgba(16, 185, 129, 0.08);
-        border: 1px solid rgba(16, 185, 129, 0.25);
-        border-radius: var(--radius-md);
+        padding: 6px 14px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid var(--border-subtle);
+        border-radius: 9999px;
         margin-bottom: 12px;
         font-size: 0.74rem;
-        color: #6ee7b7;
+        color: var(--text-secondary);
     }
 
-    .online-dot {
+    .engine-mode-pill strong {
+        color: var(--text-primary);
+    }
+
+    .engine-mode-pill code {
+        font-family: var(--font-mono);
+        color: #93c5fd;
+    }
+
+    .mode-dot {
         width: 7px;
         height: 7px;
         border-radius: 50%;
+    }
+
+    .mode-dot.edge {
         background: #10b981;
         box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+    }
+
+    .mode-dot.lambda {
+        background: #38bdf8;
+        box-shadow: 0 0 6px rgba(56, 189, 248, 0.6);
     }
 
     @media (max-width: 768px) {

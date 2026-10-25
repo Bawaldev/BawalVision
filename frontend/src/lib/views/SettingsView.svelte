@@ -418,7 +418,7 @@
         if (raw && raw !== '/api/v1' && raw !== '/api/v1/') {
             const hostPart = raw.replace(/^https?:\/\//i, '').replace(/[:/].*$/, '').trim();
             if (hostPart !== 'localhost' && hostPart !== '127.0.0.1') {
-                if (hostPart.includes('.')) {
+                if (/^[\d.]+$/.test(hostPart)) {
                     const octets = hostPart.split('.');
                     if (octets.length !== 4 || octets.some(o => !/^\d+$/.test(o) || Number(o) < 0 || Number(o) > 255)) {
                         localBackendMessage = `⚠️ Invalid IP address "${hostPart}": Expected 4 octets between 0-255 (e.g. 192.168.1.100).`;
@@ -1471,6 +1471,17 @@
                             <p class="fedora-subtext">Specifies where this web dashboard running in your browser fetches AI inference results, batch audits, and inspection reports</p>
                         </div>
                     </div>
+                    <button
+                        type="button"
+                        class="fedora-pill-btn"
+                        onclick={() => {
+                            formState.backendUrl = '/api/v1';
+                            applyLiveBackendUrl();
+                        }}
+                        title="Use AWS Lambda Cloud Serverless Mode for mobile deployment"
+                    >
+                        ☁️ AWS Lambda (Cloud / Mobile)
+                    </button>
                     <button
                         type="button"
                         class="fedora-pill-btn"

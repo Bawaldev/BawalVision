@@ -2,9 +2,25 @@ export const DEFAULT_API_BASE = '/api/v1';
 
 const STORAGE_KEY = 'bawal_backend_url';
 
+export function isValidBackendHost(url: string | null | undefined): boolean {
+    if (!url) return false;
+    const value = url.trim();
+    if (!value || value === DEFAULT_API_BASE || value === `${DEFAULT_API_BASE}/`) return true;
+    const cleaned = value.replace(/^https?:\/\//i, '').replace(/[:/].*$/, '').trim();
+    if (!cleaned || cleaned === 'localhost' || cleaned === '127.0.0.1') return true;
+    if (/^[\d.]+$/.test(cleaned)) {
+        const parts = cleaned.split('.');
+        return parts.length === 4 && parts.every(p => /^\d+$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+    }
+    return /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(cleaned);
+}
+
 export function normalizeApiBase(raw: string | null | undefined): string {
     let value = (raw ?? '').trim();
     if (!value || value === DEFAULT_API_BASE || value === `${DEFAULT_API_BASE}/`) {
+        return DEFAULT_API_BASE;
+    }
+    if (!isValidBackendHost(value)) {
         return DEFAULT_API_BASE;
     }
     value = value.replace(/\/+$/, '');
@@ -19,13 +35,18 @@ export function getConfiguredApiBase(): string {
     if (typeof localStorage === 'undefined') {
         return DEFAULT_API_BASE;
     }
-    return normalizeApiBase(localStorage.getItem(STORAGE_KEY));
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored && !isValidBackendHost(stored)) {
+        try { localStorage.removeItem(STORAGE_KEY); } catch {}
+        return DEFAULT_API_BASE;
+    }
+    return normalizeApiBase(stored);
 }
 
 export function setConfiguredApiBase(raw: string): string {
     const normalized = normalizeApiBase(raw);
     if (typeof localStorage !== 'undefined') {
-        if (normalized === DEFAULT_API_BASE) {
+        if (normalized === DEFAULT_API_BASE || !isValidBackendHost(normalized)) {
             localStorage.removeItem(STORAGE_KEY);
         } else {
             localStorage.setItem(STORAGE_KEY, normalized);
