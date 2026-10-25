@@ -243,6 +243,7 @@
         streamError = false;
         retryCount = 0;
         isLiveFeedActive = true;
+        localBackendNotice = '';
         scheduleLiveRefresh();
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('bawal-camera-online', {
@@ -259,6 +260,9 @@
         }
         streamError = true;
         isLiveFeedActive = false;
+        if (isHttpsDomain) {
+            localBackendNotice = '⚠️ <strong>Stream Blocked by Browser (Mixed Active Content)</strong>: Your browser blocked <code>' + (discoveredStreamUrl || activeStreamUrl) + '</code> from HTTPS Vercel.<br/><strong>Fix:</strong> Tap the lock icon in your address bar &rarr; <em>Site settings</em> &rarr; <em>Insecure content</em> &rarr; <strong>Allow</strong>, then refresh this page.';
+        }
     }
 
     let isProbingLocal = $state(false);
