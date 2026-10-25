@@ -279,6 +279,13 @@
                     : `${activeApiBase}/camera/stream?t=${streamEpoch}`)
     );
 
+    let isLiveStreamPreAnnotated = $derived(
+        Boolean(
+            activeStreamUrl &&
+            (activeStreamUrl.includes('/camera/stream') || activeStreamUrl.includes('/annotated'))
+        )
+    );
+
     function handleLiveImgLoaded() {
         streamError = false;
         retryCount = 0;
@@ -414,7 +421,9 @@
                                     thumb = `data:image/jpeg;base64,${data.annotated_image_base64}`;
                                 } else if (data.image_path && (data.image_path.startsWith('data:') || data.image_path.startsWith('/inspections/'))) {
                                     thumb = data.image_path;
-                                } else {
+                                } else if (canvas && data.detections.length > 0) {
+                                    thumb = buildAnnotatedThumbnail(canvas, data.detections);
+                                } else if (canvas) {
                                     thumb = canvas.toDataURL('image/jpeg', 0.85);
                                 }
                             } catch {}
@@ -611,6 +620,68 @@
         ctx.drawImage(video, dx, dy, dw, dh);
     }
 
+    function getDetectionBox(det: any): [number, number, number, number] | null {
+        if (!det) return null;
+        const raw = Array.isArray(det.box) ? det.box : (Array.isArray(det.bbox) ? det.bbox : null);
+        let x = raw ? Number(raw[0]) : (typeof det.x === 'number' ? det.x : null);
+        let y = raw ? Number(raw[1]) : (typeof det.y === 'number' ? det.y : null);
+        let w = raw ? Number(raw[2]) : (typeof det.width === 'number' ? det.width : null);
+        let h = raw ? Number(raw[3]) : (typeof det.height === 'number' ? det.height : null);
+        if (x === null || y === null || w === null || h === null || isNaN(x) || isNaN(y) || isNaN(w) || isNaN(h) || w <= 0 || h <= 0) {
+            return null;
+        }
+        if (x <= 1 && y <= 1 && w <= 1 && h <= 1 && (w > 0 || h > 0)) {
+            x *= 640;
+            y *= 480;
+            w *= 640;
+            h *= 480;
+        }
+        return [Math.round(x), Math.round(y), Math.round(w), Math.round(h)];
+    }
+
+    function buildAnnotatedThumbnail(canvas: HTMLCanvasElement, detList: any[]): string {
+        try {
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = canvas.width;
+            offCanvas.height = canvas.height;
+            const offCtx = offCanvas.getContext('2d');
+            if (!offCtx) return canvas.toDataURL('image/jpeg', 0.65);
+
+            offCtx.drawImage(canvas, 0, 0);
+            for (const det of detList) {
+                const box = getDetectionBox(det);
+                if (!box) continue;
+                const [bx, by, bw, bh] = box;
+                const spoilage = Number(det.spoilage_score) || 0;
+                const freshness = Math.max(0, Math.min(100, Math.round(100 - spoilage)));
+                const confRaw = Number(det.similarity_rate ?? det.confidence) || 0;
+                const confPct = Math.round(confRaw <= 1 ? confRaw * 100 : confRaw);
+                const status = getItemStatus(det);
+                const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444');
+                const name = det.food_name || det.class_name || 'food_item';
+                const label = `${name} ${confPct}% [${status} ${freshness}%]`;
+
+                offCtx.strokeStyle = strokeColor;
+                offCtx.lineWidth = 3;
+                offCtx.strokeRect(bx, by, bw, bh);
+
+                offCtx.font = 'bold 13px sans-serif';
+                const metrics = offCtx.measureText(label);
+                const badgeH = 22;
+                const badgeW = metrics.width + 12;
+                const badgeY = Math.max(0, by - badgeH);
+                offCtx.fillStyle = strokeColor;
+                offCtx.fillRect(bx, badgeY, badgeW, badgeH);
+
+                offCtx.fillStyle = '#ffffff';
+                offCtx.fillText(label, bx + 6, badgeY + 15);
+            }
+            return offCanvas.toDataURL('image/jpeg', 0.85);
+        } catch {
+            return canvas.toDataURL('image/jpeg', 0.65);
+        }
+    }
+
     function captureAndPushFrame() {
         if (!mockVideoEl || !mockCanvasEl || isPushingFrame) return;
         if (mockVideoEl.paused || mockVideoEl.ended || mockVideoEl.readyState < 2) return;
@@ -656,52 +727,9 @@
                                 } else if (data.image_path && (data.image_path.startsWith('data:') || data.image_path.startsWith('/inspections/'))) {
                                     thumb = data.image_path;
                                 } else if (mockCanvasEl && data.detections.length > 0) {
-                                    const offCanvas = document.createElement('canvas');
-                                    offCanvas.width = mockCanvasEl.width;
-                                    offCanvas.height = mockCanvasEl.height;
-                                    const offCtx = offCanvas.getContext('2d');
-                                    if (offCtx) {
-                                        offCtx.drawImage(mockCanvasEl, 0, 0);
-                                        for (let detIdx = 0; detIdx < data.detections.length; detIdx++) {
-                                            const det = data.detections[detIdx];
-                                            const boxArray = Array.isArray(det.box) ? det.box : (Array.isArray(det.bbox) ? det.bbox : null);
-                                            let bx = boxArray ? boxArray[0] : (det.x || 120);
-                                            let by = boxArray ? boxArray[1] : (det.y || 100);
-                                            let bw = boxArray ? boxArray[2] : (det.width || 280);
-                                            let bh = boxArray ? boxArray[3] : (det.height || 220);
-                                            if (bw <= 0 || bh <= 0) {
-                                                bx = 120; by = 100; bw = 280; bh = 220;
-                                            } else if (bx <= 1 && by <= 1 && bw <= 1 && bh <= 1) {
-                                                bx *= offCanvas.width; by *= offCanvas.height;
-                                                bw *= offCanvas.width; bh *= offCanvas.height;
-                                            }
-                                            const spoilage = Number(det.spoilage_score) || 0;
-                                            const freshness = Math.max(0, Math.min(100, Math.round(100 - spoilage)));
-                                            const confPct = Math.round((Number(det.similarity_rate ?? det.confidence) || 0) * (Number(det.similarity_rate ?? det.confidence) <= 1 ? 100 : 1));
-                                            const status = (spoilage >= 45 || confPct < 35) ? 'REJECT' : ((spoilage >= 25 || confPct < 55) ? 'REVIEW' : 'PASS');
-                                            const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444');
-                                            const name = det.food_name || det.class_name || 'food_item';
-                                            const label = `${name} ${confPct}% [${status} ${freshness}%]`;
-
-                                            offCtx.strokeStyle = strokeColor;
-                                            offCtx.lineWidth = 3;
-                                            offCtx.strokeRect(bx, by, bw, bh);
-
-                                            offCtx.font = 'bold 13px sans-serif';
-                                            const metrics = offCtx.measureText(label);
-                                            const badgeH = 22;
-                                            const badgeW = metrics.width + 12;
-                                            const badgeY = Math.max(0, by - badgeH);
-                                            offCtx.fillStyle = strokeColor;
-                                            offCtx.fillRect(bx, badgeY, badgeW, badgeH);
-
-                                            offCtx.fillStyle = '#ffffff';
-                                            offCtx.fillText(label, bx + 6, badgeY + 15);
-                                        }
-                                        thumb = offCanvas.toDataURL('image/jpeg', 0.85);
-                                    } else {
-                                        thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
-                                    }
+                                    thumb = buildAnnotatedThumbnail(mockCanvasEl, data.detections);
+                                } else if (mockCanvasEl) {
+                                    thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
                                 }
                             } catch {}
                             window.dispatchEvent(new CustomEvent('bawal-live-detections', {
@@ -763,52 +791,9 @@
                                 } else if (data.image_path && (data.image_path.startsWith('data:') || data.image_path.startsWith('/inspections/'))) {
                                     thumb = data.image_path;
                                 } else if (mockCanvasEl && data.detections.length > 0) {
-                                    const offCanvas = document.createElement('canvas');
-                                    offCanvas.width = mockCanvasEl.width;
-                                    offCanvas.height = mockCanvasEl.height;
-                                    const offCtx = offCanvas.getContext('2d');
-                                    if (offCtx) {
-                                        offCtx.drawImage(mockCanvasEl, 0, 0);
-                                        for (let detIdx = 0; detIdx < data.detections.length; detIdx++) {
-                                            const det = data.detections[detIdx];
-                                            const boxArray = Array.isArray(det.box) ? det.box : (Array.isArray(det.bbox) ? det.bbox : null);
-                                            let bx = boxArray ? boxArray[0] : (det.x || 120);
-                                            let by = boxArray ? boxArray[1] : (det.y || 100);
-                                            let bw = boxArray ? boxArray[2] : (det.width || 280);
-                                            let bh = boxArray ? boxArray[3] : (det.height || 220);
-                                            if (bw <= 0 || bh <= 0) {
-                                                bx = 120; by = 100; bw = 280; bh = 220;
-                                            } else if (bx <= 1 && by <= 1 && bw <= 1 && bh <= 1) {
-                                                bx *= offCanvas.width; by *= offCanvas.height;
-                                                bw *= offCanvas.width; bh *= offCanvas.height;
-                                            }
-                                            const spoilage = Number(det.spoilage_score) || 0;
-                                            const freshness = Math.max(0, Math.min(100, Math.round(100 - spoilage)));
-                                            const confPct = Math.round((Number(det.similarity_rate ?? det.confidence) || 0) * (Number(det.similarity_rate ?? det.confidence) <= 1 ? 100 : 1));
-                                            const status = (spoilage >= 45 || confPct < 35) ? 'REJECT' : ((spoilage >= 25 || confPct < 55) ? 'REVIEW' : 'PASS');
-                                            const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444');
-                                            const name = det.food_name || det.class_name || 'food_item';
-                                            const label = `${name} ${confPct}% [${status} ${freshness}%]`;
-
-                                            offCtx.strokeStyle = strokeColor;
-                                            offCtx.lineWidth = 3;
-                                            offCtx.strokeRect(bx, by, bw, bh);
-
-                                            offCtx.font = 'bold 13px sans-serif';
-                                            const metrics = offCtx.measureText(label);
-                                            const badgeH = 22;
-                                            const badgeW = metrics.width + 12;
-                                            const badgeY = Math.max(0, by - badgeH);
-                                            offCtx.fillStyle = strokeColor;
-                                            offCtx.fillRect(bx, badgeY, badgeW, badgeH);
-
-                                            offCtx.fillStyle = '#ffffff';
-                                            offCtx.fillText(label, bx + 6, badgeY + 15);
-                                        }
-                                        thumb = offCanvas.toDataURL('image/jpeg', 0.85);
-                                    } else {
-                                        thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
-                                    }
+                                    thumb = buildAnnotatedThumbnail(mockCanvasEl, data.detections);
+                                } else if (mockCanvasEl) {
+                                    thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
                                 }
                             } catch {}
                             window.dispatchEvent(new CustomEvent('bawal-live-detections', {
@@ -1283,10 +1268,14 @@
                 {#if !isSwitchingMode && detections && detections.length > 0}
                     <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
                         {#each detections as det}
-                            {#if det.box && det.box.length === 4}
-                                {@const [bx, by, bw, bh] = det.box}
+                            {@const box = getDetectionBox(det)}
+                            {#if box}
+                                {@const [bx, by, bw, bh] = box}
                                 {@const status = getItemStatus(det)}
                                 {@const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444')}
+                                {@const confRaw = Number(det.similarity_rate ?? det.confidence) || 0}
+                                {@const confPct = Math.round(confRaw <= 1 ? confRaw * 100 : confRaw)}
+                                {@const name = det.food_name || det.class_name || 'food_item'}
                                 <rect
                                     x={bx}
                                     y={by}
@@ -1300,7 +1289,7 @@
                                 <rect
                                     x={bx}
                                     y={Math.max(0, by - 20)}
-                                    width={Math.max(60, (det.food_name || '').length * 8 + 36)}
+                                    width={Math.max(60, name.length * 8 + 36)}
                                     height="20"
                                     fill={strokeColor}
                                     rx="3"
@@ -1313,7 +1302,7 @@
                                     font-weight="bold"
                                     font-family="sans-serif"
                                 >
-                                    {det.food_name} {Math.round((det.similarity_rate || 0) * (det.similarity_rate <= 1 ? 100 : 1))}%
+                                    {name} {confPct}%
                                 </text>
                             {/if}
                         {/each}
@@ -1335,10 +1324,14 @@
                     {#if !isSwitchingMode && detections && detections.length > 0}
                         <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
                             {#each detections as det}
-                                {#if det.box && det.box.length === 4}
-                                    {@const [bx, by, bw, bh] = det.box}
+                                {@const box = getDetectionBox(det)}
+                                {#if box}
+                                    {@const [bx, by, bw, bh] = box}
                                     {@const status = getItemStatus(det)}
                                     {@const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444')}
+                                    {@const confRaw = Number(det.similarity_rate ?? det.confidence) || 0}
+                                    {@const confPct = Math.round(confRaw <= 1 ? confRaw * 100 : confRaw)}
+                                    {@const name = det.food_name || det.class_name || 'food_item'}
                                     <rect
                                         x={bx}
                                         y={by}
@@ -1352,7 +1345,7 @@
                                     <rect
                                         x={bx}
                                         y={Math.max(0, by - 20)}
-                                        width={Math.max(60, (det.food_name || '').length * 8 + 36)}
+                                        width={Math.max(60, name.length * 8 + 36)}
                                         height="20"
                                         fill={strokeColor}
                                         rx="3"
@@ -1365,7 +1358,7 @@
                                         font-weight="bold"
                                         font-family="sans-serif"
                                     >
-                                        {det.food_name} {Math.round((det.similarity_rate || 0) * (det.similarity_rate <= 1 ? 100 : 1))}%
+                                        {name} {confPct}%
                                     </text>
                                 {/if}
                             {/each}
@@ -1402,14 +1395,18 @@
                         onerror={handleLiveImgError}
                     />
 
-                    <!-- Dynamic AI Bounding Box HUD Overlay for Live ESP Stream -->
-                    {#if !isSwitchingMode && detections && detections.length > 0}
+                    <!-- Dynamic AI Bounding Box HUD Overlay for Live ESP Stream (Hidden if pre-annotated by backend) -->
+                    {#if !isLiveStreamPreAnnotated && !isSwitchingMode && detections && detections.length > 0}
                         <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
                             {#each detections as det}
-                                {#if det.box && det.box.length === 4}
-                                    {@const [bx, by, bw, bh] = det.box}
+                                {@const box = getDetectionBox(det)}
+                                {#if box}
+                                    {@const [bx, by, bw, bh] = box}
                                     {@const status = getItemStatus(det)}
                                     {@const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444')}
+                                    {@const confRaw = Number(det.similarity_rate ?? det.confidence) || 0}
+                                    {@const confPct = Math.round(confRaw <= 1 ? confRaw * 100 : confRaw)}
+                                    {@const name = det.food_name || det.class_name || 'food_item'}
                                     <rect
                                         x={bx}
                                         y={by}
@@ -1423,7 +1420,7 @@
                                     <rect
                                         x={bx}
                                         y={Math.max(0, by - 20)}
-                                        width={Math.max(60, (det.food_name || '').length * 8 + 36)}
+                                        width={Math.max(60, name.length * 8 + 36)}
                                         height="20"
                                         fill={strokeColor}
                                         rx="3"
@@ -1436,7 +1433,7 @@
                                         font-weight="bold"
                                         font-family="sans-serif"
                                     >
-                                        {det.food_name} {Math.round((det.similarity_rate || 0) * (det.similarity_rate <= 1 ? 100 : 1))}%
+                                        {name} {confPct}%
                                     </text>
                                 {/if}
                             {/each}

@@ -1137,8 +1137,8 @@
                                     </div>
                                 {/if}
 
-                                <!-- Dynamic AI Bounding Box HUD Overlay for Batch Extracted Tray -->
-                                {#if item.detections && item.detections.length > 0}
+                                <!-- Dynamic AI Bounding Box HUD Overlay for Batch Extracted Tray (Only if image is not pre-annotated) -->
+                                {#if !item.annotated_url && item.detections && item.detections.length > 0}
                                     <svg class="batch-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
                                         {#each item.detections as det, detIdx}
                                             {@const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null)}
