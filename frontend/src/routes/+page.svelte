@@ -152,13 +152,24 @@
             if (!Array.isArray(list)) list = [];
 
             const trackKey = metadata?.videoUUID || metadata?.videoName || 'MOCK_VIDEO_CAM';
-            const auditDetections = activeDetections.map(d => ({
-                class_name: d.food_name,
-                confidence: d.similarity_rate,
-                bbox: (d.box && d.box.length === 4 ? d.box : [100, 100, 200, 200]) as [number, number, number, number],
-                freshness_score: Math.max(0, 100 - (d.spoilage_score || 0)),
-                portion_ratio: 0.35
-            }));
+            const auditDetections = activeDetections.map((d, dIdx) => {
+                let box = d.box && d.box.length === 4 && (d.box[2] > 0 || d.box[3] > 0) ? d.box : null;
+                if (!box) {
+                    const defaultBoxes: [number, number, number, number][] = [
+                        [140, 150, 320, 200],
+                        [100, 80, 220, 160],
+                        [340, 80, 200, 160]
+                    ];
+                    box = defaultBoxes[dIdx % defaultBoxes.length];
+                }
+                return {
+                    class_name: d.food_name,
+                    confidence: d.similarity_rate,
+                    bbox: box as [number, number, number, number],
+                    freshness_score: Math.max(0, 100 - (d.spoilage_score || 0)),
+                    portion_ratio: 0.35
+                };
+            });
 
             // DYNAMIC 1-OBJECT UPDATE: Update the single tracking entry in-place instead of spamming new cards
             const existingIdx = list.findIndex(r => r.track_key === trackKey || r.device_id === 'MOCK_VIDEO_CAM');
