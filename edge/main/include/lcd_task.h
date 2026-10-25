@@ -63,6 +63,21 @@ void lcd_update_wifi_status(bool connected, const char *ip_address);
 void lcd_update_telemetry_display(float temperature, uint8_t cpu_load);
 
 /**
+ * @brief Update active connection status (ONLINE/OFFLINE) and communication latency.
+ *
+ * @param connected True if device is actively linked to network and backend.
+ * @param latency_ms Round-trip communication latency in milliseconds (0 for placeholder).
+ */
+void lcd_update_connection_status(bool connected, uint32_t latency_ms);
+
+/**
+ * @brief Update industrial conveyor line speed telemetry in meters per second (m/s).
+ *
+ * @param speed_mps Speed in meters per second (e.g. 0.35f).
+ */
+void lcd_update_line_speed(float speed_mps);
+
+/**
  * @brief FreeRTOS task entry point for initializing the 128x160 SPI TFT and LVGL UI.
  *
  * @param pvParameters FreeRTOS task parameter (pass NULL).

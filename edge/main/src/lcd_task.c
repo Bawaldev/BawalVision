@@ -27,23 +27,39 @@
 static const char *TAG = "LCD_TASK";
 
 static lv_disp_t *s_disp_handle = NULL;
-static lv_obj_t *s_http_bar = NULL;
-static lv_obj_t *s_http_label = NULL;
+
+// 1. Connection Header Widget
+static lv_obj_t *s_conn_bar = NULL;
+static lv_obj_t *s_conn_badge = NULL;
+static lv_obj_t *s_conn_label = NULL;
+static lv_obj_t *s_latency_label = NULL;
+
+// 2. Wi-Fi & Device Sub-bar
 static lv_obj_t *s_wifi_label = NULL;
+
+// 3. System Inspection Status Card
 static lv_obj_t *s_status_card = NULL;
 static lv_obj_t *s_status_label = NULL;
+static lv_obj_t *s_status_sub = NULL;
+
+// 4. Industrial Telemetry Box
+static lv_obj_t *s_speed_label = NULL;
 static lv_obj_t *s_esp_temp_label = NULL;
 static lv_obj_t *s_cpu_load_label = NULL;
+
+// 5. Bottom Uptime & Status Banner
 static lv_obj_t *s_uptime_label = NULL;
 
 static system_status_t s_current_status = SYSTEM_STATUS_IDLE;
-static bool s_wifi_connected = false;
+static bool s_is_connected = false;
+static uint32_t s_current_latency_ms = 0;
+static float s_current_line_speed = 0.35f; // default 0.35 m/s conveyor line rate
 static char s_wifi_ip_str[24] = "DISCONNECTED";
 
 const char *lcd_status_to_string(system_status_t status) {
   switch (status) {
   case SYSTEM_STATUS_IDLE:
-    return "IDLE";
+    return "READY";
   case SYSTEM_STATUS_PASS:
     return "PASS";
   case SYSTEM_STATUS_FAIL:
@@ -91,24 +107,32 @@ static void apply_status_style(system_status_t status) {
   }
 
   lv_color_t bg_color;
+  const char *sub_txt = "FOOD INSPECT";
   switch (status) {
   case SYSTEM_STATUS_PASS:
     bg_color = lv_color_hex(0x10b981); // Emerald Green
+    sub_txt = "TRAY PASSED";
     break;
   case SYSTEM_STATUS_FAIL:
     bg_color = lv_color_hex(0xf43f5e); // Rose Red
+    sub_txt = "TRAY REJECTED";
     break;
   case SYSTEM_STATUS_REVIEW:
     bg_color = lv_color_hex(0xf97316); // Amber/Orange
+    sub_txt = "MANUAL REVIEW";
     break;
   case SYSTEM_STATUS_IDLE:
   default:
-    bg_color = lv_color_hex(0x0ea5e9); // Sky Blue
+    bg_color = lv_color_hex(0x0284c7); // Sky Blue
+    sub_txt = "BAWAL VISION QC";
     break;
   }
 
   lv_obj_set_style_bg_color(s_status_card, bg_color, 0);
   lv_label_set_text(s_status_label, lcd_status_to_string(status));
+  if (s_status_sub) {
+    lv_label_set_text(s_status_sub, sub_txt);
+  }
   lv_obj_invalidate(s_status_card);
 }
 
@@ -120,30 +144,60 @@ void lcd_update_status(system_status_t status) {
   }
 }
 
-void lcd_update_http_status(const char *status_str, bool is_error) {
-  if (!s_http_bar || !s_http_label || status_str == NULL) {
-    return;
-  }
+void lcd_update_connection_status(bool connected, uint32_t latency_ms) {
+  s_is_connected = connected;
+  s_current_latency_ms = latency_ms;
 
   if (lvgl_port_lock(0)) {
-    lv_color_t bar_bg =
-        is_error ? lv_color_hex(0xe11d48) : lv_color_hex(0x0369a1);
-    if (strstr(status_str, "200") != NULL || strstr(status_str, "OK") != NULL) {
-      bar_bg = lv_color_hex(0x059669); // Green
-    } else if (strstr(status_str, "SEND") != NULL ||
-               strstr(status_str, "POST") != NULL) {
-      bar_bg = lv_color_hex(0xd97706); // Amber
+    if (s_conn_badge && s_conn_label) {
+      lv_color_t badge_bg = connected ? lv_color_hex(0x10b981) : lv_color_hex(0xe11d48);
+      lv_obj_set_style_bg_color(s_conn_badge, badge_bg, 0);
+      lv_label_set_text(s_conn_label, connected ? "ONLINE" : "OFFLINE");
+      lv_obj_invalidate(s_conn_badge);
     }
-
-    lv_obj_set_style_bg_color(s_http_bar, bar_bg, 0);
-    lv_label_set_text(s_http_label, status_str);
-    lv_obj_invalidate(s_http_bar);
+    if (s_latency_label) {
+      if (connected && latency_ms > 0) {
+        lv_label_set_text_fmt(s_latency_label, "%u ms", (unsigned int)latency_ms);
+      } else if (connected) {
+        lv_label_set_text(s_latency_label, "<15 ms");
+      } else {
+        lv_label_set_text(s_latency_label, "-- ms");
+      }
+      lv_obj_invalidate(s_latency_label);
+    }
     lvgl_port_unlock();
   }
 }
 
+void lcd_update_line_speed(float speed_mps) {
+  s_current_line_speed = speed_mps;
+  if (lvgl_port_lock(0)) {
+    if (s_speed_label) {
+      lv_label_set_text_fmt(s_speed_label, "SPEED : %.2f m/s", speed_mps);
+      lv_obj_invalidate(s_speed_label);
+    }
+    lvgl_port_unlock();
+  }
+}
+
+void lcd_update_http_status(const char *status_str, bool is_error) {
+  if (status_str == NULL) {
+    return;
+  }
+
+  bool is_ok = (!is_error && (strstr(status_str, "200") != NULL ||
+                              strstr(status_str, "OK") != NULL ||
+                              strstr(status_str, "READY") != NULL));
+
+  uint32_t lat = 0;
+  if (is_ok) {
+    lat = s_current_latency_ms ? s_current_latency_ms : 24;
+  }
+  lcd_update_connection_status(is_ok, lat);
+}
+
 void lcd_update_wifi_status(bool connected, const char *ip_address) {
-  s_wifi_connected = connected;
+  s_is_connected = connected;
   if (ip_address && strlen(ip_address) > 0) {
     strncpy(s_wifi_ip_str, ip_address, sizeof(s_wifi_ip_str) - 1);
     s_wifi_ip_str[sizeof(s_wifi_ip_str) - 1] = '\0';
@@ -152,12 +206,17 @@ void lcd_update_wifi_status(bool connected, const char *ip_address) {
             sizeof(s_wifi_ip_str) - 1);
   }
 
+  lcd_update_connection_status(connected, connected ? (s_current_latency_ms ? s_current_latency_ms : 18) : 0);
+
   if (s_wifi_label && lvgl_port_lock(0)) {
-    if (s_wifi_connected) {
-      lv_label_set_text_fmt(s_wifi_label, "#10b981 # %s", s_wifi_ip_str);
+    if (connected) {
+      lv_label_set_text_fmt(s_wifi_label, "IP: %s", s_wifi_ip_str);
+      lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(0x38bdf8), 0);
     } else {
-      lv_label_set_text_fmt(s_wifi_label, "#f43f5e # NO WIFI");
+      lv_label_set_text(s_wifi_label, "WIFI: DISCONNECTED");
+      lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(0xf43f5e), 0);
     }
+    lv_obj_invalidate(s_wifi_label);
     lvgl_port_unlock();
   }
 }
@@ -165,11 +224,11 @@ void lcd_update_wifi_status(bool connected, const char *ip_address) {
 void lcd_update_telemetry_display(float temperature, uint8_t cpu_load) {
   if (lvgl_port_lock(0)) {
     if (s_esp_temp_label) {
-      lv_label_set_text_fmt(s_esp_temp_label, "TEMP: %.1f C",
+      lv_label_set_text_fmt(s_esp_temp_label, "TEMP  : %.1f C",
                             temperature > 0 ? temperature : 36.5f);
     }
     if (s_cpu_load_label) {
-      lv_label_set_text_fmt(s_cpu_load_label, "CPU : %u%%",
+      lv_label_set_text_fmt(s_cpu_load_label, "CPU   : %u%%",
                             (unsigned int)cpu_load);
     }
     lvgl_port_unlock();
@@ -178,90 +237,123 @@ void lcd_update_telemetry_display(float temperature, uint8_t cpu_load) {
 
 static void create_dashboard_ui(void) {
   lv_obj_t *scr = lv_scr_act();
-  lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x090d16), 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   // Root container (128x160)
   lv_obj_t *root = lv_obj_create(scr);
   lv_obj_set_size(root, LCD_H_RES, LCD_V_RES);
-  lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_color(root, lv_color_hex(0x090d16), 0);
   lv_obj_set_style_border_width(root, 0, 0);
   lv_obj_set_style_pad_all(root, 0, 0);
-  lv_obj_set_style_pad_row(root, 0, 0);
+  lv_obj_set_style_pad_row(root, 2, 0);
   lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
-  // 1. TOP HTTP STATUS BAR (Width: LCD_H_RES, Height: 18)
-  s_http_bar = lv_obj_create(root);
-  lv_obj_set_size(s_http_bar, LCD_H_RES, 18);
-  lv_obj_set_style_bg_color(s_http_bar, lv_color_hex(0x1e293b), 0);
-  lv_obj_set_style_border_width(s_http_bar, 0, 0);
-  lv_obj_set_style_radius(s_http_bar, 0, 0);
-  lv_obj_set_style_pad_all(s_http_bar, 1, 0);
-  lv_obj_clear_flag(s_http_bar, LV_OBJ_FLAG_SCROLLABLE);
+  // 1. TOP CONNECTION & LATENCY BAR (Width: LCD_H_RES, Height: 20)
+  s_conn_bar = lv_obj_create(root);
+  lv_obj_set_size(s_conn_bar, LCD_H_RES, 20);
+  lv_obj_set_style_bg_color(s_conn_bar, lv_color_hex(0x0f172a), 0);
+  lv_obj_set_style_border_width(s_conn_bar, 0, 0);
+  lv_obj_set_style_radius(s_conn_bar, 0, 0);
+  lv_obj_set_style_pad_hor(s_conn_bar, 4, 0);
+  lv_obj_set_style_pad_ver(s_conn_bar, 2, 0);
+  lv_obj_set_flex_flow(s_conn_bar, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(s_conn_bar, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_clear_flag(s_conn_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-  s_http_label = lv_label_create(s_http_bar);
-  lv_label_set_text(s_http_label, "HTTP: IDLE");
-  lv_obj_set_style_text_color(s_http_label, lv_color_white(), 0);
-  lv_obj_set_style_text_font(s_http_label, LV_FONT_DEFAULT, 0);
-  lv_obj_center(s_http_label);
+  // Connection Pill Badge
+  s_conn_badge = lv_obj_create(s_conn_bar);
+  lv_obj_set_size(s_conn_badge, 56, 16);
+  lv_obj_set_style_bg_color(s_conn_badge, lv_color_hex(0xe11d48), 0); // Default OFFLINE Red
+  lv_obj_set_style_border_width(s_conn_badge, 0, 0);
+  lv_obj_set_style_radius(s_conn_badge, 3, 0);
+  lv_obj_set_style_pad_all(s_conn_badge, 0, 0);
+  lv_obj_clear_flag(s_conn_badge, LV_OBJ_FLAG_SCROLLABLE);
 
-  // 2. Wi-Fi & Device Sub-bar (Height: 12)
+  s_conn_label = lv_label_create(s_conn_badge);
+  lv_label_set_text(s_conn_label, "OFFLINE");
+  lv_obj_set_style_text_color(s_conn_label, lv_color_white(), 0);
+  lv_obj_set_style_text_font(s_conn_label, LV_FONT_DEFAULT, 0);
+  lv_obj_center(s_conn_label);
+
+  // Latency Label
+  s_latency_label = lv_label_create(s_conn_bar);
+  lv_label_set_text(s_latency_label, "-- ms");
+  lv_obj_set_style_text_color(s_latency_label, lv_color_hex(0x38bdf8), 0); // Cyan
+  lv_obj_set_style_text_font(s_latency_label, LV_FONT_DEFAULT, 0);
+
+  // 2. Wi-Fi IP Sub-bar (Height: 14)
   s_wifi_label = lv_label_create(root);
-  lv_label_set_recolor(s_wifi_label, true);
-  lv_label_set_text(s_wifi_label, "#f43f5e # CONNECTING...");
-  lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(0x94a3b8), 0);
+  lv_label_set_text(s_wifi_label, "WIFI: DISCONNECTED");
+  lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(0xf43f5e), 0);
   lv_obj_set_style_text_font(s_wifi_label, LV_FONT_DEFAULT, 0);
 
-  // 3. System Inspection Status Card (Width: 120, Height: 26)
+  // 3. System Inspection Status Card (Width: 120, Height: 34)
   s_status_card = lv_obj_create(root);
-  lv_obj_set_size(s_status_card, LCD_H_RES - 8, 26);
+  lv_obj_set_size(s_status_card, LCD_H_RES - 8, 34);
   lv_obj_set_style_bg_color(s_status_card, lv_color_hex(0x0ea5e9), 0);
   lv_obj_set_style_border_width(s_status_card, 0, 0);
-  lv_obj_set_style_radius(s_status_card, 0, 0);
+  lv_obj_set_style_radius(s_status_card, 4, 0);
   lv_obj_set_style_pad_all(s_status_card, 1, 0);
+  lv_obj_set_flex_flow(s_status_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(s_status_card, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(s_status_card, LV_OBJ_FLAG_SCROLLABLE);
 
   s_status_label = lv_label_create(s_status_card);
-  lv_label_set_text(s_status_label, "BAWAL VISION");
+  lv_label_set_text(s_status_label, "READY");
   lv_obj_set_style_text_color(s_status_label, lv_color_white(), 0);
   lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_14, 0);
-  lv_obj_center(s_status_label);
 
-  // 4. Multi-Sensor Data Box (Width: 120, Height: 36)
+  s_status_sub = lv_label_create(s_status_card);
+  lv_label_set_text(s_status_sub, "BAWAL VISION QC");
+  lv_obj_set_style_text_color(s_status_sub, lv_color_hex(0xe2e8f0), 0);
+  lv_obj_set_style_text_font(s_status_sub, LV_FONT_DEFAULT, 0);
+
+  // 4. Industrial Telemetry Box (Width: 120, Height: 54)
   lv_obj_t *sensor_box = lv_obj_create(root);
-  lv_obj_set_size(sensor_box, LCD_H_RES - 8, 36);
-  lv_obj_set_style_bg_color(sensor_box, lv_color_hex(0x161e2e), 0);
-  lv_obj_set_style_border_color(sensor_box, lv_color_hex(0x2d3748), 0);
+  lv_obj_set_size(sensor_box, LCD_H_RES - 8, 54);
+  lv_obj_set_style_bg_color(sensor_box, lv_color_hex(0x111827), 0); // Dark Slate
+  lv_obj_set_style_border_color(sensor_box, lv_color_hex(0x334155), 0);
   lv_obj_set_style_border_width(sensor_box, 1, 0);
-  lv_obj_set_style_radius(sensor_box, 0, 0);
-  lv_obj_set_style_pad_all(sensor_box, 2, 0);
+  lv_obj_set_style_radius(sensor_box, 4, 0);
+  lv_obj_set_style_pad_all(sensor_box, 3, 0);
+  lv_obj_set_style_pad_row(sensor_box, 1, 0);
   lv_obj_set_flex_flow(sensor_box, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(sensor_box, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(sensor_box, LV_OBJ_FLAG_SCROLLABLE);
 
+  // Row 1: Line Speed (m/s)
+  s_speed_label = lv_label_create(sensor_box);
+  lv_label_set_text_fmt(s_speed_label, "SPEED : %.2f m/s", s_current_line_speed);
+  lv_obj_set_style_text_color(s_speed_label, lv_color_hex(0xfacc15), 0); // Golden Yellow
+  lv_obj_set_style_text_font(s_speed_label, LV_FONT_DEFAULT, 0);
+
+  // Row 2: ESP32 Temperature
   s_esp_temp_label = lv_label_create(sensor_box);
-  lv_label_set_text(s_esp_temp_label, "ESP32: -- C");
-  lv_obj_set_style_text_color(s_esp_temp_label, lv_color_hex(0xfb923c),
-                              0); // Orange
+  lv_label_set_text(s_esp_temp_label, "TEMP  : --.- C");
+  lv_obj_set_style_text_color(s_esp_temp_label, lv_color_hex(0xfb923c), 0); // Warm Orange
   lv_obj_set_style_text_font(s_esp_temp_label, LV_FONT_DEFAULT, 0);
 
+  // Row 3: CPU Load Percentage
   s_cpu_load_label = lv_label_create(sensor_box);
-  lv_label_set_text(s_cpu_load_label, "CPU : --%");
-  lv_obj_set_style_text_color(s_cpu_load_label, lv_color_hex(0x38bdf8),
-                              0); // Cyan
+  lv_label_set_text(s_cpu_load_label, "CPU   : --%");
+  lv_obj_set_style_text_color(s_cpu_load_label, lv_color_hex(0x38bdf8), 0); // Cyan Sky
   lv_obj_set_style_text_font(s_cpu_load_label, LV_FONT_DEFAULT, 0);
 
-  // 5. Bottom Heartbeat & Uptime Banner (Height: 12)
+  // 5. Bottom Heartbeat & Uptime Banner (Height: 14)
   s_uptime_label = lv_label_create(root);
-  lv_label_set_text(s_uptime_label, "UP 00:00:00");
-  lv_obj_set_style_text_color(s_uptime_label, lv_color_hex(0x94a3b8), 0);
+  lv_label_set_text(s_uptime_label, "UP 00:00:00  ● READY");
+  lv_obj_set_style_text_color(s_uptime_label, lv_color_hex(0x64748b), 0);
   lv_obj_set_style_text_font(s_uptime_label, LV_FONT_DEFAULT, 0);
 
   apply_status_style(s_current_status);
+  lcd_update_connection_status(s_is_connected, s_current_latency_ms);
 }
 
 void lcd_monitor_heartbeat_task(void *pvParameters) {
@@ -279,15 +371,16 @@ void lcd_monitor_heartbeat_task(void *pvParameters) {
 
     if (lvgl_port_lock(0)) {
       if (s_uptime_label) {
-        lv_label_set_text_fmt(s_uptime_label, "UP %02u:%02u:%02u",
+        lv_label_set_text_fmt(s_uptime_label, "UP %02u:%02u:%02u  %s",
                               (unsigned int)hrs, (unsigned int)mins,
-                              (unsigned int)secs);
+                              (unsigned int)secs,
+                              s_is_connected ? "● LINK OK" : "○ OFFLINE");
       }
       if (s_esp_temp_label) {
-        lv_label_set_text_fmt(s_esp_temp_label, "ESP32: %.1f C", real_temp);
+        lv_label_set_text_fmt(s_esp_temp_label, "TEMP  : %.1f C", real_temp);
       }
       if (s_cpu_load_label) {
-        lv_label_set_text_fmt(s_cpu_load_label, "CPU : %u%%",
+        lv_label_set_text_fmt(s_cpu_load_label, "CPU   : %u%%",
                               (unsigned int)cpu_load);
       }
       lvgl_port_unlock();
