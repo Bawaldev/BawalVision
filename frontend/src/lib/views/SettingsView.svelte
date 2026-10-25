@@ -131,6 +131,146 @@
         }
     });
 
+    let espNodeIp = $state(
+        typeof localStorage !== 'undefined'
+            ? localStorage.getItem('bawal_esp32_node_ip') || '10.105.56.236'
+            : '10.105.56.236'
+    );
+    let espNodeStatus = $state<{
+        status: string;
+        device_id?: string;
+        firmware_version?: string;
+        wifi_ssid?: string;
+        rssi?: number;
+        sta_ip?: string;
+        gateway?: string;
+        netmask?: string;
+        nvs_backend_ip?: string;
+        nvs_backend_port?: number;
+        active_target_ip?: string;
+        cpu_temperature?: number;
+        cpu_load?: number;
+        heap_free?: number;
+        streaming?: boolean;
+    } | null>(null);
+    let isQueryingEspNode = $state(false);
+    let isDeployingToEsp = $state(false);
+    let espDeployMessage = $state('');
+    let espDeploySuccess = $state(false);
+
+    let espTargetBackendIp = $state('');
+    let espTargetBackendPort = $state(8080);
+
+    async function queryEspNodeStatus(overrideIp?: string) {
+        const ipToQuery = (overrideIp || espNodeIp || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+        if (!ipToQuery) {
+            espDeployMessage = 'Enter the ESP32 node IP address to inspect.';
+            espDeploySuccess = false;
+            return;
+        }
+        if (typeof localStorage !== 'undefined') {
+            try { localStorage.setItem('bawal_esp32_node_ip', ipToQuery); } catch {}
+        }
+        isQueryingEspNode = true;
+        espDeployMessage = `Querying ESP32 node at http://${ipToQuery}/api/v1/status...`;
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 2500);
+            let res = await fetch(`http://${ipToQuery}/api/v1/status`, { signal: controller.signal, cache: 'no-store' }).catch(() => null);
+            if (!res || !res.ok) {
+                res = await fetch(`http://${ipToQuery}/status`, { signal: controller.signal, cache: 'no-store' }).catch(() => null);
+            }
+            clearTimeout(timeout);
+            if (res && res.ok) {
+                const data = await res.json();
+                espNodeStatus = data;
+                if (data.gateway && !espTargetBackendIp) {
+                    espTargetBackendIp = data.gateway;
+                } else if (data.nvs_backend_ip && !espTargetBackendIp) {
+                    espTargetBackendIp = data.nvs_backend_ip;
+                }
+                espDeploySuccess = true;
+                espDeployMessage = `✓ ESP32 Node (${data.device_id || 'Active'}) responded! Wi-Fi: "${data.wifi_ssid || 'connected'}" (RSSI: ${data.rssi || '-'} dBm).`;
+            } else {
+                espDeploySuccess = false;
+                espDeployMessage = `Node http://${ipToQuery} not responding. If on HTTPS, allow Insecure Content in site settings or connect via Web Serial.`;
+            }
+        } catch (err: any) {
+            espDeploySuccess = false;
+            espDeployMessage = `Could not reach http://${ipToQuery} (${err?.message || 'Network error'}).`;
+        } finally {
+            isQueryingEspNode = false;
+        }
+    }
+
+    async function deployTargetBackendToEsp() {
+        const nodeIp = (espNodeIp || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+        const targetIp = (espTargetBackendIp || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+        const targetPort = Number(espTargetBackendPort) || 8080;
+
+        if (!targetIp) {
+            espDeployMessage = 'Enter a valid target backend IP (e.g. laptop host IP or gateway IP).';
+            espDeploySuccess = false;
+            return;
+        }
+
+        isDeployingToEsp = true;
+        espDeployMessage = `Deploying target http://${targetIp}:${targetPort} to ESP32 node...`;
+
+        // 1. First try HTTP REST API directly to the ESP32 node
+        let deployedViaHttp = false;
+        if (nodeIp) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 3000);
+                const res = await fetch(`http://${nodeIp}/api/v1/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        backend_ip: targetIp,
+                        backend_port: targetPort
+                    }),
+                    signal: controller.signal
+                }).catch(() => null);
+                clearTimeout(timeout);
+                if (res && res.ok) {
+                    deployedViaHttp = true;
+                    espDeploySuccess = true;
+                    espDeployMessage = `✓ Deployed over Wi-Fi! ESP32 NVS updated: Target backend is now http://${targetIp}:${targetPort}/api/v1/camera/frame.`;
+                    await queryEspNodeStatus(nodeIp);
+                }
+            } catch {}
+        }
+
+        // 2. If HTTP failed (e.g. Mixed Content or node IP changed), try Web Serial
+        if (!deployedViaHttp) {
+            if (isWebSerialAvailable()) {
+                try {
+                    espDeployMessage = `HTTP connection failed. Pushing via Web Serial USB CDC...`;
+                    const res = await provisionViaBrowserSerial(
+                        espNodeStatus?.wifi_ssid || 'Target_SSID',
+                        '',
+                        targetIp
+                    );
+                    if (res.success) {
+                        espDeploySuccess = true;
+                        espDeployMessage = `✓ Deployed via Web Serial USB! Target backend persisted to NVS: http://${targetIp}:${targetPort}.`;
+                    } else {
+                        espDeploySuccess = false;
+                        espDeployMessage = res.message || 'Web Serial deployment failed.';
+                    }
+                } catch (serialErr: any) {
+                    espDeploySuccess = false;
+                    espDeployMessage = `Deployment failed: ${serialErr?.message || 'Could not connect'}.`;
+                }
+            } else {
+                espDeploySuccess = false;
+                espDeployMessage = `Could not reach ESP32 at http://${nodeIp}. Check Wi-Fi subnet or plug via USB.`;
+            }
+        }
+        isDeployingToEsp = false;
+    }
+
     async function refreshHardwareStatus() {
         const hw = await fetchDeviceStatus(formState.backendUrl);
         if (!hw) {
@@ -1053,79 +1193,185 @@
                 </div>
             </div>
 
-            <!-- ESP32-S3 Connection Controller -->
-            <div class="form-group esp-connect-group">
-                <div class="esp-header-row">
-                    <label for="deviceId">ESP32-S3 Sensor Node</label>
-                    <span class="esp-status-chip {connectionStatus}">
-                        <span class="status-dot {connectionStatus}"></span>
-                        {#if connectionStatus === 'connected'}
-                            {lastConnDetails.connectionMode === 'usb_serial' ? 'Connected (USB Sync)' : 'Connected (Same Wi-Fi)'}
-                        {:else if connectionStatus === 'connecting'}
-                            Probing Hardware...
-                        {:else if connectionStatus === 'wifi_only'}
-                            Wi-Fi OK (Backend Offline)
-                        {:else if connectionStatus === 'failed'}
-                            Not Detected
+            <!-- ESP32-S3 IoT Node Management & Remote OTA Provisioning -->
+            <div class="fedora-group esp-iot-controller">
+                <div class="fedora-group-header">
+                    <div class="header-title-box">
+                        <span class="section-icon">📡</span>
+                        <div>
+                            <h4>ESP32-S3 Node Management (OTA &amp; NVS Controller)</h4>
+                            <p class="fedora-subtext">Directly inspect hardware telemetry, query live device status, and deploy target backend URL into ESP32 NVS</p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        class="fedora-pill-btn"
+                        onclick={() => queryEspNodeStatus()}
+                        disabled={isQueryingEspNode}
+                    >
+                        {#if isQueryingEspNode}
+                            <span class="btn-spinner"></span> Inspecting...
                         {:else}
-                            Disconnected
+                            🔍 Inspect Node Status
                         {/if}
-                    </span>
+                    </button>
                 </div>
 
-                <!-- Target Node ID Input & Connect Action Bar -->
-                <div class="esp-input-action-bar">
-                    <div class="input-with-icon">
-                        <span class="input-icon">📡</span>
+                <!-- Node IP & Remote Address Configuration -->
+                <div class="local-backend-row">
+                    <div class="input-with-label" style="flex: 1;">
+                        <label for="espNodeIpInput" class="compact-label">ESP32-S3 Node Network Address / IP</label>
                         <input
-                            id="deviceId"
-                            type="text"
-                            bind:value={formState.deviceId}
-                            placeholder="e.g. ESP32S3_441BF6C95678"
-                            class="form-input esp-id-input"
-                            disabled={connectionStatus === 'connecting'}
+                            id="espNodeIpInput"
+                            class="fedora-input"
+                            bind:value={espNodeIp}
+                            placeholder="e.g. 10.105.56.236"
+                            spellcheck="false"
+                            autocapitalize="off"
+                            autocorrect="off"
                         />
                     </div>
-
-                    {#if connectionStatus === 'connected'}
-                        <button
-                            type="button"
-                            class="btn-esp-disconnect"
-                            onclick={handleDisconnectEsp}
-                            title="Disconnect ESP32 node"
-                        >
-                            Disconnect
-                        </button>
-                    {:else if connectionStatus === 'connecting'}
-                        <button
-                            type="button"
-                            class="btn-esp-connecting"
-                            disabled
-                        >
-                            <span class="btn-spinner"></span>
-                            Probing...
-                        </button>
-                    {:else}
-                        <button
-                            type="button"
-                            class="btn-esp-connect"
-                            onclick={handleConnectEsp}
-                            title="Detect ESP32 on shared Wi-Fi or provision via USB"
-                        >
-                            Detect / Connect
-                        </button>
-                    {/if}
+                    <button
+                        type="button"
+                        class="fedora-accent-pill-btn"
+                        style="align-self: flex-end;"
+                        onclick={() => queryEspNodeStatus()}
+                        disabled={isQueryingEspNode}
+                    >
+                        Query Node
+                    </button>
                 </div>
+
+                <!-- Live Node Telemetry Card if Node Responded -->
+                {#if espNodeStatus}
+                    <div class="esp-diag-grid" style="margin-top: 10px;">
+                        <div class="diag-item">
+                            <span class="diag-lbl">Device ID</span>
+                            <span class="diag-val mono">{espNodeStatus.device_id || 'ESP32-S3'}</span>
+                        </div>
+                        <div class="diag-item">
+                            <span class="diag-lbl">Wi-Fi AP</span>
+                            <span class="diag-val">{espNodeStatus.wifi_ssid || 'N/A'} ({espNodeStatus.rssi || '-'} dBm)</span>
+                        </div>
+                        <div class="diag-item">
+                            <span class="diag-lbl">STA IP / Gateway</span>
+                            <span class="diag-val mono">{espNodeStatus.sta_ip || espNodeIp} (gw: {espNodeStatus.gateway || 'N/A'})</span>
+                        </div>
+                        <div class="diag-item">
+                            <span class="diag-lbl">Active NVS Target</span>
+                            <span class="diag-val mono" style="color: #f59e0b;">
+                                http://{espNodeStatus.nvs_backend_ip || espNodeStatus.active_target_ip}:{espNodeStatus.nvs_backend_port || 8080}
+                            </span>
+                        </div>
+                    </div>
+                {/if}
+
+                <!-- Deploy Backend Target to ESP32 Form -->
+                <div class="iot-deploy-card" style="margin-top: 12px; background: rgba(15, 23, 42, 0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border-subtle);">
+                    <div class="esp-header-row" style="margin-bottom: 8px;">
+                        <strong style="font-size: 0.82rem; color: var(--text-primary);">Deploy Target Backend URL to ESP32 NVS</strong>
+                        <span class="port-subdetail-muted" style="font-size: 0.72rem;">Updates the camera frame ingestion destination on the physical board</span>
+                    </div>
+
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+                        <div style="flex: 2; min-width: 180px;">
+                            <label for="targetIpInput" class="compact-label">Target Backend IP (Laptop / Host)</label>
+                            <input
+                                id="targetIpInput"
+                                class="fedora-input"
+                                bind:value={espTargetBackendIp}
+                                placeholder={espNodeStatus?.gateway ? `e.g. ${espNodeStatus.gateway}` : 'e.g. 10.105.56.206 or 192.168.1.100'}
+                                spellcheck="false"
+                            />
+                        </div>
+                        <div style="flex: 1; min-width: 90px;">
+                            <label for="targetPortInput" class="compact-label">Port</label>
+                            <input
+                                id="targetPortInput"
+                                type="number"
+                                class="fedora-input"
+                                bind:value={espTargetBackendPort}
+                                placeholder="8080"
+                            />
+                        </div>
+                    </div>
+
+                    <!-- Quick Adopt Helper Chips -->
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
+                        {#if espNodeStatus?.gateway}
+                            <button
+                                type="button"
+                                class="fedora-pill-btn"
+                                style="font-size: 0.68rem; padding: 2px 8px;"
+                                onclick={() => (espTargetBackendIp = espNodeStatus?.gateway || '')}
+                            >
+                                ⚡ Adopt Gateway IP ({espNodeStatus.gateway})
+                            </button>
+                        {/if}
+                        {#if detectedHostIp}
+                            <button
+                                type="button"
+                                class="fedora-pill-btn"
+                                style="font-size: 0.68rem; padding: 2px 8px;"
+                                onclick={() => (espTargetBackendIp = detectedHostIp)}
+                            >
+                                💻 Adopt Detected Host IP ({detectedHostIp})
+                            </button>
+                        {/if}
+                        <button
+                            type="button"
+                            class="fedora-pill-btn"
+                            style="font-size: 0.68rem; padding: 2px 8px;"
+                            onclick={() => (espTargetBackendIp = '')}
+                        >
+                            🧹 Reset to Dynamic Discovery
+                        </button>
+                    </div>
+
+                    <!-- Action Deploy Buttons -->
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button
+                            type="button"
+                            class="fedora-btn primary"
+                            style="padding: 6px 14px; font-size: 0.78rem;"
+                            onclick={deployTargetBackendToEsp}
+                            disabled={isDeployingToEsp}
+                        >
+                            {#if isDeployingToEsp}
+                                <span class="btn-spinner"></span> Deploying to NVS...
+                            {:else}
+                                🚀 Deploy Target to ESP32 (Write NVS)
+                            {/if}
+                        </button>
+                        {#if isWebSerialAvailable()}
+                            <button
+                                type="button"
+                                class="fedora-btn secondary"
+                                style="padding: 6px 14px; font-size: 0.78rem;"
+                                onclick={() => provisionViaBrowserSerial(espNodeStatus?.wifi_ssid || 'Target_SSID', '', espTargetBackendIp)}
+                                disabled={isDeployingToEsp}
+                            >
+                                ⚡ Push via Web Serial USB
+                            </button>
+                        {/if}
+                    </div>
+                </div>
+
+                {#if espDeployMessage}
+                    <div class="fedora-notice {espDeploySuccess ? 'good' : 'idle'}" style="margin-top: 10px;">
+                        <span>{espDeployMessage}</span>
+                    </div>
+                {/if}
             </div>
 
-            <!-- Local live backend target for MJPEG + SIMD inference -->
+            <!-- Browser Dashboard Gateway Target -->
             <div class="fedora-group">
                 <div class="fedora-group-header">
                     <div class="header-title-box">
                         <span class="section-icon">🖥️</span>
                         <div>
-                            <h4>Local Live Backend (MJPEG + SIMD)</h4>
-                            <p class="fedora-subtext">ESP32 camera and vision engine stay on the host; cloud/Lambda handles reports only</p>
+                            <h4>Browser Dashboard Gateway (HMI Backend API)</h4>
+                            <p class="fedora-subtext">Specifies where this web dashboard running in your browser fetches AI inference results, batch audits, and inspection reports</p>
                         </div>
                     </div>
                     <button
@@ -1151,13 +1397,12 @@
                         autocorrect="off"
                     />
                     <button type="button" class="fedora-accent-pill-btn" onclick={applyLiveBackendUrl}>
-                        Apply &amp; Detect
+                        Apply Dashboard Gateway
                     </button>
                 </div>
                 <p class="port-detail-text">
-                    When <code>ACM0</code> is detected, the gateway IP auto-fills from this backend.
-                    For phone access use the laptop LAN IP (or open the local frontend at
-                    <code>http://&lt;laptop-ip&gt;:3001</code>); HTTPS cloud pages may block HTTP MJPEG.
+                    For remote access use your laptop LAN IP (e.g. <code>http://&lt;laptop-ip&gt;:8080/api/v1</code>).
+                    To run host backend, use <code>just run-backend</code>.
                 </p>
                 {#if localBackendMessage}
                     <div class="fedora-notice idle"><span>{localBackendMessage}</span></div>

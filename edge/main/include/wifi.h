@@ -113,6 +113,9 @@ esp_err_t get_backend_url(const char *endpoint, char *out_url, size_t max_len);
  */
 uint16_t get_backend_port(void);
 
+void wifi_notify_backend_failure(void);
+void wifi_notify_backend_success(void);
+
 /**
  * @brief Periodic telemetry task (5 s heartbeat, no queue).
  */

@@ -442,6 +442,8 @@ uint16_t get_backend_port(void) {
     return 8080;
 }
 
+static uint32_t s_backend_failure_count = 0;
+
 bool get_backend_ip(char *out_ip, size_t max_len) {
     if (!out_ip || max_len == 0) return false;
 
@@ -455,6 +457,20 @@ bool get_backend_ip(char *out_ip, size_t max_len) {
 
     esp_netif_ip_info_t ip_info;
     if (get_sta_ip_info(&ip_info)) {
+        // If the configured NVS backend IP has failed consecutively 3+ times,
+        // do not stay locked to it. First try the gateway, then fallback to discovery.
+        if (s_backend_failure_count < 3 && is_valid_ipv4(g_backend_ip) && is_same_subnet_ip(g_backend_ip)) {
+            strncpy(out_ip, g_backend_ip, max_len - 1);
+            out_ip[max_len - 1] = '\0';
+            return true;
+        }
+
+        // On tethered APs (e.g. mobile hotspot), host usually runs on gateway or peer
+        if (s_backend_failure_count >= 3 && ip_info.gw.addr != 0) {
+            snprintf(out_ip, max_len, IPSTR, IP2STR(&ip_info.gw));
+            return true;
+        }
+
         if (is_valid_ipv4(g_backend_ip) && is_same_subnet_ip(g_backend_ip)) {
             strncpy(out_ip, g_backend_ip, max_len - 1);
             out_ip[max_len - 1] = '\0';
@@ -497,9 +513,14 @@ esp_err_t get_backend_url(const char *endpoint, char *out_url, size_t max_len) {
 
 void wifi_notify_backend_failure(void) {
     s_discovered_ip[0] = '\0';
+    s_backend_failure_count++;
     if (g_wifi_event_group) {
         xEventGroupSetBits(g_wifi_event_group, WIFI_DISCOVERY_BIT);
     }
+}
+
+void wifi_notify_backend_success(void) {
+    s_backend_failure_count = 0;
 }
 
 bool wifi_camera_stream_is_healthy(void) {
@@ -884,15 +905,158 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t options_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t status_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
+
+    telemetry_data_t meta;
+    init_device_metadata(&meta);
+
+    char ip_str[24] = "0.0.0.0";
+    char gw_str[24] = "0.0.0.0";
+    char mask_str[24] = "0.0.0.0";
+    esp_netif_ip_info_t ip_info;
+    if (get_sta_ip_info(&ip_info)) {
+        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
+        snprintf(gw_str, sizeof(gw_str), IPSTR, IP2STR(&ip_info.gw));
+        snprintf(mask_str, sizeof(mask_str), IPSTR, IP2STR(&ip_info.netmask));
+    }
+
+    char target_ip[32] = {0};
+    get_backend_ip(target_ip, sizeof(target_ip));
+
+    wifi_ap_record_t ap_info;
+    int rssi = -100;
+    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        rssi = ap_info.rssi;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_set_status(req, "500 Internal Error");
+        httpd_resp_sendstr(req, "{\"error\":\"cJSON allocation failed\"}");
+        return ESP_FAIL;
+    }
+
+    cJSON_AddStringToObject(root, "status", "online");
+    cJSON_AddStringToObject(root, "device_id", meta.device_id);
+    cJSON_AddStringToObject(root, "firmware_version", meta.firmware_version);
+    cJSON_AddStringToObject(root, "camera_model", "OV2640 / ESP32-CAM");
+    cJSON_AddStringToObject(root, "wifi_ssid", g_wifi_ssid);
+    cJSON_AddNumberToObject(root, "rssi", rssi);
+    cJSON_AddStringToObject(root, "sta_ip", ip_str);
+    cJSON_AddStringToObject(root, "gateway", gw_str);
+    cJSON_AddStringToObject(root, "netmask", mask_str);
+    cJSON_AddStringToObject(root, "nvs_backend_ip", g_backend_ip);
+    cJSON_AddNumberToObject(root, "nvs_backend_port", (double)get_backend_port());
+    cJSON_AddStringToObject(root, "active_target_ip", target_ip);
+    cJSON_AddNumberToObject(root, "cpu_temperature", (double)get_esp32_cpu_temperature());
+    cJSON_AddNumberToObject(root, "cpu_load", (double)get_cpu_usage_percentage());
+    cJSON_AddNumberToObject(root, "heap_free", (double)esp_get_free_heap_size());
+    cJSON_AddBoolToObject(root, "streaming", is_camera_streaming());
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json) {
+        httpd_resp_sendstr(req, json);
+        cJSON_free(json);
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"online\"}");
+    }
+    return ESP_OK;
+}
+
+static esp_err_t config_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
+
+    char buf[512] = {0};
+    int total_len = req->content_len;
+    if (total_len <= 0 || total_len >= sizeof(buf)) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"error\":\"Invalid payload size\"}");
+        return ESP_FAIL;
+    }
+
+    int cur_len = 0;
+    while (cur_len < total_len) {
+        int received = httpd_req_recv(req, buf + cur_len, total_len - cur_len);
+        if (received <= 0) break;
+        cur_len += received;
+    }
+    buf[cur_len] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"error\":\"Invalid JSON\"}");
+        return ESP_FAIL;
+    }
+
+    cJSON *s = cJSON_GetObjectItemCaseSensitive(root, "ssid");
+    cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "pass");
+    if (!p) p = cJSON_GetObjectItemCaseSensitive(root, "password");
+    cJSON *ip = cJSON_GetObjectItemCaseSensitive(root, "backend_ip");
+    cJSON *port = cJSON_GetObjectItemCaseSensitive(root, "backend_port");
+
+    const char *ssid_val = (cJSON_IsString(s) && s->valuestring && s->valuestring[0] != '\0') ? s->valuestring : g_wifi_ssid;
+    const char *pass_val = (cJSON_IsString(p) && p->valuestring) ? p->valuestring : NULL;
+    const char *ip_val = (cJSON_IsString(ip) && ip->valuestring) ? ip->valuestring : g_backend_ip;
+
+    char port_buf[16] = {0};
+    if (cJSON_IsNumber(port)) {
+        snprintf(port_buf, sizeof(port_buf), "%d", port->valueint);
+    } else if (cJSON_IsString(port) && port->valuestring && port->valuestring[0] != '\0') {
+        strncpy(port_buf, port->valuestring, sizeof(port_buf) - 1);
+    } else {
+        snprintf(port_buf, sizeof(port_buf), "%u", get_backend_port());
+    }
+
+    bool ok = wifi_apply_runtime_credentials(ssid_val, pass_val, ip_val, port_buf);
+    cJSON_Delete(root);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "status", ok ? "ok" : "error");
+    cJSON_AddStringToObject(resp, "message", ok ? "ESP32 Target Backend updated and persisted to NVS" : "Failed to apply configuration");
+    cJSON_AddStringToObject(resp, "backend_ip", g_backend_ip);
+    cJSON_AddNumberToObject(resp, "backend_port", (double)get_backend_port());
+    cJSON_AddStringToObject(resp, "ssid", g_wifi_ssid);
+
+    char *resp_str = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    if (resp_str) {
+        httpd_resp_sendstr(req, resp_str);
+        cJSON_free(resp_str);
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    }
+    return ESP_OK;
+}
+
 esp_err_t wifi_http_stream_server_start(void) {
     if (s_http_server != NULL) return ESP_OK;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.ctrl_port = 32768;
-    config.max_open_sockets = 6;
+    config.max_open_sockets = 7;
+    config.max_uri_handlers = 12;
     config.lru_purge_enable = true;
-    config.stack_size = 6144;
+    config.stack_size = 8192;
     esp_err_t err = httpd_start(&s_http_server, &config);
     if (err != ESP_OK) return err;
 
@@ -904,14 +1068,46 @@ esp_err_t wifi_http_stream_server_start(void) {
         .uri = "/snapshot", .method = HTTP_GET,
         .handler = snapshot_handler, .user_ctx = NULL
     };
-    if ((err = httpd_register_uri_handler(s_http_server, &stream_uri)) != ESP_OK ||
-        (err = httpd_register_uri_handler(s_http_server, &snapshot_uri)) != ESP_OK) {
-        httpd_stop(s_http_server);
-        s_http_server = NULL;
-        return err;
-    }
+    const httpd_uri_t status_uri = {
+        .uri = "/status", .method = HTTP_GET,
+        .handler = status_handler, .user_ctx = NULL
+    };
+    const httpd_uri_t status_api_uri = {
+        .uri = "/api/v1/status", .method = HTTP_GET,
+        .handler = status_handler, .user_ctx = NULL
+    };
+    const httpd_uri_t config_post_uri = {
+        .uri = "/api/v1/config", .method = HTTP_POST,
+        .handler = config_handler, .user_ctx = NULL
+    };
+    const httpd_uri_t config_post_short_uri = {
+        .uri = "/config", .method = HTTP_POST,
+        .handler = config_handler, .user_ctx = NULL
+    };
+    const httpd_uri_t config_options_uri = {
+        .uri = "/api/v1/config", .method = HTTP_OPTIONS,
+        .handler = options_handler, .user_ctx = NULL
+    };
+    const httpd_uri_t config_options_short_uri = {
+        .uri = "/config", .method = HTTP_OPTIONS,
+        .handler = options_handler, .user_ctx = NULL
+    };
+    const httpd_uri_t status_options_uri = {
+        .uri = "/api/v1/status", .method = HTTP_OPTIONS,
+        .handler = options_handler, .user_ctx = NULL
+    };
 
-    ESP_LOGI(TAG, "Native MJPEG server ready at http://<esp32-ip>/stream (VGA)");
+    (void)httpd_register_uri_handler(s_http_server, &stream_uri);
+    (void)httpd_register_uri_handler(s_http_server, &snapshot_uri);
+    (void)httpd_register_uri_handler(s_http_server, &status_uri);
+    (void)httpd_register_uri_handler(s_http_server, &status_api_uri);
+    (void)httpd_register_uri_handler(s_http_server, &config_post_uri);
+    (void)httpd_register_uri_handler(s_http_server, &config_post_short_uri);
+    (void)httpd_register_uri_handler(s_http_server, &config_options_uri);
+    (void)httpd_register_uri_handler(s_http_server, &config_options_short_uri);
+    (void)httpd_register_uri_handler(s_http_server, &status_options_uri);
+
+    ESP_LOGI(TAG, "Native HTTP IoT Server active at http://<esp32-ip>/ (/stream, /snapshot, /api/v1/status, /api/v1/config)");
     return ESP_OK;
 }
 
@@ -982,9 +1178,16 @@ void WiFi_Server_Task(void *pvParameters) {
         if (get_backend_ip(backend_ip, sizeof(backend_ip))) {
             esp_err_t err = send_telemetry_to_backend(backend_ip, get_backend_port(), NULL);
             if (err != ESP_OK) {
-                ESP_LOGW(TAG, "Telemetry to %s:%u failed: %s; refreshing backend discovery",
-                         backend_ip, get_backend_port(), esp_err_to_name(err));
+                ESP_LOGW(TAG, "Telemetry to %s:%u failed: %s; refreshing backend discovery (failures: %u)",
+                         backend_ip, get_backend_port(), esp_err_to_name(err), (unsigned)s_backend_failure_count);
                 wifi_notify_backend_failure();
+            } else {
+                wifi_notify_backend_success();
+                if (strcmp(g_backend_ip, backend_ip) != 0 && is_same_subnet_ip(backend_ip)) {
+                    ESP_LOGI(TAG, "Adopted active backend IP: %s (persisted to NVS)", backend_ip);
+                    str_trim_copy(g_backend_ip, sizeof(g_backend_ip), backend_ip);
+                    (void)wifi_nvs_save_full_config(g_wifi_ssid, NULL, g_backend_ip, g_backend_port);
+                }
             }
         }
     }
