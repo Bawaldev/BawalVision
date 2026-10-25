@@ -320,43 +320,45 @@ std::string LatexPdfGenerator::generateReportPdf(
     std::error_code ec;
     fs::create_directories(kReportDir, ec);
 
+    const fs::path compiled_pdf =
+        fs::path(kReportDir) / fmt::format("report_{}.pdf", entry.frame_id);
+
+    // 1. First priority: compile authentic LaTeX template if TeX engine is available.
+    const std::string tex_path = generateReportTex(entry, template_path);
+    if (!tex_path.empty()) {
+        std::string command;
+        if (std::system("command -v pdflatex >/dev/null 2>&1") == 0) {
+            command = fmt::format(
+                "pdflatex -interaction=nonstopmode -halt-on-error -output-directory={} \"{}\" "
+                ">/dev/null 2>&1",
+                std::string(kReportDir), tex_path);
+        } else if (std::system("command -v tectonic >/dev/null 2>&1") == 0) {
+            command = fmt::format(
+                "tectonic --outdir {} --chatter minimal \"{}\" >/dev/null 2>&1",
+                std::string(kReportDir), tex_path);
+        }
+
+        if (!command.empty()) {
+            std::lock_guard<std::mutex> lock(g_generate_mutex);
+            const int status = std::system(command.c_str());
+            if (status == 0 && fs::is_regular_file(compiled_pdf, ec)) {
+                return compiled_pdf.string();
+            }
+        }
+    }
+
+    // 2. Fallback: embedded C++ PDF renderer when TeX engines are not installed
     MarkdownPdfOptions options;
     options.title = fmt::format("BawalVision Inspection Audit - Frame {}",
                                 entry.frame_id);
     options.subject = "MBG Food Quality & Freshness Compliance Report";
-    const fs::path portable_pdf =
-        fs::path(kReportDir) / fmt::format("report_{}.pdf", entry.frame_id);
     const std::string portable = MarkdownPdfGenerator::generatePdfFile(
-        generateReportMarkdown(entry), portable_pdf, options);
+        generateReportMarkdown(entry), compiled_pdf, options);
     if (!portable.empty()) {
         return portable;
     }
 
-    const std::string tex_path = generateReportTex(entry, template_path);
-    if (tex_path.empty()) {
-        return {};
-    }
-
-    std::string command;
-    if (std::system("command -v pdflatex >/dev/null 2>&1") == 0) {
-        command = fmt::format(
-            "pdflatex -interaction=nonstopmode -halt-on-error -output-directory={} \"{}\" "
-            ">/dev/null 2>&1",
-            std::string(kReportDir), tex_path);
-    } else if (std::system("command -v tectonic >/dev/null 2>&1") == 0) {
-        command = fmt::format(
-            "tectonic --outdir {} --chatter minimal \"{}\" >/dev/null 2>&1",
-            std::string(kReportDir), tex_path);
-    } else {
-        return tex_path;
-    }
-
-    std::lock_guard<std::mutex> lock(g_generate_mutex);
-    const int status = std::system(command.c_str());
-    if (status == 0 && fs::is_regular_file(portable_pdf, ec)) {
-        return portable_pdf.string();
-    }
-    return tex_path;
+    return tex_path.empty() ? std::string{} : tex_path;
 }
 
 } // namespace bawal::report

@@ -87,17 +87,34 @@
         const key = `frame-${record.frame_id}`;
         if (isConvertingPdf[key]) return;
         isConvertingPdf = { ...isConvertingPdf, [key]: true };
-        showToast(`Converting frame #${record.frame_id} Markdown to PDF...`);
+        showToast(`Preparing official audit PDF for frame #${record.frame_id}...`);
+        try {
+            const backendRes = await fetch(`/api/v1/inspections/${record.frame_id}/report.pdf`);
+            if (backendRes.ok && (backendRes.headers.get('Content-Type')?.includes('pdf') || backendRes.headers.get('X-Report-Format') === 'pdf')) {
+                const blob = await backendRes.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `BawalVision-Audit-Frame-${record.frame_id}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                showToast(`Official audit PDF #${record.frame_id} downloaded`);
+                return;
+            }
+        } catch {}
+
         try {
             const markdown = generateInspectionMarkdown(record);
             await downloadMarkdownPdf(
-                `MBG-REPORT-${record.frame_id}.pdf`,
+                `BawalVision-Audit-Frame-${record.frame_id}.pdf`,
                 markdown,
-                { title: `MBG Inspection Report - Frame ${record.frame_id}` }
+                { title: `BawalVision Inspection Audit - Frame ${record.frame_id}` }
             );
             showToast(`PDF report #${record.frame_id} ready`);
         } catch (err) {
-            showToast(err instanceof Error ? err.message : 'Markdown to PDF conversion failed');
+            showToast(err instanceof Error ? err.message : 'PDF generation failed');
         } finally {
             isConvertingPdf = { ...isConvertingPdf, [key]: false };
         }
@@ -342,7 +359,7 @@
                                 disabled={isConvertingPdf[`frame-${record.frame_id}`]}
                                 onclick={() => reportRecordPdf(record)}
                             >
-                                {isConvertingPdf[`frame-${record.frame_id}`] ? '⏳ Converting...' : '📑 PDF (Markdown)'}
+                                {isConvertingPdf[`frame-${record.frame_id}`] ? '⏳ Compiling...' : '📑 PDF (LaTeX)'}
                             </button>
                             <button
                                 type="button"
@@ -519,7 +536,7 @@
                         disabled={isConvertingPdf[`frame-${selectedRecord.frame_id}`]}
                         onclick={reportSelectedPdf}
                     >
-                        {isConvertingPdf[`frame-${selectedRecord.frame_id}`] ? '⏳ Converting PDF...' : '📑 Export PDF (Markdown)'}
+                        {isConvertingPdf[`frame-${selectedRecord.frame_id}`] ? '⏳ Compiling PDF...' : '📑 Export PDF (LaTeX)'}
                     </button>
                     <button
                         type="button"

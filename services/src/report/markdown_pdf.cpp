@@ -811,6 +811,14 @@ public:
                 continue;
             }
 
+            if (stripped == "\\newpage" || stripped == "\\pagebreak" ||
+                stripped == "<!-- pagebreak -->" || stripped == "<div style=\"page-break-after: always;\"></div>") {
+                flushParagraph();
+                newPage();
+                ++i;
+                continue;
+            }
+
             if (isHorizontalRule(stripped)) {
                 flushParagraph();
                 renderHorizontalRule();
@@ -1109,17 +1117,26 @@ private:
 
     void renderHeading(int level, const std::string& text) {
         static constexpr std::array<double, 6> sizes{
-            21.0, 16.0, 13.5, 12.0, 11.2, 10.6};
+            18.0, 15.0, 13.0, 11.5, 11.0, 10.5};
         const double size = sizes[static_cast<std::size_t>(std::clamp(level, 1, 6) - 1)];
-        m_cursor += level == 1 ? 10.0 : 7.0;
+        if (level == 1) {
+            ensureSpace(38.0);
+            drawRect(kMarginLeft, m_cursor, kContentWidth, 32.0, kNavy);
+            const double text_width = measureText(text, Face::Bold, 13.0);
+            const double x = kMarginLeft + std::max(12.0, (kContentWidth - text_width) / 2.0);
+            drawText(x, m_cursor + 20.0, 13.0, Face::Bold, kWhite, text);
+            m_cursor += 38.0;
+            return;
+        }
+        m_cursor += 7.0;
         renderSpans(parseInline(text, Face::Bold), size, 0.0, kNavy);
-        if (level <= 2) {
+        if (level == 2) {
             ensureSpace(8.0);
             drawLine(kMarginLeft, m_cursor + 2.0,
                      kPageWidth - kMarginRight, m_cursor + 2.0,
-                     level == 1 ? kBlue : kLightBlue, level == 1 ? 1.4 : 0.8);
+                     kBlue, 1.0);
         }
-        m_cursor += level == 1 ? 9.0 : 6.0;
+        m_cursor += 6.0;
     }
 
     void renderHorizontalRule() {
@@ -1220,9 +1237,22 @@ private:
                 const auto& cell = row.cells[c];
                 double baseline = top + padding + font_size * 0.82;
                 for (const auto& text_line : cell.lines) {
+                    Rgb cell_color = header ? kNavy : kSlate;
+                    Face cell_face = header ? Face::Bold : Face::Regular;
+                    if (!header) {
+                        if (text_line == "PASS" || text_line == "ACCEPTED") {
+                            cell_color = kGreen;
+                            cell_face = Face::Bold;
+                        } else if (text_line == "REVIEW") {
+                            cell_color = kAmber;
+                            cell_face = Face::Bold;
+                        } else if (text_line == "REJECT" || text_line == "FAIL" || text_line == "REJECTED") {
+                            cell_color = kRed;
+                            cell_face = Face::Bold;
+                        }
+                    }
                     drawText(x + padding, baseline, font_size,
-                             header ? Face::Bold : Face::Regular,
-                             header ? kNavy : kSlate, text_line);
+                             cell_face, cell_color, text_line);
                     baseline += line_height;
                 }
             }

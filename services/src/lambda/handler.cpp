@@ -305,6 +305,22 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             return resp;
         }
 
+        if (route.method == "POST" && route.path.find("/devices/usb/probe") != std::string::npos) {
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+            resp.json_payload = R"({"success":false,"status":"no_server_usb","message":"Cloud serverless backend cannot access host USB. Use Direct Browser Connect (Web Serial) in Chrome/Edge."})";
+            return resp;
+        }
+
+        if (route.method == "POST" && route.path.find("/devices/usb/provision") != std::string::npos) {
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+            resp.json_payload = R"({"success":false,"status":"no_server_usb","message":"Cloud serverless backend cannot access host USB /dev/ttyACM*. Please click 'Direct Browser Connect' to flash Wi-Fi credentials directly from Chrome/Edge."})";
+            return resp;
+        }
+
         if (route.method == "POST" && route.path.find("/devices/disconnect") != std::string::npos) {
             LambdaInspectionResponse resp;
             resp.status_code = 200;
@@ -317,6 +333,11 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             LambdaInspectionResponse resp;
             resp.status_code = 200;
             resp.is_success = true;
+
+            if (route.path.find("/devices/usb/ports") != std::string::npos) {
+                resp.json_payload = R"({"ports":[]})";
+                return resp;
+            }
 
             if (route.path.find("/system/engines") != std::string::npos) {
                 resp.json_payload = R"({"arch":"x86_64_avx2","graviton_available":false,"local_engine_available":true,"cloud_lambda_active":true,"runtime":"aws_lambda_cpp"})";

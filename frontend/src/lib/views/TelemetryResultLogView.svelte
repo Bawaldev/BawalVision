@@ -25,7 +25,43 @@
     async function loadRecords(showLoading = true) {
         if (showLoading && records.length === 0) isLoading = true;
         try {
-            const nextRecords = await fetchRecords();
+            let nextRecords = await fetchRecords().catch(() => []);
+            if (!nextRecords || nextRecords.length === 0) {
+                if (typeof localStorage !== 'undefined') {
+                    try {
+                        const stored = localStorage.getItem('bawal_audit_records');
+                        if (stored) {
+                            const auditList = JSON.parse(stored);
+                            if (Array.isArray(auditList) && auditList.length > 0) {
+                                nextRecords = auditList.map((a: any, idx: number) => ({
+                                    id: String(a.frame_id || idx + 1),
+                                    device_id: a.device_id || 'MOCK_VIDEO_CAM',
+                                    created_at: a.timestamp || new Date().toISOString(),
+                                    temperature: a.surface_temp || 25.0,
+                                    is_spoiled: a.verdict === 'REJECTED',
+                                    t_safe_hours: a.t_safe_hours || 8.0,
+                                    engine_pipeline: a.engine_pipeline || 'YOLOv8s-INT8',
+                                    image_s3_uri: a.image_path || '',
+                                    inspection_foods: (a.detections || []).map((d: any) => ({
+                                        food_name: d.class_name || 'food_item',
+                                        similarity_rate: Number(d.confidence <= 1 ? d.confidence : d.confidence / 100) || 0.8,
+                                        spoilage_score: d.freshness_score ? Math.max(0, 100 - d.freshness_score) : 0,
+                                        is_spoiled: d.freshness_score ? d.freshness_score < 50 : false
+                                    })),
+                                    detections: (a.detections || []).map((d: any) => ({
+                                        class_name: d.class_name || 'food_item',
+                                        confidence: Number(d.confidence <= 1 ? d.confidence : d.confidence / 100) || 0.8,
+                                        freshness_score: d.freshness_score || 96,
+                                        portion_ratio: d.portion_ratio || 0.35,
+                                        bbox: d.bbox || [140, 150, 320, 200]
+                                    }))
+                                }));
+                            }
+                        }
+                    } catch {}
+                }
+            }
+
             if (nextRecords && Array.isArray(nextRecords)) {
                 // Track dynamic updates on existing UIDs
                 const now = Date.now();
@@ -57,8 +93,19 @@
         const pollTimer = setInterval(() => {
             loadRecords(false);
         }, 2000);
+
+        const handleLive = () => {
+            loadRecords(false);
+        };
+        if (typeof window !== 'undefined') {
+            window.addEventListener('bawal-live-detections', handleLive);
+        }
+
         return () => {
             clearInterval(pollTimer);
+            if (typeof window !== 'undefined') {
+                window.removeEventListener('bawal-live-detections', handleLive);
+            }
         };
     });
 

@@ -40,6 +40,7 @@
     let errorMessage = $state('');
     let detectedUsbPorts = $state<USBPortInfo[]>([]);
     let selectedUsbPort = $state('');
+    let backendOnline = $state(true);
     let portOptions = $derived.by(() => detectedUsbPorts.map((p) => p.port));
     let detectedHostIp = $state('');
     let gatewayHostIp = $state('');
@@ -129,7 +130,14 @@
 
     async function refreshHardwareStatus() {
         const hw = await fetchDeviceStatus(formState.backendUrl);
-        if (!hw) return;
+        if (!hw) {
+            backendOnline = false;
+            detectedUsbPorts = [];
+            selectedUsbPort = '';
+            wifiNetworks = [];
+            return;
+        }
+        backendOnline = true;
 
         detectedUsbPorts = hw.usb_ports || [];
         const preferredPort =
@@ -357,12 +365,13 @@
         }
 
         try {
-            // Prefer the backend when it can actually see the board's USB node.
-            // Otherwise go straight to Web Serial: under Docker Desktop the
-            // daemon runs in a VM, so host /dev/ttyACM* is never visible and a
-            // backend call would only fail with "port not accessible".
+            // Prefer direct browser Web Serial when explicitly selected or when
+            // backend runs in VM/cloud without visible host USB ports.
             let res: EspConnectionResult;
-            if (detectedPort) {
+            const useBrowserSerial = selectedUsbPort === 'web_serial' || (!detectedPort && isWebSerialAvailable());
+            if (useBrowserSerial) {
+                res = await provisionViaBrowserSerial(ssid, connectPassword, gatewayIpToUse);
+            } else if (detectedPort) {
                 res = await provisionEspViaUsb(
                     detectedPort,
                     ssid,
@@ -373,7 +382,7 @@
                 // Transport-level server failures (no node visible to the
                 // backend, port busy, ACK timeout) fall back to Web Serial;
                 // credential rejections are surfaced as-is.
-                if (!res.success && isWebSerialAvailable() && /not accessible|no such file|no USB serial|cannot open|timed out|permission denied|did not report/i.test(res.message || '')) {
+                if (!res.success && isWebSerialAvailable() && /not accessible|no such file|no USB serial|cannot open|timed out|permission denied|did not report|no_server_usb/i.test(res.message || '')) {
                     res = await provisionViaBrowserSerial(ssid, connectPassword, gatewayIpToUse);
                 }
             } else {
@@ -612,12 +621,21 @@
         webSerialMsg = `Web Serial is unavailable. Falling back to server-side USB provisioning on ${targetPort}...`;
 
         const hw = await fetchDeviceStatus(formState.backendUrl);
-        if (hw?.server_wifi) {
+        if (!hw) {
+            backendOnline = false;
+            webSerialStatus = 'error';
+            webSerialMsg =
+                `Backend unreachable at ${formState.backendUrl || 'the configured URL'}. ` +
+                'Start it on the host with "just run-backend" (not inside Docker Desktop), then retry.';
+            return false;
+        }
+        backendOnline = true;
+        if (hw.server_wifi) {
             if (hw.server_wifi.ssid) serverWifiSsid = hw.server_wifi.ssid;
             if (hw.server_wifi.backend_ip) serverBackendIp = hw.server_wifi.backend_ip;
         }
 
-        const visiblePorts = hw?.usb_ports || [];
+        const visiblePorts = hw.usb_ports || [];
         if (visiblePorts.length === 0) {
             webSerialStatus = 'idle';
             webSerialMsg =
@@ -1160,6 +1178,16 @@
                                 </div>
                             </div>
                         {/each}
+                    {:else if !backendOnline}
+                        <div class="fedora-list-row empty-row">
+                            <div class="row-leading">
+                                <span class="empty-icon">⚠️</span>
+                                <div>
+                                    <span class="empty-title">Backend offline</span>
+                                    <p class="port-detail-text">Cannot reach the backend API. Start it on the host with <code>just run-backend</code> (Docker Desktop cannot expose host USB or nmcli), then press <strong>Rescan Ports</strong>.</p>
+                                </div>
+                            </div>
+                        </div>
                     {:else}
                         <div class="fedora-list-row empty-row">
                             <div class="row-leading">
@@ -1269,7 +1297,10 @@
                             <div class="row-leading">
                                 <span class="empty-icon">📡</span>
                                 <div>
-                                    {#if isScanningWifi}
+                                    {#if !backendOnline}
+                                        <span class="empty-title">Backend offline</span>
+                                        <p class="port-detail-text">Start the host backend with <code>just run-backend</code> to scan networks through <code>nmcli</code>, then press <strong>Scan Now</strong>.</p>
+                                    {:else if isScanningWifi}
                                         <span class="empty-title">Scanning for available Wi-Fi networks...</span>
                                         <p class="port-detail-text">Querying the backend via <code>nmcli</code>.</p>
                                     {:else}
@@ -1372,9 +1403,12 @@
                                     <select id="wifi-dialog-port" bind:value={selectedUsbPort} class="fedora-select">
                                         {#each portOptions as port}
                                             <option value={port}>{portLabel(port)}</option>
-                                        {:else}
-                                            <option value="">No USB serial ports detected</option>
                                         {/each}
+                                        {#if isWebSerialAvailable()}
+                                            <option value="web_serial">⚡ Direct Browser Connect (Web Serial - /dev/ttyACM0)</option>
+                                        {:else if portOptions.length === 0}
+                                            <option value="">No USB serial ports detected</option>
+                                        {/if}
                                     </select>
                                 </div>
                                 <div class="dialog-field half">
