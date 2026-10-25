@@ -13,6 +13,14 @@ export const handle: Handle = async ({ event, resolve }) => {
         });
     }
 
+    if (event.url.pathname.startsWith('/api/v1/examples/file/')) {
+        const filePath = event.url.pathname.replace('/api/v1/examples/file/', '/examples/');
+        return new Response(null, {
+            status: 302,
+            headers: { Location: filePath }
+        });
+    }
+
     if (event.url.pathname.startsWith('/api/') || event.url.pathname.startsWith('/inspections/')) {
         const backendUrl = env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080';
         const target = `${backendUrl}${event.url.pathname}${event.url.search}`;

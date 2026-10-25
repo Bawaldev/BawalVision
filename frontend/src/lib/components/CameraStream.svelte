@@ -85,7 +85,7 @@
     ]);
     let videoUUIDMap = $state<Record<string, string>>({});
     let selectedVideo = $state('banana/banana_sample_one.mp4');
-    let mockVideoSrc = $state('/api/v1/examples/file/banana/banana_sample_one.mp4');
+    let mockVideoSrc = $state('/examples/banana/banana_sample_one.mp4');
     let mockFileName = $state('banana/banana_sample_one.mp4');
     let customFileKey = $state('');
     let isCustomUpload = $state(false);
@@ -184,7 +184,7 @@
             if (savedVideo && savedVideo !== 'custom') {
                 selectedVideo = savedVideo;
                 mockFileName = savedVideo;
-                mockVideoSrc = `/api/v1/examples/file/${savedVideo}`;
+                mockVideoSrc = `/examples/${savedVideo}`;
             }
             const saved = localStorage.getItem('bawal_source_mode');
             if (saved === 'mock' || saved === 'live') {
@@ -458,7 +458,7 @@
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);
         }
-        mockVideoSrc = `/api/v1/examples/file/${name}`;
+        mockVideoSrc = `/examples/${name}`;
         streamError = false;
         streamEpoch = Date.now();
 
