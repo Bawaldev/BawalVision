@@ -8,6 +8,7 @@
         downloadMarkdown,
         downloadMarkdownPdf,
         generateBatchInspectionMarkdown,
+        generateInspectionLatex,
         generateInspectionMarkdown
     } from '../utils/reportGenerator';
 
@@ -128,7 +129,12 @@
         isConvertingPdf = { ...isConvertingPdf, [key]: true };
         showToast(`Preparing official audit PDF for frame #${record.frame_id}...`);
         try {
-            const backendRes = await fetch(`${resolveApiBase()}/inspections/${record.frame_id}/report.pdf`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
+            const backendRes = await fetch(`${resolveApiBase()}/inspections/${record.frame_id}/report.pdf`, {
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
             if (backendRes.ok && (backendRes.headers.get('Content-Type')?.includes('pdf') || backendRes.headers.get('X-Report-Format') === 'pdf')) {
                 const blob = await backendRes.blob();
                 const url = URL.createObjectURL(blob);
@@ -214,42 +220,63 @@
     }
 
     async function downloadBackendReport(frameId: number, format: 'pdf' | 'tex') {
+        const targetRecord = records.find(r => r.frame_id === frameId) || selectedRecord;
         try {
             if (format === 'pdf') {
                 isDownloadingPdf = { ...isDownloadingPdf, [frameId]: true };
                 showToast(`Compiling LaTeX PDF for frame #${frameId}...`);
             }
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
             const endpoint = `${resolveApiBase()}/inspections/${frameId}/report.${format}`;
-            const response = await fetch(endpoint);
+            const response = await fetch(endpoint, { signal: controller.signal });
+            clearTimeout(timeoutId);
 
-            if (!response.ok) {
-                throw new Error(`Server returned ${response.status}`);
+            if (response.ok) {
+                const servedFormat = response.headers.get('X-Report-Format') === 'pdf' ? 'pdf' : 'tex';
+                const blob = await response.blob();
+                const blobUrl = window.URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+                anchor.href = blobUrl;
+                anchor.download = `BawalVision-Report-${frameId}.${servedFormat}`;
+                document.body.appendChild(anchor);
+                anchor.click();
+                document.body.removeChild(anchor);
+                window.URL.revokeObjectURL(blobUrl);
+
+                showToast(servedFormat === 'pdf'
+                    ? `PDF report #${frameId} ready`
+                    : `TeX engine unavailable — LaTeX source #${frameId} downloaded`);
+                return;
             }
-
-            // The backend falls back to the .tex source when pdflatex is not
-            // installed; X-Report-Format tells us which artifact we received.
-            const servedFormat = response.headers.get('X-Report-Format') === 'pdf' ? 'pdf' : 'tex';
-
-            const blob = await response.blob();
-            const blobUrl = window.URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = blobUrl;
-            anchor.download = `BawalVision-Report-${frameId}.${servedFormat}`;
-            document.body.appendChild(anchor);
-            anchor.click();
-            document.body.removeChild(anchor);
-            window.URL.revokeObjectURL(blobUrl);
-
-            showToast(servedFormat === 'pdf'
-                ? `PDF report #${frameId} ready`
-                : `TeX engine unavailable — LaTeX source #${frameId} downloaded`);
-        } catch (err) {
-            showToast(`Failed to export ${format.toUpperCase()} report`);
+        } catch {
+            // Fall through to client offline export
         } finally {
             if (format === 'pdf') {
                 isDownloadingPdf = { ...isDownloadingPdf, [frameId]: false };
             }
+        }
+
+        // Autonomous Client-Side Fallback when backend is offline
+        if (targetRecord) {
+            if (format === 'tex') {
+                const texContent = generateInspectionLatex(targetRecord);
+                const blob = new Blob([texContent], { type: 'application/x-latex' });
+                const blobUrl = window.URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+                anchor.href = blobUrl;
+                anchor.download = `BawalVision-Report-${frameId}.tex`;
+                document.body.appendChild(anchor);
+                anchor.click();
+                document.body.removeChild(anchor);
+                window.URL.revokeObjectURL(blobUrl);
+                showToast(`LaTeX source #${frameId} downloaded`);
+            } else {
+                await reportRecordPdf(targetRecord);
+            }
+        } else {
+            showToast(`Report export failed: Record #${frameId} not found`);
         }
     }
 </script>

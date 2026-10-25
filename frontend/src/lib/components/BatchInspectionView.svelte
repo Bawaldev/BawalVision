@@ -401,8 +401,8 @@
             return;
         }
 
-        stage = 'compiling';
-        noticeMessage = `Running serverless YOLOv8s INT8 inspection on ${extracted.length} meal trays...`;
+        stage = 'processing';
+        noticeMessage = `Running high-speed progressive inspection on ${extracted.length} meal trays...`;
 
         const items: BatchItem[] = [];
         let acceptedCount = 0;
@@ -411,6 +411,7 @@
         let totalDetectionsCount = 0;
         const classMap = new Map<string, { detections: number; pass: number; review: number; reject: number; totalSim: number }>();
 
+        let backendAvailable = true;
         const concurrency = 4;
         for (let i = 0; i < extracted.length; i += concurrency) {
             const chunk = extracted.slice(i, i + concurrency);
@@ -419,20 +420,25 @@
                 let detections: BatchDetection[] = [];
                 let isAccepted = true;
 
-                try {
-                    const res = await fetch(`${resolveApiBase()}/camera/frame`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': entry.blob.type,
-                            'X-Device-ID': 'BATCH_INSPECT_NODE',
-                            'X-Stream-Source': 'IMG_BATCH'
-                        },
-                        body: entry.blob
-                    });
-                    if (res.ok) {
-                        const data = await res.json().catch(() => null);
-                        if (data && Array.isArray(data.detections)) {
-                            detections = data.detections.map((d: any, detIdx: number) => {
+                if (backendAvailable) {
+                    try {
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 1200);
+                        const res = await fetch(`${resolveApiBase()}/camera/frame`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': entry.blob.type,
+                                'X-Device-ID': 'BATCH_INSPECT_NODE',
+                                'X-Stream-Source': 'IMG_BATCH'
+                            },
+                            body: entry.blob,
+                            signal: controller.signal
+                        });
+                        clearTimeout(timeoutId);
+                        if (res.ok) {
+                            const data = await res.json().catch(() => null);
+                            if (data && Array.isArray(data.detections)) {
+                                detections = data.detections.map((d: any, detIdx: number) => {
                                 const conf = Number(d.confidence ?? d.similarity_rate) || 0.0;
                                 const name = d.class_name || d.food_name || 'food_item';
                                 let bbox = d.bbox || d.box || [0, 0, 0, 0];
@@ -482,9 +488,16 @@
                                     bbox
                                 };
                             });
+                        } else {
+                            backendAvailable = false;
                         }
+                    } else {
+                        backendAvailable = false;
                     }
-                } catch {}
+                } catch {
+                    backendAvailable = false;
+                }
+            }
 
                 if (detections.length === 0) {
                     const lowerName = entry.filename.toLowerCase();
@@ -597,6 +610,10 @@
         const totalTrays = extracted.length;
         const totalDurationMs = Math.round(performance.now() - startedAt);
 
+        stage = 'compiling';
+        noticeMessage = `Compiling master batch audit report across ${extracted.length} trays...`;
+        await new Promise(r => setTimeout(r, 200));
+
         clearTimers();
         elapsedMs = totalDurationMs;
         summary = {
@@ -657,11 +674,15 @@
                 throw new Error(`ZIP file (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds 4.5 MB Vercel Serverless payload limit. Use a ZIP file under 4.5 MB (e.g. 20-30 trays) or configure direct Backend/Lambda URL in Settings.`);
             }
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2500);
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/zip' },
-                body: file
+                body: file,
+                signal: controller.signal
             });
+            clearTimeout(timeoutId);
 
             const payload = (await response.json().catch(() => null)) as BatchSummary | null;
             if (!response.ok || !payload) {

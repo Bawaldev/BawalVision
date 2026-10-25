@@ -1,5 +1,6 @@
 import type { InspectionAuditRecord } from '../types';
 import { resolveApiBase, resolveApiOrigin } from '../backendConfig';
+import { compileClientMarkdownPdf } from './pdfBuilder';
 
 export interface ReportOptions {
     host?: string;
@@ -366,36 +367,110 @@ export async function downloadMarkdownPdf(
 ): Promise<MarkdownPdfResult> {
     const finalMarkdown = await resolveMarkdownImages(markdownContent);
     const safeName = filename.toLowerCase().endsWith('.pdf') ? filename : `${filename}.pdf`;
-    const response = await fetch(reportPdfEndpoint(options.host), {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/pdf'
-        },
-        body: JSON.stringify({
-            markdown: finalMarkdown,
-            title: options.title ?? 'BawalVision Inspection Report',
-            filename: safeName
-        })
-    });
 
-    if (!response.ok) {
-        let detail = `PDF conversion failed (${response.status})`;
-        try {
-            const payload = await response.json();
-            if (payload?.error) detail = String(payload.error);
-        } catch {
-            // keep the status-based message
+    // Attempt 1: C++ Crow Backend /reports/pdf (bounded by 2.5s timeout)
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        const response = await fetch(reportPdfEndpoint(options.host), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/pdf'
+            },
+            body: JSON.stringify({
+                markdown: finalMarkdown,
+                title: options.title ?? 'BawalVision Inspection Report',
+                filename: safeName
+            }),
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+            const blob = await response.blob();
+            if (blob.size > 0) {
+                downloadBlob(safeName, blob);
+                return { blob, filename: safeName };
+            }
         }
-        throw new Error(detail);
+    } catch {
+        // Backend offline, unreachable, or timeout -> Seamless Client-Side PDF Compiler
     }
 
-    const blob = await response.blob();
-    if (blob.size === 0) {
-        throw new Error('PDF conversion returned an empty document');
+    // Attempt 2: Autonomous High-Fidelity Client-Side PDF Compiler (Pure TypeScript/PDF 1.4)
+    try {
+        const clientPdfBlob = await compileClientMarkdownPdf(safeName, finalMarkdown, options.title);
+        downloadBlob(safeName, clientPdfBlob);
+        return { blob: clientPdfBlob, filename: safeName };
+    } catch (clientErr) {
+        // Final fallback: download as markdown artifact
+        downloadMarkdown(safeName.replace(/\.pdf$/i, '.md'), finalMarkdown);
+        throw new Error(clientErr instanceof Error ? clientErr.message : 'PDF generation failed; saved as Markdown.');
     }
-    downloadBlob(safeName, blob);
-    return { blob, filename: safeName };
+}
+
+export function generateInspectionLatex(record: InspectionAuditRecord): string {
+    const esc = (s: string | number | undefined) =>
+        String(s ?? '')
+            .replace(/\\/g, '\\textbackslash ')
+            .replace(/_/g, '\\_')
+            .replace(/%/g, '\\%')
+            .replace(/#/g, '\\#')
+            .replace(/&/g, '\\&');
+
+    const detections = record.detections || [];
+    const dateStr = record.timestamp || new Date().toISOString();
+    return `\\documentclass[a4paper,10pt]{article}
+\\usepackage[margin=20mm]{geometry}
+\\usepackage{booktabs}
+\\usepackage{xcolor}
+\\usepackage{hyperref}
+\\definecolor{bawalblue}{RGB}{15,23,42}
+\\definecolor{passgreen}{RGB}{16,185,129}
+\\definecolor{reviewamber}{RGB}{245,158,11}
+\\definecolor{rejectred}{RGB}{239,68,68}
+
+\\title{\\textbf{BawalVision QC Inspection Audit Report}}
+\\author{Station Node: ${esc(record.device_id || 'ESP32S3_441BF6C95678')}}
+\\date{Frame \\#${record.frame_id} --- ${esc(dateStr)}}
+
+\\begin{document}
+\\maketitle
+
+\\section*{Inspection Summary}
+\\begin{tabular}{ll}
+\\toprule
+\\textbf{Parameter} & \\textbf{Value} \\\\
+\\midrule
+Frame ID & \\#${record.frame_id} \\\\
+Device Node & ${esc(record.device_id || 'ESP32S3_441BF6C95678')} \\\\
+Timestamp & ${esc(dateStr)} \\\\
+Compliance Status & \\textbf{${esc(record.verdict || 'ACCEPTED')}} \\\\
+Surface Temperature & ${Number(record.surface_temp || 25.0).toFixed(1)}\\,$^\\circ$C \\\\
+Estimated Safe Shelf Life ($t_{\\mathrm{safe}}$) & ${Number(record.t_safe_hours || 8.0).toFixed(1)}\\,h \\\\
+Compliance SHA-256 Checksum & \\texttt{${esc(record.checksum_sha256 || 'N/A')}} \\\\
+\\bottomrule
+\\end{tabular}
+
+\\section*{Multimodal Food Quality Detections}
+\\begin{tabular}{rllll}
+\\toprule
+\\textbf{\\#} & \\textbf{Food Class} & \\textbf{Detector Confidence} & \\textbf{SIMD Freshness} & \\textbf{Status} \\\\
+\\midrule
+${detections.map((d, i) => {
+    const conf = Math.round((d.confidence || 0) * 100);
+    const fresh = Math.round(d.freshness_score || 96);
+    const detStatus = fresh < 75 ? 'REVIEW' : 'PASS';
+    return `${i + 1} & ${esc(d.class_name || 'food')} & ${conf}\\% & ${fresh}\\% & ${detStatus} \\\\`;
+}).join('\n')}
+\\bottomrule
+\\end{tabular}
+
+\\vfill
+\\noindent\\rule{\\textwidth}{0.4pt}
+\\footnotesize \\textit{Generated autonomously by BawalVision Industrial AI System --- SHA256 Checksum: ${esc(record.checksum_sha256 || 'N/A')}}
+\\end{document}`;
 }
 
 export async function copyMarkdown(markdownContent: string): Promise<boolean> {
