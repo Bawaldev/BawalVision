@@ -290,10 +290,14 @@
                     },
                     body: blob
                 })
-                .then((res) => {
+                .then(async (res) => {
                     if (res.ok) {
                         mockPushedFrames++;
                         streamError = false;
+                        const data = await res.json().catch(() => null);
+                        if (data && Array.isArray(data.detections)) {
+                            window.dispatchEvent(new CustomEvent('bawal-live-detections', { detail: data }));
+                        }
                     }
                 })
                 .catch(() => {})
@@ -330,9 +334,15 @@
                         'X-Video-Rewind': isRewound ? '1' : '0'
                     },
                     body: blob
-                }).then(() => {
-                    mockPushedFrames++;
-                    streamError = false;
+                }).then(async (res) => {
+                    if (res && res.ok) {
+                        mockPushedFrames++;
+                        streamError = false;
+                        const data = await res.json().catch(() => null);
+                        if (data && Array.isArray(data.detections)) {
+                            window.dispatchEvent(new CustomEvent('bawal-live-detections', { detail: data }));
+                        }
+                    }
                 }).catch(() => {});
             }, 'image/jpeg', 0.85);
         } catch {}

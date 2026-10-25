@@ -141,6 +141,38 @@
     let isDestroyed = false;
 
     // Real Backend Polling Step
+    let lastLiveDetectionTime = 0;
+
+    function applyDetections(rawList: any[]) {
+        if (!Array.isArray(rawList)) return;
+        const activeThreshold = Math.min(0.98, Math.max(0.25, Number(systemConfig.minConfidenceThreshold) || 0.35));
+        const filtered = rawList.filter((det: any) => {
+            const conf = Number(det.similarity_rate ?? det.confidence) || 0.0;
+            return conf >= activeThreshold;
+        });
+        if (filtered.length > 0) {
+            lastLiveDetectionTime = Date.now();
+            detections = filtered.map((det: any) => {
+                const spoilage = Number(det.spoilage_score) || 0;
+                const conf = Number(det.similarity_rate ?? det.confidence) || 0.0;
+                let st: 'PASS' | 'REVIEW' | 'REJECT' = det.status;
+                if (!st || (st as string) === '') {
+                    st = (spoilage >= 50 || conf < activeThreshold) ? 'REJECT' : ((spoilage >= 25 || conf < (activeThreshold + 0.10)) ? 'REVIEW' : 'PASS');
+                }
+                const name = det.food_name || det.class_name || 'food_item';
+                const box = det.box || det.bbox || [];
+                return {
+                    food_name: name,
+                    similarity_rate: conf,
+                    spoilage_score: spoilage,
+                    status: st,
+                    category: getCategory(name),
+                    box: box
+                };
+            });
+        }
+    }
+
     async function pollBackendData() {
         if (isPolling) return;
         isPolling = true;
@@ -225,26 +257,8 @@
                     isOnline = true;
                 }
                 hasLiveDetections = true;
-                const activeThreshold = Math.min(0.98, Math.max(0.25, Number(systemConfig.minConfidenceThreshold) || 0.35));
-                detections = latestLive.detections
-                    .filter((det: any) => (Number(det.similarity_rate) || 0.0) >= activeThreshold)
-                    .map((det: any) => {
-                        const spoilage = Number(det.spoilage_score) || 0;
-                        const conf = Number(det.similarity_rate) || 0.0;
-                        let st: 'PASS' | 'REVIEW' | 'REJECT' = det.status;
-                        if (!st || (st as string) === '') {
-                            st = (spoilage >= 50 || conf < activeThreshold) ? 'REJECT' : ((spoilage >= 25 || conf < (activeThreshold + 0.10)) ? 'REVIEW' : 'PASS');
-                        }
-                        return {
-                            food_name: det.food_name || 'food_item',
-                            similarity_rate: conf,
-                            spoilage_score: spoilage,
-                            status: st,
-                            category: getCategory(det.food_name || ''),
-                            box: det.box || []
-                        };
-                    });
-            } else if (isLiveStreamActive) {
+                applyDetections(latestLive.detections);
+            } else if (isLiveStreamActive && (Date.now() - lastLiveDetectionTime > 4000)) {
                 detections = [];
             }
 
@@ -340,6 +354,7 @@
             window.addEventListener('hashchange', syncTabFromLocation);
             window.addEventListener('popstate', syncTabFromLocation);
             window.addEventListener('bawal-clear-detections', handleClearDetections);
+            window.addEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
         }
 
         // Initial sync of detection threshold from backend (or Docker env default)
@@ -361,6 +376,12 @@
         runPollingLoop();
     });
 
+    function handleLiveDetectionsEvent(e: CustomEvent) {
+        if (e.detail && Array.isArray(e.detail.detections)) {
+            applyDetections(e.detail.detections);
+        }
+    }
+
     function handleClearDetections() {
         detections = [];
     }
@@ -372,6 +393,7 @@
             window.removeEventListener('hashchange', syncTabFromLocation);
             window.removeEventListener('popstate', syncTabFromLocation);
             window.removeEventListener('bawal-clear-detections', handleClearDetections);
+            window.removeEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
         }
     });
 

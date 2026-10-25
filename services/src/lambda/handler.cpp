@@ -135,7 +135,12 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
                 return resp;
             }
             if (route.path.find("/inspections/latest") != std::string::npos) {
-                resp.json_payload = R"({"frame_id":1,"status":"PASSED","device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_AVX2_LAMBDA","processing_time_ms":15.2,"surface_temp":28.5,"message":"Cloud Lambda Serverless Active","detections":[]})";
+                std::lock_guard<std::mutex> lock(m_mutex);
+                if (!m_last_inspection_json.empty()) {
+                    resp.json_payload = m_last_inspection_json;
+                } else {
+                    resp.json_payload = R"({"frame_id":1,"status":"PASSED","device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_AVX2_LAMBDA","processing_time_ms":15.2,"surface_temp":28.5,"message":"Cloud Lambda Serverless Active","detections":[]})";
+                }
                 return resp;
             }
             if (route.path.find("/records") != std::string::npos ||
@@ -251,6 +256,7 @@ LambdaInspectionResponse VisionLambdaHandler::handleLocked(
     if (const auto error = glz::write_json(dto, response.json_payload); error) {
         return errorResponse(500, "Could not serialize inspection result", start);
     }
+    m_last_inspection_json = response.json_payload;
     return response;
 }
 

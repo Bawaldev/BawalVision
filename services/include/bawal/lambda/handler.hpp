@@ -96,6 +96,7 @@ private:
     BatchSummaryProcessor m_batch_processor;
     std::atomic<bool> m_initialized{false};
     std::atomic<bool> m_configured{false};
+    std::string m_last_inspection_json;
 };
 
 } // namespace bawal::lambda
