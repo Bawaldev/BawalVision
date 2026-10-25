@@ -35,7 +35,7 @@
     let sourceModeBusy = $state(false);
 
     // ESP32-S3 Hardware Connection & USB Serial Provisioning State
-    let connectionStatus = $state<'disconnected' | 'connecting' | 'connected' | 'failed'>('disconnected');
+    let connectionStatus = $state<'disconnected' | 'connecting' | 'connected' | 'wifi_only' | 'failed'>('disconnected');
     let connectingStepText = $state('Probing shared Wi-Fi & USB slots...');
     let errorMessage = $state('');
     let detectedUsbPorts = $state<USBPortInfo[]>([]);
@@ -143,7 +143,7 @@
         const preferredPort =
             detectedUsbPorts.find((p) => p.is_esp32) || detectedUsbPorts[0];
         if (detectedUsbPorts.length === 0) {
-            selectedUsbPort = '';
+            selectedUsbPort = isWebSerialAvailable() ? 'web_serial' : '';
         } else if (!selectedUsbPort || !detectedUsbPorts.some((p) => p.port === selectedUsbPort)) {
             selectedUsbPort = preferredPort?.port || '';
         }
@@ -194,23 +194,33 @@
 
         const inPairingGrace = Date.now() < pairingGraceUntil;
         const serialWifi = hw.esp_usb_status?.wifi_connected === true;
-        if ((hw.connected || serialWifi) && !inPairingGrace) {
-            const serialOnly = !hw.connected && serialWifi;
+        if (hw.connected && !inPairingGrace) {
             connectionStatus = 'connected';
             lastConnDetails = {
                 success: true,
                 deviceId: hw.device_id || hw.esp_usb_status?.device_id || formState.deviceId,
                 firmwareVersion: hw.firmware_version || '1.0.0',
-                ipAddress: hw.ip_address || (serialOnly ? hw.esp_usb_status?.port : '') || serverBackendIp || 'LAN',
-                connectionMode: serialOnly ? 'usb_serial' : hw.connection_mode,
-                latencyMs: serialOnly || hw.connection_mode === 'usb_serial' ? 4 : 9,
-                message: serialOnly
-                    ? `Connected via USB Serial — ESP32-S3 on Wi-Fi "${hw.esp_usb_status?.current_ssid || 'unknown'}"`
-                    : hw.connection_mode === 'usb_serial'
-                        ? `Connected via USB Serial (${hw.ip_address}) — Server Wi-Fi Synced`
-                        : `Connected on shared Wi-Fi network (${hw.ip_address || 'LAN'})`
+                ipAddress: hw.ip_address || serverBackendIp || 'LAN',
+                connectionMode: hw.connection_mode,
+                latencyMs: hw.connection_mode === 'usb_serial' ? 4 : 9,
+                message: hw.connection_mode === 'usb_serial'
+                    ? `Connected via USB Serial (${hw.ip_address}) — Server Wi-Fi Synced`
+                    : `Connected on shared Wi-Fi network (${hw.ip_address || 'LAN'})`
             };
-        } else if (!hw.connected && !serialWifi && connectionStatus === 'connected' && !inPairingGrace) {
+        } else if (serialWifi && !inPairingGrace) {
+            connectionStatus = 'wifi_only';
+            lastConnDetails = {
+                success: false,
+                deviceId: hw.esp_usb_status?.device_id || formState.deviceId,
+                firmwareVersion: hw.firmware_version || '1.0.0',
+                ipAddress: hw.esp_usb_status?.port || 'USB Serial',
+                connectionMode: 'usb_serial',
+                latencyMs: 4,
+                message: `ESP32-S3 joined Wi-Fi "${hw.esp_usb_status?.current_ssid || 'unknown'}", but the backend cannot reach it. Check AP client isolation or firewall.`
+            };
+        } else if (!hw.connected && !serialWifi &&
+                   (connectionStatus === 'connected' || connectionStatus === 'wifi_only') &&
+                   !inPairingGrace) {
             connectionStatus = 'disconnected';
         }
     }
@@ -1020,6 +1030,8 @@
                             {lastConnDetails.connectionMode === 'usb_serial' ? 'Connected (USB Sync)' : 'Connected (Same Wi-Fi)'}
                         {:else if connectionStatus === 'connecting'}
                             Probing Hardware...
+                        {:else if connectionStatus === 'wifi_only'}
+                            Wi-Fi OK (Backend Offline)
                         {:else if connectionStatus === 'failed'}
                             Not Detected
                         {:else}
@@ -1410,10 +1422,16 @@
                                         {/each}
                                         {#if isWebSerialAvailable()}
                                             <option value="web_serial">⚡ Direct Browser Connect (Web Serial - /dev/ttyACM0)</option>
-                                        {:else if portOptions.length === 0}
+                                        {/if}
+                                        {#if portOptions.length === 0 && !isWebSerialAvailable()}
                                             <option value="">No USB serial ports detected</option>
                                         {/if}
                                     </select>
+                                    {#if portOptions.length === 0 && !isWebSerialAvailable()}
+                                        <p class="port-detail-text" style="color: #ea580c; font-size: 0.75rem; margin-top: 4px;">
+                                            ⚠️ Web Serial is blocked or unsupported in this browser (e.g. Brave Shields). Use Chrome/Edge or enable Serial in brave://settings/content/serialPorts to pair /dev/ttyACM0 directly.
+                                        </p>
+                                    {/if}
                                 </div>
                                 <div class="dialog-field half">
                                     <label for="wifi-dialog-backend">Gateway Host IP</label>
@@ -1509,6 +1527,16 @@
                             <span class="connecting-step-title">{connectingStepText}</span>
                             <small class="connecting-hint">Checking shared Wi-Fi heartbeats & USB serial slots...</small>
                         </div>
+                    </div>
+                {:else if connectionStatus === 'wifi_only'}
+                    <div class="esp-failed-box">
+                        <div class="failed-info">
+                            <span class="failed-icon">📶</span>
+                            <span class="failed-text">{lastConnDetails.message || 'ESP32-S3 is on Wi-Fi but the backend cannot reach it.'}</span>
+                        </div>
+                        <button type="button" class="btn-retry-conn" onclick={handleConnectEsp}>
+                            ↻ Retry
+                        </button>
                     </div>
                 {:else if connectionStatus === 'failed'}
                     <div class="esp-failed-box">
@@ -1950,6 +1978,12 @@
         border-color: rgba(239, 68, 68, 0.35);
     }
 
+    .esp-status-chip.wifi_only {
+        color: var(--accent-amber);
+        background: var(--accent-amber-dim);
+        border-color: rgba(217, 119, 6, 0.35);
+    }
+
     .status-dot {
         width: 6px;
         height: 6px;
@@ -1969,6 +2003,10 @@
 
     .status-dot.failed {
         background: var(--accent-red);
+    }
+
+    .status-dot.wifi_only {
+        background: var(--accent-amber);
     }
 
     @keyframes pulse-dot {
@@ -2095,6 +2133,11 @@
     .esp-connection-card.failed {
         border-color: rgba(239, 68, 68, 0.3);
         background: rgba(239, 68, 68, 0.03);
+    }
+
+    .esp-connection-card.wifi_only {
+        border-color: rgba(217, 119, 6, 0.3);
+        background: rgba(217, 119, 6, 0.03);
     }
 
     .esp-diag-grid {
