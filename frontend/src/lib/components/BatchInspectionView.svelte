@@ -812,7 +812,9 @@
     }
 
     function formatPercent(value: number): string {
-        return `${(value * 100).toFixed(0)}%`;
+        const val = Number(value) || 0;
+        const normalized = (val > 0 && val <= 1.0) ? val * 100 : val;
+        return `${Math.round(normalized)}%`;
     }
 
     function qualityTone(index: number): 'good' | 'warn' | 'bad' {
