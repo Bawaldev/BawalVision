@@ -959,8 +959,8 @@
             } else {
                 connectionStatus = 'failed';
                 let msg = res.message || 'No ESP32-S3 detected on shared Wi-Fi or USB slots.';
-                if (msg.includes('Vision pipeline')) {
-                    msg = 'No ESP32-S3 stream active on cloud. Use Direct Browser Connect (/dev/ttyACM0) or verify Wi-Fi.';
+                if (msg.toLowerCase().includes('vision pipeline') || msg.toLowerCase().includes('could not process') || msg.includes('422') || msg.includes('502') || msg.toLowerCase().includes('backend unreachable')) {
+                    msg = 'No ESP32-S3 IoT node detected on cloud stream. Use Direct Browser Connect (/dev/ttyACM0) or connect to your local backend (http://localhost:8080).';
                 }
                 errorMessage = msg;
                 onDeviceConnectionChange?.(false, targetId);
@@ -969,8 +969,8 @@
         } catch (err: any) {
             connectionStatus = 'failed';
             let msg = err?.message || 'Failed to probe ESP32-S3 hardware.';
-            if (msg.includes('Vision pipeline')) {
-                msg = 'No ESP32-S3 stream active on cloud. Use Direct Browser Connect (/dev/ttyACM0) or verify Wi-Fi.';
+            if (msg.toLowerCase().includes('vision pipeline') || msg.toLowerCase().includes('could not process') || msg.includes('422') || msg.includes('502') || msg.toLowerCase().includes('backend unreachable')) {
+                msg = 'No ESP32-S3 IoT node detected on cloud stream. Use Direct Browser Connect (/dev/ttyACM0) or connect to your local backend (http://localhost:8080).';
             }
             errorMessage = msg;
             onDeviceConnectionChange?.(false, targetId);

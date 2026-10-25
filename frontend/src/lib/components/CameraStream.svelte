@@ -139,6 +139,12 @@
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
     let discoveredStreamUrl = $state('');
+    let isAttemptingLocalStream = $state(true);
+    let liveImgEl = $state<HTMLImageElement | null>(null);
+    let isLiveFeedActive = $state(false);
+    let isPushingLiveFrame = false;
+    let livePushTimer: ReturnType<typeof setInterval> | null = null;
+    let liveFrameSeq = 0;
     let deviceStatusTimer: ReturnType<typeof setInterval> | null = null;
     let retryCount = $state(0);
     const MAX_RETRIES = 3;
@@ -153,6 +159,122 @@
                     ? withApiOrigin(discoveredStreamUrl, activeApiBase)
                     : `${activeApiBase}/camera/stream?t=${streamEpoch}`)
     );
+
+    function handleLiveImgLoaded() {
+        streamError = false;
+        retryCount = 0;
+        isLiveFeedActive = true;
+        scheduleLiveRefresh();
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('bawal-camera-online', {
+                detail: { active: true }
+            }));
+        }
+    }
+
+    function handleLiveImgError() {
+        if (!discoveredStreamUrl && typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+            discoveredStreamUrl = 'http://localhost:8080/api/v1/camera/stream';
+            streamEpoch = Date.now();
+            return;
+        }
+        streamError = true;
+        isLiveFeedActive = false;
+    }
+
+    function connectLocalBackendStream() {
+        discoveredStreamUrl = 'http://localhost:8080/api/v1/camera/stream';
+        isAttemptingLocalStream = true;
+        streamError = false;
+        retryCount = 0;
+        streamEpoch = Date.now();
+    }
+
+    function captureAndPushLiveFrame() {
+        if (!liveImgEl || isPushingLiveFrame || sourceMode !== 'live' || streamError || !isLiveFeedActive) return;
+        if (!liveImgEl.complete || liveImgEl.naturalWidth === 0) return;
+
+        isPushingLiveFrame = true;
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 480;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                isPushingLiveFrame = false;
+                return;
+            }
+            ctx.drawImage(liveImgEl, 0, 0, 640, 480);
+            canvas.toBlob((blob) => {
+                if (!blob) {
+                    isPushingLiveFrame = false;
+                    return;
+                }
+                const currentSeq = ++liveFrameSeq;
+                fetch(apiEndpoint('/api/v1/camera/frame'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'image/jpeg',
+                        'X-Device-ID': deviceId || 'ESP32S3_CAM',
+                        'X-Stream-Source': 'LIVE_CAMERA',
+                        'X-Frame-ID': String(currentSeq),
+                        'X-Inference-Target': 'YOLO_OPENCV4'
+                    },
+                    body: blob
+                })
+                .then(async (res) => {
+                    if (res && res.ok) {
+                        const data = await res.json().catch(() => null);
+                        if (data && Array.isArray(data.detections)) {
+                            let thumb = '';
+                            try {
+                                if (data.annotated_image_base64) {
+                                    thumb = `data:image/jpeg;base64,${data.annotated_image_base64}`;
+                                } else if (data.image_path && (data.image_path.startsWith('data:') || data.image_path.startsWith('/inspections/'))) {
+                                    thumb = data.image_path;
+                                } else {
+                                    thumb = canvas.toDataURL('image/jpeg', 0.85);
+                                }
+                            } catch {}
+
+                            if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('bawal-live-detections', {
+                                    detail: {
+                                        ...data,
+                                        source: 'live_camera',
+                                        deviceId: deviceId || 'ESP32S3_CAM',
+                                        thumbnail: thumb
+                                    }
+                                }));
+                            }
+                        }
+                    }
+                })
+                .catch(() => {})
+                .finally(() => {
+                    isPushingLiveFrame = false;
+                });
+            }, 'image/jpeg', 0.82);
+        } catch {
+            isPushingLiveFrame = false;
+        }
+    }
+
+    function startLivePushing() {
+        stopLivePushing();
+        livePushTimer = setInterval(() => {
+            if (sourceMode === 'live' && isLiveFeedActive && !streamError && isTabVisible) {
+                captureAndPushLiveFrame();
+            }
+        }, 1500);
+    }
+
+    function stopLivePushing() {
+        if (livePushTimer) {
+            clearInterval(livePushTimer);
+            livePushTimer = null;
+        }
+    }
 
     function handleVisibilityChange() {
         if (typeof document !== 'undefined') {
@@ -248,6 +370,11 @@
                 // Fallback to presets if backend is unavailable
             });
 
+        if (sourceMode === 'live') {
+            startLivePushing();
+        } else {
+            startMockPushing();
+        }
     });
 
     function formatExampleLabel(path: string): string {
@@ -505,6 +632,7 @@
 
     function startMockPushing() {
         stopMockPushing();
+        stopLivePushing();
         // Run continuous frame capture into AI vision pipeline (optimized for network/serverless ingress)
         pushInterval = setInterval(() => {
             if (sourceMode === 'mock') {
@@ -537,6 +665,7 @@
         }
 
         if (mode === 'mock') {
+            stopLivePushing();
             // 1. Immediately request backend mode change and wipe frames/detections
             await fetch(apiEndpoint('/api/v1/camera/mode'), {
                 method: 'POST',
@@ -560,6 +689,7 @@
         } else {
             // 1. Stop mock pushing and pause video immediately
             stopMockPushing();
+        stopLivePushing();
             if (mockVideoEl) {
                 mockVideoEl.pause();
             }
@@ -576,6 +706,7 @@
             await new Promise(r => setTimeout(r, 800));
 
             streamEpoch = Date.now();
+            startLivePushing();
             isSwitchingMode = false;
         }
     }
@@ -706,6 +837,7 @@
         } else {
             mockVideoEl.pause();
             stopMockPushing();
+        stopLivePushing();
             pushCurrentFrameOnce();
         }
     }
@@ -753,6 +885,7 @@
             deviceStatusTimer = null;
         }
         stopMockPushing();
+        stopLivePushing();
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);
         }
@@ -955,13 +1088,15 @@
                 {/if}
             {:else}
                 <!-- Live Stream Mode (Unified MJPEG Ingress from ESP32-S3 Camera) -->
-                {#if hasCamera && !streamError}
+                {#if (hasCamera || isAttemptingLocalStream || discoveredStreamUrl) && !streamError}
                     <img
+                        bind:this={liveImgEl}
                         src={activeStreamUrl}
                         alt="AI Live Inspection Stream"
                         class="feed-video"
-                        onload={() => { streamError = false; retryCount = 0; scheduleLiveRefresh(); }}
-                        onerror={() => { streamError = true; }}
+                        crossorigin="anonymous"
+                        onload={handleLiveImgLoaded}
+                        onerror={handleLiveImgError}
                     />
 
                     <!-- Dynamic AI Bounding Box HUD Overlay for Live ESP Stream -->
@@ -1015,6 +1150,9 @@
                         <div class="standby-actions-row">
                             <button type="button" class="switch-mock-btn" onclick={() => { setSourceMode('mock'); togglePlayPause(); }}>
                                 🎬 Switch to Mock Video (Simulation)
+                            </button>
+                            <button type="button" class="local-backend-btn" onclick={connectLocalBackendStream}>
+                                🔌 Connect Localhost Backend (:8080)
                             </button>
                             <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); }}>
                                 ↻ Reconnect Camera
@@ -1758,6 +1896,27 @@
     }
 
     .switch-mock-btn:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.1);
+    }
+
+    .local-backend-btn {
+        background: #3b82f6;
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 0.78rem;
+        border: none;
+        padding: 8px 16px;
+        border-radius: var(--radius-pill);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: transform 0.15s ease, filter 0.15s ease;
+        box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+    }
+
+    .local-backend-btn:hover {
         transform: translateY(-1px);
         filter: brightness(1.1);
     }

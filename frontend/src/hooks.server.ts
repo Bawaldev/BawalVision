@@ -23,7 +23,18 @@ export const handle: Handle = async ({ event, resolve }) => {
 
     if (event.url.pathname.startsWith('/api/') || event.url.pathname.startsWith('/inspections/')) {
         const backendUrl = env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080';
-        const target = `${backendUrl}${event.url.pathname}${event.url.search}`;
+        let targetPath = event.url.pathname;
+        if (backendUrl.includes('execute-api') || backendUrl.includes('lambda-url')) {
+            if (targetPath === '/api/v1/camera/frame') {
+                targetPath = '/api/v1/lambda/inspect';
+            }
+        }
+        const target = `${backendUrl}${targetPath}${event.url.search}`;
+
+        const jsonHeaders = {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        };
 
         try {
             const res = await fetch(target, {
@@ -31,6 +42,15 @@ export const handle: Handle = async ({ event, resolve }) => {
                 headers: event.request.headers,
                 body: ['GET', 'HEAD'].includes(event.request.method) ? undefined : await event.request.arrayBuffer()
             });
+
+            if (res.status === 422 && event.url.pathname.includes('/devices/connect')) {
+                return new Response(JSON.stringify({
+                    success: false,
+                    status: 'disconnected',
+                    device_id: 'NO_ESP32_NODE',
+                    message: 'No ESP32-S3 IoT node detected on cloud stream. Use Direct Browser Connect (/dev/ttyACM0) or connect to your local backend (http://localhost:8080).'
+                }), { status: 200, headers: jsonHeaders });
+            }
 
             const headers = new Headers(res.headers);
             headers.delete('content-encoding');
@@ -44,12 +64,32 @@ export const handle: Handle = async ({ event, resolve }) => {
         } catch (err) {
             console.warn(`[PROXY FALLBACK] Backend ${target} unreachable, serving cloud serverless state:`, err);
 
-            const jsonHeaders = {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            };
-
             const path = event.url.pathname;
+            if (path.includes('/devices/connect')) {
+                return new Response(JSON.stringify({
+                    success: false,
+                    status: 'disconnected',
+                    device_id: 'NO_ESP32_NODE',
+                    message: 'No ESP32-S3 IoT node detected on cloud stream. Use Direct Browser Connect (/dev/ttyACM0) or connect to your local backend (http://localhost:8080).'
+                }), { status: 200, headers: jsonHeaders });
+            }
+            if (path.includes('/devices/disconnect')) {
+                return new Response(JSON.stringify({
+                    success: true,
+                    status: 'disconnected',
+                    message: 'Device disconnected'
+                }), { status: 200, headers: jsonHeaders });
+            }
+            if (path.includes('/devices/usb/ports')) {
+                return new Response(JSON.stringify({
+                    ports: []
+                }), { status: 200, headers: jsonHeaders });
+            }
+            if (path.includes('/devices/wifi/networks')) {
+                return new Response(JSON.stringify({
+                    networks: []
+                }), { status: 200, headers: jsonHeaders });
+            }
             if (path.includes('/system/engines')) {
                 return new Response(JSON.stringify({
                     arch: 'cloud-serverless',

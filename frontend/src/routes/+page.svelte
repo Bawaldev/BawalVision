@@ -433,6 +433,7 @@
             window.addEventListener('popstate', syncTabFromLocation);
             window.addEventListener('bawal-clear-detections', handleClearDetections);
             window.addEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
+            window.addEventListener('bawal-camera-online', handleCameraOnline as EventListener);
         }
 
         // Prefer a local C++ backend for live camera/SIMD when the cloud UI can
@@ -483,7 +484,20 @@
 
     function handleLiveDetectionsEvent(e: CustomEvent) {
         if (e.detail && Array.isArray(e.detail.detections)) {
+            hasCamera = true;
+            isOnline = true;
+            lastLiveDetectionTime = Date.now();
             applyDetections(e.detail.detections, e.detail);
+            if (e.detail.scene_optical) {
+                latestOptical = e.detail.scene_optical;
+            }
+        }
+    }
+
+    function handleCameraOnline(e: CustomEvent) {
+        if (e.detail?.active) {
+            hasCamera = true;
+            isOnline = true;
         }
     }
 
@@ -499,6 +513,7 @@
             window.removeEventListener('popstate', syncTabFromLocation);
             window.removeEventListener('bawal-clear-detections', handleClearDetections);
             window.removeEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
+            window.removeEventListener('bawal-camera-online', handleCameraOnline as EventListener);
         }
     });
 

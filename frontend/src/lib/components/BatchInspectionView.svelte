@@ -298,7 +298,8 @@
                         const status = det.status || 'PASS';
                         const color = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444');
                         const confPct = Math.round((det.confidence || 0) * (det.confidence <= 1 ? 100 : 1));
-                        const freshPct = Math.round(det.freshness || 96);
+                        const rawFresh = Number(det.freshness) || 96;
+                        const freshPct = Math.round(rawFresh <= 1.0 ? rawFresh * 100 : (rawFresh > 100 ? 100 : rawFresh));
                         const label = `${det.class_name} ${confPct}% [${status} ${freshPct}%]`;
 
                         ctx.strokeStyle = color;
@@ -425,7 +426,7 @@
                                     bbox = defaultBoxes[detIdx % defaultBoxes.length];
                                 }
                                 const spoilage = Number(d.spoilage_score) || 0;
-                                const freshness = Math.max(0, 100 - spoilage);
+                                const freshness = Math.max(0, Math.min(100, 100 - spoilage));
                                 const stat = (spoilage >= 50 || conf < 0.35) ? 'REJECT' : ((spoilage >= 25 || conf < 0.45) ? 'REVIEW' : 'PASS');
                                 if (stat === 'REJECT') isAccepted = false;
                                 return {
@@ -734,8 +735,8 @@
                     );
                     it.detections.forEach((d, dIdx) => {
                         const bbox = d.bbox || [0, 0, 0, 0];
-                        const conf = Math.round(d.confidence <= 1 ? d.confidence * 100 : d.confidence);
-                        const fresh = Math.round(d.freshness <= 1 ? d.freshness * 100 : d.freshness);
+                        const conf = Math.round(d.confidence <= 1 ? d.confidence * 100 : Math.min(100, d.confidence));
+                        const fresh = Math.round(d.freshness <= 1 ? d.freshness * 100 : Math.min(100, d.freshness));
                         mdLines.push(`| ${dIdx + 1} | ${d.class_name} | [${bbox.join(', ')}] | ${conf}% | ${fresh}% | ${d.status} |`);
                     });
                     mdLines.push('');
@@ -807,7 +808,11 @@
 
     function formatPercent(value: number): string {
         const val = Number(value) || 0;
-        const normalized = (val > 0 && val <= 1.0) ? val * 100 : val;
+        let normalized = (val > 0 && val <= 1.0) ? val * 100 : val;
+        if (normalized > 100) {
+            normalized = (normalized >= 9900 && normalized <= 10000) ? normalized / 100 : Math.min(100, normalized);
+        }
+        if (normalized < 0) normalized = 0;
         return `${Math.round(normalized)}%`;
     }
 
