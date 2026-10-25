@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import { resolveApiBase, setConfiguredApiBase } from '../backendConfig';
     import type { FoodDetection, SceneOpticalMetrics } from '../types';
 
@@ -150,21 +150,47 @@
             return;
         }
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: {
-                    facingMode: { ideal: 'environment' },
-                    width: { ideal: 640 },
-                    height: { ideal: 480 }
-                },
-                audio: false
-            });
+            let stream: MediaStream | null = null;
+            try {
+                // Primary: Try rear/environment camera on smartphone
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: { ideal: 'environment' },
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                });
+            } catch {
+                // Fallback: Default webcam for laptops / PCs without environment camera
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                });
+            }
+
+            if (!stream) {
+                throw new Error('Unable to acquire camera video stream.');
+            }
+
             deviceCamStream = stream;
+            isDeviceCamActive = true;
+            await tick();
             if (deviceCamVideoEl) {
                 deviceCamVideoEl.srcObject = stream;
-                await deviceCamVideoEl.play().catch(() => {});
+                try {
+                    await deviceCamVideoEl.play();
+                } catch {}
             }
-            isDeviceCamActive = true;
             startLivePushing();
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('bawal-camera-online', {
+                    detail: { active: true, deviceId: 'PHONE_CAMERA' }
+                }));
+            }
         } catch (err: any) {
             console.error('Failed to open device camera:', err);
             deviceCamError = err?.name === 'NotAllowedError'
@@ -173,6 +199,15 @@
             isDeviceCamActive = false;
         }
     }
+
+    $effect(() => {
+        if (sourceMode === 'device_cam' && isDeviceCamActive && deviceCamVideoEl && deviceCamStream) {
+            if (deviceCamVideoEl.srcObject !== deviceCamStream) {
+                deviceCamVideoEl.srcObject = deviceCamStream;
+                deviceCamVideoEl.play().catch(() => {});
+            }
+        }
+    });
 
     function stopDeviceCam() {
         if (deviceCamStream) {
@@ -189,6 +224,8 @@
     let streamEpoch = $state(Date.now());
     let discoveredStreamUrl = $state('');
     let manualEspStreamUrl = $state('');
+    let autoDetectedEspIp = $state('');
+    let autoDetectedBackendIp = $state('');
     let isAttemptingLocalStream = $state(true);
     let isHttpsDomain = $derived(typeof window !== 'undefined' && window.location.protocol === 'https:');
 
@@ -231,7 +268,6 @@
         const host = hostMatch ? hostMatch[1] : '';
         const backendCandidates = [
             host ? `http://${host}:8080/api/v1` : '',
-            'http://10.105.56.144:8080/api/v1',
             'http://localhost:8080/api/v1',
             'http://127.0.0.1:8080/api/v1'
         ].filter(Boolean);
@@ -511,18 +547,53 @@
     // Initial mount: restore persisted source mode, selected video, and fetch examples list with unique UUIDs
     onMount(() => {
         window.addEventListener('bawal-source-mode', handleGlobalSourceMode);
-        const refreshDiscoveredStream = () => {
+        const refreshDiscoveredStream = async () => {
             syncApiBase();
-            fetch(apiEndpoint('/api/v1/devices/status'), { cache: 'no-store' })
-                .then(res => res.ok ? res.json() : null)
-                .then(data => {
-                    const nextUrl = typeof data?.stream_url === 'string' ? data.stream_url : '';
-                    if (nextUrl && nextUrl !== discoveredStreamUrl) {
-                        discoveredStreamUrl = nextUrl;
-                        streamError = false;
+            const candidates = [
+                'http://localhost:8080/api/v1/devices/status',
+                apiEndpoint('/api/v1/devices/status')
+            ];
+            if (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && !window.location.hostname.endsWith('.vercel.app')) {
+                candidates.unshift(`http://${window.location.hostname}:8080/api/v1/devices/status`);
+            }
+
+            for (const ep of candidates) {
+                try {
+                    const c = new AbortController();
+                    const to = setTimeout(() => c.abort(), 1200);
+                    const res = await fetch(ep, { signal: c.signal, cache: 'no-store' });
+                    clearTimeout(to);
+                    if (res.ok) {
+                        const data = await res.json();
+                        const nextUrl = typeof data?.stream_url === 'string' ? data.stream_url : (data?.ip_address ? `http://${data.ip_address}/stream` : '');
+                        if (data?.ip_address) {
+                            autoDetectedEspIp = data.ip_address;
+                        }
+                        if (data?.detected_host_ip) {
+                            autoDetectedBackendIp = data.detected_host_ip;
+                        }
+                        if (nextUrl) {
+                            if (!discoveredStreamUrl || streamError) {
+                                discoveredStreamUrl = nextUrl;
+                                if (!manualEspStreamUrl) {
+                                    manualEspStreamUrl = nextUrl;
+                                }
+                                streamError = false;
+                            }
+                            // Auto-adopt live local backend if current is default
+                            const baseCand = ep.replace(/\/devices\/status$/i, '');
+                            if (baseCand.startsWith('http') && baseCand !== activeApiBase) {
+                                setConfiguredApiBase(baseCand);
+                                activeApiBase = baseCand;
+                                if (typeof window !== 'undefined') {
+                                    window.dispatchEvent(new CustomEvent('bawal-backend-updated', { detail: baseCand }));
+                                }
+                            }
+                            break;
+                        }
                     }
-                })
-                .catch(() => {});
+                } catch {}
+            }
         };
         refreshDiscoveredStream();
         deviceStatusTimer = setInterval(refreshDiscoveredStream, 2000);
@@ -1214,7 +1285,7 @@
                     onclick={() => setSourceMode('device_cam')}
                     title="Direct live food inspection using your smartphone rear camera or webcam"
                 >
-                    <span class="pill-icon">📱</span> Phone Cam
+                    <span class="pill-icon">📱</span> Phone / Laptop Cam
                 </button>
                 <button
                     type="button"
@@ -1309,17 +1380,18 @@
                     </svg>
                 {/if}
             {:else if sourceMode === 'device_cam'}
-                <!-- Direct Smartphone / Webcam Video Feed -->
-                {#if isDeviceCamActive}
-                    <video
-                        bind:this={deviceCamVideoEl}
-                        aria-label="Device Camera Stream"
-                        class="feed-video"
-                        playsinline
-                        autoplay
-                        muted
-                    ></video>
+                <!-- Direct Smartphone / Webcam Video Feed (Always mounted so element reference is bound) -->
+                <video
+                    bind:this={deviceCamVideoEl}
+                    aria-label="Device Camera Stream"
+                    class="feed-video"
+                    class:hidden-video={!isDeviceCamActive}
+                    playsinline
+                    autoplay
+                    muted
+                ></video>
 
+                {#if isDeviceCamActive}
                     <!-- Dynamic AI Bounding Box HUD Overlay for Device Cam -->
                     {#if !isSwitchingMode && detections && detections.length > 0}
                         <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
@@ -1371,10 +1443,10 @@
                             <span class="standby-icon">📱</span>
                         </div>
                         <h4>Smartphone / Web Camera</h4>
-                        <p>{deviceCamError || 'Point your smartphone camera at a food meal tray. Real-time frames are captured and streamed to AWS Lambda YOLO for live object detection and freshness inspection.'}</p>
+                        <p>{deviceCamError || 'Point your smartphone camera or laptop webcam at a food meal tray. Real-time frames are captured and inspected by YOLO AI in real-time.'}</p>
                         <div class="standby-actions-row">
                             <button type="button" class="switch-mock-btn" onclick={startDeviceCam}>
-                                📷 Start Phone Camera
+                                📷 Start Camera Feed
                             </button>
                             <button type="button" class="retry-btn" onclick={() => setSourceMode('live')}>
                                 📹 Switch to ESP32
@@ -1451,6 +1523,38 @@
                         {#if localBackendNotice}
                             <div class="local-backend-alert">
                                 <span>{@html localBackendNotice}</span>
+                            </div>
+                        {/if}
+
+                        {#if autoDetectedEspIp || autoDetectedBackendIp}
+                            <div class="auto-detected-row">
+                                <span class="auto-detected-label">⚡ Auto-Discovered:</span>
+                                {#if autoDetectedEspIp}
+                                    <button
+                                        type="button"
+                                        class="auto-detected-pill"
+                                        onclick={() => {
+                                            manualEspStreamUrl = `http://${autoDetectedEspIp}/stream`;
+                                            connectManualEspStream();
+                                        }}
+                                        title="Click to auto-connect ESP32 camera without typing IP"
+                                    >
+                                        📹 ESP32 Camera ({autoDetectedEspIp}) &rarr; Connect
+                                    </button>
+                                {/if}
+                                {#if autoDetectedBackendIp}
+                                    <button
+                                        type="button"
+                                        class="auto-detected-pill backend"
+                                        onclick={() => {
+                                            manualEspStreamUrl = `http://${autoDetectedBackendIp}:8080/api/v1/camera/stream`;
+                                            connectManualEspStream();
+                                        }}
+                                        title="Click to sync with Host C++ Backend"
+                                    >
+                                        🖥️ Host Backend ({autoDetectedBackendIp}:8080) &rarr; Connect
+                                    </button>
+                                {/if}
                             </div>
                         {/if}
 
@@ -2147,6 +2251,56 @@
         object-fit: contain;
         display: block;
         margin: auto;
+    }
+
+    .feed-video.hidden-video {
+        display: none !important;
+    }
+
+    .auto-detected-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 10px;
+        margin-bottom: 4px;
+    }
+
+    .auto-detected-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: #f59e0b;
+    }
+
+    .auto-detected-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px;
+        border-radius: 9999px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+        border: 1px solid rgba(16, 185, 129, 0.4);
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .auto-detected-pill:hover {
+        background: rgba(16, 185, 129, 0.3);
+        transform: translateY(-1px);
+    }
+
+    .auto-detected-pill.backend {
+        background: rgba(56, 189, 248, 0.15);
+        color: #38bdf8;
+        border-color: rgba(56, 189, 248, 0.4);
+    }
+
+    .auto-detected-pill.backend:hover {
+        background: rgba(56, 189, 248, 0.3);
     }
 
     .hud-overlay {
