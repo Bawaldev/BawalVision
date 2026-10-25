@@ -33,6 +33,15 @@ public:
         const std::filesystem::path& template_path = {});
 
     /**
+     * @brief Renders the inspection record as a portable Markdown audit document.
+     *
+     * The Markdown artifact is used by the built-in PDF engine and is also the
+     * canonical representation consumed by the web report exporter.
+     */
+    [[nodiscard]] static std::string generateReportMarkdown(
+        const backend::InspectionHistoryEntry& entry);
+
+    /**
      * @brief Compiles inspection records into an official PDF report using pdflatex.
      *
      * Invokes `pdflatex` via a non-blocking subprocess with the generated .tex file.

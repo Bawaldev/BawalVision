@@ -314,6 +314,22 @@
         void refreshHardwareStatus();
     }
 
+    function handleOpenManualWifiModal() {
+        selectedNetwork = {
+            ssid: '',
+            is_server: false,
+            signal: 100,
+            security: 'WPA2'
+        };
+        selectedSsid = '';
+        connectPassword = '';
+        connectError = '';
+        wifiConnectSuccess = false;
+        wifiSuccessMsg = '';
+        showConnectModal = true;
+        void refreshHardwareStatus();
+    }
+
     function closeConnectModal() {
         showConnectModal = false;
         selectedNetwork = null;
@@ -596,10 +612,10 @@
 
         const visiblePorts = hw?.usb_ports || [];
         if (visiblePorts.length === 0) {
-            webSerialStatus = 'error';
+            webSerialStatus = 'idle';
             webSerialMsg =
-                'The backend cannot see any USB serial device. Docker Desktop cannot pass host USB through to its VM; ' +
-                'run `just edge-stack` (backend on host) or use Chrome/Edge on localhost for Direct Browser Connect.';
+                '💡 Cloud backend cannot see local laptop USB directly. ' +
+                'Click "⚡ Direct Browser Connect" above to connect your ESP32-S3 (/dev/ttyACM0) natively via Web Serial in Chrome/Edge!';
             return false;
         }
         if (!visiblePorts.some((p) => p.port === targetPort)) {
@@ -763,15 +779,14 @@
             }
 
             try {
-                // Never leave the modal hanging on the browser permission
-                // prompt: time out and hand the job to the backend instead.
+                // Request access to Espressif USB serial (or any serial port if unlisted)
                 port = await withTimeout(
                     (navigator as any).serial.requestPort({
                         filters: [
                             { usbVendorId: 0x303a } // Espressif Systems
                         ]
                     }),
-                    4000
+                    30000
                 );
             } catch (authErr: any) {
                 if (!allowBackendFallback) throw authErr;
@@ -786,40 +801,43 @@
             const knownPassword = selectedNetwork && selectedNetwork.ssid === serverWifiSsid
                 ? connectPassword
                 : serverWifiPassword;
-            const payload = JSON.stringify({
-                cmd: 'set_wifi',
-                ssid: serverWifiSsid,
-                pass: knownPassword || '',
-                backend_ip: backendIp,
-                backend_port: 8080
-            }) + '\n';
+
+            // If a valid Wi-Fi SSID is provided, provision Wi-Fi credentials.
+            // Otherwise, query hardware status and verify ESP32 communication.
+            const hasWifiTarget = !!(serverWifiSsid && serverWifiSsid.trim().length > 0 && !serverWifiSsid.includes('Cloud-Serverless'));
+            const payload = hasWifiTarget
+                ? JSON.stringify({
+                    cmd: 'set_wifi',
+                    ssid: serverWifiSsid,
+                    pass: knownPassword || '',
+                    backend_ip: backendIp,
+                    backend_port: 8080
+                }) + '\n'
+                : JSON.stringify({ cmd: 'status' }) + '\n';
 
             await writer.write(encoder.encode(payload));
             writer.releaseLock();
 
-            webSerialMsg = 'Waiting for BAWAL_ACK from ESP32-S3...';
-            // The firmware answers only after it applied the credentials and
-            // waited up to 20 s for the association (rollback on failure), so
-            // a 7 s ACK window times out on every slow AP.
-            const ack = await readBawalAck(port, 30000);
+            webSerialMsg = hasWifiTarget ? 'Waiting for Wi-Fi provisioning ACK from ESP32-S3...' : 'Querying status from ESP32-S3 (/dev/ttyACM0)...';
+            const ack = await readBawalAck(port, hasWifiTarget ? 30000 : 5000);
 
             if (ack && (ack.status === 'wifi_provisioned' || ack.status === 'ok')) {
-                const ssid = ack.ssid || serverWifiSsid;
+                const ssid = ack.ssid || (hasWifiTarget ? serverWifiSsid : 'USB Direct');
                 const result: EspConnectionResult = {
                     success: true,
                     status: ack.status,
                     deviceId: ack.device_id || espUsbStatus?.device_id || formState.deviceId || 'ESP32S3_USB',
                     firmwareVersion: ack.firmware_version || '1.0.0',
                     latencyMs: 4,
-                    ipAddress: serverBackendIp || ack.backend_ip || 'USB Serial',
-                    usbPort: targetPort,
+                    ipAddress: serverBackendIp || ack.backend_ip || 'USB Serial (/dev/ttyACM0)',
+                    usbPort: targetPort || 'Web Serial (/dev/ttyACM0)',
                     provisionedSsid: ssid,
                     gatewayHostIp: gatewayHostIp || serverBackendIp || ack.backend_ip || '',
                     wifiConnected: !!ack.wifi_connected,
                     connectionMode: 'usb_serial',
-                    message: `Provisioned ${ssid} via Web Serial`
+                    message: hasWifiTarget ? `Provisioned ${ssid} via Web Serial` : `Connected to ${ack.device_id || 'ESP32-S3'} via Web Serial (/dev/ttyACM0)`
                 };
-                applyProvisionedResult(result, targetPort, ssid);
+                applyProvisionedResult(result, targetPort || '/dev/ttyACM0', ssid);
                 await refreshHardwareStatus();
             } else {
                 const message = ack
@@ -872,13 +890,21 @@
                 await refreshHardwareStatus();
             } else {
                 connectionStatus = 'failed';
-                errorMessage = res.message || 'No ESP32-S3 detected on shared Wi-Fi or USB slots.';
+                let msg = res.message || 'No ESP32-S3 detected on shared Wi-Fi or USB slots.';
+                if (msg.includes('Vision pipeline')) {
+                    msg = 'No ESP32-S3 stream active on cloud. Use Direct Browser Connect (/dev/ttyACM0) or verify Wi-Fi.';
+                }
+                errorMessage = msg;
                 onDeviceConnectionChange?.(false, targetId);
                 await refreshHardwareStatus();
             }
         } catch (err: any) {
             connectionStatus = 'failed';
-            errorMessage = err?.message || 'Failed to probe ESP32-S3 hardware.';
+            let msg = err?.message || 'Failed to probe ESP32-S3 hardware.';
+            if (msg.includes('Vision pipeline')) {
+                msg = 'No ESP32-S3 stream active on cloud. Use Direct Browser Connect (/dev/ttyACM0) or verify Wi-Fi.';
+            }
+            errorMessage = msg;
             onDeviceConnectionChange?.(false, targetId);
         }
     }
@@ -1245,9 +1271,12 @@
                                     {/if}
                                 </div>
                             </div>
-                            <div class="row-trailing">
+                            <div class="row-trailing" style="display: flex; gap: 8px;">
                                 <button type="button" class="fedora-pill-btn" onclick={handleScanWifi}>
                                     Scan Now
+                                </button>
+                                <button type="button" class="fedora-pill-btn primary" onclick={handleOpenManualWifiModal}>
+                                    ➕ Enter Wi-Fi Manually
                                 </button>
                             </div>
                         </div>

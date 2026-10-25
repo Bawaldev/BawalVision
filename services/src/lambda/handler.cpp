@@ -1,8 +1,11 @@
 #include "bawal/lambda/handler.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <filesystem>
 #include <map>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,7 +15,9 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include "bawal/lambda/base64.hpp"
+#include "bawal/lambda/report.hpp"
 #include "bawal/lambda/runtime.hpp"
+#include "bawal/report/markdown_pdf.hpp"
 #include "bawal/server/inspection_dto.hpp"
 #include "bawal/vision/pipeline.hpp"
 
@@ -137,6 +142,30 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             }
 
             resp.json_payload = R"({"status":"success","message":"Real-time ESP32 hardware telemetry recorded"})";
+            return resp;
+        }
+
+        if (route.method == "POST" && route.path.find("/devices/connect") != std::string::npos) {
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const auto now = std::chrono::steady_clock::now();
+            const auto age_sec = std::chrono::duration_cast<std::chrono::seconds>(now - m_last_telemetry_time).count();
+            if (!m_last_telemetry_json.empty() && age_sec <= 45) {
+                resp.json_payload = R"({"success":true,"status":"connected","device_id":"ESP32S3_LIVE","message":"ESP32-S3 IoT node active on cloud stream"})";
+            } else {
+                resp.json_payload = R"({"success":false,"status":"disconnected","message":"No ESP32-S3 detected on cloud. Use Direct Browser Connect (Web Serial) in Chrome/Edge to pair /dev/ttyACM0."})";
+            }
+            return resp;
+        }
+
+        if (route.method == "POST" && route.path.find("/devices/disconnect") != std::string::npos) {
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+            resp.json_payload = R"({"success":true,"status":"disconnected","message":"Device disconnected"})";
             return resp;
         }
 
@@ -294,11 +323,14 @@ LambdaInspectionResponse VisionLambdaHandler::handleLocked(
              detection.bbox.width, detection.bbox.height}});
     }
 
-    if (request.return_annotated && !output.annotated_image.empty()) {
+    if (!output.annotated_image.empty()) {
         std::vector<uchar> jpeg;
         const std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 85};
         if (cv::imencode(".jpg", output.annotated_image, jpeg, params)) {
             dto.annotated_image_base64 = encodeBase64(jpeg.data(), jpeg.size());
+            if (dto.image_path.empty()) {
+                dto.image_path = "data:image/jpeg;base64," + dto.annotated_image_base64;
+            }
         }
     }
 

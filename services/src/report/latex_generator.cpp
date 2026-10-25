@@ -1,4 +1,5 @@
 #include "bawal/report/latex_generator.hpp"
+#include "bawal/report/markdown_pdf.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -124,6 +125,21 @@ fs::path resolveImagePath(std::string_view url_path) {
     return {};
 }
 
+std::string markdownCell(std::string_view value) {
+    std::string out;
+    out.reserve(value.size());
+    for (const char c : value) {
+        if (c == '|') {
+            out += "\\|";
+        } else if (c == '\n' || c == '\r') {
+            out.push_back(' ');
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
 std::string buildDetectionRows(const backend::InspectionHistoryEntry& entry) {
     if (entry.detections.empty()) {
         return "1 & \\textit{No Food Detected} & [0, 0, 0, 0] & 0.0\\% & 0.00 & "
@@ -150,6 +166,91 @@ std::string buildDetectionRows(const backend::InspectionHistoryEntry& entry) {
 }
 
 } // namespace
+
+std::string LatexPdfGenerator::generateReportMarkdown(
+    const backend::InspectionHistoryEntry& entry) {
+    const fs::path image = resolveImagePath(entry.image_path);
+    const std::string verdict = entry.verdict.empty() ? "UNKNOWN" : entry.verdict;
+    const std::string device_id =
+        entry.device_id.empty() ? "ESP32S3_UNKNOWN" : entry.device_id;
+    const std::string timestamp =
+        entry.timestamp.empty() ? "N/A" : entry.timestamp;
+    const std::string engine_pipeline = entry.engine_pipeline.empty()
+        ? "YOLOv8-INT8 + OpenCV SIMD"
+        : entry.engine_pipeline;
+
+    std::ostringstream md;
+    md << "# BawalVision Inspection Audit\n\n";
+    md << "**MBG Food Quality & Freshness Compliance Report**\n\n";
+    md << "| Field | Value |\n";
+    md << "| --- | --- |\n";
+    md << "| Frame ID | " << entry.frame_id << " |\n";
+    md << "| Device | " << markdownCell(device_id) << " |\n";
+    md << "| Timestamp | " << markdownCell(timestamp) << " |\n";
+    md << "| Engine | " << markdownCell(engine_pipeline) << " |\n";
+    md << "| Verdict | **" << markdownCell(verdict) << "** |\n";
+    md << "| Surface Temperature | " << fmt::format("{:.1f}", entry.surface_temp)
+       << " C |\n";
+    md << "| Safe Consumption Window | "
+       << fmt::format("{:.1f}", entry.t_safe_hours) << " hours |\n\n";
+
+    md << "## Verdict\n\n";
+    md << "> **" << markdownCell(verdict) << "**\n";
+    md << ">\n";
+    md << "> Surface temperature: "
+       << fmt::format("{:.1f}", entry.surface_temp) << " C\n";
+    md << ">\n";
+    md << "> Safe consumption window: "
+       << fmt::format("{:.1f}", entry.t_safe_hours) << " hours\n\n";
+
+    if (!image.empty()) {
+        md << "## Visual Evidence\n\n";
+        md << "![Annotated inspection evidence](" << image.string() << ")\n\n";
+    }
+
+    md << "## Telemetry\n\n";
+    md << "| Metric | Value |\n";
+    md << "| --- | --- |\n";
+    md << "| Ambient Lux | " << fmt::format("{:.1f}", entry.lux_luminance)
+       << " lx |\n";
+    md << "| Color Temperature | " << entry.color_temperature << " K |\n";
+    md << "| White Balance | "
+       << markdownCell(entry.white_balance_status.empty()
+                           ? "BALANCED"
+                           : entry.white_balance_status)
+       << " |\n";
+    md << "| Spoilage Risk | " << fmt::format("{:.1f}", entry.spoilage_risk)
+       << "% |\n";
+    md << "| Tray Coverage | " << fmt::format("{:.1f}", entry.tray_coverage)
+       << "% |\n\n";
+
+    md << "## Detection Log\n\n";
+    md << "| No | Item | Bounding Box | Confidence | Freshness | Status |\n";
+    md << "| ---: | --- | --- | ---: | ---: | --- |\n";
+    if (entry.detections.empty()) {
+        md << "| 1 | _No Food Detected_ | [0, 0, 0, 0] | 0.0% | 0.00 | FAIL |\n";
+    } else {
+        int index = 1;
+        for (const auto& detection : entry.detections) {
+            const bool pass = detection.freshness_score >= 0.70f;
+            md << "| " << index++ << " | "
+               << markdownCell(detection.class_name.empty() ? "unknown"
+                                                            : detection.class_name)
+               << " | [" << detection.bbox[0] << ", " << detection.bbox[1] << ", "
+               << detection.bbox[2] << ", " << detection.bbox[3] << "] | "
+               << fmt::format("{:.1f}%", detection.confidence * 100.0f) << " | "
+               << fmt::format("{:.2f}", detection.freshness_score) << " | "
+               << (pass ? "PASS" : "FAIL") << " |\n";
+        }
+    }
+    md << "\n## Audit Integrity\n\n";
+    md << "- **SHA-256:** `"
+       << (entry.checksum_sha256.empty() ? "N/A" : entry.checksum_sha256)
+       << "`\n";
+    md << "- Generated automatically by the BawalVision C++ audit engine.\n";
+
+    return md.str();
+}
 
 std::string LatexPdfGenerator::generateReportTex(
     const backend::InspectionHistoryEntry& entry,
@@ -216,13 +317,26 @@ std::string LatexPdfGenerator::generateReportTex(
 std::string LatexPdfGenerator::generateReportPdf(
     const backend::InspectionHistoryEntry& entry,
     const fs::path& template_path) {
+    std::error_code ec;
+    fs::create_directories(kReportDir, ec);
+
+    MarkdownPdfOptions options;
+    options.title = fmt::format("BawalVision Inspection Audit - Frame {}",
+                                entry.frame_id);
+    options.subject = "MBG Food Quality & Freshness Compliance Report";
+    const fs::path portable_pdf =
+        fs::path(kReportDir) / fmt::format("report_{}.pdf", entry.frame_id);
+    const std::string portable = MarkdownPdfGenerator::generatePdfFile(
+        generateReportMarkdown(entry), portable_pdf, options);
+    if (!portable.empty()) {
+        return portable;
+    }
+
     const std::string tex_path = generateReportTex(entry, template_path);
     if (tex_path.empty()) {
         return {};
     }
 
-    // Prefer pdflatex, then tectonic (single binary, XeTeX based). Without a
-    // TeX engine the generated .tex source is the deliverable.
     std::string command;
     if (std::system("command -v pdflatex >/dev/null 2>&1") == 0) {
         command = fmt::format(
@@ -237,12 +351,10 @@ std::string LatexPdfGenerator::generateReportPdf(
         return tex_path;
     }
 
-    const fs::path pdf_path = fs::path(kReportDir) / fmt::format("report_{}.pdf", entry.frame_id);
     std::lock_guard<std::mutex> lock(g_generate_mutex);
     const int status = std::system(command.c_str());
-    std::error_code ec;
-    if (status == 0 && fs::is_regular_file(pdf_path, ec)) {
-        return pdf_path.string();
+    if (status == 0 && fs::is_regular_file(portable_pdf, ec)) {
+        return portable_pdf.string();
     }
     return tex_path;
 }

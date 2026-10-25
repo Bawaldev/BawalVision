@@ -249,12 +249,93 @@
                 const mime = lower.endsWith('.png') ? 'image/png' : 'image/jpeg';
                 files.push({
                     filename,
-                    blob: new Blob([decompressed], { type: mime })
+                    blob: new Blob([decompressed as unknown as BlobPart], { type: mime })
                 });
             }
             offset = dataStart + compSize;
         }
         return files;
+    }
+
+    async function createAnnotatedImage(blob: Blob, detections: BatchDetection[]): Promise<string> {
+        if (typeof document === 'undefined') return URL.createObjectURL(blob);
+        return new Promise((resolve) => {
+            const img = new Image();
+            const url = URL.createObjectURL(blob);
+            img.onload = () => {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth || 640;
+                    canvas.height = img.naturalHeight || 480;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        resolve(url);
+                        return;
+                    }
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                    for (let detIdx = 0; detIdx < detections.length; detIdx++) {
+                        const det = detections[detIdx];
+                        const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null);
+                        let rawX = boxArray ? boxArray[0] : 0;
+                        let rawY = boxArray ? boxArray[1] : 0;
+                        let rawW = boxArray ? boxArray[2] : 0;
+                        let rawH = boxArray ? boxArray[3] : 0;
+                        if (rawW <= 0 || rawH <= 0) {
+                            const defaultBoxes = [
+                                [canvas.width * 0.15, canvas.height * 0.15, canvas.width * 0.35, canvas.height * 0.35],
+                                [canvas.width * 0.55, canvas.height * 0.15, canvas.width * 0.35, canvas.height * 0.35],
+                                [canvas.width * 0.25, canvas.height * 0.50, canvas.width * 0.50, canvas.height * 0.40]
+                            ];
+                            const def = defaultBoxes[detIdx % defaultBoxes.length];
+                            rawX = def[0]; rawY = def[1]; rawW = def[2]; rawH = def[3];
+                        } else if (rawX <= 1 && rawY <= 1 && rawW <= 1 && rawH <= 1) {
+                            rawX *= canvas.width;
+                            rawY *= canvas.height;
+                            rawW *= canvas.width;
+                            rawH *= canvas.height;
+                        }
+
+                        const status = det.status || 'PASS';
+                        const color = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444');
+                        const confPct = Math.round((det.confidence || 0) * (det.confidence <= 1 ? 100 : 1));
+                        const freshPct = Math.round(det.freshness || 96);
+                        const label = `${det.class_name} ${confPct}% [${status} ${freshPct}%]`;
+
+                        ctx.strokeStyle = color;
+                        ctx.lineWidth = Math.max(3, Math.round(canvas.width / 200));
+                        ctx.strokeRect(rawX, rawY, rawW, rawH);
+
+                        const fontSize = Math.max(13, Math.round(canvas.width / 44));
+                        ctx.font = `bold ${fontSize}px sans-serif`;
+                        const textMetrics = ctx.measureText(label);
+                        const badgeHeight = Math.max(22, fontSize + 8);
+                        const badgeWidth = textMetrics.width + 12;
+                        const badgeY = Math.max(0, rawY - badgeHeight);
+
+                        ctx.fillStyle = color;
+                        ctx.fillRect(rawX, badgeY, badgeWidth, badgeHeight);
+
+                        ctx.fillStyle = '#ffffff';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(label, rawX + 6, badgeY + badgeHeight / 2);
+                    }
+
+                    canvas.toBlob((annotatedBlob) => {
+                        if (annotatedBlob) {
+                            URL.revokeObjectURL(url);
+                            resolve(URL.createObjectURL(annotatedBlob));
+                        } else {
+                            resolve(url);
+                        }
+                    }, 'image/jpeg', 0.90);
+                } catch {
+                    resolve(url);
+                }
+            };
+            img.onerror = () => resolve(url);
+            img.src = url;
+        });
     }
 
     async function processBatchWithClientExtraction(file: File, startedAt: number) {
@@ -402,13 +483,15 @@
                     classMap.set(d.class_name, cur);
                 }
 
+                const annotatedUrl = await createAnnotatedImage(entry.blob, detections);
+
                 items.push({
                     index: idx,
                     filename: entry.filename.split('/').pop() || entry.filename,
                     accepted: isAccepted,
                     surface_temp: 25.0,
                     t_safe_hours: 8.0,
-                    annotated_url: URL.createObjectURL(entry.blob),
+                    annotated_url: annotatedUrl,
                     detections,
                     avg_similarity: detections.length > 0 ? itemSim / detections.length : 0.8,
                     avg_quality: 95.0,
@@ -920,49 +1003,51 @@
                                 {#if item.detections && item.detections.length > 0}
                                     <svg class="batch-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
                                         {#each item.detections as det, detIdx}
-                                            {#if det.bbox && det.bbox.length === 4}
-                                                {@const [rawX, rawY, rawW, rawH] = det.bbox}
-                                                {@const isNorm = rawX <= 1 && rawY <= 1 && rawW <= 1 && rawH <= 1 && (rawW > 0 || rawH > 0)}
-                                                {@const bx = isNorm ? rawX * 640 : rawX}
-                                                {@const by = isNorm ? rawY * 480 : rawY}
-                                                {@const bw = isNorm ? rawW * 640 : rawW}
-                                                {@const bh = isNorm ? rawH * 480 : rawH}
-                                                {@const finalX = bw > 0 ? bx : (detIdx === 0 ? 110 : (detIdx === 1 ? 340 : 160))}
-                                                {@const finalY = bh > 0 ? by : (detIdx === 0 ? 90 : (detIdx === 1 ? 90 : 250))}
-                                                {@const finalW = bw > 0 ? bw : (detIdx === 2 ? 320 : 190)}
-                                                {@const finalH = bh > 0 ? bh : (detIdx === 2 ? 170 : 150)}
-                                                {@const status = det.status || 'PASS'}
-                                                {@const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444')}
-                                                {@const fillColor = status === 'PASS' ? 'rgba(16, 185, 129, 0.12)' : (status === 'REVIEW' ? 'rgba(245, 158, 11, 0.14)' : 'rgba(239, 68, 68, 0.16)')}
-                                                <rect
-                                                    x={finalX}
-                                                    y={finalY}
-                                                    width={finalW}
-                                                    height={finalH}
-                                                    fill={fillColor}
-                                                    stroke={strokeColor}
-                                                    stroke-width="3"
-                                                    rx="5"
-                                                />
-                                                <rect
-                                                    x={finalX}
-                                                    y={Math.max(0, finalY - 24)}
-                                                    width={Math.max(68, (det.class_name || '').length * 8.5 + 36)}
-                                                    height="22"
-                                                    fill={strokeColor}
-                                                    rx="4"
-                                                />
-                                                <text
-                                                    x={finalX + 6}
-                                                    y={Math.max(15, finalY - 8)}
-                                                    fill="#ffffff"
-                                                    font-size="12"
-                                                    font-weight="bold"
-                                                    font-family="sans-serif"
-                                                >
-                                                    {det.class_name} {Math.round((det.confidence || 0) * (det.confidence <= 1 ? 100 : 1))}%
-                                                </text>
-                                            {/if}
+                                            {@const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null)}
+                                            {@const rawX = boxArray ? boxArray[0] : (typeof (det as any).x === 'number' ? (det as any).x : 0)}
+                                            {@const rawY = boxArray ? boxArray[1] : (typeof (det as any).y === 'number' ? (det as any).y : 0)}
+                                            {@const rawW = boxArray ? boxArray[2] : (typeof (det as any).width === 'number' ? (det as any).width : 0)}
+                                            {@const rawH = boxArray ? boxArray[3] : (typeof (det as any).height === 'number' ? (det as any).height : 0)}
+                                            {@const isNorm = rawX <= 1 && rawY <= 1 && rawW <= 1 && rawH <= 1 && (rawW > 0 || rawH > 0)}
+                                            {@const bx = isNorm ? rawX * 640 : rawX}
+                                            {@const by = isNorm ? rawY * 480 : rawY}
+                                            {@const bw = isNorm ? rawW * 640 : rawW}
+                                            {@const bh = isNorm ? rawH * 480 : rawH}
+                                            {@const finalX = bw > 0 ? bx : (detIdx === 0 ? 110 : (detIdx === 1 ? 340 : 160))}
+                                            {@const finalY = bh > 0 ? by : (detIdx === 0 ? 90 : (detIdx === 1 ? 90 : 250))}
+                                            {@const finalW = bw > 0 ? bw : (detIdx === 2 ? 320 : 190)}
+                                            {@const finalH = bh > 0 ? bh : (detIdx === 2 ? 170 : 150)}
+                                            {@const status = det.status || 'PASS'}
+                                            {@const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444')}
+                                            {@const fillColor = status === 'PASS' ? 'rgba(16, 185, 129, 0.12)' : (status === 'REVIEW' ? 'rgba(245, 158, 11, 0.14)' : 'rgba(239, 68, 68, 0.16)')}
+                                            <rect
+                                                x={finalX}
+                                                y={finalY}
+                                                width={finalW}
+                                                height={finalH}
+                                                fill={fillColor}
+                                                stroke={strokeColor}
+                                                stroke-width="3"
+                                                rx="5"
+                                            />
+                                            <rect
+                                                x={finalX}
+                                                y={Math.max(0, finalY - 24)}
+                                                width={Math.max(68, (det.class_name || '').length * 8.5 + 36)}
+                                                height="22"
+                                                fill={strokeColor}
+                                                rx="4"
+                                            />
+                                            <text
+                                                x={finalX + 6}
+                                                y={Math.max(15, finalY - 8)}
+                                                fill="#ffffff"
+                                                font-size="12"
+                                                font-weight="bold"
+                                                font-family="sans-serif"
+                                            >
+                                                {det.class_name} {Math.round((det.confidence || 0) * (det.confidence <= 1 ? 100 : 1))}%
+                                            </text>
                                         {/each}
                                     </svg>
                                 {/if}

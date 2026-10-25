@@ -64,6 +64,10 @@ struct LambdaInspectionResponse {
     int status_code{200};
     double execution_time_ms{0.0};
     bool is_success{false};
+    std::vector<uint8_t> binary_body;
+    std::string content_type{"application/json"};
+    std::string content_disposition;
+    bool is_binary{false};
 };
 
 } // namespace bawal::lambda

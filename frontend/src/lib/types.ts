@@ -51,6 +51,8 @@ export interface InspectionRecord {
     color_temperature?: number;
     scene_optical?: SceneOpticalMetrics;
     inspection_foods?: InspectionFoodEntry[];
+    is_live?: boolean;
+    detections?: FoodDetection[];
 }
 
 export interface MockInspectionRecord {

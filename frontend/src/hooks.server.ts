@@ -60,35 +60,37 @@ export const handle: Handle = async ({ event, resolve }) => {
             }
             if (path.includes('/camera/status') || path.includes('/camera/active')) {
                 return new Response(JSON.stringify({
-                    active: true,
-                    device_id: 'CLOUD_SERVERLESS',
-                    fps: 1.0,
-                    last_frame_age_ms: 50
+                    active: false,
+                    device_id: 'NO_CAMERA',
+                    fps: 0.0,
+                    last_frame_age_ms: 0
                 }), { status: 200, headers: jsonHeaders });
             }
             if (path.includes('/telemetry/latest')) {
                 return new Response(JSON.stringify({
-                    device_id: 'CLOUD_SERVERLESS',
-                    firmware_version: '2.0.0-cloud',
-                    device_core: 2,
-                    cpu_temperature: 38.0,
-                    temperature: 25.0,
-                    cpu_load: 5.0,
-                    free_heap: 268435456,
-                    is_connected: true,
-                    status: 'online'
+                    device_id: 'NO_ESP32_NODE',
+                    firmware_version: 'offline',
+                    device_core: 0,
+                    cpu_temperature: null,
+                    temperature: null,
+                    cpu_load: null,
+                    free_heap: null,
+                    heap_free: null,
+                    is_connected: false,
+                    status: 'offline',
+                    message: 'Awaiting real-time ESP32-S3 hardware telemetry heartbeat'
                 }), { status: 200, headers: jsonHeaders });
             }
             if (path.includes('/devices/status')) {
                 return new Response(JSON.stringify({
-                    connected: true,
-                    device_id: 'CLOUD_SERVERLESS',
-                    mode: 'cloud_serverless',
-                    status: 'connected',
+                    connected: false,
+                    device_id: 'NO_ESP32_NODE',
+                    mode: 'offline',
+                    status: 'disconnected',
                     server_wifi: {
-                        ssid: 'Cloud-Vercel-Serverless',
-                        active_ssid: 'Cloud-Vercel-Serverless',
-                        backend_ip: 'cloud.vercel.app'
+                        ssid: '',
+                        active_ssid: '',
+                        backend_ip: ''
                     }
                 }), { status: 200, headers: jsonHeaders });
             }

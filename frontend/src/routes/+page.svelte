@@ -172,7 +172,7 @@
             });
 
             // DYNAMIC 1-OBJECT UPDATE: Update the single tracking entry in-place instead of spamming new cards
-            const existingIdx = list.findIndex(r => r.track_key === trackKey || r.device_id === 'MOCK_VIDEO_CAM');
+            const existingIdx = list.findIndex((r: any) => r.track_key === trackKey || r.device_id === 'MOCK_VIDEO_CAM');
             if (existingIdx >= 0) {
                 list[existingIdx].detections = auditDetections;
                 list[existingIdx].timestamp = new Date().toISOString();

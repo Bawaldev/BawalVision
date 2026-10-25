@@ -228,6 +228,28 @@ bool LambdaEventParser::parseEvent(std::string_view event_payload,
 
 std::string LambdaResponseBuilder::buildResponse(const LambdaInspectionResponse& response,
                                                  InvocationSource source) {
+    if (response.is_binary && !response.binary_body.empty()) {
+        const std::string encoded = encodeBase64(response.binary_body);
+        if (source == InvocationSource::DIRECT_INVOKE) {
+            return std::string(R"({"status":"success","content_type":")") +
+                   response.content_type + R"(","is_base64_encoded":true,"body":")" +
+                   encoded + R"("})";
+        }
+
+        bawal::server::LambdaProxyResponse proxy;
+        proxy.status_code = response.status_code;
+        proxy.is_base64_encoded = true;
+        proxy.headers.content_type = response.content_type;
+        proxy.headers.content_disposition = response.content_disposition;
+        proxy.headers.x_report_format = "pdf";
+        proxy.body = encoded;
+        std::string json;
+        if (const auto error = glz::write_json(proxy, json); error) {
+            return "{\"error\":\"binary response serialization failed\"}";
+        }
+        return json;
+    }
+
     if (response.json_payload.empty()) {
         return "{}";
     }
@@ -239,7 +261,7 @@ std::string LambdaResponseBuilder::buildResponse(const LambdaInspectionResponse&
     bawal::server::LambdaProxyResponse proxy;
     proxy.status_code = response.status_code;
     proxy.is_base64_encoded = false;
-    proxy.headers.content_type = "application/json";
+    proxy.headers.content_type = response.content_type;
     proxy.body = response.json_payload;
 
     std::string encoded;

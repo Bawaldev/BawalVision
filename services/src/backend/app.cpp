@@ -9,6 +9,7 @@
 #include "bawal/backend/wifi_probe.hpp"
 #include "bawal/server/rolling_image_store.hpp"
 #include "bawal/report/latex_generator.hpp"
+#include "bawal/report/markdown_pdf.hpp"
 #include "bawal/lambda/events.hpp"
 #include "bawal/lambda/handler.hpp"
 #include "bawal/vision/classifier.hpp"
@@ -676,11 +677,31 @@ void BackendApp::registerCameraRoutes() {
         return res;
     };
 
+    auto serve_annotated = [this](std::string device_id) {
+        device_id = normalizeDeviceParam(std::move(device_id));
+        std::vector<uint8_t> jpeg = m_state.latestAnnotatedJpeg(device_id);
+        if (jpeg.empty()) {
+            jpeg = m_state.latestJpeg(device_id);
+        }
+        if (jpeg.empty()) {
+            return jsonError(404, "No annotated frame available from camera ingress");
+        }
+
+        crow::response res(200);
+        res.set_header("Content-Type", "image/jpeg");
+        res.set_header("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.body.assign(reinterpret_cast<const char*>(jpeg.data()), jpeg.size());
+        return res;
+    };
+
     CROW_ROUTE(m_app, "/api/v1/camera/latest")([serve_raw]() {
         return serve_raw({});
     });
     CROW_ROUTE(m_app, "/api/v1/camera/latest/raw")([serve_raw]() {
         return serve_raw({});
+    });
+    CROW_ROUTE(m_app, "/api/v1/camera/latest/annotated")([serve_annotated]() {
+        return serve_annotated({});
     });
     CROW_ROUTE(m_app, "/api/v1/camera/latest/<string>")
         ([serve_raw](const std::string& device_id) {
@@ -690,10 +711,17 @@ void BackendApp::registerCameraRoutes() {
         ([serve_raw](const std::string& device_id) {
             return serve_raw(device_id);
         });
+    CROW_ROUTE(m_app, "/api/v1/camera/latest/<string>/annotated")
+        ([serve_annotated](const std::string& device_id) {
+            return serve_annotated(device_id);
+        });
 
     auto serve_stream = [this](std::string device_id) {
         device_id = normalizeDeviceParam(std::move(device_id));
-        const std::vector<uint8_t> jpeg = m_state.latestJpeg(device_id);
+        std::vector<uint8_t> jpeg = m_state.latestAnnotatedJpeg(device_id);
+        if (jpeg.empty()) {
+            jpeg = m_state.latestJpeg(device_id);
+        }
         if (jpeg.empty()) {
             return jsonError(404, "No frame available for MJPEG stream");
         }
@@ -1157,6 +1185,97 @@ void BackendApp::registerInspectionRoutes() {
         res.add_header("X-Report-Format", "tex");
         res.end();
     });
+
+    const auto markdown_pdf_handler = [](const crow::request& req,
+                                         crow::response& res) {
+        constexpr std::size_t kMaxMarkdownBytes = 4U * 1024U * 1024U;
+        if (req.body.empty()) {
+            res.code = 400;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Empty Markdown payload\"}");
+            res.end();
+            return;
+        }
+        if (req.body.size() > kMaxMarkdownBytes) {
+            res.code = 413;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Markdown payload exceeds 4 MB\"}");
+            res.end();
+            return;
+        }
+
+        std::string markdown;
+        std::string title = "BawalVision Inspection Report";
+        std::string filename = "BawalVision-Report.pdf";
+        const std::string content_type = req.get_header_value("Content-Type");
+        if (content_type.find("application/json") != std::string::npos) {
+            const auto doc = crow::json::load(req.body);
+            if (!doc || !doc.has("markdown") ||
+                doc["markdown"].t() != crow::json::type::String) {
+                res.code = 400;
+                res.set_header("Content-Type", "application/json");
+                res.write("{\"error\":\"JSON body must contain a string 'markdown' field\"}");
+                res.end();
+                return;
+            }
+            markdown = static_cast<std::string>(doc["markdown"].s());
+            if (doc.has("title") && doc["title"].t() == crow::json::type::String) {
+                title = static_cast<std::string>(doc["title"].s());
+            }
+            if (doc.has("filename") &&
+                doc["filename"].t() == crow::json::type::String) {
+                filename = static_cast<std::string>(doc["filename"].s());
+            }
+        } else {
+            markdown = req.body;
+        }
+
+        if (markdown.empty()) {
+            res.code = 400;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Markdown document is empty\"}");
+            res.end();
+            return;
+        }
+
+        std::string safe_name;
+        for (const char c : std::filesystem::path(filename).filename().string()) {
+            if (std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' ||
+                c == '_' || c == '.') {
+                safe_name.push_back(c);
+            } else {
+                safe_name.push_back('_');
+            }
+        }
+        if (safe_name.empty()) safe_name = "BawalVision-Report";
+        if (!safe_name.ends_with(".pdf")) safe_name += ".pdf";
+
+        bawal::report::MarkdownPdfOptions options;
+        options.title = title;
+        options.subject = "BawalVision Markdown Report";
+        const std::vector<uint8_t> pdf =
+            bawal::report::MarkdownPdfGenerator::render(markdown, options);
+        if (pdf.empty()) {
+            res.code = 500;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Markdown PDF rendering failed\"}");
+            res.end();
+            return;
+        }
+
+        res.code = 200;
+        res.set_header("Content-Type", "application/pdf");
+        res.set_header("Content-Disposition",
+                       "attachment; filename=\"" + safe_name + "\"");
+        res.set_header("X-Report-Format", "pdf");
+        res.body.assign(reinterpret_cast<const char*>(pdf.data()), pdf.size());
+        res.end();
+    };
+
+    CROW_ROUTE(m_app, "/api/v1/reports/pdf")
+        .methods(crow::HTTPMethod::Post)(markdown_pdf_handler);
+    CROW_ROUTE(m_app, "/api/v1/reports/markdown/pdf")
+        .methods(crow::HTTPMethod::Post)(markdown_pdf_handler);
 
     // ------------------------------------------------------------------
     // Batch image inspection: ZIP upload -> parallel OpenMP inspection ->
