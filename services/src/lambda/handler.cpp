@@ -184,7 +184,7 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
                 return resp;
             }
             if (route.path.find("/devices/wifi/networks") != std::string::npos) {
-                resp.json_payload = R"({"networks":[{"ssid":"AWS-Cloud-Serverless","bssid":"00:00:00:00:00:00","signal":100,"security":"WPA2"}]})";
+                resp.json_payload = R"({"networks":[]})";
                 return resp;
             }
             if (route.path.find("/inspections/latest") != std::string::npos) {
