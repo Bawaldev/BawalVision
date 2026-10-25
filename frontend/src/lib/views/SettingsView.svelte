@@ -31,7 +31,7 @@
     });
 
     // Global inspection source preference (shared with CameraStream).
-    type InspectionSourceMode = 'live' | 'mock';
+    type InspectionSourceMode = 'live' | 'mock' | 'device_cam';
     let inspectionSource = $state<InspectionSourceMode>('live');
     let sourceModeBusy = $state(false);
 
@@ -292,7 +292,7 @@
     onMount(() => {
         try {
             const saved = localStorage.getItem('bawal_source_mode');
-            if (saved === 'mock' || saved === 'live') {
+            if (saved === 'mock' || saved === 'live' || saved === 'device_cam') {
                 inspectionSource = saved;
             }
         } catch {
@@ -1652,6 +1652,16 @@
                 >
                     <strong>Live ESP32 Camera</strong>
                     <small>Stream frames from the physical sensor node in real time.</small>
+                </button>
+                <button
+                    type="button"
+                    class="source-mode-btn"
+                    class:active={inspectionSource === 'device_cam'}
+                    disabled={sourceModeBusy}
+                    onclick={() => applyInspectionSource('device_cam')}
+                >
+                    <strong>Phone / Web Camera</strong>
+                    <small>Inspect food directly with your mobile phone camera or webcam.</small>
                 </button>
                 <button
                     type="button"

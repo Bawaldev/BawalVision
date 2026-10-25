@@ -34,7 +34,7 @@
         { id: 'water_spinach', aliases: ['water_spinach', 'waterspinach', 'kangkung'], label: 'Water Spinach (Kangkung)', icon: '🌱' }
     ];
 
-    type SourceModeType = 'live' | 'mock';
+    type SourceModeType = 'live' | 'mock' | 'device_cam';
     let sourceMode = $state<SourceModeType>('live');
 
     let activeApiBase = $state(resolveApiBase());
@@ -136,6 +136,55 @@
     let isRewound = $state(false);
     let lastVideoTime = 0;
 
+    // Device / Phone Camera Ingestion Pipeline State
+    let deviceCamVideoEl = $state<HTMLVideoElement | null>(null);
+    let deviceCamStream: MediaStream | null = null;
+    let isDeviceCamActive = $state(false);
+    let deviceCamError = $state('');
+
+    async function startDeviceCam() {
+        stopDeviceCam();
+        deviceCamError = '';
+        if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+            deviceCamError = 'Camera access (getUserMedia) is not supported in this browser environment.';
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 640 },
+                    height: { ideal: 480 }
+                },
+                audio: false
+            });
+            deviceCamStream = stream;
+            if (deviceCamVideoEl) {
+                deviceCamVideoEl.srcObject = stream;
+                await deviceCamVideoEl.play().catch(() => {});
+            }
+            isDeviceCamActive = true;
+            startLivePushing();
+        } catch (err: any) {
+            console.error('Failed to open device camera:', err);
+            deviceCamError = err?.name === 'NotAllowedError'
+                ? 'Camera access was denied. Please allow camera permissions in your browser.'
+                : (err?.message || 'Failed to initialize device camera.');
+            isDeviceCamActive = false;
+        }
+    }
+
+    function stopDeviceCam() {
+        if (deviceCamStream) {
+            deviceCamStream.getTracks().forEach((track) => track.stop());
+            deviceCamStream = null;
+        }
+        if (deviceCamVideoEl) {
+            deviceCamVideoEl.srcObject = null;
+        }
+        isDeviceCamActive = false;
+    }
+
     let streamError = $state(false);
     let streamEpoch = $state(Date.now());
     let discoveredStreamUrl = $state('');
@@ -214,9 +263,14 @@
             }
         } catch {
             if (isHttps) {
-                localBackendNotice = '⚠️ <strong>Mixed Content Blocked</strong>: Your browser (Chrome/Brave) blocks insecure HTTP localhost connections from an HTTPS domain (Vercel).<br/><strong>Solution:</strong> Run <code>just run-frontend</code> in your terminal and open <a href="http://localhost:5173" target="_blank" rel="noopener">http://localhost:5173</a>, or switch to <strong>Mock Video (Simulation)</strong> above for cloud AI inspection.';
+                localBackendNotice = '⚠️ <strong>Mixed Content Blocked</strong>: Your browser blocks insecure HTTP connections from an HTTPS domain (Vercel).<br/>' +
+                    '<strong>Solutions:</strong><br/>' +
+                    '• <strong>📱 Phone Cam Mode</strong>: Click the <strong>Phone Cam</strong> button above to inspect live food with your phone\'s rear camera.<br/>' +
+                    '• <strong>Local Network (HTTP)</strong>: Connect phone to laptop Wi-Fi hotspot and open <code>http://&lt;laptop-ip&gt;:5173</code> (runs without mixed content blocking).<br/>' +
+                    '• <strong>Browser Setting</strong>: In Chrome/Brave on Android, tap Site Settings &rarr; Insecure content &rarr; Allow.<br/>' +
+                    '• <strong>Simulation</strong>: Switch to <strong>Mock Video (Simulation)</strong> for cloud AI inspection.';
             } else {
-                localBackendNotice = '⚠️ <strong>Local backend is not active on port 8080</strong>. Start the C++ backend using: <code>just compose-up bawal_backend</code> or <code>just run-backend</code> in your terminal.';
+                localBackendNotice = '⚠️ <strong>Local backend is not active on port 8080</strong>. Start it using: <code>just run-backend</code> or <code>just compose-up bawal_backend</code>.';
             }
         } finally {
             isProbingLocal = false;
@@ -224,8 +278,18 @@
     }
 
     function captureAndPushLiveFrame() {
-        if (!liveImgEl || isPushingLiveFrame || sourceMode !== 'live' || streamError || !isLiveFeedActive) return;
-        if (!liveImgEl.complete || liveImgEl.naturalWidth === 0) return;
+        if (isPushingLiveFrame) return;
+
+        let sourceEl: CanvasImageSource | null = null;
+        if (sourceMode === 'live') {
+            if (!liveImgEl || streamError || !isLiveFeedActive || !liveImgEl.complete || liveImgEl.naturalWidth === 0) return;
+            sourceEl = liveImgEl;
+        } else if (sourceMode === 'device_cam') {
+            if (!deviceCamVideoEl || !isDeviceCamActive || deviceCamVideoEl.readyState < 2) return;
+            sourceEl = deviceCamVideoEl;
+        } else {
+            return;
+        }
 
         isPushingLiveFrame = true;
         try {
@@ -237,7 +301,7 @@
                 isPushingLiveFrame = false;
                 return;
             }
-            ctx.drawImage(liveImgEl, 0, 0, 640, 480);
+            ctx.drawImage(sourceEl, 0, 0, 640, 480);
             canvas.toBlob((blob) => {
                 if (!blob) {
                     isPushingLiveFrame = false;
@@ -248,8 +312,8 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'image/jpeg',
-                        'X-Device-ID': deviceId || 'ESP32S3_CAM',
-                        'X-Stream-Source': 'LIVE_CAMERA',
+                        'X-Device-ID': sourceMode === 'device_cam' ? 'PHONE_CAMERA' : (deviceId || 'ESP32S3_CAM'),
+                        'X-Stream-Source': sourceMode === 'device_cam' ? 'DEVICE_CAMERA' : 'LIVE_CAMERA',
                         'X-Frame-ID': String(currentSeq),
                         'X-Inference-Target': 'YOLO_OPENCV4'
                     },
@@ -274,8 +338,8 @@
                                 window.dispatchEvent(new CustomEvent('bawal-live-detections', {
                                     detail: {
                                         ...data,
-                                        source: 'live_camera',
-                                        deviceId: deviceId || 'ESP32S3_CAM',
+                                        source: sourceMode === 'device_cam' ? 'device_camera' : 'live_camera',
+                                        deviceId: sourceMode === 'device_cam' ? 'PHONE_CAMERA' : (deviceId || 'ESP32S3_CAM'),
                                         thumbnail: thumb
                                     }
                                 }));
@@ -296,7 +360,8 @@
     function startLivePushing() {
         stopLivePushing();
         livePushTimer = setInterval(() => {
-            if (sourceMode === 'live' && isLiveFeedActive && !streamError && isTabVisible) {
+            if ((sourceMode === 'live' && isLiveFeedActive && !streamError && isTabVisible) ||
+                (sourceMode === 'device_cam' && isDeviceCamActive && isTabVisible)) {
                 captureAndPushLiveFrame();
             }
         }, 1500);
@@ -686,6 +751,7 @@
     async function setSourceMode(mode: SourceModeType) {
         if (sourceMode === mode && !isSwitchingMode) return;
         isSwitchingMode = true;
+        const prevMode = sourceMode;
         sourceMode = mode;
         if (typeof localStorage !== 'undefined') {
             try { localStorage.setItem('bawal_source_mode', mode); } catch {}
@@ -697,8 +763,20 @@
             window.dispatchEvent(new CustomEvent('bawal-clear-detections'));
         }
 
-        if (mode === 'mock') {
+        // Clean up previous mode
+        if (prevMode === 'mock') {
+            stopMockPushing();
+            if (mockVideoEl) {
+                mockVideoEl.pause();
+            }
+        } else if (prevMode === 'device_cam') {
+            stopDeviceCam();
             stopLivePushing();
+        } else {
+            stopLivePushing();
+        }
+
+        if (mode === 'mock') {
             // 1. Immediately request backend mode change and wipe frames/detections
             await fetch(apiEndpoint('/api/v1/camera/mode'), {
                 method: 'POST',
@@ -719,14 +797,17 @@
             }
             startMockPushing();
             isSwitchingMode = false;
-        } else {
-            // 1. Stop mock pushing and pause video immediately
-            stopMockPushing();
-        stopLivePushing();
-            if (mockVideoEl) {
-                mockVideoEl.pause();
-            }
+        } else if (mode === 'device_cam') {
+            await fetch(apiEndpoint('/api/v1/camera/mode'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: 'live' })
+            }).catch(() => {});
 
+            await new Promise(r => setTimeout(r, 600));
+            await startDeviceCam();
+            isSwitchingMode = false;
+        } else {
             // 2. Immediately request backend to switch to live mode and clear mock detections
             await fetch(apiEndpoint('/api/v1/camera/mode'), {
                 method: 'POST',
@@ -919,6 +1000,7 @@
         }
         stopMockPushing();
         stopLivePushing();
+        stopDeviceCam();
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);
         }
@@ -1018,8 +1100,16 @@
     <div class="viewport-card">
         <div class="viewport-header">
             <div class="header-left">
-                <span class="live-dot" class:offline={sourceMode === 'live' && (!hasCamera || streamError)}></span>
-                <strong>{sourceMode === 'live' ? 'Live Inspection View' : 'Mock Video Inspection View (AI Connected)'}</strong>
+                <span class="live-dot" class:offline={sourceMode === 'live' ? (!hasCamera || streamError) : (sourceMode === 'device_cam' ? (!isDeviceCamActive || !!deviceCamError) : false)}></span>
+                <strong>
+                    {#if sourceMode === 'live'}
+                        Live ESP32 Inspection View
+                    {:else if sourceMode === 'device_cam'}
+                        Phone / Device Camera (Cloud AI)
+                    {:else}
+                        Mock Video Inspection View (AI Connected)
+                    {/if}
+                </strong>
             </div>
 
             <!-- Video / Camera Ingestion Source Mode Switcher -->
@@ -1029,9 +1119,18 @@
                     class="mode-pill-btn"
                     class:active={sourceMode === 'live'}
                     onclick={() => setSourceMode('live')}
-                    title="Live continuous stream push from camera"
+                    title="Live continuous stream push from ESP32-S3 camera"
                 >
-                    <span class="pill-icon">📹</span> Live Stream
+                    <span class="pill-icon">📹</span> ESP32 Stream
+                </button>
+                <button
+                    type="button"
+                    class="mode-pill-btn"
+                    class:active={sourceMode === 'device_cam'}
+                    onclick={() => setSourceMode('device_cam')}
+                    title="Direct live food inspection using your smartphone rear camera or webcam"
+                >
+                    <span class="pill-icon">📱</span> Phone Cam
                 </button>
                 <button
                     type="button"
@@ -1044,9 +1143,11 @@
                 </button>
             </div>
 
-            <span class="pill-badge" class:badge-active={sourceMode === 'mock' || (hasCamera && !streamError)}>
+            <span class="pill-badge" class:badge-active={sourceMode === 'mock' || sourceMode === 'device_cam' || (hasCamera && !streamError)}>
                 {#if sourceMode === 'live'}
                     {hasCamera && !streamError ? 'Live Push (Active HUD)' : 'Standby'}
+                {:else if sourceMode === 'device_cam'}
+                    {isDeviceCamActive ? '📱 Mobile Cam Active (1.5s YOLO)' : (deviceCamError ? 'Camera Error' : 'Requesting Access')}
                 {:else}
                     🎬 MP4 -> ONNX AI Pipeline ({mockPlaybackRate}x)
                 {/if}
@@ -1119,6 +1220,76 @@
                         {/each}
                     </svg>
                 {/if}
+            {:else if sourceMode === 'device_cam'}
+                <!-- Direct Smartphone / Webcam Video Feed -->
+                {#if isDeviceCamActive}
+                    <video
+                        bind:this={deviceCamVideoEl}
+                        aria-label="Device Camera Stream"
+                        class="feed-video"
+                        playsinline
+                        autoplay
+                        muted
+                    ></video>
+
+                    <!-- Dynamic AI Bounding Box HUD Overlay for Device Cam -->
+                    {#if !isSwitchingMode && detections && detections.length > 0}
+                        <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
+                            {#each detections as det}
+                                {#if det.box && det.box.length === 4}
+                                    {@const [bx, by, bw, bh] = det.box}
+                                    {@const status = getItemStatus(det)}
+                                    {@const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444')}
+                                    <rect
+                                        x={bx}
+                                        y={by}
+                                        width={bw}
+                                        height={bh}
+                                        fill="none"
+                                        stroke={strokeColor}
+                                        stroke-width="2.5"
+                                        rx="4"
+                                    />
+                                    <rect
+                                        x={bx}
+                                        y={Math.max(0, by - 20)}
+                                        width={Math.max(60, (det.food_name || '').length * 8 + 36)}
+                                        height="20"
+                                        fill={strokeColor}
+                                        rx="3"
+                                    />
+                                    <text
+                                        x={bx + 4}
+                                        y={Math.max(14, by - 5)}
+                                        fill="#ffffff"
+                                        font-size="11"
+                                        font-weight="bold"
+                                        font-family="sans-serif"
+                                    >
+                                        {det.food_name} {Math.round((det.similarity_rate || 0) * (det.similarity_rate <= 1 ? 100 : 1))}%
+                                    </text>
+                                {/if}
+                            {/each}
+                        </svg>
+                    {/if}
+                {:else}
+                    <!-- Device Cam Standby / Permission Notice -->
+                    <div class="standby-box">
+                        <div class="standby-radar-ring">
+                            <span class="standby-icon">📱</span>
+                        </div>
+                        <h4>Smartphone / Web Camera</h4>
+                        <p>{deviceCamError || 'Point your smartphone camera at a food meal tray. Real-time frames are captured and streamed to AWS Lambda YOLO for live object detection and freshness inspection.'}</p>
+                        <div class="standby-actions-row">
+                            <button type="button" class="switch-mock-btn" onclick={startDeviceCam}>
+                                📷 Start Phone Camera
+                            </button>
+                            <button type="button" class="retry-btn" onclick={() => setSourceMode('live')}>
+                                📹 Switch to ESP32
+                            </button>
+                        </div>
+                    </div>
+                {/if}
             {:else}
                 <!-- Live Stream Mode (Unified MJPEG Ingress from ESP32-S3 Camera) -->
                 {#if (hasCamera || isAttemptingLocalStream || discoveredStreamUrl) && !streamError}
@@ -1188,6 +1359,9 @@
                         {/if}
 
                         <div class="standby-actions-row">
+                            <button type="button" class="switch-mock-btn" onclick={() => setSourceMode('device_cam')}>
+                                📱 Use Phone Camera
+                            </button>
                             <button type="button" class="switch-mock-btn" onclick={() => { setSourceMode('mock'); togglePlayPause(); }}>
                                 🎬 Switch to Mock Video (Simulation)
                             </button>
@@ -1210,8 +1384,8 @@
                 <div class="mode-switching-scrim">
                     <div class="switching-spinner"></div>
                     <div class="switching-status-text">
-                        <strong>Switching to {sourceMode === 'mock' ? 'Mock Simulation' : 'Live ESP32-S3'}</strong>
-                        <span>Turning off YOLO detection boxes & synchronizing stream pipeline...</span>
+                        <strong>Switching to {sourceMode === 'mock' ? 'Mock Simulation' : (sourceMode === 'device_cam' ? 'Phone / Device Camera' : 'Live ESP32-S3')}</strong>
+                        <span>Synchronizing video pipeline & clearing detection overlays...</span>
                     </div>
                 </div>
             {/if}
@@ -1332,7 +1506,7 @@
 
         <div class="viewport-footer">
             <div class="footer-left">
-                <span class="device-label">📷 Device: {sourceMode === 'mock' ? `MOCK_VIDEO_CAM (UUID: ${mockVideoUUID.slice(0, 8)})` : (deviceId || 'ESP32S3_CAM')}</span>
+                <span class="device-label">📷 Device: {sourceMode === 'mock' ? `MOCK_VIDEO_CAM (UUID: ${mockVideoUUID.slice(0, 8)})` : (sourceMode === 'device_cam' ? 'PHONE_CAMERA (Cloud AI)' : (deviceId || 'ESP32S3_CAM'))}</span>
                 {#if sceneOptical && sceneOptical.lux_luminance != null}
                     <span class="optical-badge" title="SIMD AVX2 Optical Scene Analysis: Lux, White Balance & Correlated Color Temp">
                         💡 {Math.round(sceneOptical.lux_luminance)} lx • WB: {sceneOptical.white_balance_status} ({sceneOptical.color_temperature}K)
