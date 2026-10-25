@@ -133,9 +133,11 @@
 
     let espNodeIp = $state(
         typeof localStorage !== 'undefined'
-            ? localStorage.getItem('bawal_esp32_node_ip') || '10.105.56.236'
-            : '10.105.56.236'
+            ? localStorage.getItem('bawal_esp32_node_ip') || ''
+            : ''
     );
+    let espWifiSsid = $state('');
+    let espWifiPassword = $state('');
     let espNodeStatus = $state<{
         status: string;
         device_id?: string;
@@ -184,6 +186,9 @@
             if (res && res.ok) {
                 const data = await res.json();
                 espNodeStatus = data;
+                if (data.wifi_ssid && !espWifiSsid) {
+                    espWifiSsid = data.wifi_ssid;
+                }
                 if (data.gateway && !espTargetBackendIp) {
                     espTargetBackendIp = data.gateway;
                 } else if (data.nvs_backend_ip && !espTargetBackendIp) {
@@ -207,54 +212,69 @@
         const nodeIp = (espNodeIp || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
         const targetIp = (espTargetBackendIp || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
         const targetPort = Number(espTargetBackendPort) || 8080;
+        const targetSsid = (espWifiSsid || espNodeStatus?.wifi_ssid || '').trim();
+        const targetPass = (espWifiPassword || '').trim();
 
-        if (!targetIp) {
-            espDeployMessage = 'Enter a valid target backend IP (e.g. laptop host IP or gateway IP).';
+        if (!targetIp && !targetSsid) {
+            espDeployMessage = 'Enter a valid target backend IP or Wi-Fi SSID to deploy.';
             espDeploySuccess = false;
             return;
         }
 
         isDeployingToEsp = true;
-        espDeployMessage = `Deploying target http://${targetIp}:${targetPort} to ESP32 node...`;
+        espDeployMessage = `Deploying configuration to ESP32 node...`;
 
-        // 1. First try HTTP REST API directly to the ESP32 node
+        // 1. First try HTTP REST API directly to the ESP32 node if reachable
         let deployedViaHttp = false;
         if (nodeIp) {
             try {
                 const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 3000);
+                const timeout = setTimeout(() => controller.abort(), 3500);
+                const payload: Record<string, any> = {};
+                if (targetIp) {
+                    payload.backend_ip = targetIp;
+                    payload.backend_port = targetPort;
+                }
+                if (targetSsid) {
+                    payload.ssid = targetSsid;
+                    if (targetPass) payload.pass = targetPass;
+                }
+
                 const res = await fetch(`http://${nodeIp}/api/v1/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        backend_ip: targetIp,
-                        backend_port: targetPort
-                    }),
+                    body: JSON.stringify(payload),
                     signal: controller.signal
                 }).catch(() => null);
                 clearTimeout(timeout);
                 if (res && res.ok) {
                     deployedViaHttp = true;
                     espDeploySuccess = true;
-                    espDeployMessage = `✓ Deployed over Wi-Fi! ESP32 NVS updated: Target backend is now http://${targetIp}:${targetPort}/api/v1/camera/frame.`;
+                    espDeployMessage = `✓ Deployed over Wi-Fi! ESP32 NVS updated: Wi-Fi "${targetSsid || 'preserved'}", Backend http://${targetIp || 'auto'}:${targetPort}.`;
                     await queryEspNodeStatus(nodeIp);
                 }
             } catch {}
         }
 
-        // 2. If HTTP failed (e.g. Mixed Content or node IP changed), try Web Serial
+        // 2. If HTTP failed (e.g. Mixed Content or changing to a new network), try Web Serial
         if (!deployedViaHttp) {
             if (isWebSerialAvailable()) {
+                if (!targetSsid) {
+                    espDeploySuccess = false;
+                    espDeployMessage = 'Wi-Fi SSID is required for Web Serial provisioning.';
+                    isDeployingToEsp = false;
+                    return;
+                }
                 try {
-                    espDeployMessage = `HTTP connection failed. Pushing via Web Serial USB CDC...`;
+                    espDeployMessage = `HTTP direct connection unavailable. Pushing via Web Serial USB CDC...`;
                     const res = await provisionViaBrowserSerial(
-                        espNodeStatus?.wifi_ssid || 'Target_SSID',
-                        '',
+                        targetSsid,
+                        targetPass,
                         targetIp
                     );
                     if (res.success) {
                         espDeploySuccess = true;
-                        espDeployMessage = `✓ Deployed via Web Serial USB! Target backend persisted to NVS: http://${targetIp}:${targetPort}.`;
+                        espDeployMessage = `✓ Deployed via Web Serial USB! Target Wi-Fi & backend persisted to NVS.`;
                     } else {
                         espDeploySuccess = false;
                         espDeployMessage = res.message || 'Web Serial deployment failed.';
@@ -265,7 +285,7 @@
                 }
             } else {
                 espDeploySuccess = false;
-                espDeployMessage = `Could not reach ESP32 at http://${nodeIp}. Check Wi-Fi subnet or plug via USB.`;
+                espDeployMessage = `Could not reach ESP32 at http://${nodeIp || 'empty'}. Plug via USB or check Wi-Fi network.`;
             }
         }
         isDeployingToEsp = false;
@@ -541,6 +561,12 @@
         wifiConnectSuccess = false;
 
         const ssid = (selectedSsid || selectedNetwork.ssid || '').trim();
+        if (!ssid) {
+            connectError = 'Target Wi-Fi SSID is required.';
+            isConnectingWifi = false;
+            return;
+        }
+
         const detectedPort = detectedUsbPorts[0]?.port || '';
         let gatewayIpToUse = (gatewayHostIp || detectedHostIp || '').trim();
         if (!gatewayIpToUse && serverBackendIp && isValidGatewayIp(serverBackendIp)) {
@@ -553,9 +579,41 @@
             return;
         }
 
+        // 1. Attempt OTA Wi-Fi switch directly to ESP node if currently reachable on network
+        const nodeIp = (espNodeIp || espNodeStatus?.sta_ip || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+        if (nodeIp) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 3500);
+                const res = await fetch(`http://${nodeIp}/api/v1/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ssid,
+                        pass: connectPassword || '',
+                        backend_ip: gatewayIpToUse || undefined
+                    }),
+                    signal: controller.signal
+                }).catch(() => null);
+                clearTimeout(timeout);
+                if (res && res.ok) {
+                    wifiConnectSuccess = true;
+                    wifiSuccessMsg = `✓ Switched ESP32 Wi-Fi to "${ssid}" directly via OTA! Reconnecting...`;
+                    connectionStatus = 'connected';
+                    connectToast = wifiSuccessMsg;
+                    setTimeout(() => (connectToast = ''), 6000);
+                    await refreshHardwareStatus();
+                    setTimeout(() => {
+                        closeConnectModal();
+                    }, 1600);
+                    isConnectingWifi = false;
+                    return;
+                }
+            } catch {}
+        }
+
         try {
-            // Prefer direct browser Web Serial when explicitly selected or when
-            // backend runs in VM/cloud without visible host USB ports.
+            // 2. Fall back to direct USB provisioning (Web Serial or backend USB CDC)
             let res: EspConnectionResult;
             const useBrowserSerial = selectedUsbPort === 'web_serial' || (!detectedPort && isWebSerialAvailable());
             if (useBrowserSerial) {
@@ -1225,7 +1283,7 @@
                             id="espNodeIpInput"
                             class="fedora-input"
                             bind:value={espNodeIp}
-                            placeholder="e.g. 10.105.56.236"
+                            placeholder="e.g. 192.168.1.150"
                             spellcheck="false"
                             autocapitalize="off"
                             autocorrect="off"
@@ -1250,7 +1308,7 @@
                             <span class="diag-val mono">{espNodeStatus.device_id || 'ESP32-S3'}</span>
                         </div>
                         <div class="diag-item">
-                            <span class="diag-lbl">Wi-Fi AP</span>
+                            <span class="diag-lbl">Current Wi-Fi</span>
                             <span class="diag-val">{espNodeStatus.wifi_ssid || 'N/A'} ({espNodeStatus.rssi || '-'} dBm)</span>
                         </div>
                         <div class="diag-item">
@@ -1266,13 +1324,39 @@
                     </div>
                 {/if}
 
-                <!-- Deploy Backend Target to ESP32 Form -->
+                <!-- Deploy Wi-Fi & Backend Target to ESP32 Form -->
                 <div class="iot-deploy-card" style="margin-top: 12px; background: rgba(15, 23, 42, 0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border-subtle);">
                     <div class="esp-header-row" style="margin-bottom: 8px;">
-                        <strong style="font-size: 0.82rem; color: var(--text-primary);">Deploy Target Backend URL to ESP32 NVS</strong>
-                        <span class="port-subdetail-muted" style="font-size: 0.72rem;">Updates the camera frame ingestion destination on the physical board</span>
+                        <strong style="font-size: 0.82rem; color: var(--text-primary);">Configure ESP32 Wi-Fi &amp; Backend Target</strong>
+                        <span class="port-subdetail-muted" style="font-size: 0.72rem;">Change Wi-Fi network and frame ingestion destination directly on the board via OTA HTTP or USB</span>
                     </div>
 
+                    <!-- Wi-Fi Inputs -->
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+                        <div style="flex: 1; min-width: 160px;">
+                            <label for="espWifiSsidInput" class="compact-label">Target Wi-Fi Network (SSID)</label>
+                            <input
+                                id="espWifiSsidInput"
+                                class="fedora-input"
+                                bind:value={espWifiSsid}
+                                placeholder={espNodeStatus?.wifi_ssid ? `Current: ${espNodeStatus.wifi_ssid}` : 'Enter Wi-Fi SSID'}
+                                spellcheck="false"
+                            />
+                        </div>
+                        <div style="flex: 1; min-width: 160px;">
+                            <label for="espWifiPassInput" class="compact-label">Wi-Fi Password</label>
+                            <input
+                                id="espWifiPassInput"
+                                type="password"
+                                class="fedora-input"
+                                bind:value={espWifiPassword}
+                                placeholder="Wi-Fi Password (leave blank to keep current)"
+                                autocomplete="new-password"
+                            />
+                        </div>
+                    </div>
+
+                    <!-- Target Backend Inputs -->
                     <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
                         <div style="flex: 2; min-width: 180px;">
                             <label for="targetIpInput" class="compact-label">Target Backend IP (Laptop / Host)</label>
@@ -1280,7 +1364,7 @@
                                 id="targetIpInput"
                                 class="fedora-input"
                                 bind:value={espTargetBackendIp}
-                                placeholder={espNodeStatus?.gateway ? `e.g. ${espNodeStatus.gateway}` : 'e.g. 10.105.56.206 or 192.168.1.100'}
+                                placeholder={espNodeStatus?.gateway ? `e.g. ${espNodeStatus.gateway}` : 'e.g. 192.168.1.100'}
                                 spellcheck="false"
                             />
                         </div>
@@ -1338,9 +1422,9 @@
                             disabled={isDeployingToEsp}
                         >
                             {#if isDeployingToEsp}
-                                <span class="btn-spinner"></span> Deploying to NVS...
+                                <span class="btn-spinner"></span> Updating ESP32...
                             {:else}
-                                🚀 Deploy Target to ESP32 (Write NVS)
+                                🚀 Apply &amp; Switch Wi-Fi / Target (OTA)
                             {/if}
                         </button>
                         {#if isWebSerialAvailable()}
@@ -1348,7 +1432,7 @@
                                 type="button"
                                 class="fedora-btn secondary"
                                 style="padding: 6px 14px; font-size: 0.78rem;"
-                                onclick={() => provisionViaBrowserSerial(espNodeStatus?.wifi_ssid || 'Target_SSID', '', espTargetBackendIp)}
+                                onclick={() => provisionViaBrowserSerial(espWifiSsid || espNodeStatus?.wifi_ssid || '', espWifiPassword, espTargetBackendIp)}
                                 disabled={isDeployingToEsp}
                             >
                                 ⚡ Push via Web Serial USB
