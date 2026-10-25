@@ -332,14 +332,37 @@ quantize-ai1:
         python3 ml/AI1/quantize_int8.py || python ml/AI1/quantize_int8.py
     fi
 
-# Automated multi-engine scraper and lightweight ZIP archiver
-[no-cd]
-zip-scraper query="nasi bento ayam tempe" limit="15" output="batch_inspection_images.zip":
+# Scrape citra baki makanan MBG riil dan kompres ke ZIP (<4MB)
+zip-scraper query="top down food plate white rice fried chicken tofu" limit="30" output="batch_inspection_images.zip":
     #!/usr/bin/env bash
+    set -euo pipefail
+
+    CLEAN_QUERY="{{ query }}"
+    CLEAN_QUERY="${CLEAN_QUERY#query=}"
+    CLEAN_QUERY="$(echo "${CLEAN_QUERY}" | sed -e 's/^[ "'\''"]*//' -e 's/[ "'\''"]*$//')"
+
+    CLEAN_LIMIT="{{ limit }}"
+    CLEAN_LIMIT="${CLEAN_LIMIT#limit=}"
+    CLEAN_LIMIT="$(echo "${CLEAN_LIMIT}" | tr -cd '0-9')"
+    [ -z "${CLEAN_LIMIT}" ] && CLEAN_LIMIT="30"
+
+    CLEAN_OUT="{{ output }}"
+    CLEAN_OUT="${CLEAN_OUT#output=}"
+    CLEAN_OUT="$(echo "${CLEAN_OUT}" | sed -e 's/^[ "'\''"]*//' -e 's/[ "'\''"]*$//')"
+    [ -z "${CLEAN_OUT}" ] && CLEAN_OUT="batch_inspection_images.zip"
+
+    PYTHON_BIN="python3"
     if [ -f ".venv/bin/python3" ]; then
-        .venv/bin/python3 scripts/image_scraper.py -q "{{ query }}" -n {{ limit }} -z "{{ output }}" --clean-after
-    else
-        python3 scripts/image_scraper.py -q "{{ query }}" -n {{ limit }} -z "{{ output }}" --clean-after
+        PYTHON_BIN=".venv/bin/python3"
+    elif [ -f "backend/.venv/bin/python3" ]; then
+        PYTHON_BIN="backend/.venv/bin/python3"
     fi
+
+    echo "[+] Running CV-Protected Food Scraper via ${PYTHON_BIN}..."
+    ${PYTHON_BIN} scripts/image_scraper.py \
+        -q "${CLEAN_QUERY}" \
+        -n "${CLEAN_LIMIT}" \
+        -z "${CLEAN_OUT}" \
+        --clean-after
 
 alias zip-scrapper := zip-scraper
