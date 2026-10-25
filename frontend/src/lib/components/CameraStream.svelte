@@ -296,7 +296,21 @@
                         streamError = false;
                         const data = await res.json().catch(() => null);
                         if (data && Array.isArray(data.detections)) {
-                            window.dispatchEvent(new CustomEvent('bawal-live-detections', { detail: data }));
+                            let thumb = '';
+                            try {
+                                if (mockCanvasEl && data.detections.length > 0) {
+                                    thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
+                                }
+                            } catch {}
+                            window.dispatchEvent(new CustomEvent('bawal-live-detections', {
+                                detail: {
+                                    ...data,
+                                    source: 'mock_video',
+                                    videoName: mockFileName,
+                                    videoUUID: mockVideoUUID,
+                                    thumbnail: thumb
+                                }
+                            }));
                         }
                     }
                 })
@@ -340,7 +354,21 @@
                         streamError = false;
                         const data = await res.json().catch(() => null);
                         if (data && Array.isArray(data.detections)) {
-                            window.dispatchEvent(new CustomEvent('bawal-live-detections', { detail: data }));
+                            let thumb = '';
+                            try {
+                                if (mockCanvasEl && data.detections.length > 0) {
+                                    thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
+                                }
+                            } catch {}
+                            window.dispatchEvent(new CustomEvent('bawal-live-detections', {
+                                detail: {
+                                    ...data,
+                                    source: 'mock_video',
+                                    videoName: mockFileName,
+                                    videoUUID: mockVideoUUID,
+                                    thumbnail: thumb
+                                }
+                            }));
                         }
                     }
                 }).catch(() => {});

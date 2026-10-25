@@ -142,14 +142,16 @@
 
     // Real Backend Polling Step
     let lastLiveDetectionTime = 0;
-    let lastLogInferenceTime = 0;
-    let mockFrameAuditId = 1000;
+    let lastTrackedSummary = '';
 
-    function saveLiveAuditRecord(activeDetections: FoodDetection[], status: string) {
+    function saveLiveAuditRecord(activeDetections: FoodDetection[], status: string, metadata?: any) {
         if (typeof localStorage === 'undefined' || !activeDetections || activeDetections.length === 0) return;
         try {
             const raw = localStorage.getItem('bawal_audit_records');
-            const list = raw ? JSON.parse(raw) : [];
+            let list = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(list)) list = [];
+
+            const trackKey = metadata?.videoUUID || metadata?.videoName || 'MOCK_VIDEO_CAM';
             const auditDetections = activeDetections.map(d => ({
                 class_name: d.food_name,
                 confidence: d.similarity_rate,
@@ -157,29 +159,42 @@
                 freshness_score: Math.max(0, 100 - (d.spoilage_score || 0)),
                 portion_ratio: 0.35
             }));
-            const record = {
-                frame_id: ++mockFrameAuditId,
-                timestamp: new Date().toISOString(),
-                device_id: 'MOCK_VIDEO_CAM',
-                engine_pipeline: 'YOLOv8s-INT8 (AWS Lambda Serverless)',
-                verdict: status === 'REJECT' ? 'REJECTED' : 'ACCEPTED',
-                surface_temp: 25.0,
-                lux_luminance: 450,
-                color_temperature: 6500,
-                white_balance_status: 'BALANCED',
-                spoilage_risk: 0,
-                tray_coverage: 65,
-                image_path: '/examples/banana/banana_sample_one.mp4',
-                detections: auditDetections,
-                t_safe_hours: 8.0,
-                checksum_sha256: Math.random().toString(36).substring(2, 14)
-            };
-            const updated = [record, ...list].slice(0, 50);
-            localStorage.setItem('bawal_audit_records', JSON.stringify(updated));
+
+            // DYNAMIC 1-OBJECT UPDATE: Update the single tracking entry in-place instead of spamming new cards
+            const existingIdx = list.findIndex(r => r.track_key === trackKey || r.device_id === 'MOCK_VIDEO_CAM');
+            if (existingIdx >= 0) {
+                list[existingIdx].detections = auditDetections;
+                list[existingIdx].timestamp = new Date().toISOString();
+                list[existingIdx].verdict = status === 'REJECT' ? 'REJECTED' : 'ACCEPTED';
+                if (metadata?.thumbnail) {
+                    list[existingIdx].image_path = metadata.thumbnail;
+                }
+            } else {
+                const record = {
+                    track_key: trackKey,
+                    frame_id: 1,
+                    timestamp: new Date().toISOString(),
+                    device_id: 'MOCK_VIDEO_CAM',
+                    engine_pipeline: 'YOLOv8s-INT8 (AWS Lambda Serverless)',
+                    verdict: status === 'REJECT' ? 'REJECTED' : 'ACCEPTED',
+                    surface_temp: 25.0,
+                    lux_luminance: 450,
+                    color_temperature: 6500,
+                    white_balance_status: 'BALANCED',
+                    spoilage_risk: 0,
+                    tray_coverage: 65,
+                    image_path: metadata?.thumbnail || '/examples/banana/banana_sample_one.mp4',
+                    detections: auditDetections,
+                    t_safe_hours: 8.0,
+                    checksum_sha256: '9f2a7b' + Date.now().toString(16).slice(-6)
+                };
+                list = [record, ...list].slice(0, 50);
+            }
+            localStorage.setItem('bawal_audit_records', JSON.stringify(list));
         } catch {}
     }
 
-    function applyDetections(rawList: any[]) {
+    function applyDetections(rawList: any[], metadata?: any) {
         if (!Array.isArray(rawList)) return;
         const activeThreshold = Math.min(0.98, Math.max(0.25, Number(systemConfig.minConfidenceThreshold) || 0.35));
         const filtered = rawList.filter((det: any) => {
@@ -207,21 +222,20 @@
                 };
             });
 
-            const now = Date.now();
-            if (now - lastLogInferenceTime > 3500) {
-                lastLogInferenceTime = now;
-                const summary = detections.map(d => `${d.food_name} (${Math.round((d.similarity_rate <= 1 ? d.similarity_rate * 100 : d.similarity_rate))}%)`).join(', ');
+            const summary = detections.map(d => `${d.food_name} (${Math.round((d.similarity_rate <= 1 ? d.similarity_rate * 100 : d.similarity_rate))}%)`).join(', ');
+            if (summary !== lastTrackedSummary) {
+                lastTrackedSummary = summary;
                 logs = [
                     ...logs.slice(-49),
                     {
                         id: Math.random().toString(36).substring(2, 9),
                         timestamp: new Date().toLocaleTimeString(),
                         level: 'AI',
-                        message: `YOLOv8s INT8 Ingress: Detected ${summary} - Shelf Freshness 100% (PASS)`
+                        message: `[AI Dynamic Ingress] Tracking meal tray: ${summary} (PASS - Optimal Freshness)`
                     }
                 ];
-                saveLiveAuditRecord(detections, 'PASS');
             }
+            saveLiveAuditRecord(detections, 'PASS', metadata);
         }
     }
 
@@ -417,6 +431,26 @@
             }
         } catch {}
 
+        // Clean up legacy spam audit records in localStorage
+        if (typeof localStorage !== 'undefined') {
+            try {
+                const raw = localStorage.getItem('bawal_audit_records');
+                if (raw) {
+                    const list = JSON.parse(raw);
+                    if (Array.isArray(list) && list.length > 1) {
+                        const seen = new Set();
+                        const cleaned = list.filter(r => {
+                            const k = r.device_id || 'dev';
+                            if (seen.has(k)) return false;
+                            seen.add(k);
+                            return true;
+                        });
+                        localStorage.setItem('bawal_audit_records', JSON.stringify(cleaned));
+                    }
+                }
+            } catch {}
+        }
+
         // Controlled, non-blocking polling loop (prevents request stacking on cloud endpoints)
         async function runPollingLoop() {
             if (isDestroyed) return;
@@ -430,7 +464,7 @@
 
     function handleLiveDetectionsEvent(e: CustomEvent) {
         if (e.detail && Array.isArray(e.detail.detections)) {
-            applyDetections(e.detail.detections);
+            applyDetections(e.detail.detections, e.detail);
         }
     }
 

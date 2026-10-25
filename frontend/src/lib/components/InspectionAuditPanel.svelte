@@ -98,6 +98,14 @@
         reportRecord(selectedRecord);
     }
 
+    function clearAuditRecords() {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem('bawal_audit_records');
+        }
+        records = [];
+        showToast('Audit records cleared');
+    }
+
     async function downloadBackendReport(frameId: number, format: 'pdf' | 'tex') {
         try {
             if (format === 'pdf') {
@@ -148,6 +156,7 @@
         </div>
         <div class="audit-actions">
             <button type="button" class="action-btn" onclick={loadRecords}>↻ Refresh</button>
+            <button type="button" class="action-btn" onclick={clearAuditRecords}>🗑️ Clear Records</button>
             <button type="button" class="action-btn primary" onclick={reportBatch}>📄 Export Batch (.md)</button>
         </div>
     </div>
