@@ -1,12 +1,43 @@
 <script lang="ts">
-    import { onDestroy } from 'svelte';
-    import { resolveApiBase, resolveApiOrigin } from '../backendConfig';
+    import { onMount, onDestroy } from 'svelte';
+    import { resolveApiBase, resolveApiOrigin, detectLocalBackend, setConfiguredApiBase } from '../backendConfig';
     import { downloadMarkdown, downloadMarkdownPdf } from '../utils/reportGenerator';
 
     const MAX_ZIP_BYTES = 15 * 1024 * 1024;
 
+    let backendOnline = $state(false);
+    let currentBackendUrl = $state(resolveApiBase());
+    let isCheckingBackend = $state(false);
+
+    async function checkAndDetectBackend() {
+        isCheckingBackend = true;
+        try {
+            const candidate = await detectLocalBackend(1000);
+            if (candidate) {
+                currentBackendUrl = candidate;
+                backendOnline = true;
+                return;
+            }
+            const base = resolveApiBase();
+            const probe = await fetch(`${base}/health`, { signal: AbortSignal.timeout(1000), cache: 'no-store' })
+                .then(r => r.ok)
+                .catch(() => false);
+            backendOnline = probe;
+            currentBackendUrl = base;
+        } catch {
+            backendOnline = false;
+        } finally {
+            isCheckingBackend = false;
+        }
+    }
+
+    onMount(() => {
+        checkAndDetectBackend();
+    });
+
     function getBatchEndpoint(): string {
-        return `${resolveApiBase()}/inspections/batch-zip`;
+        const base = (currentBackendUrl || resolveApiBase()).replace(/\/+$/, '');
+        return `${base}/inspections/batch-zip`;
     }
 
     interface BatchDetection {
@@ -267,7 +298,19 @@
             elapsedMs = performance.now() - startedAt;
         }, 100);
 
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
+
         try {
+            // Check & auto-detect local C++ backend if current base is unconfirmed or cloud default
+            if (!backendOnline || currentBackendUrl === '/api/v1') {
+                const detected = await detectLocalBackend(1000);
+                if (detected) {
+                    currentBackendUrl = detected;
+                    backendOnline = true;
+                }
+            }
+
             const endpoint = getBatchEndpoint();
             if (endpoint.startsWith('/api') && file.size > 4.5 * 1024 * 1024) {
                 throw new Error(`ZIP file (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds 4.5 MB Vercel Serverless payload limit. Use a ZIP file under 4.5 MB (e.g. 20-30 trays) or configure direct Backend/Lambda URL in Settings.`);
@@ -279,8 +322,10 @@
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/zip' },
-                body: file
+                body: file,
+                signal: controller.signal
             });
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 let detail = `Batch inspection failed (${response.status})`;
@@ -305,10 +350,17 @@
             elapsedMs = payload.processing_time_ms;
             stage = 'done';
             noticeMessage = `Batch ${payload.batch_id} completed: ${payload.accepted} accepted / ${payload.rejected} rejected across ${payload.total_trays || (payload.items ? payload.items.length : 0)} trays.`;
-        } catch (err) {
+        } catch (err: any) {
+            clearTimeout(timeoutId);
             clearTimers();
             stage = 'error';
-            errorMessage = err instanceof Error ? err.message : 'Batch ZIP processing failed.';
+            if (err?.name === 'AbortError') {
+                errorMessage = `Connection to C++ backend timed out after 25s. Make sure bawal_backend is running locally on port 8080 (run "just run-backend").`;
+            } else if (err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError') || err?.message?.includes('502')) {
+                errorMessage = `Cannot reach C++ backend at ${getBatchEndpoint()}. If browsing from Vercel (bawal-vision.vercel.app), open the local frontend at http://localhost:5173 (run "just run-frontend") or configure your laptop LAN IP in Settings.`;
+            } else {
+                errorMessage = err instanceof Error ? err.message : 'Batch ZIP processing failed.';
+            }
         }
     }
 
@@ -515,6 +567,31 @@
             </div>
         </div>
     </header>
+
+    <!-- Backend Status Banner -->
+    {#if !backendOnline}
+        <div class="backend-offline-banner">
+            <div class="banner-left">
+                <span class="banner-icon">⚠️</span>
+                <div class="banner-text">
+                    <strong>C++ Backend Offline ({currentBackendUrl})</strong>
+                    <span>
+                        The OpenMP YOLOv8s INT8 engine runs on your local machine.
+                        Ensure <code>bawal_backend</code> is running (<code>just run-backend</code>),
+                        or open the local web UI at <a href="http://localhost:5173/#batch">http://localhost:5173</a>.
+                    </span>
+                </div>
+            </div>
+            <button type="button" class="banner-recheck-btn" onclick={checkAndDetectBackend} disabled={isCheckingBackend}>
+                {isCheckingBackend ? 'Detecting...' : '↻ Auto-Detect Backend'}
+            </button>
+        </div>
+    {:else}
+        <div class="backend-online-banner">
+            <span class="online-dot"></span>
+            <span>Connected to C++ YOLOv8s INT8 Engine at <code>{currentBackendUrl}</code></span>
+        </div>
+    {/if}
 
     <section class="upload-card card">
         <button
@@ -1740,6 +1817,92 @@
         font-size: 0.62rem;
         color: var(--text-muted);
         font-style: italic;
+    }
+
+    .backend-offline-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+        background: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: var(--radius-md);
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+    }
+
+    .banner-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .banner-icon {
+        font-size: 1.2rem;
+    }
+
+    .banner-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        font-size: 0.76rem;
+        color: #fca5a5;
+    }
+
+    .banner-text strong {
+        color: #f87171;
+        font-size: 0.8rem;
+    }
+
+    .banner-text code {
+        background: rgba(0, 0, 0, 0.3);
+        padding: 1px 4px;
+        border-radius: 4px;
+        font-family: var(--font-mono);
+    }
+
+    .banner-text a {
+        color: #93c5fd;
+        text-decoration: underline;
+    }
+
+    .banner-recheck-btn {
+        padding: 6px 12px;
+        background: rgba(239, 68, 68, 0.15);
+        color: #fca5a5;
+        border: 1px solid rgba(239, 68, 68, 0.4);
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .banner-recheck-btn:hover {
+        background: rgba(239, 68, 68, 0.25);
+        color: #fff;
+    }
+
+    .backend-online-banner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        background: rgba(16, 185, 129, 0.08);
+        border: 1px solid rgba(16, 185, 129, 0.25);
+        border-radius: var(--radius-md);
+        margin-bottom: 12px;
+        font-size: 0.74rem;
+        color: #6ee7b7;
+    }
+
+    .online-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #10b981;
+        box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
     }
 
     @media (max-width: 768px) {

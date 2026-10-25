@@ -36,12 +36,17 @@ export const handle: Handle = async ({ event, resolve }) => {
             'Access-Control-Allow-Origin': '*'
         };
 
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+
         try {
             const res = await fetch(target, {
                 method: event.request.method,
                 headers: event.request.headers,
-                body: ['GET', 'HEAD'].includes(event.request.method) ? undefined : await event.request.arrayBuffer()
+                body: ['GET', 'HEAD'].includes(event.request.method) ? undefined : await event.request.arrayBuffer(),
+                signal: controller.signal
             });
+            clearTimeout(timeoutId);
 
             if (res.status === 422 && event.url.pathname.includes('/devices/connect')) {
                 return new Response(JSON.stringify({
@@ -62,6 +67,7 @@ export const handle: Handle = async ({ event, resolve }) => {
                 headers
             });
         } catch (err) {
+            clearTimeout(timeoutId);
             console.warn(`[PROXY FALLBACK] Backend ${target} unreachable, serving cloud serverless state:`, err);
 
             const path = event.url.pathname;
