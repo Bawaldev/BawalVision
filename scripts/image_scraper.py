@@ -31,11 +31,15 @@ HEADERS = {
 }
 
 DEFAULT_QUERIES = [
-    "bento lunch box tray",
-    "fresh banana on plate",
-    "fried chicken meal tray",
-    "boiled spinach bowl",
-    "fried tofu dish",
+    "nasi bento ayam tempe",
+    "ayam goreng piring makan",
+    "tempe tahu goreng",
+    "telur dadar piring",
+    "sayur bayam mangkok",
+    "tumis kangkung",
+    "pisang segar piring",
+    "buah jeruk segar",
+    "buah apel segar",
 ]
 
 

@@ -334,7 +334,7 @@ quantize-ai1:
 
 # Automated multi-engine scraper and lightweight ZIP archiver
 [no-cd]
-zip-scraper query="bento lunch box tray" limit="30" output="batch_inspection_images.zip":
+zip-scraper query="nasi bento ayam tempe" limit="15" output="batch_inspection_images.zip":
     #!/usr/bin/env bash
     if [ -f ".venv/bin/python3" ]; then
         .venv/bin/python3 scripts/image_scraper.py -q "{{ query }}" -n {{ limit }} -z "{{ output }}" --clean-after
