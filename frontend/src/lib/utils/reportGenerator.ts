@@ -1,5 +1,5 @@
 import type { InspectionAuditRecord } from '../types';
-import { resolveApiBase } from '../backendConfig';
+import { resolveApiBase, resolveApiOrigin } from '../backendConfig';
 
 export interface ReportOptions {
     host?: string;
@@ -15,13 +15,22 @@ function backendBaseUrl(host?: string): string {
     if (host) {
         return host.replace(/\/+$/, '');
     }
-    if (typeof window !== 'undefined' && window.location.hostname) {
+    const origin = resolveApiOrigin();
+    if (origin) {
+        return origin;
+    }
+    if (typeof window !== 'undefined' && window.location.hostname &&
+        window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' &&
+        !window.location.hostname.endsWith('.vercel.app')) {
         return `http://${window.location.hostname}:8080`;
     }
     return 'http://localhost:8080';
 }
 
 function imageUrl(record: InspectionAuditRecord, host?: string): string {
+    if (record.thumbnail_data_url && record.thumbnail_data_url.startsWith('data:')) {
+        return record.thumbnail_data_url;
+    }
     if (!record.image_path) {
         return '';
     }

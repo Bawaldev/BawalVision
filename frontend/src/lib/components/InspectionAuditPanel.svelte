@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { fetchInspectionAuditRecords } from '../api';
-    import { resolveApiBase } from '../backendConfig';
+    import { resolveApiBase, resolveApiOrigin, detectLocalBackend, isLocalBackendConfigured } from '../backendConfig';
     import type { InspectionAuditRecord } from '../types';
     import {
         copyMarkdown,
@@ -21,17 +21,55 @@
     let toast = $state('');
     let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
+    function resolveInspectionImageUrl(record: InspectionAuditRecord): string {
+        if (record.thumbnail_data_url && record.thumbnail_data_url.startsWith('data:')) {
+            return record.thumbnail_data_url;
+        }
+        const path = record.image_path;
+        if (!path) return '';
+        if (/^(https?:|data:|blob:)/i.test(path)) {
+            return path;
+        }
+        const origin = resolveApiOrigin();
+        if (origin) {
+            return `${origin}${path.startsWith('/') ? '' : '/'}${path}`;
+        }
+        return path;
+    }
+
     async function loadRecords() {
+        if (!isLocalBackendConfigured()) {
+            await detectLocalBackend(800).catch(() => null);
+        }
+
         const next = await fetchInspectionAuditRecords(100);
-        if (next && next.length > 0) {
-            records = next;
-        } else if (typeof localStorage !== 'undefined') {
+        let localRecords: InspectionAuditRecord[] = [];
+        if (typeof localStorage !== 'undefined') {
             try {
                 const stored = localStorage.getItem('bawal_audit_records');
                 if (stored) {
-                    records = JSON.parse(stored);
+                    localRecords = JSON.parse(stored);
                 }
             } catch {}
+        }
+
+        if (next && next.length > 0) {
+            const localThumbMap = new Map<number, string>();
+            for (const r of localRecords) {
+                if (r.thumbnail_data_url) {
+                    localThumbMap.set(r.frame_id, r.thumbnail_data_url);
+                } else if (r.image_path && r.image_path.startsWith('data:')) {
+                    localThumbMap.set(r.frame_id, r.image_path);
+                }
+            }
+            for (const r of next) {
+                if (!r.thumbnail_data_url && localThumbMap.has(r.frame_id)) {
+                    r.thumbnail_data_url = localThumbMap.get(r.frame_id);
+                }
+            }
+            records = next;
+        } else if (localRecords.length > 0) {
+            records = localRecords;
         }
         isLoading = false;
         if (selectedRecord) {
@@ -248,19 +286,40 @@
         <div class="audit-grid">
             {#each records as record (record.frame_id + '-' + record.image_path)}
                 {@const detections = record.detections ?? []}
+                {@const imgSrc = resolveInspectionImageUrl(record)}
                 <article class="audit-card">
                     <div class="thumb-wrap">
-                        {#if record.image_path && !failedImages[record.image_path]}
+                        {#if imgSrc && !failedImages[imgSrc]}
                             <img
-                                src={record.image_path}
+                                src={imgSrc}
                                 alt={`Inspection ${record.frame_id}`}
                                 loading="lazy"
-                                onerror={() => imageFailed(record.image_path)}
+                                onerror={() => imageFailed(imgSrc)}
                             />
                         {:else}
-                            <div class="thumb-fallback">
-                                <span class="fallback-icon">🗂️</span>
-                                <span>Snapshot Rolled Out</span>
+                            <div class="tactical-tray-canvas">
+                                <svg class="tray-blueprint-svg" viewBox="0 0 640 480" preserveAspectRatio="none">
+                                    <defs>
+                                        <pattern id="audit-grid-{record.frame_id}" width="40" height="40" patternUnits="userSpaceOnUse">
+                                            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                                        </pattern>
+                                    </defs>
+                                    <rect width="640" height="480" fill="#0b111a" />
+                                    <rect width="640" height="480" fill="url(#audit-grid-{record.frame_id})" />
+                                    <!-- Industrial meal tray silhouette -->
+                                    <rect x="25" y="20" width="590" height="440" rx="16" fill="rgba(30, 41, 59, 0.4)" stroke="rgba(148, 163, 184, 0.25)" stroke-width="2" />
+                                    <!-- 4 MBG tray compartments: Carb / Protein / Veg / Fruit -->
+                                    <rect x="50" y="40" width="255" height="230" rx="12" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(148, 163, 184, 0.15)" stroke-dasharray="4 4" />
+                                    <rect x="335" y="40" width="255" height="180" rx="12" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(148, 163, 184, 0.15)" stroke-dasharray="4 4" />
+                                    <rect x="50" y="295" width="255" height="145" rx="12" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(148, 163, 184, 0.15)" stroke-dasharray="4 4" />
+                                    <rect x="335" y="245" width="255" height="195" rx="12" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(148, 163, 184, 0.15)" stroke-dasharray="4 4" />
+                                    <text x="62" y="62" fill="rgba(148, 163, 184, 0.35)" font-size="10" font-family="monospace">MBG TRAY COMPARTMENT A</text>
+                                    <text x="347" y="62" fill="rgba(148, 163, 184, 0.35)" font-size="10" font-family="monospace">MBG TRAY COMPARTMENT B</text>
+                                </svg>
+                                <div class="blueprint-tag">
+                                    <span class="blueprint-dot"></span>
+                                    <span>TRAY SIMULATION HUD</span>
+                                </div>
                             </div>
                         {/if}
 
@@ -388,6 +447,7 @@
 
 {#if selectedRecord}
     {@const detections = selectedRecord.detections ?? []}
+    {@const modalImg = resolveInspectionImageUrl(selectedRecord)}
     <div class="modal-backdrop" role="dialog" aria-modal="true">
         <button
             type="button"
@@ -406,16 +466,40 @@
 
             <div class="modal-body">
                 <div class="modal-evidence">
-                    {#if selectedRecord.image_path && !failedImages[selectedRecord.image_path]}
+                    {#if modalImg && !failedImages[modalImg]}
                         <img
-                            src={selectedRecord.image_path}
+                            src={modalImg}
                             alt={`Inspection ${selectedRecord.frame_id}`}
-                            onerror={() => imageFailed(selectedRecord?.image_path ?? '')}
+                            onerror={() => imageFailed(modalImg)}
                         />
+                    {:else}
+                        <div class="tactical-tray-canvas modal-canvas">
+                            <svg class="tray-blueprint-svg" viewBox="0 0 640 480" preserveAspectRatio="none">
+                                <defs>
+                                    <pattern id="modal-grid-{selectedRecord.frame_id}" width="40" height="40" patternUnits="userSpaceOnUse">
+                                        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                                    </pattern>
+                                </defs>
+                                <rect width="640" height="480" fill="#0b111a" />
+                                <rect width="640" height="480" fill="url(#modal-grid-{selectedRecord.frame_id})" />
+                                <rect x="25" y="20" width="590" height="440" rx="16" fill="rgba(30, 41, 59, 0.4)" stroke="rgba(148, 163, 184, 0.25)" stroke-width="2" />
+                                <rect x="50" y="40" width="255" height="230" rx="12" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(148, 163, 184, 0.15)" stroke-dasharray="4 4" />
+                                <rect x="335" y="40" width="255" height="180" rx="12" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(148, 163, 184, 0.15)" stroke-dasharray="4 4" />
+                                <rect x="50" y="295" width="255" height="145" rx="12" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(148, 163, 184, 0.15)" stroke-dasharray="4 4" />
+                                <rect x="335" y="245" width="255" height="195" rx="12" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(148, 163, 184, 0.15)" stroke-dasharray="4 4" />
+                                <text x="62" y="62" fill="rgba(148, 163, 184, 0.35)" font-size="10" font-family="monospace">MBG TRAY COMPARTMENT A</text>
+                                <text x="347" y="62" fill="rgba(148, 163, 184, 0.35)" font-size="10" font-family="monospace">MBG TRAY COMPARTMENT B</text>
+                            </svg>
+                            <div class="blueprint-tag">
+                                <span class="blueprint-dot"></span>
+                                <span>TRAY SIMULATION HUD (50-slot buffer rolling)</span>
+                            </div>
+                        </div>
+                    {/if}
 
-                        <!-- Dynamic AI Bounding Box HUD Overlay for Inspection Detail Modal -->
-                        {#if detections && detections.length > 0}
-                            <svg class="audit-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
+                    <!-- Dynamic AI Bounding Box HUD Overlay for Inspection Detail Modal -->
+                    {#if detections && detections.length > 0}
+                        <svg class="audit-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
                                 {#each detections as det, detIdx}
                                     {@const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null)}
                                     {@const rawX = boxArray ? boxArray[0] : (typeof (det as any).x === 'number' ? (det as any).x : 0)}
@@ -466,12 +550,6 @@
                                 {/each}
                             </svg>
                         {/if}
-                    {:else}
-                        <div class="thumb-fallback large">
-                            <span class="fallback-icon">🗂️</span>
-                            <span>Snapshot Rolled Out of the 50-slot buffer</span>
-                        </div>
-                    {/if}
                 </div>
 
                 <div class="modal-verdict" class:rejected={isVerdictRejected(selectedRecord)}>
@@ -733,6 +811,58 @@
         height: 100%;
         pointer-events: none;
         z-index: 2;
+    }
+
+    .tactical-tray-canvas {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        min-height: 160px;
+        background: #0b111a;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .tactical-tray-canvas.modal-canvas {
+        min-height: 280px;
+    }
+
+    .tray-blueprint-svg {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+    }
+
+    .blueprint-tag {
+        position: absolute;
+        bottom: 8px;
+        left: 8px;
+        z-index: 3;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        color: #94a3b8;
+        font-size: 0.58rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        padding: 2px 6px;
+        border-radius: 4px;
+        backdrop-filter: blur(4px);
+    }
+
+    .blueprint-dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #10b981;
     }
 
     .thumb-fallback {

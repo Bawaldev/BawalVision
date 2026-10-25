@@ -455,12 +455,12 @@
                             try {
                                 if (data.annotated_image_base64) {
                                     thumb = `data:image/jpeg;base64,${data.annotated_image_base64}`;
-                                } else if (data.image_path && (data.image_path.startsWith('data:') || data.image_path.startsWith('/inspections/'))) {
-                                    thumb = data.image_path;
                                 } else if (canvas && data.detections.length > 0) {
                                     thumb = buildAnnotatedThumbnail(canvas, data.detections);
                                 } else if (canvas) {
                                     thumb = canvas.toDataURL('image/jpeg', 0.85);
+                                } else if (data.image_path) {
+                                    thumb = data.image_path;
                                 }
                             } catch {}
 
@@ -795,12 +795,12 @@
                             try {
                                 if (data.annotated_image_base64) {
                                     thumb = `data:image/jpeg;base64,${data.annotated_image_base64}`;
-                                } else if (data.image_path && (data.image_path.startsWith('data:') || data.image_path.startsWith('/inspections/'))) {
-                                    thumb = data.image_path;
                                 } else if (mockCanvasEl && data.detections.length > 0) {
                                     thumb = buildAnnotatedThumbnail(mockCanvasEl, data.detections);
                                 } else if (mockCanvasEl) {
                                     thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
+                                } else if (data.image_path) {
+                                    thumb = data.image_path;
                                 }
                             } catch {}
                             window.dispatchEvent(new CustomEvent('bawal-live-detections', {
@@ -859,12 +859,12 @@
                             try {
                                 if (data.annotated_image_base64) {
                                     thumb = `data:image/jpeg;base64,${data.annotated_image_base64}`;
-                                } else if (data.image_path && (data.image_path.startsWith('data:') || data.image_path.startsWith('/inspections/'))) {
-                                    thumb = data.image_path;
                                 } else if (mockCanvasEl && data.detections.length > 0) {
                                     thumb = buildAnnotatedThumbnail(mockCanvasEl, data.detections);
                                 } else if (mockCanvasEl) {
                                     thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
+                                } else if (data.image_path) {
+                                    thumb = data.image_path;
                                 }
                             } catch {}
                             window.dispatchEvent(new CustomEvent('bawal-live-detections', {

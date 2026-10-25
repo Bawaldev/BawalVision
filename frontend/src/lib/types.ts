@@ -144,6 +144,8 @@ export interface InspectionAuditRecord {
     spoilage_risk?: number;
     tray_coverage?: number;
     image_path: string;
+    thumbnail_data_url?: string;
+    local_blob_url?: string;
     detections: InspectionAuditDetection[];
     t_safe_hours: number;
     checksum_sha256: string;
