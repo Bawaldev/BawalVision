@@ -1,18 +1,12 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
+    import { resolveApiBase } from '../backendConfig';
     import { downloadMarkdown, downloadMarkdownPdf } from '../utils/reportGenerator';
 
     const MAX_ZIP_BYTES = 15 * 1024 * 1024;
-    const DEFAULT_BATCH_ENDPOINT = '/api/v1/inspections/batch-zip';
 
     function getBatchEndpoint(): string {
-        if (typeof window !== 'undefined') {
-            const custom = localStorage.getItem('bawal_backend_url') || localStorage.getItem('backend_url');
-            if (custom && custom.startsWith('http')) {
-                return `${custom.replace(/\/$/, '')}/inspections/batch-zip`;
-            }
-        }
-        return DEFAULT_BATCH_ENDPOINT;
+        return `${resolveApiBase()}/inspections/batch-zip`;
     }
 
     interface BatchDetection {
@@ -405,7 +399,7 @@
                 let isAccepted = true;
 
                 try {
-                    const res = await fetch('/api/v1/camera/frame', {
+                    const res = await fetch(`${resolveApiBase()}/camera/frame`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': entry.blob.type,

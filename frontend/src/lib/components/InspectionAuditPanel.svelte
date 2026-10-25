@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { fetchInspectionAuditRecords } from '../api';
+    import { resolveApiBase } from '../backendConfig';
     import type { InspectionAuditRecord } from '../types';
     import {
         copyMarkdown,
@@ -89,7 +90,7 @@
         isConvertingPdf = { ...isConvertingPdf, [key]: true };
         showToast(`Preparing official audit PDF for frame #${record.frame_id}...`);
         try {
-            const backendRes = await fetch(`/api/v1/inspections/${record.frame_id}/report.pdf`);
+            const backendRes = await fetch(`${resolveApiBase()}/inspections/${record.frame_id}/report.pdf`);
             if (backendRes.ok && (backendRes.headers.get('Content-Type')?.includes('pdf') || backendRes.headers.get('X-Report-Format') === 'pdf')) {
                 const blob = await backendRes.blob();
                 const url = URL.createObjectURL(blob);
@@ -181,7 +182,7 @@
                 showToast(`Compiling LaTeX PDF for frame #${frameId}...`);
             }
 
-            const endpoint = `/api/v1/inspections/${frameId}/report.${format}`;
+            const endpoint = `${resolveApiBase()}/inspections/${frameId}/report.${format}`;
             const response = await fetch(endpoint);
 
             if (!response.ok) {

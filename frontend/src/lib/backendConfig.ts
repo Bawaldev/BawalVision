@@ -75,7 +75,7 @@ export async function detectLocalBackend(timeoutMs = 1200): Promise<string | nul
     if (typeof window === 'undefined') return null;
 
     if (await probeCrowBackend(DEFAULT_API_BASE, timeoutMs)) {
-        return null;
+        return DEFAULT_API_BASE;
     }
 
     const candidates = new Set<string>();

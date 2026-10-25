@@ -1,4 +1,5 @@
 import type { InspectionAuditRecord } from '../types';
+import { resolveApiBase } from '../backendConfig';
 
 export interface ReportOptions {
     host?: string;
@@ -299,7 +300,7 @@ function reportPdfEndpoint(host?: string): string {
     if (host) {
         return `${host.replace(/\/+$/, '')}/api/v1/reports/pdf`;
     }
-    return '/api/v1/reports/pdf';
+    return `${resolveApiBase()}/reports/pdf`;
 }
 
 function downloadBlob(filename: string, blob: Blob): void {

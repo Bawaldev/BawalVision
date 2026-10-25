@@ -20,6 +20,7 @@
         fetchConfidenceThreshold,
         updateConfidenceThreshold
     } from '$lib/api';
+    import { detectLocalBackend, getConfiguredApiBase } from '$lib/backendConfig';
 
     import type {
         FoodDetection,
@@ -95,7 +96,7 @@
     let parallelCores = $state(0);
 
     let systemConfig = $state<SystemConfig>({
-        backendUrl: '/api/v1',
+        backendUrl: getConfiguredApiBase(),
         deviceId: '',
         streamIntervalMs: 1500,
         enableMockIfOffline: false,
@@ -432,6 +433,13 @@
             window.addEventListener('popstate', syncTabFromLocation);
             window.addEventListener('bawal-clear-detections', handleClearDetections);
             window.addEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
+        }
+
+        // Prefer a local C++ backend for live camera/SIMD when the cloud UI can
+        // reach it (e.g. Vercel page opened on the laptop running the container).
+        const localBackend = await detectLocalBackend();
+        if (localBackend) {
+            systemConfig.backendUrl = localBackend;
         }
 
         // Initial sync of detection threshold from backend (or Docker env default)

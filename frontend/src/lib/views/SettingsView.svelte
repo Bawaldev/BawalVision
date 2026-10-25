@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { connectEspDevice, disconnectEspDevice, fetchDeviceStatus, provisionEspViaUsb, fetchWiFiNetworks, probeEspUsbPort } from '../api';
+    import { detectLocalBackend, getConfiguredApiBase, resolveApiBase, setConfiguredApiBase } from '../backendConfig';
     import type { SystemConfig, EspConnectionResult, USBPortInfo, WiFiNetworkInfo } from '../types';
 
     interface Props {
@@ -20,7 +21,7 @@
     }: Props = $props();
 
     let formState = $state({
-        backendUrl: '/api/v1',
+        backendUrl: getConfiguredApiBase(),
         deviceId: '',
         streamIntervalMs: 1500,
         enableMockIfOffline: true,
@@ -41,6 +42,8 @@
     let detectedUsbPorts = $state<USBPortInfo[]>([]);
     let selectedUsbPort = $state('');
     let backendOnline = $state(true);
+    let detectingLocalBackend = $state(false);
+    let localBackendMessage = $state('');
     let portOptions = $derived.by(() => detectedUsbPorts.map((p) => p.port));
     let detectedHostIp = $state('');
     let gatewayHostIp = $state('');
@@ -225,6 +228,32 @@
         }
     }
 
+    async function handleDetectLocalBackend() {
+        detectingLocalBackend = true;
+        localBackendMessage = 'Searching for the local C++ backend...';
+        try {
+            const detected = await detectLocalBackend(1800);
+            if (detected) {
+                formState.backendUrl = detected;
+                localBackendMessage = `Local live backend connected: ${detected}`;
+                await refreshHardwareStatus();
+            } else {
+                formState.backendUrl = getConfiguredApiBase();
+                localBackendMessage =
+                    'No local C++ backend found. Live MJPEG/SIMD needs the host backend; the cloud/Lambda backend only serves reports and snapshots.';
+            }
+        } finally {
+            detectingLocalBackend = false;
+        }
+    }
+
+    async function applyLiveBackendUrl() {
+        formState.backendUrl = setConfiguredApiBase(formState.backendUrl);
+        onSaveConfig({ ...formState });
+        localBackendMessage = `Live backend: ${formState.backendUrl}`;
+        await refreshHardwareStatus();
+    }
+
     async function handleProbeUsbPort(port?: string) {
         isProbingUsb = true;
         usbProbeMsg = 'Probing serial status...';
@@ -290,7 +319,7 @@
         } catch {
             // Preference persistence is best-effort.
         }
-        await fetch('/api/v1/camera/mode', {
+        await fetch(`${resolveApiBase()}/camera/mode`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode })
@@ -986,9 +1015,7 @@
 
     function handleSubmit(e: SubmitEvent) {
         e.preventDefault();
-        if (typeof window !== 'undefined' && formState.backendUrl) {
-            localStorage.setItem('bawal_backend_url', formState.backendUrl);
-        }
+        formState.backendUrl = setConfiguredApiBase(formState.backendUrl);
         onSaveConfig(formState);
         isSaved = true;
         setTimeout(() => (isSaved = false), 2500);
@@ -1083,6 +1110,52 @@
                         </button>
                     {/if}
                 </div>
+            </div>
+
+            <!-- Local live backend target for MJPEG + SIMD inference -->
+            <div class="fedora-group">
+                <div class="fedora-group-header">
+                    <div class="header-title-box">
+                        <span class="section-icon">🖥️</span>
+                        <div>
+                            <h4>Local Live Backend (MJPEG + SIMD)</h4>
+                            <p class="fedora-subtext">ESP32 camera and vision engine stay on the host; cloud/Lambda handles reports only</p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        class="fedora-pill-btn"
+                        onclick={handleDetectLocalBackend}
+                        disabled={detectingLocalBackend}
+                    >
+                        {#if detectingLocalBackend}
+                            <span class="btn-spinner"></span> Detecting...
+                        {:else}
+                            Detect Local Backend
+                        {/if}
+                    </button>
+                </div>
+                <div class="local-backend-row">
+                    <input
+                        class="fedora-input"
+                        bind:value={formState.backendUrl}
+                        placeholder="http://192.168.100.165:8080 or http://localhost:8080"
+                        spellcheck="false"
+                        autocapitalize="off"
+                        autocorrect="off"
+                    />
+                    <button type="button" class="fedora-accent-pill-btn" onclick={applyLiveBackendUrl}>
+                        Apply &amp; Detect
+                    </button>
+                </div>
+                <p class="port-detail-text">
+                    When <code>ACM0</code> is detected, the gateway IP auto-fills from this backend.
+                    For phone access use the laptop LAN IP (or open the local frontend at
+                    <code>http://&lt;laptop-ip&gt;:3001</code>); HTTPS cloud pages may block HTTP MJPEG.
+                </p>
+                {#if localBackendMessage}
+                    <div class="fedora-notice idle"><span>{localBackendMessage}</span></div>
+                {/if}
             </div>
 
             <!-- Hardware Serial Ports (/dev/ttyACM*, /dev/ttyUSB*) Controller -->
@@ -2338,6 +2411,21 @@
         justify-content: space-between;
         gap: 12px;
         flex-wrap: wrap;
+    }
+
+    .local-backend-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .local-backend-row .fedora-input {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .local-backend-row .fedora-accent-pill-btn {
+        flex-shrink: 0;
     }
 
     .header-title-box {

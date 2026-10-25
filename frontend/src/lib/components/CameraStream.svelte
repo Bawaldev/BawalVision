@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
+    import { resolveApiBase } from '../backendConfig';
     import type { FoodDetection, SceneOpticalMetrics } from '../types';
 
     interface Props {
@@ -35,6 +36,28 @@
 
     type SourceModeType = 'live' | 'mock';
     let sourceMode = $state<SourceModeType>('live');
+
+    let activeApiBase = $state(resolveApiBase());
+
+    function withApiOrigin(path: string, base = activeApiBase): string {
+        if (!path || /^(https?:|blob:|data:)/i.test(path)) return path;
+        const origin = base === '/api/v1' ? '' : base.replace(/\/api\/v1$/i, '');
+        return origin ? `${origin}${path.startsWith('/') ? path : `/${path}`}` : path;
+    }
+
+    function apiEndpoint(path: string): string {
+        const base = resolveApiBase();
+        if (base === '/api/v1') return path;
+        return `${base.replace(/\/api\/v1$/i, '')}${path}`;
+    }
+
+    function syncApiBase() {
+        const next = resolveApiBase();
+        if (next !== activeApiBase) {
+            activeApiBase = next;
+            streamEpoch = Date.now();
+        }
+    }
 
     // Deterministic RFC-4122 UUID v5 generator matching backend inspection.DeterministicMockVideoUUID byte-for-byte
     function computeMockVideoUUID(videoKey: string): string {
@@ -86,6 +109,7 @@
     let videoUUIDMap = $state<Record<string, string>>({});
     let selectedVideo = $state('banana/banana_sample_one.mp4');
     let mockVideoSrc = $state('/examples/banana/banana_sample_one.mp4');
+    let resolvedMockVideoSrc = $derived(withApiOrigin(mockVideoSrc, activeApiBase));
     let mockFileName = $state('banana/banana_sample_one.mp4');
     let customFileKey = $state('');
     let isCustomUpload = $state(false);
@@ -123,7 +147,11 @@
     let activeStreamUrl = $derived(
         !isTabVisible
             ? ''
-            : (streamUrl || discoveredStreamUrl || `/api/v1/camera/stream?t=${streamEpoch}`)
+            : (streamUrl
+                ? withApiOrigin(streamUrl, activeApiBase)
+                : discoveredStreamUrl
+                    ? withApiOrigin(discoveredStreamUrl, activeApiBase)
+                    : `${activeApiBase}/camera/stream?t=${streamEpoch}`)
     );
 
     function handleVisibilityChange() {
@@ -163,7 +191,8 @@
     onMount(() => {
         window.addEventListener('bawal-source-mode', handleGlobalSourceMode);
         const refreshDiscoveredStream = () => {
-            fetch('/api/v1/devices/status', { cache: 'no-store' })
+            syncApiBase();
+            fetch(apiEndpoint('/api/v1/devices/status'), { cache: 'no-store' })
                 .then(res => res.ok ? res.json() : null)
                 .then(data => {
                     const nextUrl = typeof data?.stream_url === 'string' ? data.stream_url : '';
@@ -190,7 +219,7 @@
             if (saved === 'mock' || saved === 'live') {
                 sourceMode = saved;
                 if (saved === 'mock') {
-                    fetch('/api/v1/camera/mode', {
+                    fetch(apiEndpoint('/api/v1/camera/mode'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -202,7 +231,7 @@
                 }
             }
         }
-        fetch('/api/v1/examples')
+        fetch(apiEndpoint('/api/v1/examples'))
             .then(res => res.ok ? res.json() : null)
             .then(data => {
                 if (data && data.video_uuids && typeof data.video_uuids === 'object') {
@@ -274,7 +303,7 @@
                     return;
                 }
                 const currentSeq = ++mockFrameSeq;
-                fetch('/api/v1/camera/frame', {
+                fetch(apiEndpoint('/api/v1/camera/frame'), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'image/jpeg',
@@ -382,7 +411,7 @@
             drawVideoPreservingAspect(ctx, mockVideoEl, mockCanvasEl.width, mockCanvasEl.height);
             mockCanvasEl.toBlob((blob) => {
                 if (!blob) return;
-                fetch('/api/v1/camera/frame', {
+                fetch(apiEndpoint('/api/v1/camera/frame'), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'image/jpeg',
@@ -509,7 +538,7 @@
 
         if (mode === 'mock') {
             // 1. Immediately request backend mode change and wipe frames/detections
-            await fetch('/api/v1/camera/mode', {
+            await fetch(apiEndpoint('/api/v1/camera/mode'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -536,7 +565,7 @@
             }
 
             // 2. Immediately request backend to switch to live mode and clear mock detections
-            await fetch('/api/v1/camera/mode', {
+            await fetch(apiEndpoint('/api/v1/camera/mode'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: 'live' })
@@ -554,7 +583,7 @@
     function resetRewindState() {
         isRewound = false;
         lastVideoTime = 0;
-        fetch('/api/v1/devices/mock/reset', {
+        fetch(apiEndpoint('/api/v1/devices/mock/reset'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -582,7 +611,7 @@
             try { localStorage.setItem('bawal_mock_selected_video', name); } catch {}
         }
         const nextUUID = videoUUIDMap[name] || computeMockVideoUUID(name);
-        await fetch('/api/v1/camera/mode', {
+        await fetch(apiEndpoint('/api/v1/camera/mode'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -619,7 +648,7 @@
             isRewound = false;
             lastVideoTime = 0;
             const nextUUID = computeMockVideoUUID(customFileKey);
-            fetch('/api/v1/camera/mode', {
+            fetch(apiEndpoint('/api/v1/camera/mode'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -871,7 +900,7 @@
                 <!-- Smooth Native 60 FPS Mock Video Player -->
                 <video
                     bind:this={mockVideoEl}
-                    src={mockVideoSrc}
+                    src={resolvedMockVideoSrc}
                     aria-label="Mock Video Feed"
                     class="feed-video"
                     crossorigin="anonymous"
