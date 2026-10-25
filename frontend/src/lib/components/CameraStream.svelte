@@ -194,7 +194,15 @@
 
     function connectManualEspStream() {
         if (!manualEspStreamUrl.trim()) return;
-        let url = manualEspStreamUrl.trim();
+        const raw = manualEspStreamUrl.trim();
+
+        if (/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(raw)) {
+            localBackendNotice = `⚠️ <strong><code>${raw}</code> is a MAC Address, NOT an IP Address!</strong><br/>` +
+                `In your phone's Hotspot list, tap on this device to see its <strong>IP Address</strong> (formatted like <code>192.168.43.xxx</code>).`;
+            return;
+        }
+
+        let url = raw;
         if (!/^https?:\/\//i.test(url)) {
             url = `http://${url}`;
         }
