@@ -757,59 +757,6 @@
         }
     }
 
-    function handleMockOfflineSimulation(currentSeq: number) {
-        mockPushedFrames++;
-        streamError = false;
-
-        let thumb = '';
-        try {
-            if (mockCanvasEl) {
-                thumb = mockCanvasEl.toDataURL('image/jpeg', 0.65);
-            }
-        } catch {}
-
-        const isBanana = mockFileName.toLowerCase().includes('banana') || mockFileName.toLowerCase().includes('pisang');
-        const foodName = isBanana ? 'banana' : (mockFileName.split('/')[0] || 'food_item');
-
-        const t = mockCurrentTime;
-        const wobbleX = Math.round(Math.sin(t * 1.5) * 8);
-        const wobbleY = Math.round(Math.cos(t * 1.2) * 6);
-        const baseBox = [160 + wobbleX, 110 + wobbleY, 320, 240];
-        const conf = 0.92 + Math.sin(t * 2.0) * 0.04;
-
-        const simulatedDetections: FoodDetection[] = [
-            {
-                class_name: foodName,
-                food_name: foodName,
-                category: isBanana ? 'Fruit' : 'Side',
-                confidence: Math.round(conf * 100) / 100,
-                similarity_rate: Math.round(conf * 100) / 100,
-                freshness: 99,
-                status: 'PASS',
-                bbox: baseBox
-            }
-        ];
-
-        window.dispatchEvent(new CustomEvent('bawal-live-detections', {
-            detail: {
-                frame_id: currentSeq,
-                detections: simulatedDetections,
-                deviceId: 'MOCK_VIDEO_CAM',
-                source: 'mock_video',
-                videoName: mockFileName,
-                videoUUID: mockVideoUUID,
-                thumbnail: thumb,
-                scene_optical: {
-                    temperature: 23.8,
-                    lux: 420,
-                    thermal_state: 'OPTIMAL',
-                    freshness_score: 99,
-                    quality_grade: 'Grade A (Optimal)'
-                }
-            }
-        }));
-    }
-
     function captureAndPushFrame() {
         if (!mockVideoEl || !mockCanvasEl || isPushingFrame) return;
         if (mockVideoEl.paused || mockVideoEl.ended || mockVideoEl.readyState < 2) return;
@@ -826,8 +773,6 @@
                     return;
                 }
                 const currentSeq = ++mockFrameSeq;
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 1200);
 
                 fetch(apiEndpoint('/api/v1/camera/frame'), {
                     method: 'POST',
@@ -843,11 +788,9 @@
                         'X-Is-Rewind': isRewound ? '1' : '0',
                         'X-Video-Rewind': isRewound ? '1' : '0'
                     },
-                    body: blob,
-                    signal: controller.signal
+                    body: blob
                 })
                 .then(async (res) => {
-                    clearTimeout(timeoutId);
                     if (res.ok) {
                         mockPushedFrames++;
                         streamError = false;
@@ -874,14 +817,13 @@
                                     thumbnail: thumb
                                 }
                             }));
-                            return;
                         }
+                    } else {
+                        streamError = true;
                     }
-                    handleMockOfflineSimulation(currentSeq);
                 })
                 .catch(() => {
-                    clearTimeout(timeoutId);
-                    handleMockOfflineSimulation(currentSeq);
+                    streamError = true;
                 })
                 .finally(() => {
                     isPushingFrame = false;
@@ -902,8 +844,6 @@
             mockCanvasEl.toBlob((blob) => {
                 if (!blob) return;
                 const currentSeq = ++mockFrameSeq;
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 1200);
 
                 fetch(apiEndpoint('/api/v1/camera/frame'), {
                     method: 'POST',
@@ -919,10 +859,8 @@
                         'X-Is-Rewind': isRewound ? '1' : '0',
                         'X-Video-Rewind': isRewound ? '1' : '0'
                     },
-                    body: blob,
-                    signal: controller.signal
+                    body: blob
                 }).then(async (res) => {
-                    clearTimeout(timeoutId);
                     if (res && res.ok) {
                         mockPushedFrames++;
                         streamError = false;
@@ -949,13 +887,12 @@
                                     thumbnail: thumb
                                 }
                             }));
-                            return;
                         }
+                    } else {
+                        streamError = true;
                     }
-                    handleMockOfflineSimulation(currentSeq);
                 }).catch(() => {
-                    clearTimeout(timeoutId);
-                    handleMockOfflineSimulation(currentSeq);
+                    streamError = true;
                 });
             }, 'image/jpeg', 0.85);
         } catch {}

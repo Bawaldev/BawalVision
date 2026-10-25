@@ -204,142 +204,6 @@
         void uploadBatch(file);
     }
 
-    async function extractImagesFromZip(buf: ArrayBuffer): Promise<{ filename: string; blob: Blob }[]> {
-        const u8 = new Uint8Array(buf);
-        const view = new DataView(buf);
-        let offset = 0;
-        const files: { filename: string; blob: Blob }[] = [];
-        const dec = new TextDecoder();
-
-        while (offset < u8.length - 30) {
-            if (view.getUint32(offset, true) !== 0x04034b50) {
-                offset++;
-                continue;
-            }
-            const method = view.getUint16(offset + 8, true);
-            const compSize = view.getUint32(offset + 18, true);
-            const nameLen = view.getUint16(offset + 26, true);
-            const extraLen = view.getUint16(offset + 28, true);
-            const nameBytes = u8.subarray(offset + 30, offset + 30 + nameLen);
-            const filename = dec.decode(nameBytes);
-            const dataStart = offset + 30 + nameLen + extraLen;
-            const compData = u8.subarray(dataStart, dataStart + compSize);
-
-            const lower = filename.toLowerCase();
-            if (compSize > 0 && (lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.webp'))) {
-                let decompressed: Uint8Array;
-                if (method === 8) {
-                    try {
-                        const stream = new Response(compData).body?.pipeThrough(new DecompressionStream('deflate-raw'));
-                        if (stream) {
-                            const decompBuf = await new Response(stream).arrayBuffer();
-                            decompressed = new Uint8Array(decompBuf);
-                        } else {
-                            decompressed = compData;
-                        }
-                    } catch {
-                        decompressed = compData;
-                    }
-                } else {
-                    decompressed = compData;
-                }
-                const mime = lower.endsWith('.png') ? 'image/png' : 'image/jpeg';
-                files.push({
-                    filename,
-                    blob: new Blob([decompressed as unknown as BlobPart], { type: mime })
-                });
-            }
-            offset = dataStart + compSize;
-        }
-        return files;
-    }
-
-    async function createAnnotatedImage(blob: Blob, detections: BatchDetection[]): Promise<{ blobUrl: string; dataUrl: string }> {
-        if (typeof document === 'undefined') {
-            const fallback = URL.createObjectURL(blob);
-            return { blobUrl: fallback, dataUrl: '' };
-        }
-        return new Promise((resolve) => {
-            const img = new Image();
-            const url = URL.createObjectURL(blob);
-            img.onload = () => {
-                try {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.naturalWidth || 640;
-                    canvas.height = img.naturalHeight || 480;
-                    const ctx = canvas.getContext('2d');
-                    if (!ctx) {
-                        resolve({ blobUrl: url, dataUrl: '' });
-                        return;
-                    }
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-                    for (let detIdx = 0; detIdx < detections.length; detIdx++) {
-                        const det = detections[detIdx];
-                        const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null);
-                        let rawX = boxArray ? boxArray[0] : 0;
-                        let rawY = boxArray ? boxArray[1] : 0;
-                        let rawW = boxArray ? boxArray[2] : 0;
-                        let rawH = boxArray ? boxArray[3] : 0;
-                        if (rawW <= 0 || rawH <= 0) {
-                            const defaultBoxes = [
-                                [canvas.width * 0.15, canvas.height * 0.15, canvas.width * 0.35, canvas.height * 0.35],
-                                [canvas.width * 0.55, canvas.height * 0.15, canvas.width * 0.35, canvas.height * 0.35],
-                                [canvas.width * 0.25, canvas.height * 0.50, canvas.width * 0.50, canvas.height * 0.40]
-                            ];
-                            const def = defaultBoxes[detIdx % defaultBoxes.length];
-                            rawX = def[0]; rawY = def[1]; rawW = def[2]; rawH = def[3];
-                        } else if (rawX <= 1 && rawY <= 1 && rawW <= 1 && rawH <= 1) {
-                            rawX *= canvas.width;
-                            rawY *= canvas.height;
-                            rawW *= canvas.width;
-                            rawH *= canvas.height;
-                        }
-
-                        const status = det.status || 'PASS';
-                        const color = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444');
-                        const confPct = Math.round((det.confidence || 0) * (det.confidence <= 1 ? 100 : 1));
-                        const rawFresh = Number(det.freshness) || 96;
-                        const freshPct = Math.round(rawFresh <= 1.0 ? rawFresh * 100 : (rawFresh > 100 ? 100 : rawFresh));
-                        const label = `${det.class_name} ${confPct}% [${status} ${freshPct}%]`;
-
-                        ctx.strokeStyle = color;
-                        ctx.lineWidth = Math.max(3, Math.round(canvas.width / 200));
-                        ctx.strokeRect(rawX, rawY, rawW, rawH);
-
-                        const fontSize = Math.max(13, Math.round(canvas.width / 44));
-                        ctx.font = `bold ${fontSize}px sans-serif`;
-                        const textMetrics = ctx.measureText(label);
-                        const badgeHeight = Math.max(22, fontSize + 8);
-                        const badgeWidth = textMetrics.width + 12;
-                        const badgeY = Math.max(0, rawY - badgeHeight);
-
-                        ctx.fillStyle = color;
-                        ctx.fillRect(rawX, badgeY, badgeWidth, badgeHeight);
-
-                        ctx.fillStyle = '#ffffff';
-                        ctx.textBaseline = 'middle';
-                        ctx.fillText(label, rawX + 6, badgeY + badgeHeight / 2);
-                    }
-
-                    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
-                    canvas.toBlob((annotatedBlob) => {
-                        if (annotatedBlob) {
-                            URL.revokeObjectURL(url);
-                            resolve({ blobUrl: URL.createObjectURL(annotatedBlob), dataUrl });
-                        } else {
-                            resolve({ blobUrl: url, dataUrl });
-                        }
-                    }, 'image/jpeg', 0.85);
-                } catch {
-                    resolve({ blobUrl: url, dataUrl: '' });
-                }
-            };
-            img.onerror = () => resolve({ blobUrl: url, dataUrl: '' });
-            img.src = url;
-        });
-    }
-
     async function ensureDataUrl(it: BatchItem): Promise<string> {
         if (it.annotated_data_url && it.annotated_data_url.startsWith('data:')) {
             return it.annotated_data_url;
@@ -387,265 +251,6 @@
         return candidateUrl || '';
     }
 
-    async function processBatchWithClientExtraction(file: File, startedAt: number) {
-        stage = 'processing';
-        noticeMessage = 'Extracting meal tray images from ZIP archive...';
-
-        const arrayBuf = await file.arrayBuffer();
-        const extracted = await extractImagesFromZip(arrayBuf);
-
-        if (extracted.length === 0) {
-            clearTimers();
-            stage = 'error';
-            errorMessage = 'No valid JPEG or PNG meal tray images found inside the ZIP archive.';
-            return;
-        }
-
-        stage = 'processing';
-        noticeMessage = `Running high-speed progressive inspection on ${extracted.length} meal trays...`;
-
-        const items: BatchItem[] = [];
-        let acceptedCount = 0;
-        let rejectedCount = 0;
-        let totalSim = 0;
-        let totalDetectionsCount = 0;
-        const classMap = new Map<string, { detections: number; pass: number; review: number; reject: number; totalSim: number }>();
-
-        let backendAvailable = true;
-        const concurrency = 4;
-        for (let i = 0; i < extracted.length; i += concurrency) {
-            const chunk = extracted.slice(i, i + concurrency);
-            await Promise.all(chunk.map(async (entry, chunkIdx) => {
-                const idx = i + chunkIdx + 1;
-                let detections: BatchDetection[] = [];
-                let isAccepted = true;
-
-                if (backendAvailable) {
-                    try {
-                        const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), 1200);
-                        const res = await fetch(`${resolveApiBase()}/camera/frame`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': entry.blob.type,
-                                'X-Device-ID': 'BATCH_INSPECT_NODE',
-                                'X-Stream-Source': 'IMG_BATCH'
-                            },
-                            body: entry.blob,
-                            signal: controller.signal
-                        });
-                        clearTimeout(timeoutId);
-                        if (res.ok) {
-                            const data = await res.json().catch(() => null);
-                            if (data && Array.isArray(data.detections)) {
-                                detections = data.detections.map((d: any, detIdx: number) => {
-                                const conf = Number(d.confidence ?? d.similarity_rate) || 0.0;
-                                const name = d.class_name || d.food_name || 'food_item';
-                                let bbox = d.bbox || d.box || [0, 0, 0, 0];
-                                if (!Array.isArray(bbox) || bbox.length !== 4 || (bbox[2] === 0 && bbox[3] === 0)) {
-                                    const defaultBoxes = [
-                                        [100, 80, 200, 160],
-                                        [340, 80, 200, 160],
-                                        [160, 240, 320, 200],
-                                        [80, 240, 180, 180]
-                                    ];
-                                    bbox = defaultBoxes[detIdx % defaultBoxes.length];
-                                }
-                                const rawSpoilage = Number(d.spoilage_score ?? (d.spoilage ? d.spoilage.discoloration_ratio * 100 : undefined));
-                                let spoilage = !isNaN(rawSpoilage) && rawSpoilage > 0 ? rawSpoilage : 0;
-                                let freshness = Number(d.freshness ?? d.freshness_score ?? d.quality);
-                                if (isNaN(freshness) || freshness <= 0) {
-                                    if (spoilage > 0) {
-                                        freshness = Math.max(0, Math.min(100, 100 - spoilage));
-                                    } else {
-                                        // Dynamic freshness based on detector confidence and food class profile
-                                        // so freshness score realistically varies rather than staying stuck at 100%
-                                        const hash = Math.abs(name.split('').reduce((acc: number, c: string) => acc * 31 + c.charCodeAt(0), 0) + detIdx * 17 + Math.round(conf * 1000));
-                                        const jitter = (hash % 7); // 0..6
-                                        if (conf < 0.45) {
-                                            freshness = 72.0 + jitter; // 72..78% (Review range)
-                                            spoilage = Math.round(100 - freshness);
-                                        } else if (conf < 0.65) {
-                                            freshness = 85.0 + jitter; // 85..91%
-                                            spoilage = Math.round(100 - freshness);
-                                        } else {
-                                            freshness = 93.0 + (jitter * 0.8); // 93..97.8% (Pristine freshness)
-                                            spoilage = Math.round(100 - freshness);
-                                        }
-                                    }
-                                } else if (freshness > 0 && freshness <= 1.0) {
-                                    freshness *= 100;
-                                }
-                                freshness = Math.max(0, Math.min(100, freshness));
-
-                                const stat = (spoilage >= 45 || conf < 0.35) ? 'REJECT' : ((spoilage >= 25 || conf < 0.50) ? 'REVIEW' : 'PASS');
-                                if (stat === 'REJECT') isAccepted = false;
-                                return {
-                                    class_name: name,
-                                    confidence: conf,
-                                    freshness,
-                                    status: stat,
-                                    bbox
-                                };
-                            });
-                        } else {
-                            backendAvailable = false;
-                        }
-                    } else {
-                        backendAvailable = false;
-                    }
-                } catch {
-                    backendAvailable = false;
-                }
-            }
-
-                if (detections.length === 0) {
-                    const lowerName = entry.filename.toLowerCase();
-                    let detectedFood = '';
-                    if (lowerName.includes('banana') || lowerName.includes('pisang')) detectedFood = 'banana';
-                    else if (lowerName.includes('chicken') || lowerName.includes('ayam')) detectedFood = 'fried_chicken';
-                    else if (lowerName.includes('bento') || lowerName.includes('nasi') || lowerName.includes('rice')) detectedFood = 'rice';
-                    else if (lowerName.includes('tempe')) detectedFood = 'tempeh';
-                    else if (lowerName.includes('tofu') || lowerName.includes('tahu')) detectedFood = 'tofu';
-                    else if (lowerName.includes('spinach') || lowerName.includes('bayam')) detectedFood = 'spinach';
-                    else if (lowerName.includes('kangkung')) detectedFood = 'water_spinach';
-                    else if (lowerName.includes('telur') || lowerName.includes('egg')) detectedFood = 'boiled_egg';
-                    else if (lowerName.includes('jeruk') || lowerName.includes('orange')) detectedFood = 'orange';
-                    else if (lowerName.includes('apel') || lowerName.includes('apple')) detectedFood = 'apple';
-
-                    if (detectedFood) {
-                        detections.push({
-                            class_name: detectedFood,
-                            confidence: 0.86,
-                            freshness: 98,
-                            status: 'PASS',
-                            bbox: [140, 100, 360, 280]
-                        });
-                    } else {
-                        const combos = [
-                            [
-                                { class_name: 'rice', confidence: 0.88, freshness: 98, status: 'PASS', bbox: [160, 240, 320, 200] },
-                                { class_name: 'fried_chicken', confidence: 0.84, freshness: 96, status: 'PASS', bbox: [100, 70, 210, 160] },
-                                { class_name: 'tempeh', confidence: 0.79, freshness: 97, status: 'PASS', bbox: [340, 70, 180, 150] }
-                            ],
-                            [
-                                { class_name: 'rice', confidence: 0.91, freshness: 99, status: 'PASS', bbox: [170, 230, 300, 210] },
-                                { class_name: 'tempeh', confidence: 0.82, freshness: 95, status: 'PASS', bbox: [90, 80, 190, 140] },
-                                { class_name: 'tofu', confidence: 0.77, freshness: 96, status: 'PASS', bbox: [330, 80, 190, 140] }
-                            ],
-                            [
-                                { class_name: 'rice', confidence: 0.89, freshness: 98, status: 'PASS', bbox: [160, 230, 310, 200] },
-                                { class_name: 'fried_chicken', confidence: 0.86, freshness: 97, status: 'PASS', bbox: [100, 80, 200, 150] },
-                                { class_name: 'spinach', confidence: 0.75, freshness: 94, status: 'PASS', bbox: [340, 90, 180, 140] }
-                            ],
-                            [
-                                { class_name: 'rice', confidence: 0.87, freshness: 97, status: 'PASS', bbox: [170, 240, 300, 190] },
-                                { class_name: 'boiled_egg', confidence: 0.85, freshness: 98, status: 'PASS', bbox: [110, 80, 180, 140] },
-                                { class_name: 'water_spinach', confidence: 0.78, freshness: 95, status: 'PASS', bbox: [330, 80, 190, 150] }
-                            ],
-                            [
-                                { class_name: 'banana', confidence: 0.92, freshness: 99, status: 'PASS', bbox: [120, 120, 210, 220] },
-                                { class_name: 'orange', confidence: 0.88, freshness: 98, status: 'PASS', bbox: [340, 130, 190, 200] }
-                            ]
-                        ];
-                        const combo = combos[(idx - 1) % combos.length];
-                        detections.push(...combo);
-                    }
-                }
-
-                if (isAccepted) acceptedCount++;
-                else rejectedCount++;
-
-                let itemSim = 0;
-                for (const d of detections) {
-                    itemSim += d.confidence;
-                    totalSim += d.confidence;
-                    totalDetectionsCount++;
-                    const cur = classMap.get(d.class_name) || { detections: 0, pass: 0, review: 0, reject: 0, totalSim: 0 };
-                    cur.detections++;
-                    if (d.status === 'REJECT') cur.reject++;
-                    else if (d.status === 'REVIEW') cur.review++;
-                    else cur.pass++;
-                    cur.totalSim += d.confidence;
-                    classMap.set(d.class_name, cur);
-                }
-
-                const ann = await createAnnotatedImage(entry.blob, detections);
-
-                items.push({
-                    index: idx,
-                    filename: entry.filename.split('/').pop() || entry.filename,
-                    accepted: isAccepted,
-                    surface_temp: 25.0,
-                    t_safe_hours: 8.0,
-                    annotated_url: ann.blobUrl,
-                    annotated_data_url: ann.dataUrl,
-                    detections,
-                    avg_similarity: detections.length > 0 ? itemSim / detections.length : 0.8,
-                    avg_quality: 95.0,
-                    pass_detections: detections.filter(d => d.status === 'PASS').length,
-                    review_detections: detections.filter(d => d.status === 'REVIEW').length,
-                    reject_detections: detections.filter(d => d.status === 'REJECT').length
-                });
-            }));
-            noticeMessage = `Processed ${Math.min(i + concurrency, extracted.length)} of ${extracted.length} meal trays...`;
-        }
-
-        items.sort((a, b) => a.index - b.index);
-
-        const classBreakdown: BatchClassStat[] = [];
-        for (const [clsName, stat] of classMap.entries()) {
-            classBreakdown.push({
-                class_name: clsName,
-                detections: stat.detections,
-                pass_count: stat.pass,
-                review_count: stat.review,
-                reject_count: stat.reject,
-                avg_similarity: stat.detections > 0 ? stat.totalSim / stat.detections : 0.8,
-                avg_quality: 96.0
-            });
-        }
-
-        const batchId = 'BATCH-' + Date.now();
-        const totalTrays = extracted.length;
-        const totalDurationMs = Math.round(performance.now() - startedAt);
-
-        stage = 'compiling';
-        noticeMessage = `Compiling master batch audit report across ${extracted.length} trays...`;
-        await new Promise(r => setTimeout(r, 200));
-
-        clearTimers();
-        elapsedMs = totalDurationMs;
-        summary = {
-            status: 'success',
-            batch_id: batchId,
-            inspection_type: 'IMG_BATCH (Serverless Progressive Ingress)',
-            generated_at: new Date().toISOString(),
-            model_arch: 'YOLOv8s-INT8 (Cloud Serverless)',
-            engine: 'Client Extraction + AWS Lambda In-Process YOLO',
-            omp_threads: 4,
-            total_trays: totalTrays,
-            accepted: acceptedCount,
-            rejected: rejectedCount,
-            processing_time_ms: totalDurationMs,
-            throughput_trays_per_sec: totalDurationMs > 0 ? (totalTrays / (totalDurationMs / 1000)) : 10.0,
-            pass_rate: totalTrays > 0 ? (acceptedCount / totalTrays) * 100 : 100,
-            quality_index: 94.5,
-            avg_similarity: totalDetectionsCount > 0 ? totalSim / totalDetectionsCount : 0.82,
-            avg_quality: 96.0,
-            total_detections: totalDetectionsCount,
-            pass_detections: items.reduce((s, it) => s + (it.pass_detections || 0), 0),
-            review_detections: items.reduce((s, it) => s + (it.review_detections || 0), 0),
-            reject_detections: items.reduce((s, it) => s + (it.reject_detections || 0), 0),
-            quality_histogram: [0, 0, 0, 0, 1, 2, 5, 8, 12, 5],
-            class_breakdown: classBreakdown,
-            pdf_download_url: '',
-            items
-        };
-        stage = 'done';
-        noticeMessage = `Batch ${batchId} completed: ${acceptedCount} accepted / ${rejectedCount} rejected across ${totalTrays} trays.`;
-    }
-
     async function uploadBatch(file: File) {
         clearTimers();
         summary = null;
@@ -661,12 +266,6 @@
         elapsedTimer = setInterval(() => {
             elapsedMs = performance.now() - startedAt;
         }, 100);
-        stageTimerA = setTimeout(() => {
-            if (stage === 'uploading') stage = 'processing';
-        }, 550);
-        stageTimerB = setTimeout(() => {
-            if (stage === 'uploading' || stage === 'processing') stage = 'compiling';
-        }, 1800);
 
         try {
             const endpoint = getBatchEndpoint();
@@ -674,61 +273,42 @@
                 throw new Error(`ZIP file (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds 4.5 MB Vercel Serverless payload limit. Use a ZIP file under 4.5 MB (e.g. 20-30 trays) or configure direct Backend/Lambda URL in Settings.`);
             }
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 2500);
+            stage = 'processing';
+            noticeMessage = 'Uploading ZIP archive and running multi-core YOLOv8s INT8 inspection in parallel...';
+
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/zip' },
-                body: file,
-                signal: controller.signal
+                body: file
             });
-            clearTimeout(timeoutId);
 
-            const payload = (await response.json().catch(() => null)) as BatchSummary | null;
-            if (!response.ok || !payload) {
-                // If cloud serverless endpoint cannot process raw zip, seamlessly extract and run in-browser!
-                await processBatchWithClientExtraction(file, startedAt);
-                return;
+            if (!response.ok) {
+                let detail = `Batch inspection failed (${response.status})`;
+                try {
+                    const errPayload = await response.json();
+                    if (errPayload?.error) detail = String(errPayload.error);
+                } catch {}
+                throw new Error(detail);
             }
 
+            const payload = (await response.json()) as BatchSummary;
             clearTimers();
 
-            // Extract local blobs from the uploaded ZIP so we have instant client-side thumbnail fallback
-            try {
-                const arrayBuf = await file.arrayBuffer();
-                const extracted = await extractImagesFromZip(arrayBuf);
-                const fileBlobMap = new Map<string, string>();
-                for (const ex of extracted) {
-                    const base = ex.filename.split('/').pop() || ex.filename;
-                    fileBlobMap.set(base, URL.createObjectURL(ex.blob));
+            const origin = resolveApiOrigin();
+            for (const it of payload.items || []) {
+                if (it.annotated_url && it.annotated_url.startsWith('/') && origin) {
+                    it.annotated_url = `${origin}${it.annotated_url}`;
                 }
-                const origin = resolveApiOrigin();
-                for (const it of payload.items || []) {
-                    const base = it.filename.split('/').pop() || it.filename;
-                    if (fileBlobMap.has(base)) {
-                        it.local_blob_url = fileBlobMap.get(base);
-                    }
-                    if (it.annotated_url && it.annotated_url.startsWith('/') && origin) {
-                        it.annotated_url = `${origin}${it.annotated_url}`;
-                    }
-                }
-            } catch (zipExtractErr) {
-                console.warn('Could not extract local blobs for thumbnail fallback:', zipExtractErr);
             }
 
             summary = payload;
             elapsedMs = payload.processing_time_ms;
             stage = 'done';
-            noticeMessage = `Batch ${payload.batch_id} completed: ${payload.accepted} accepted / ${payload.rejected} rejected.`;
+            noticeMessage = `Batch ${payload.batch_id} completed: ${payload.accepted} accepted / ${payload.rejected} rejected across ${payload.total_trays || (payload.items ? payload.items.length : 0)} trays.`;
         } catch (err) {
-            try {
-                // Fallback to client-side progressive batch extraction
-                await processBatchWithClientExtraction(file, startedAt);
-            } catch (fallbackErr) {
-                clearTimers();
-                stage = 'error';
-                errorMessage = fallbackErr instanceof Error ? fallbackErr.message : 'Batch ZIP processing failed.';
-            }
+            clearTimers();
+            stage = 'error';
+            errorMessage = err instanceof Error ? err.message : 'Batch ZIP processing failed.';
         }
     }
 
@@ -853,7 +433,10 @@
                 return;
             }
 
-            const response = await fetch(summary.pdf_download_url);
+            const targetUrl = summary.pdf_download_url.startsWith('http')
+                ? summary.pdf_download_url
+                : `${resolveApiOrigin()}${summary.pdf_download_url.startsWith('/') ? '' : '/'}${summary.pdf_download_url}`;
+            const response = await fetch(targetUrl);
             if (!response.ok) {
                 throw new Error(`Report download failed (${response.status})`);
             }

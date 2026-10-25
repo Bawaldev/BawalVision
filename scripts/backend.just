@@ -110,6 +110,7 @@ run-backend:
     @just compose-up postgres
     -cd {{ justfile_directory() }} && docker compose -f {{ COMPOSE_FILE }} stop bawal_backend >/dev/null 2>&1 || true
     cd {{ justfile_directory() }} && \
+        LD_LIBRARY_PATH=/opt/onnxruntime/lib:/usr/local/lib:${LD_LIBRARY_PATH:-} \
         CROW_PORT={{ BACKEND_PORT }} \
         DB_HOST={{ env_var_or_default("DB_HOST", "localhost") }} \
         DB_PORT={{ POSTGRES_PORT }} \

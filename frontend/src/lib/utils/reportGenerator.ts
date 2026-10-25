@@ -1,6 +1,5 @@
 import type { InspectionAuditRecord } from '../types';
 import { resolveApiBase, resolveApiOrigin } from '../backendConfig';
-import { compileClientMarkdownPdf } from './pdfBuilder';
 
 export interface ReportOptions {
     host?: string;
@@ -368,46 +367,36 @@ export async function downloadMarkdownPdf(
     const finalMarkdown = await resolveMarkdownImages(markdownContent);
     const safeName = filename.toLowerCase().endsWith('.pdf') ? filename : `${filename}.pdf`;
 
-    // Attempt 1: C++ Crow Backend /reports/pdf (bounded by 2.5s timeout)
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const response = await fetch(reportPdfEndpoint(options.host), {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/pdf'
-            },
-            body: JSON.stringify({
-                markdown: finalMarkdown,
-                title: options.title ?? 'BawalVision Inspection Report',
-                filename: safeName
-            }),
-            signal: controller.signal
-        });
-        clearTimeout(timeoutId);
+    const endpoint = reportPdfEndpoint(options.host);
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/pdf'
+        },
+        body: JSON.stringify({
+            markdown: finalMarkdown,
+            title: options.title ?? 'BawalVision Inspection Report',
+            filename: safeName
+        })
+    });
 
-        if (response.ok) {
-            const blob = await response.blob();
-            if (blob.size > 0) {
-                downloadBlob(safeName, blob);
-                return { blob, filename: safeName };
-            }
-        }
-    } catch {
-        // Backend offline, unreachable, or timeout -> Seamless Client-Side PDF Compiler
+    if (!response.ok) {
+        let detail = `PDF generation failed (${response.status})`;
+        try {
+            const errJson = await response.json();
+            if (errJson?.error) detail = String(errJson.error);
+        } catch {}
+        throw new Error(detail);
     }
 
-    // Attempt 2: Autonomous High-Fidelity Client-Side PDF Compiler (Pure TypeScript/PDF 1.4)
-    try {
-        const clientPdfBlob = await compileClientMarkdownPdf(safeName, finalMarkdown, options.title);
-        downloadBlob(safeName, clientPdfBlob);
-        return { blob: clientPdfBlob, filename: safeName };
-    } catch (clientErr) {
-        // Final fallback: download as markdown artifact
-        downloadMarkdown(safeName.replace(/\.pdf$/i, '.md'), finalMarkdown);
-        throw new Error(clientErr instanceof Error ? clientErr.message : 'PDF generation failed; saved as Markdown.');
+    const blob = await response.blob();
+    if (blob.size === 0) {
+        throw new Error('PDF compilation returned an empty payload');
     }
+
+    downloadBlob(safeName, blob);
+    return { blob, filename: safeName };
 }
 
 export function generateInspectionLatex(record: InspectionAuditRecord): string {
