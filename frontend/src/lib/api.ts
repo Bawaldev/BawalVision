@@ -1,8 +1,7 @@
 import type { InspectionRecord, InspectionAuditRecord, TelemetryPayload, FoodDetection, InferenceLogEntry, EngineStatus, EspConnectionResult, DeviceHardwareStatus, WiFiNetworkInfo } from './types';
+import { resolveApiBase } from './backendConfig';
 
-const BASE_URL = '/api/v1';
-
-export async function fetchEngineStatus(baseUrl = BASE_URL): Promise<EngineStatus> {
+export async function fetchEngineStatus(baseUrl = resolveApiBase()): Promise<EngineStatus> {
     try {
         const response = await fetch(`${baseUrl}/system/engines`, {
             headers: { 'Accept': 'application/json' }
@@ -20,7 +19,7 @@ export async function fetchEngineStatus(baseUrl = BASE_URL): Promise<EngineStatu
     };
 }
 
-export async function fetchRecords(baseUrl = BASE_URL): Promise<InspectionRecord[]> {
+export async function fetchRecords(baseUrl = resolveApiBase()): Promise<InspectionRecord[]> {
     try {
         const response = await fetch(`${baseUrl}/records`, {
             headers: { 'Accept': 'application/json' }
@@ -37,7 +36,7 @@ export async function fetchRecords(baseUrl = BASE_URL): Promise<InspectionRecord
 
 export async function fetchInspectionAuditRecords(
     limit = 100,
-    baseUrl = BASE_URL
+    baseUrl = resolveApiBase()
 ): Promise<InspectionAuditRecord[]> {
     try {
         const response = await fetch(`${baseUrl}/inspections?limit=${limit}`, {
@@ -54,7 +53,7 @@ export async function fetchInspectionAuditRecords(
     }
 }
 
-export async function fetchCameraStatus(baseUrl = BASE_URL): Promise<{ active: boolean; deviceId: string; fps: number }> {
+export async function fetchCameraStatus(baseUrl = resolveApiBase()): Promise<{ active: boolean; deviceId: string; fps: number }> {
     try {
         // /camera/status reports whichever source is active (live ESP32 or mock
         // video); fall back to the live-only endpoint for older backends.
@@ -79,7 +78,7 @@ export async function fetchCameraStatus(baseUrl = BASE_URL): Promise<{ active: b
     return { active: false, deviceId: '', fps: 0.0 };
 }
 
-export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<TelemetryPayload | null> {
+export async function fetchLatestTelemetry(baseUrl = resolveApiBase()): Promise<TelemetryPayload | null> {
     try {
         const response = await fetch(`${baseUrl}/telemetry/latest`, {
             headers: { 'Accept': 'application/json' }
@@ -113,7 +112,7 @@ export async function fetchLatestTelemetry(baseUrl = BASE_URL): Promise<Telemetr
     return null;
 }
 
-export async function fetchLatestInspection(baseUrl = BASE_URL): Promise<InspectionRecord | null> {
+export async function fetchLatestInspection(baseUrl = resolveApiBase()): Promise<InspectionRecord | null> {
     try {
         const response = await fetch(`${baseUrl}/inspections/latest`, {
             headers: { 'Accept': 'application/json' }
@@ -140,7 +139,7 @@ export async function fetchLatestInspection(baseUrl = BASE_URL): Promise<Inspect
 export async function triggerManualInspection(
     deviceId: string,
     detections: FoodDetection[],
-    baseUrl = BASE_URL,
+    baseUrl = resolveApiBase(),
     sourceMode?: string,
     videoSource?: string,
     videoUUID?: string
@@ -187,7 +186,7 @@ export async function triggerManualInspection(
     return { status: 'error' };
 }
 
-export async function fetchDeviceStatus(baseUrl = BASE_URL): Promise<DeviceHardwareStatus | null> {
+export async function fetchDeviceStatus(baseUrl = resolveApiBase()): Promise<DeviceHardwareStatus | null> {
     try {
         const response = await fetch(`${baseUrl}/devices/status`, {
             headers: { 'Accept': 'application/json' }
@@ -203,7 +202,7 @@ export async function fetchDeviceStatus(baseUrl = BASE_URL): Promise<DeviceHardw
 
 export async function connectEspDevice(
     deviceId: string,
-    baseUrl = BASE_URL,
+    baseUrl = resolveApiBase(),
     options?: { usbPort?: string; ssid?: string; password?: string }
 ): Promise<EspConnectionResult> {
     const cleanId = (deviceId || '').trim();
@@ -258,7 +257,7 @@ export async function provisionEspViaUsb(
     usbPort: string,
     ssid: string,
     password: string,
-    baseUrl = BASE_URL,
+    baseUrl = resolveApiBase(),
     gatewayHostIp = ''
 ): Promise<EspConnectionResult> {
     try {
@@ -310,7 +309,7 @@ export async function provisionEspViaUsb(
 
 export async function disconnectEspDevice(
     deviceId: string,
-    baseUrl = BASE_URL
+    baseUrl = resolveApiBase()
 ): Promise<boolean> {
     try {
         const response = await fetch(`${baseUrl}/devices/disconnect`, {
@@ -327,7 +326,7 @@ export async function disconnectEspDevice(
     }
 }
 
-export async function fetchWiFiNetworks(baseUrl = BASE_URL): Promise<WiFiNetworkInfo[]> {
+export async function fetchWiFiNetworks(baseUrl = resolveApiBase()): Promise<WiFiNetworkInfo[]> {
     try {
         const response = await fetch(`${baseUrl}/devices/wifi/networks`, {
             headers: { 'Accept': 'application/json' }
@@ -343,7 +342,7 @@ export async function fetchWiFiNetworks(baseUrl = BASE_URL): Promise<WiFiNetwork
     return [];
 }
 
-export async function probeEspUsbPort(port?: string, baseUrl = BASE_URL): Promise<{
+export async function probeEspUsbPort(port?: string, baseUrl = resolveApiBase()): Promise<{
     success: boolean;
     port?: string;
     deviceId?: string;
@@ -381,7 +380,7 @@ export async function probeEspUsbPort(port?: string, baseUrl = BASE_URL): Promis
     }
 }
 
-export async function fetchConfidenceThreshold(baseUrl = BASE_URL): Promise<{ threshold: number; min: number; max: number; default: number }> {
+export async function fetchConfidenceThreshold(baseUrl = resolveApiBase()): Promise<{ threshold: number; min: number; max: number; default: number }> {
     try {
         const response = await fetch(`${baseUrl}/system/threshold`, {
             headers: { 'Accept': 'application/json' }
@@ -395,7 +394,7 @@ export async function fetchConfidenceThreshold(baseUrl = BASE_URL): Promise<{ th
     return { threshold: 0.60, min: 0.45, max: 0.98, default: 0.60 };
 }
 
-export async function updateConfidenceThreshold(threshold: number, baseUrl = BASE_URL): Promise<boolean> {
+export async function updateConfidenceThreshold(threshold: number, baseUrl = resolveApiBase()): Promise<boolean> {
     try {
         const response = await fetch(`${baseUrl}/system/threshold`, {
             method: 'POST',
