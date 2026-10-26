@@ -427,7 +427,7 @@
     }
 
     function handleLiveImgError() {
-        if (!discoveredStreamUrl && typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+        if (!discoveredStreamUrl && typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.protocol !== 'https:') {
             discoveredStreamUrl = 'http://localhost:8080/api/v1/camera/stream';
             streamEpoch = Date.now();
             return;

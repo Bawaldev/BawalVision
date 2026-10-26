@@ -229,12 +229,27 @@ export const handle: Handle = async ({ event, resolve }) => {
                         cpu_load: 12
                     }), { status: 200, headers: jsonHeaders });
                 }
-                if (path.includes('/records') || path.includes('/inspections/latest')) {
+                if (path.includes('/records') || path.includes('/inspections')) {
                     return new Response(JSON.stringify({
                         status: 'OK',
                         records: [],
                         detections: [],
                         message: 'Stateless Lambda active.'
+                    }), { status: 200, headers: jsonHeaders });
+                }
+                if (path.includes('/system/engines')) {
+                    return new Response(JSON.stringify({
+                        engines: [
+                            { id: 'ONNX_INT8_LAMBDA', name: 'Cloud Lambda Graviton3 (YOLOv8s INT8)', status: 'ready', default: true },
+                            { id: 'CROW_SIMD_HOST', name: 'Local C++ SIMD Engine', status: 'available', default: false }
+                        ]
+                    }), { status: 200, headers: jsonHeaders });
+                }
+                if (path.includes('/system/threshold')) {
+                    return new Response(JSON.stringify({
+                        min_confidence: 0.35,
+                        target_fps: 15,
+                        color_threshold: 0.5
                     }), { status: 200, headers: jsonHeaders });
                 }
                 if (path.includes('/devices/wifi/networks')) {

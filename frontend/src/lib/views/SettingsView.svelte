@@ -164,6 +164,7 @@
 
     let espTargetBackendIp = $state('');
     let espTargetBackendPort = $state(8080);
+    let showAdvancedEspIp = $state(false);
 
     async function queryEspNodeStatus(overrideIp?: string) {
         const ipToQuery = (overrideIp || espNodeIp || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
@@ -1313,170 +1314,110 @@
                     </button>
                 </div>
 
-                <!-- Node IP & Remote Address Configuration -->
-                <div class="local-backend-row">
-                    <div class="input-with-label" style="flex: 1;">
-                        <label for="espNodeIpInput" class="compact-label">ESP32-S3 Node Network Address / IP</label>
-                        <input
-                            id="espNodeIpInput"
-                            class="fedora-input"
-                            bind:value={espNodeIp}
-                            placeholder="e.g. 192.168.1.150"
-                            spellcheck="false"
-                            autocapitalize="off"
-                            autocorrect="off"
-                        />
-                    </div>
-                    <button
-                        type="button"
-                        class="fedora-accent-pill-btn"
-                        style="align-self: flex-end;"
-                        onclick={() => queryEspNodeStatus()}
-                        disabled={isQueryingEspNode}
-                    >
-                        Query Node
-                    </button>
-                </div>
-
-                <!-- Live Node Telemetry Card if Node Responded -->
-                {#if espNodeStatus}
-                    <div class="esp-diag-grid" style="margin-top: 10px;">
-                        <div class="diag-item">
-                            <span class="diag-lbl">Device ID</span>
-                            <span class="diag-val mono">{espNodeStatus.device_id || 'ESP32-S3'}</span>
+                <!-- One-Click Wi-Fi Sync via USB (Zero-IP Experience) -->
+                <div class="iot-deploy-card" style="margin-top: 8px; background: rgba(30, 41, 59, 0.45); padding: 14px; border-radius: 10px; border: 1px solid rgba(56, 189, 248, 0.25);">
+                    <div class="esp-header-row" style="margin-bottom: 10px;">
+                        <div>
+                            <strong style="font-size: 0.88rem; color: #38bdf8;">⚡ One-Click Wi-Fi Sync (via USB /dev/ttyACM0)</strong>
+                            <p class="port-subdetail-muted" style="font-size: 0.75rem; margin-top: 2px;">
+                                Colok ESP32 ke laptop. Masukkan Wi-Fi yang sedang Anda pakai &rarr; klik <strong>Sync Wi-Fi</strong>. ESP32 otomatis berganti ke Wi-Fi Anda <strong>tanpa perlu tahu atau mengetik alamat IP apa pun!</strong>
+                            </p>
                         </div>
-                        <div class="diag-item">
-                            <span class="diag-lbl">Current Wi-Fi</span>
-                            <span class="diag-val">{espNodeStatus.wifi_ssid || 'N/A'} ({espNodeStatus.rssi || '-'} dBm)</span>
-                        </div>
-                        <div class="diag-item">
-                            <span class="diag-lbl">STA IP / Gateway</span>
-                            <span class="diag-val mono">{espNodeStatus.sta_ip || espNodeIp} (gw: {espNodeStatus.gateway || 'N/A'})</span>
-                        </div>
-                        <div class="diag-item">
-                            <span class="diag-lbl">Active NVS Target</span>
-                            <span class="diag-val mono" style="color: #f59e0b;">
-                                http://{espNodeStatus.nvs_backend_ip || espNodeStatus.active_target_ip}:{espNodeStatus.nvs_backend_port || 8080}
-                            </span>
-                        </div>
-                    </div>
-                {/if}
-
-                <!-- Deploy Wi-Fi & Backend Target to ESP32 Form -->
-                <div class="iot-deploy-card" style="margin-top: 12px; background: rgba(15, 23, 42, 0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border-subtle);">
-                    <div class="esp-header-row" style="margin-bottom: 8px;">
-                        <strong style="font-size: 0.82rem; color: var(--text-primary);">Configure ESP32 Wi-Fi &amp; Backend Target</strong>
-                        <span class="port-subdetail-muted" style="font-size: 0.72rem;">Change Wi-Fi network and frame ingestion destination directly on the board via OTA HTTP or USB</span>
                     </div>
 
                     <!-- Wi-Fi Inputs -->
-                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
-                        <div style="flex: 1; min-width: 160px;">
-                            <label for="espWifiSsidInput" class="compact-label">Target Wi-Fi Network (SSID)</label>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+                        <div style="flex: 1; min-width: 170px;">
+                            <label for="espWifiSsidInput" class="compact-label">Nama Wi-Fi Target (SSID)</label>
                             <input
                                 id="espWifiSsidInput"
                                 class="fedora-input"
                                 bind:value={espWifiSsid}
-                                placeholder={espNodeStatus?.wifi_ssid ? `Current: ${espNodeStatus.wifi_ssid}` : 'Enter Wi-Fi SSID'}
+                                placeholder={serverWifiSsid ? `Saran: ${serverWifiSsid}` : 'Ketik nama Wi-Fi / Hotspot'}
                                 spellcheck="false"
                             />
                         </div>
-                        <div style="flex: 1; min-width: 160px;">
-                            <label for="espWifiPassInput" class="compact-label">Wi-Fi Password</label>
+                        <div style="flex: 1; min-width: 170px;">
+                            <label for="espWifiPassInput" class="compact-label">Password Wi-Fi</label>
                             <input
                                 id="espWifiPassInput"
                                 type="password"
                                 class="fedora-input"
                                 bind:value={espWifiPassword}
-                                placeholder="Wi-Fi Password (leave blank to keep current)"
+                                placeholder="Password Wi-Fi (kosongkan jika tanpa password)"
                                 autocomplete="new-password"
                             />
                         </div>
                     </div>
 
-                    <!-- Target Backend Inputs -->
-                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
-                        <div style="flex: 2; min-width: 180px;">
-                            <label for="targetIpInput" class="compact-label">Target Backend IP (Laptop / Host)</label>
-                            <input
-                                id="targetIpInput"
-                                class="fedora-input"
-                                bind:value={espTargetBackendIp}
-                                placeholder={espNodeStatus?.gateway ? `e.g. ${espNodeStatus.gateway}` : 'e.g. 192.168.1.100'}
-                                spellcheck="false"
-                            />
-                        </div>
-                        <div style="flex: 1; min-width: 90px;">
-                            <label for="targetPortInput" class="compact-label">Port</label>
-                            <input
-                                id="targetPortInput"
-                                type="number"
-                                class="fedora-input"
-                                bind:value={espTargetBackendPort}
-                                placeholder="8080"
-                            />
-                        </div>
-                    </div>
-
-                    <!-- Quick Adopt Helper Chips -->
-                    <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
-                        {#if espNodeStatus?.gateway}
-                            <button
-                                type="button"
-                                class="fedora-pill-btn"
-                                style="font-size: 0.68rem; padding: 2px 8px;"
-                                onclick={() => (espTargetBackendIp = espNodeStatus?.gateway || '')}
-                            >
-                                ⚡ Adopt Gateway IP ({espNodeStatus.gateway})
-                            </button>
-                        {/if}
-                        {#if detectedHostIp}
-                            <button
-                                type="button"
-                                class="fedora-pill-btn"
-                                style="font-size: 0.68rem; padding: 2px 8px;"
-                                onclick={() => (espTargetBackendIp = detectedHostIp)}
-                            >
-                                💻 Adopt Detected Host IP ({detectedHostIp})
-                            </button>
-                        {/if}
-                        <button
-                            type="button"
-                            class="fedora-pill-btn"
-                            style="font-size: 0.68rem; padding: 2px 8px;"
-                            onclick={() => (espTargetBackendIp = '')}
-                        >
-                            🧹 Reset to Dynamic Discovery
-                        </button>
-                    </div>
-
-                    <!-- Action Deploy Buttons -->
-                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                        <button
-                            type="button"
-                            class="fedora-btn primary"
-                            style="padding: 6px 14px; font-size: 0.78rem;"
-                            onclick={deployTargetBackendToEsp}
-                            disabled={isDeployingToEsp}
-                        >
-                            {#if isDeployingToEsp}
-                                <span class="btn-spinner"></span> Updating ESP32...
-                            {:else}
-                                🚀 Apply &amp; Switch Wi-Fi / Target (OTA)
-                            {/if}
-                        </button>
+                    <!-- Primary Zero-IP Action Button -->
+                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                         {#if isWebSerialAvailable()}
                             <button
                                 type="button"
-                                class="fedora-btn secondary"
-                                style="padding: 6px 14px; font-size: 0.78rem;"
-                                onclick={() => provisionViaBrowserSerial(espWifiSsid || espNodeStatus?.wifi_ssid || '', espWifiPassword, espTargetBackendIp)}
+                                class="fedora-btn primary"
+                                style="padding: 8px 18px; font-size: 0.84rem; font-weight: 600;"
+                                onclick={() => provisionViaBrowserSerial(espWifiSsid || serverWifiSsid || '', espWifiPassword, '')}
                                 disabled={isDeployingToEsp}
                             >
-                                ⚡ Push via Web Serial USB
+                                {#if isDeployingToEsp}
+                                    <span class="btn-spinner"></span> Menyambungkan ESP32...
+                                {:else}
+                                    ⚡ Sync Wi-Fi ke ESP32 (via USB ACM0)
+                                {/if}
                             </button>
+                        {:else}
+                            <div class="port-detail-text" style="color: #f59e0b; font-size: 0.78rem;">
+                                ⚠️ Web Serial tidak aktif di browser ini. Buka via Google Chrome atau Edge untuk menyambungkan USB secara langsung.
+                            </div>
                         {/if}
+
+                        <button
+                            type="button"
+                            class="fedora-pill-btn"
+                            style="font-size: 0.72rem; margin-left: auto;"
+                            onclick={() => (showAdvancedEspIp = !showAdvancedEspIp)}
+                        >
+                            {showAdvancedEspIp ? '▴ Tutup Setelan IP Manual' : '▸ Setelan IP Manual / OTA (Opsional)'}
+                        </button>
                     </div>
+
+                    <!-- Advanced Manual IP Section (Collapsed by Default) -->
+                    {#if showAdvancedEspIp}
+                        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-subtle);">
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+                                <div style="flex: 1; min-width: 160px;">
+                                    <label for="espNodeIpInput" class="compact-label">Alamat IP ESP32 (Manual OTA)</label>
+                                    <input
+                                        id="espNodeIpInput"
+                                        class="fedora-input"
+                                        bind:value={espNodeIp}
+                                        placeholder="contoh: 192.168.1.150"
+                                        spellcheck="false"
+                                    />
+                                </div>
+                                <div style="flex: 1; min-width: 160px;">
+                                    <label for="targetIpInput" class="compact-label">Host Backend IP Target</label>
+                                    <input
+                                        id="targetIpInput"
+                                        class="fedora-input"
+                                        bind:value={espTargetBackendIp}
+                                        placeholder="contoh: 192.168.1.100"
+                                        spellcheck="false"
+                                    />
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                class="fedora-pill-btn"
+                                style="font-size: 0.72rem;"
+                                onclick={deployTargetBackendToEsp}
+                                disabled={isDeployingToEsp}
+                            >
+                                🚀 Deploy via OTA HTTP
+                            </button>
+                        </div>
+                    {/if}
                 </div>
 
                 {#if espDeployMessage}
