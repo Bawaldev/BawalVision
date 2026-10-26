@@ -247,7 +247,7 @@ export const handle: Handle = async ({ event, resolve }) => {
                 if (path.includes('/system/engines')) {
                     return new Response(JSON.stringify({
                         engines: [
-                            { id: 'ONNX_INT8_LAMBDA', name: 'Cloud Lambda Graviton3 (YOLOv8s INT8)', status: 'ready', default: true },
+                            { id: 'ONNX_INT8_LAMBDA', name: 'Cloud Lambda (YOLOv8s INT8)', status: 'ready', default: true },
                             { id: 'CROW_SIMD_HOST', name: 'Local C++ SIMD Engine', status: 'available', default: false }
                         ]
                     }), { status: 200, headers: jsonHeaders });

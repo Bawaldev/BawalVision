@@ -81,7 +81,7 @@
             onclick={() => {
                 if (gravitonAvailable && onToggleGraviton) onToggleGraviton();
             }}
-            title={gravitonAvailable ? 'Toggle AWS Graviton3 Cloud Inference' : 'Cloud Graviton3 Offline'}
+            title={gravitonAvailable ? 'Toggle cloud inference' : 'Cloud inference offline'}
         >
             <div class="chip-circle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="chip-svg">
@@ -89,7 +89,7 @@
                 </svg>
             </div>
             <div class="chip-text">
-                <strong>Cloud Graviton3</strong>
+                <strong>Cloud Inference</strong>
                 <small>{gravitonAvailable ? (gravitonEnabled ? 'Active' : 'Standby') : 'Unavailable'}</small>
             </div>
         </button>

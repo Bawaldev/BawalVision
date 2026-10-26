@@ -496,7 +496,7 @@
                 <div class="hardware-box">
                     <div class="hw-top">
                         <span class="hw-title">Compute Engine & QC Gate</span>
-                        <span class="hw-badge graviton">{gravitonEnabled && gravitonAvailable ? 'AWS Graviton3 ARM64' : 'Local Multi-Arch SIMD'}</span>
+                        <span class="hw-badge graviton">{gravitonEnabled && gravitonAvailable ? 'Cloud Inference' : 'Local Multi-Arch SIMD'}</span>
                     </div>
                     <div class="hw-metrics">
                         <div class="hw-metric-item">

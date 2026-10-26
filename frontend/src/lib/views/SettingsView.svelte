@@ -2147,14 +2147,14 @@
                     />
                     <div class="check-text">
                         <strong>
-                            AWS Graviton3 (Neoverse-N1 SVE Acceleration)
+                            Cloud Inference (ARM64 SVE Acceleration)
                             {#if !config.gravitonEngineAvailable}
                                 <span class="unavail-badge">Unavailable</span>
                             {/if}
                         </strong>
                         <small>
                             {#if !config.gravitonEngineAvailable}
-                                Requires ARM64 Graviton3 cloud hardware instance
+                                Requires ARM64 cloud hardware instance
                             {:else}
                                 Utilizes ARM SVE vector acceleration extensions
                             {/if}

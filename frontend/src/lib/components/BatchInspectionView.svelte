@@ -668,7 +668,7 @@
             <span><strong>Local Edge Station:</strong> C++20 OpenMP + AVX2 YOLOv8s INT8 Engine (<code>{currentBackendUrl}</code>)</span>
         {:else}
             <span class="mode-dot lambda"></span>
-            <span><strong>AWS Lambda Mobile Engine:</strong> Serverless C++ Runtime (AWS Graviton3 ARM64 · YOLOv8s INT8)</span>
+            <span><strong>AWS Lambda Mobile Engine:</strong> Serverless C++ Runtime (ARM64 · YOLOv8s INT8)</span>
         {/if}
     </div>
 
