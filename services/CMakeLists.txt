@@ -342,7 +342,7 @@ endif()
 # AWS Lambda custom-runtime bootstrap (`bootstrap` is the reserved filename).
 if(ENABLE_AWS_LAMBDA)
     add_executable(bawal_lambda src/lambda/main_lambda.cpp)
-    target_link_libraries(bawal_lambda PRIVATE bawal_core AWS::aws-lambda-runtime)
+    target_link_libraries(bawal_lambda PRIVATE bawal_core AWS::aws-lambda-runtime OpenMP::OpenMP_CXX)
     target_compile_definitions(bawal_lambda PRIVATE BAWAL_USE_MIMALLOC=1)
     set_target_properties(bawal_lambda PROPERTIES OUTPUT_NAME "bootstrap")
     install(TARGETS bawal_lambda DESTINATION bin)

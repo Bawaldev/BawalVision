@@ -145,7 +145,14 @@ BatchReportSummary BatchInspector::processZipBuffer(
     summary.inspection_type = std::string(kBatchInspectionType);
     summary.generated_at = utcTimestampNow();
     summary.model_arch = std::string(classifier.getModelArchitecture());
-    summary.omp_threads = omp_get_max_threads();
+    if (const char* omp_env = std::getenv("OMP_NUM_THREADS"); omp_env != nullptr && *omp_env != '\0') {
+        const int requested_threads = std::atoi(omp_env);
+        if (requested_threads > 0) {
+            omp_set_num_threads(requested_threads);
+        }
+    }
+    const int max_threads = omp_get_max_threads();
+    summary.omp_threads = max_threads > 0 ? max_threads : 1;
     summary.engine = fmt::format("OpenMP ({} threads) + AVX2 vectorized YOLOv8s INT8",
                                  summary.omp_threads);
     if (grafana != nullptr) {
@@ -166,7 +173,19 @@ BatchReportSummary BatchInspector::processZipBuffer(
 
     std::string unzip_cmd = fmt::format("unzip -q -j \"{}\" -d \"{}\" 2>&1", 
                                         temp_zip.string(), extract_dir.string());
-    (void)std::system(unzip_cmd.c_str());
+    int res = std::system(unzip_cmd.c_str());
+    if (res != 0) {
+        // Fallback 1: python3 zipfile module
+        std::string py_cmd = fmt::format("python3 -m zipfile -e \"{}\" \"{}\" > /dev/null 2>&1",
+                                         temp_zip.string(), extract_dir.string());
+        res = std::system(py_cmd.c_str());
+        if (res != 0) {
+            // Fallback 2: tar -xf
+            std::string tar_cmd = fmt::format("tar -xf \"{}\" -C \"{}\" > /dev/null 2>&1",
+                                             temp_zip.string(), extract_dir.string());
+            (void)std::system(tar_cmd.c_str());
+        }
+    }
 
     std::vector<fs::path> image_files;
     size_t total_uncompressed_bytes = 0;

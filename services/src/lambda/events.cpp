@@ -328,6 +328,46 @@ bool LambdaEventParser::isIamAuthorized(std::string_view payload) {
     return false;
 }
 
+std::vector<uint8_t> LambdaEventParser::extractBodyBytes(std::string_view payload) {
+    if (payload.empty()) {
+        return {};
+    }
+
+    // Direct raw ZIP check (direct invocation with raw bytes)
+    if (payload.size() >= 4 &&
+        static_cast<uint8_t>(payload[0]) == 0x50 &&
+        static_cast<uint8_t>(payload[1]) == 0x4B &&
+        (static_cast<uint8_t>(payload[2]) == 0x03 || static_cast<uint8_t>(payload[2]) == 0x05) &&
+        (static_cast<uint8_t>(payload[3]) == 0x04 || static_cast<uint8_t>(payload[3]) == 0x06)) {
+        return std::vector<uint8_t>(payload.begin(), payload.end());
+    }
+
+    // Try parsing API Gateway / Function URL event envelope
+    bawal::server::LambdaEvent event;
+    if (!glz::read<glz::opts{.error_on_unknown_keys = false}>(event, payload)) {
+        if (!event.body.empty()) {
+            std::string_view body = stripDataUri(event.body);
+            if (event.is_base64_encoded || looksLikeBase64(body)) {
+                std::vector<uint8_t> decoded = decodeBase64(body);
+                if (!decoded.empty()) {
+                    return decoded;
+                }
+            }
+            return std::vector<uint8_t>(body.begin(), body.end());
+        }
+    }
+
+    // Fallback: check if entire payload is base64 encoded
+    if (looksLikeBase64(payload)) {
+        std::vector<uint8_t> decoded = decodeBase64(stripDataUri(payload));
+        if (!decoded.empty()) {
+            return decoded;
+        }
+    }
+
+    return std::vector<uint8_t>(payload.begin(), payload.end());
+}
+
 std::string LambdaEventParser::extractHeader(std::string_view payload,
                                              std::string_view name) {
     glz::json_t root;

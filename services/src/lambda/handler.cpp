@@ -12,6 +12,8 @@
 
 #include <glaze/glaze.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <fstream>
+#include <omp.h>
 
 #include "bawal/lambda/base64.hpp"
 #include "bawal/lambda/report.hpp"
@@ -20,9 +22,12 @@
 #include "bawal/report/report_builder.hpp"
 #include "bawal/server/inspection_dto.hpp"
 #include "bawal/vision/pipeline.hpp"
+#include "bawal/vision/image/batch_inspector.hpp"
 
 namespace {
 
+using bawal::lambda::decodeBase64;
+using bawal::lambda::kMaxMarkdownBytes;
 using bawal::lambda::LambdaInspectionResponse;
 using bawal::lambda::LambdaReportRequest;
 
@@ -165,6 +170,114 @@ LambdaInspectionResponse makePdfResponse(std::vector<uint8_t> pdf,
     response.content_disposition =
         "attachment; filename=\"" + std::move(filename) + "\"";
     return response;
+}
+
+std::string serializeBatchSummaryJson(const bawal::vision::image::BatchReportSummary& summary) {
+    glz::json_t::object_t root;
+    root["status"] = "success";
+    root["batch_id"] = summary.batch_id;
+    root["inspection_type"] = summary.inspection_type;
+    root["generated_at"] = summary.generated_at;
+    root["model_arch"] = summary.model_arch;
+    root["engine"] = summary.engine;
+    root["omp_threads"] = static_cast<double>(summary.omp_threads);
+    root["total_trays"] = static_cast<double>(summary.total_images);
+    root["accepted"] = static_cast<double>(summary.accepted_count);
+    root["rejected"] = static_cast<double>(summary.rejected_count);
+    root["processing_time_ms"] = summary.total_processing_time_ms;
+    root["throughput_trays_per_sec"] = summary.throughput_images_per_sec;
+    const double pass_rate = summary.total_images > 0
+        ? static_cast<double>(summary.accepted_count) / static_cast<double>(summary.total_images) * 100.0
+        : 0.0;
+    root["pass_rate"] = pass_rate;
+    root["quality_index"] = static_cast<double>(summary.quality.quality_index);
+    root["avg_similarity"] = static_cast<double>(summary.quality.avg_similarity);
+    root["avg_quality"] = static_cast<double>(summary.quality.avg_quality);
+    root["min_quality"] = static_cast<double>(summary.quality.min_quality);
+    root["max_quality"] = static_cast<double>(summary.quality.max_quality);
+    root["quality_stddev"] = static_cast<double>(summary.quality.stddev_quality);
+    root["total_detections"] = static_cast<double>(summary.quality.total_detections);
+    root["pass_detections"] = static_cast<double>(summary.quality.pass_detections);
+    root["review_detections"] = static_cast<double>(summary.quality.review_detections);
+    root["reject_detections"] = static_cast<double>(summary.quality.reject_detections);
+    root["report_checksum"] = summary.report_checksum;
+    root["persisted_to_postgres"] = false;
+    root["pdf_download_url"] = "/api/v1/inspections/batch/" + summary.batch_id + "/report.pdf";
+
+    glz::json_t::array_t histogram;
+    for (const uint32_t val : summary.quality_histogram) {
+        histogram.emplace_back(static_cast<double>(val));
+    }
+    root["quality_histogram"] = std::move(histogram);
+
+    glz::json_t::array_t class_breakdown;
+    for (const auto& cls : summary.class_breakdown) {
+        glz::json_t::object_t item;
+        item["class_name"] = std::string(bawal::vision::image::fixedStringView(cls.class_name));
+        item["detections"] = static_cast<double>(cls.detections);
+        item["pass_count"] = static_cast<double>(cls.pass_count);
+        item["review_count"] = static_cast<double>(cls.review_count);
+        item["reject_count"] = static_cast<double>(cls.reject_count);
+        item["avg_similarity"] = static_cast<double>(cls.avg_similarity);
+        item["avg_quality"] = static_cast<double>(cls.avg_quality);
+        class_breakdown.emplace_back(std::move(item));
+    }
+    root["class_breakdown"] = std::move(class_breakdown);
+
+    glz::json_t::array_t items;
+    for (const auto& it : summary.items) {
+        glz::json_t::object_t item;
+        item["index"] = static_cast<double>(it.index);
+        item["filename"] = it.filename;
+        item["accepted"] = it.accepted;
+        item["surface_temp"] = static_cast<double>(it.surface_temp);
+        item["t_safe_hours"] = static_cast<double>(it.t_safe_hours);
+        item["avg_similarity"] = static_cast<double>(it.avg_similarity);
+        item["avg_quality"] = static_cast<double>(it.avg_quality);
+        item["pass_detections"] = static_cast<double>(it.pass_detections);
+        item["review_detections"] = static_cast<double>(it.review_detections);
+        item["reject_detections"] = static_cast<double>(it.reject_detections);
+        item["annotated_url"] = "/api/v1/inspections/batch/" + summary.batch_id +
+                                "/annotated/" + std::to_string(it.index);
+
+        if (!it.annotated_image_path.empty() && std::filesystem::is_regular_file(it.annotated_image_path)) {
+            std::ifstream img_stream(it.annotated_image_path, std::ios::binary);
+            if (img_stream) {
+                std::vector<uint8_t> img_bytes((std::istreambuf_iterator<char>(img_stream)),
+                                                std::istreambuf_iterator<char>());
+                if (!img_bytes.empty()) {
+                    item["annotated_data_url"] = "data:image/jpeg;base64," + bawal::lambda::encodeBase64(img_bytes);
+                }
+            }
+        }
+
+        glz::json_t::array_t detections;
+        for (const auto& det : it.detections) {
+            glz::json_t::object_t d;
+            d["class_name"] = std::string(det.class_name);
+            d["confidence"] = static_cast<double>(det.confidence);
+            d["freshness"] = static_cast<double>(bawal::vision::image::freshnessScore(det) / 100.0f);
+            d["status"] = std::string(bawal::vision::image::qualityStatusName(
+                bawal::vision::image::classifyQuality(det)));
+
+            glz::json_t::array_t bbox;
+            bbox.emplace_back(static_cast<double>(det.bbox.x));
+            bbox.emplace_back(static_cast<double>(det.bbox.y));
+            bbox.emplace_back(static_cast<double>(det.bbox.width));
+            bbox.emplace_back(static_cast<double>(det.bbox.height));
+            d["bbox"] = std::move(bbox);
+            detections.emplace_back(std::move(d));
+        }
+        item["detections"] = std::move(detections);
+        items.emplace_back(std::move(item));
+    }
+    root["items"] = std::move(items);
+
+    std::string out;
+    if (const auto err = glz::write_json(root, out); err) {
+        return R"({"error":"Failed to serialize batch inspection summary"})";
+    }
+    return out;
 }
 
 } // namespace
@@ -411,6 +524,63 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             return resp;
         }
 
+        if (route.method == "POST" && route.path.find("/inspections/batch-zip") != std::string::npos) {
+            const Clock::time_point start = Clock::now();
+            const std::vector<uint8_t> zip_bytes = LambdaEventParser::extractBodyBytes(event_payload);
+
+            if (zip_bytes.empty()) {
+                return errorResponse(400, "Empty payload body. Please upload a valid ZIP archive.", start);
+            }
+            if (zip_bytes.size() > 15 * 1024 * 1024) {
+                return errorResponse(413, "ZIP archive exceeds maximum limit of 15 MB.", start);
+            }
+            if (zip_bytes.size() < 4 ||
+                zip_bytes[0] != 0x50 || zip_bytes[1] != 0x4B ||
+                (zip_bytes[2] != 0x03 && zip_bytes[2] != 0x05) ||
+                (zip_bytes[3] != 0x04 && zip_bytes[3] != 0x06)) {
+                return errorResponse(400, "Invalid ZIP archive: missing ZIP magic header", start);
+            }
+
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!m_initialized.load(std::memory_order_acquire) || !m_pipeline) {
+                LambdaConfig config = m_config;
+                if (config.model_path.empty()) {
+                    config.model_path = "/var/task/models/yolov8s_int8.onnx";
+                }
+                if (!initializeLocked(config)) {
+                    return errorResponse(503, "Lambda batch vision engine not initialized (ONNX model unavailable)", start);
+                }
+            }
+
+            std::filesystem::path template_path = "/var/task/templates/batch_report.tex.in";
+            if (!std::filesystem::exists(template_path)) {
+                template_path = "./services/templates/batch_report.tex.in";
+            }
+            if (!std::filesystem::exists(template_path)) {
+                template_path = "./templates/batch_report.tex.in";
+            }
+
+            const bawal::vision::image::BatchReportSummary summary =
+                bawal::vision::image::BatchInspector::processZipBuffer(
+                    zip_bytes.data(),
+                    zip_bytes.size(),
+                    m_pipeline->getClassifier(),
+                    template_path,
+                    nullptr);
+
+            if (summary.total_images == 0) {
+                return errorResponse(400, "Failed to extract valid image files (.jpg/.png) from ZIP archive", start);
+            }
+
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+            resp.content_type = "application/json";
+            resp.execution_time_ms = elapsedMs(start);
+            resp.json_payload = serializeBatchSummaryJson(summary);
+            return resp;
+        }
+
         if (route.method == "GET") {
             LambdaInspectionResponse resp;
             resp.status_code = 200;
@@ -482,6 +652,29 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
                     resp.json_payload = R"({"status":"OK","capability":true,"records":[]})";
                 }
                 return resp;
+            }
+
+            if (route.path.find("/inspections/batch/") != std::string::npos &&
+                route.path.find("/report.pdf") != std::string::npos) {
+                const Clock::time_point start = Clock::now();
+                const size_t bpos = route.path.find("/inspections/batch/");
+                std::string batch_id;
+                if (bpos != std::string::npos) {
+                    const size_t start_id = bpos + 19;
+                    const size_t end_id = route.path.find('/', start_id);
+                    if (end_id != std::string::npos) {
+                        batch_id = route.path.substr(start_id, end_id - start_id);
+                    }
+                }
+                const std::filesystem::path pdf_file =
+                    std::filesystem::path("/tmp/bawal_batches") / batch_id / "master_report.pdf";
+                if (std::filesystem::is_regular_file(pdf_file)) {
+                    std::ifstream in(pdf_file, std::ios::binary);
+                    std::vector<uint8_t> pdf_bytes((std::istreambuf_iterator<char>(in)),
+                                                   std::istreambuf_iterator<char>());
+                    return makePdfResponse(std::move(pdf_bytes), "BawalVision-Batch-" + batch_id + ".pdf", start);
+                }
+                return errorResponse(404, "Batch master report PDF not found", start);
             }
         }
     }

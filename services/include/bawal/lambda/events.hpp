@@ -63,6 +63,9 @@ public:
 
     /** True when API Gateway already authenticated the request with AWS_IAM. */
     [[nodiscard]] static bool isIamAuthorized(std::string_view payload);
+
+    /** Extract raw or base64-decoded body bytes from an invocation event. */
+    [[nodiscard]] static std::vector<uint8_t> extractBodyBytes(std::string_view payload);
 };
 
 /**

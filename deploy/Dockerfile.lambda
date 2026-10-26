@@ -29,6 +29,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         pkg-config \
         ca-certificates \
         curl \
+        unzip \
         libopencv-dev \
         libcurl4-openssl-dev \
         libssl-dev \
@@ -85,6 +86,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        unzip \
         libcurl4t64 \
         libssl3t64 \
         libpq5 \
