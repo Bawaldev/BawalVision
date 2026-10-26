@@ -28,6 +28,8 @@
 
 namespace {
 
+using namespace bawal::backend;
+
 bool invokeRemoteLambdaInference(const cv::Mat& frame,
                                  const std::string& endpoint,
                                  const std::string& auth_token,

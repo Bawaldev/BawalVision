@@ -16,6 +16,8 @@
 
 namespace {
 
+using namespace bawal::backend;
+
 std::string envOr(const char* key, const char* fallback) {
     const char* value = std::getenv(key);
     if (value == nullptr || *value == '\0') {

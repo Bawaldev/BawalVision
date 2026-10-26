@@ -44,6 +44,8 @@
 
 namespace {
 
+using namespace bawal::backend;
+
 std::string boundedString(const char* data, size_t capacity) {
     const size_t len = strnlen(data, capacity);
     return std::string(data, len);
