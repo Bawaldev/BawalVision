@@ -827,9 +827,14 @@
         } finally {
             if (timer) clearTimeout(timer);
             if (retryInterval) clearInterval(retryInterval);
-            try {
-                reader?.releaseLock();
-            } catch {}
+            if (reader) {
+                try {
+                    await reader.cancel();
+                } catch {}
+                try {
+                    reader.releaseLock();
+                } catch {}
+            }
         }
         return null;
     }
@@ -967,7 +972,20 @@
             if (port) {
                 try {
                     await port.close();
-                } catch {}
+                } catch {
+                    try {
+                        if (port.readable?.locked) {
+                            const r = port.readable.getReader();
+                            await r.cancel().catch(() => {});
+                            r.releaseLock();
+                        }
+                        if (port.writable?.locked) {
+                            const w = port.writable.getWriter();
+                            w.releaseLock();
+                        }
+                        await port.close().catch(() => {});
+                    } catch {}
+                }
             }
         }
     }
