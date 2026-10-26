@@ -327,8 +327,8 @@
                             </div>
                         {/if}
 
-                        <!-- Dynamic AI Bounding Box HUD Overlay for Audit Card -->
-                        {#if detections && detections.length > 0}
+                        <!-- Dynamic AI Bounding Box HUD Overlay for Audit Card (Only if image is raw unannotated blob) -->
+                        {#if (!imgSrc || failedImages[imgSrc]) && record.local_blob_url && detections && detections.length > 0}
                             <svg class="audit-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
                                 {#each detections as det, detIdx}
                                     {@const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null)}
@@ -483,8 +483,8 @@
                         </div>
                     {/if}
 
-                    <!-- Dynamic AI Bounding Box HUD Overlay for Inspection Detail Modal -->
-                    {#if detections && detections.length > 0}
+                    <!-- Dynamic AI Bounding Box HUD Overlay for Inspection Detail Modal (Only if image is raw unannotated blob) -->
+                    {#if (!modalImg || failedImages[modalImg]) && selectedRecord.local_blob_url && detections && detections.length > 0}
                         <svg class="audit-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
                                 {#each detections as det, detIdx}
                                     {@const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null)}
