@@ -349,6 +349,11 @@
                                     {@const isPass = !isVerdictRejected(record)}
                                     {@const strokeColor = isPass ? '#10b981' : '#ef4444'}
                                     {@const fillColor = isPass ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.16)'}
+                                    {@const spoilage = Number((det as any).spoilage_score) || 0}
+                                    {@const freshness = typeof (det as any).freshness_score === 'number' ? Math.round((det as any).freshness_score <= 1 ? (det as any).freshness_score * 100 : (det as any).freshness_score) : Math.round(Math.max(0, Math.min(100, 100 - spoilage)))}
+                                    {@const status = (det as any).status || (isPass ? 'PASS' : 'REJECT')}
+                                    {@const hudLabel = `${det.class_name} ${confPct}% [${status} ${freshness}%]`}
+                                    {@const badgeW = Math.max(88, hudLabel.length * 7.5 + 16)}
                                     <rect
                                         x={finalX}
                                         y={finalY}
@@ -362,7 +367,7 @@
                                     <rect
                                         x={finalX}
                                         y={Math.max(0, finalY - 24)}
-                                        width={Math.max(72, (det.class_name || '').length * 8.5 + 42)}
+                                        width={badgeW}
                                         height="22"
                                         fill={strokeColor}
                                         rx="4"
@@ -375,7 +380,7 @@
                                         font-weight="bold"
                                         font-family="sans-serif"
                                     >
-                                        {det.class_name} {confPct}%
+                                        {hudLabel}
                                     </text>
                                 {/each}
                             </svg>
@@ -505,6 +510,11 @@
                                     {@const isPass = !isVerdictRejected(selectedRecord)}
                                     {@const strokeColor = isPass ? '#10b981' : '#ef4444'}
                                     {@const fillColor = isPass ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.16)'}
+                                    {@const spoilage = Number((det as any).spoilage_score) || 0}
+                                    {@const freshness = typeof (det as any).freshness_score === 'number' ? Math.round((det as any).freshness_score <= 1 ? (det as any).freshness_score * 100 : (det as any).freshness_score) : Math.round(Math.max(0, Math.min(100, 100 - spoilage)))}
+                                    {@const status = (det as any).status || (isPass ? 'PASS' : 'REJECT')}
+                                    {@const hudLabel = `${det.class_name} ${confPct}% [${status} ${freshness}%]`}
+                                    {@const badgeW = Math.max(88, hudLabel.length * 7.5 + 16)}
                                     <rect
                                         x={finalX}
                                         y={finalY}
@@ -518,7 +528,7 @@
                                     <rect
                                         x={finalX}
                                         y={Math.max(0, finalY - 24)}
-                                        width={Math.max(72, (det.class_name || '').length * 8.5 + 42)}
+                                        width={badgeW}
                                         height="22"
                                         fill={strokeColor}
                                         rx="4"
@@ -531,7 +541,7 @@
                                         font-weight="bold"
                                         font-family="sans-serif"
                                     >
-                                        {det.class_name} {confPct}%
+                                        {hudLabel}
                                     </text>
                                 {/each}
                             </svg>

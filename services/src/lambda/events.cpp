@@ -444,6 +444,12 @@ bool LambdaEventParser::parseEvent(std::string_view event_payload,
         out_request.frame_id = event.frame_id;
         out_request.confidence_threshold = static_cast<float>(event.confidence_threshold);
         out_request.return_annotated = event.return_annotated;
+        if (!out_request.return_annotated) {
+            const std::string ret_hdr = extractHeader(event_payload, "x-return-annotated");
+            if (ret_hdr == "1" || ret_hdr == "true" || ret_hdr == "yes") {
+                out_request.return_annotated = true;
+            }
+        }
         // Processing dimensions are optional tuning hints carried by the event.
         if (event.processing_width > 0) {
             out_request.processing_width = event.processing_width;
