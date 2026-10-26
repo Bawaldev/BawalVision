@@ -21,7 +21,11 @@ set -euo pipefail
 #   DOCKER_PLATFORM  (default: linux/amd64, matching the SAM architecture)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
+if [[ -z "$REGION" && -f "$ROOT_DIR/.env" ]]; then
+    REGION="$(grep -E "execute-api|lambda-url" "$ROOT_DIR/.env" | grep -oE '[a-z]{2}-[a-z]+-[0-9]' | head -n 1 || true)"
+fi
+REGION="${REGION:-us-east-1}"
 STACK_NAME="${STACK_NAME:-bawalvision-lambda}"
 ECR_REPOSITORY="${ECR_REPOSITORY:-bawalvision-lambda}"
 IMAGE_TAG="${IMAGE_TAG:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
@@ -84,6 +88,7 @@ sam deploy \
     --region "$REGION" \
     --capabilities CAPABILITY_IAM \
     --resolve-s3 \
+    --image-repository "${ECR_REGISTRY}/${ECR_REPOSITORY}" \
     --no-confirm-changeset \
     --parameter-overrides \
         "ImageUri=${IMAGE_URI}" \

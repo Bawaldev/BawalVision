@@ -9,6 +9,7 @@ Description: >
 Parameters:
   ImageUri:
     Type: String
+    Default: "431618680115.dkr.ecr.ap-southeast-3.amazonaws.com/bawalvision-service:latest"
     Description: ECR image URI for the BawalVision Lambda image
   StageName:
     Type: String
@@ -18,8 +19,8 @@ Parameters:
     Type: Number
     Default: 3008
     MinValue: 1024
-    MaxValue: 10240
-    Description: Lambda memory in MB (3008 MB provides about 2 vCPU)
+    MaxValue: 3008
+    Description: Lambda memory in MB (3008 MB is max for Jakarta region quota and provides 2 vCPU)
   Timeout:
     Type: Number
     Default: 29
@@ -36,14 +37,10 @@ Parameters:
     Default: "0"
     AllowedValues: ["0", "1"]
     Description: Set to 1 only for snapshot-only workloads that accept ONNX cold start
-  LambdaAuthMode:
-    Type: String
-    Default: NONE
-    AllowedValues: ["AWS_IAM", "NONE"]
-    Description: Function URL auth mode. NONE (default for open source, protected by X-Bawal-Token) or AWS_IAM (SigV4 from Local Agent)
   AuthToken:
     Type: String
     NoEcho: true
+    Default: "bawalvision_secure_auth_token_32chars_long"
     MinLength: 32
     Description: Shared bearer token required by the Lambda handler for HTTP events
 
@@ -76,10 +73,7 @@ Resources:
         - "application/pdf"
         - "image/jpeg"
         - "image/png"
-        - "image/*"
         - "application/zip"
-      Auth:
-        DefaultAuthorizer: AWS_IAM
 
   BawalInspectionFunction:
     Type: AWS::Serverless::Function
@@ -100,7 +94,7 @@ Resources:
           OMP_NUM_THREADS: "2"
           OPENCV_LOG_LEVEL: ERROR
       FunctionUrlConfig:
-        AuthType: !Ref LambdaAuthMode
+        AuthType: NONE
         Cors:
           AllowOrigins:
             - "http://localhost:5173"
@@ -123,8 +117,6 @@ Resources:
             RestApiId: !Ref BawalApi
             Path: /api/v1/lambda/health
             Method: get
-            Auth:
-              Authorizer: NONE
         InspectSnapshot:
           Type: Api
           Properties:
@@ -162,7 +154,7 @@ Resources:
 
 Outputs:
   FunctionUrl:
-    Description: Base URL of the public $0 Lambda Function URL (direct browser/Vercel integration, zero API Gateway charges)
+    Description: Base URL of the public $0 Lambda Function URL
     Value: !GetAtt BawalInspectionFunctionUrl.FunctionUrl
   ApiEndpoint:
     Description: Base URL of the API Gateway endpoint

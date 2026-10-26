@@ -321,9 +321,18 @@
             stage = 'processing';
             noticeMessage = 'Uploading ZIP archive and running YOLOv8s INT8 inspection...';
 
+            const token = typeof localStorage !== 'undefined'
+                ? localStorage.getItem('bawal_lambda_token') || localStorage.getItem('bawal_admin_token') || ''
+                : '';
+            const headers: Record<string, string> = { 'Content-Type': 'application/zip' };
+            if (token) {
+                headers['X-Bawal-Token'] = token;
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/zip' },
+                headers,
                 body: file,
                 signal: controller.signal
             });

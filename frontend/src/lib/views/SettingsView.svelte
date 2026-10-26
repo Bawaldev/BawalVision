@@ -45,6 +45,7 @@
     let detectingLocalBackend = $state(false);
     let localBackendMessage = $state('');
     let espDeviceToken = $state(typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_device_token') || '' : '');
+    let lambdaAuthToken = $state(typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_lambda_token') || localStorage.getItem('bawal_admin_token') || '' : '');
     let portOptions = $derived.by(() => detectedUsbPorts.map((p) => p.port));
     let detectedHostIp = $state('');
     let gatewayHostIp = $state('');
@@ -437,6 +438,13 @@
             }
         }
         formState.backendUrl = setConfiguredApiBase(formState.backendUrl);
+        if (typeof localStorage !== 'undefined') {
+            if (lambdaAuthToken.trim()) {
+                localStorage.setItem('bawal_lambda_token', lambdaAuthToken.trim());
+            } else {
+                localStorage.removeItem('bawal_lambda_token');
+            }
+        }
         onSaveConfig({ ...formState });
         localBackendMessage = `Live backend: ${formState.backendUrl}`;
         await refreshHardwareStatus();
@@ -1534,6 +1542,20 @@
                     />
                     <button type="button" class="fedora-accent-pill-btn" onclick={applyLiveBackendUrl}>
                         Apply Dashboard Gateway
+                    </button>
+                </div>
+                <div class="local-backend-row" style="margin-top: 8px;">
+                    <input
+                        class="fedora-input"
+                        type="password"
+                        bind:value={lambdaAuthToken}
+                        placeholder="Cloud / Lambda Bearer Token (BAWAL_LAMBDA_AUTH_TOKEN)"
+                        spellcheck="false"
+                        autocapitalize="off"
+                        autocorrect="off"
+                    />
+                    <button type="button" class="fedora-pill-btn" onclick={applyLiveBackendUrl}>
+                        Save Token
                     </button>
                 </div>
                 <p class="port-detail-text">

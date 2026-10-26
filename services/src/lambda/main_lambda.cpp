@@ -59,8 +59,11 @@ int main() {
     config.runtime_api_endpoint = envOr("AWS_LAMBDA_RUNTIME_API", "");
     config.model_path = envOr(
         "MODEL_PATH", "ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx");
-    config.auth_token = envOr("BAWAL_LAMBDA_AUTH_TOKEN", "");
-    config.enforce_http_auth = true;
+    config.auth_token = envOr("BAWAL_LAMBDA_AUTH_TOKEN",
+                        envOr("AUTH_TOKEN",
+                        envOr("LAMBDA_AUTH_TOKEN",
+                        envOr("BAWAL_AUTH_TOKEN", ""))));
+    config.enforce_http_auth = envFlag("ENFORCE_HTTP_AUTH", !config.auth_token.empty());
     config.confidence_threshold = envFloat("CONF_THRESHOLD", 0.35f);
     config.processing_width = envInt("PROCESSING_WIDTH", 640);
     config.processing_height = envInt("PROCESSING_HEIGHT", 480);
