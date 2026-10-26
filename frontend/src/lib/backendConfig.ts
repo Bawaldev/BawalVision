@@ -95,6 +95,17 @@ async function probeCrowBackend(apiBase: string, timeoutMs: number): Promise<boo
 export async function detectLocalBackend(timeoutMs = 1500): Promise<string | null> {
     if (typeof window === 'undefined') return null;
 
+    // Mixed Content Guard: Browsers strictly block plain HTTP fetches from HTTPS origins
+    // (such as bawal-vision.vercel.app or production cloud domains). Probing http:// localhost
+    // or LAN IPs from HTTPS triggers browser console security errors and 15-25s hung timeouts.
+    const isHttps = window.location.protocol === 'https:';
+    if (isHttps) {
+        if (await probeCrowBackend(DEFAULT_API_BASE, timeoutMs)) {
+            return DEFAULT_API_BASE;
+        }
+        return null;
+    }
+
     const candidates = new Set<string>();
 
     // 1. Check if user configured a custom backend in localStorage
@@ -109,7 +120,11 @@ export async function detectLocalBackend(timeoutMs = 1500): Promise<string | nul
         if (streamUrl) {
             const match = streamUrl.match(/https?:\/\/([^/:]+)/i);
             if (match && match[1]) {
-                candidates.add(`http://${match[1]}:8080/api/v1`);
+                const candidateHost = match[1].trim();
+                const parts = candidateHost.split('.');
+                if (parts.length === 4 && parts.every(p => /^\d+$/.test(p) && Number(p) >= 0 && Number(p) <= 255)) {
+                    candidates.add(`http://${candidateHost}:8080/api/v1`);
+                }
             }
         }
     } catch {}
@@ -131,7 +146,7 @@ export async function detectLocalBackend(timeoutMs = 1500): Promise<string | nul
         }
     }
 
-    // 3. Fallback to cloud default (/api/v1) if no local backend is reachable
+    // Fallback to cloud default (/api/v1) if no local backend is reachable
     if (await probeCrowBackend(DEFAULT_API_BASE, timeoutMs)) {
         return DEFAULT_API_BASE;
     }

@@ -72,8 +72,13 @@ int main() {
     config.device_token = envOr("BAWAL_DEVICE_TOKEN", "");
     config.admin_token = envOr("BAWAL_ADMIN_TOKEN", "");
 
-    if (lan_mode) {
-        std::cout << "[INFO] LAN Mode enabled: binding " << config.bind_address << " for IoT nodes\n";
+    if (lan_mode || config.bind_address == "0.0.0.0") {
+        if (config.device_token.empty() || config.admin_token.empty()) {
+            std::cerr << "[FATAL] Binding 0.0.0.0 / LAN Mode requires both BAWAL_DEVICE_TOKEN and BAWAL_ADMIN_TOKEN to be set!\n"
+                      << "        Run 'just setup' to generate tokens. Refusing to start in unauthenticated fail-open mode.\n";
+            return 1;
+        }
+        std::cout << "[INFO] LAN Mode enabled: binding " << config.bind_address << " with device and admin auth active\n";
     } else {
         std::cout << "[INFO] Localhost Mode: binding " << config.bind_address << " (set BAWAL_LAN_MODE=1 for LAN ingress)\n";
     }

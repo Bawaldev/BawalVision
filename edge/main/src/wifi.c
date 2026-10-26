@@ -793,6 +793,12 @@ void wifi_init_sta(void) {
 }
 
 static esp_err_t snapshot_handler(httpd_req_t *req) {
+    if (!is_request_authorized(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"error\":\"Unauthorized: missing or invalid device token\"}");
+    }
+
     camera_frame_buffer_t frame = {0};
     frame.capacity = MJPEG_FRAME_CAPACITY;
     frame.data = heap_caps_malloc(frame.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -951,6 +957,12 @@ static esp_err_t options_handler(httpd_req_t *req) {
 }
 
 static esp_err_t status_handler(httpd_req_t *req) {
+    if (!is_request_authorized(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"error\":\"Unauthorized: missing or invalid device token\"}");
+    }
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");

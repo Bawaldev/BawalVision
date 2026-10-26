@@ -38,9 +38,9 @@ Parameters:
     Description: Set to 1 only for snapshot-only workloads that accept ONNX cold start
   LambdaAuthMode:
     Type: String
-    Default: AWS_IAM
+    Default: NONE
     AllowedValues: ["AWS_IAM", "NONE"]
-    Description: Function URL auth mode. AWS_IAM (default, SigV4 from Local Agent) or NONE (protected by X-Bawal-Token)
+    Description: Function URL auth mode. NONE (default for open source, protected by X-Bawal-Token) or AWS_IAM (SigV4 from Local Agent)
   AuthToken:
     Type: String
     NoEcho: true
@@ -73,7 +73,11 @@ Resources:
       StageName: !Ref StageName
       Description: BawalVision snapshot, telemetry batch, and PDF report ingestion
       BinaryMediaTypes:
-        - application/pdf
+        - "application/pdf"
+        - "image/jpeg"
+        - "image/png"
+        - "image/*"
+        - "application/zip"
       Auth:
         DefaultAuthorizer: AWS_IAM
 
@@ -113,6 +117,14 @@ Resources:
             - "X-Bawal-Token"
           MaxAge: 3600
       Events:
+        HealthCheck:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BawalApi
+            Path: /api/v1/lambda/health
+            Method: get
+            Auth:
+              Authorizer: NONE
         InspectSnapshot:
           Type: Api
           Properties:

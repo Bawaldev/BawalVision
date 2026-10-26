@@ -40,10 +40,10 @@ services:
         required: false
     environment:
       CROW_PORT: "8080"
-      CROW_BIND: "0.0.0.0"
-      BAWAL_LAN_MODE: ${BAWAL_LAN_MODE:-0}
-      BAWAL_DEVICE_TOKEN: ${BAWAL_DEVICE_TOKEN:-}
-      BAWAL_ADMIN_TOKEN: ${BAWAL_ADMIN_TOKEN:-}
+      CROW_BIND: ${CROW_BIND:-0.0.0.0}
+      BAWAL_LAN_MODE: ${BAWAL_LAN_MODE:-1}
+      BAWAL_DEVICE_TOKEN: ${BAWAL_DEVICE_TOKEN:?BAWAL_DEVICE_TOKEN is required in .env. Run 'just setup'}
+      BAWAL_ADMIN_TOKEN: ${BAWAL_ADMIN_TOKEN:?BAWAL_ADMIN_TOKEN is required in .env. Run 'just setup'}
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_USER: ${POSTGRES_USER:-postgres}

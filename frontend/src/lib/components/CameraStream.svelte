@@ -309,15 +309,24 @@
     const MAX_RETRIES = 3;
     let isTabVisible = $state(true);
 
-    let activeStreamUrl = $derived(
-        !isTabVisible
-            ? ''
-            : (streamUrl
-                ? withApiOrigin(streamUrl, activeApiBase)
-                : discoveredStreamUrl
-                    ? withApiOrigin(discoveredStreamUrl, activeApiBase)
-                    : `${activeApiBase}/camera/stream?t=${streamEpoch}`)
-    );
+    let activeStreamUrl = $derived.by(() => {
+        if (!isTabVisible) return '';
+        let url = streamUrl
+            ? withApiOrigin(streamUrl, activeApiBase)
+            : discoveredStreamUrl
+                ? withApiOrigin(discoveredStreamUrl, activeApiBase)
+                : `${activeApiBase}/camera/stream?t=${streamEpoch}`;
+
+        // Direct ESP node streaming: append token query parameter if device authentication is active
+        if (url && url.includes('/stream') && !url.includes(':8080') && !url.includes('token=')) {
+            const devToken = typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_device_token') || '' : '';
+            if (devToken) {
+                const sep = url.includes('?') ? '&' : '?';
+                url = `${url}${sep}token=${encodeURIComponent(devToken)}`;
+            }
+        }
+        return url;
+    });
 
     let isLiveStreamPreAnnotated = $derived(
         Boolean(

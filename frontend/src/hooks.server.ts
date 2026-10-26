@@ -105,10 +105,19 @@ export const handle: Handle = async ({ event, resolve }) => {
         const proxyHeaders = new Headers(event.request.headers);
         proxyHeaders.delete('host');
         proxyHeaders.delete('content-length');
-        if (lambdaAuthToken) {
+
+        // Security check: Only inject server-side credentials for trusted same-origin browser requests.
+        // Raw external curl requests without Origin or Sec-Fetch-Site must provide their own tokens.
+        const isTrustedBrowser = Boolean(
+            (originHeader && allowedOrigin) ||
+            event.request.headers.get('sec-fetch-site') === 'same-origin' ||
+            event.request.headers.get('sec-fetch-site') === 'same-site'
+        );
+
+        if (lambdaAuthToken && isTrustedBrowser) {
             proxyHeaders.set('x-bawal-token', lambdaAuthToken);
         }
-        if (adminToken) {
+        if (adminToken && isTrustedBrowser) {
             proxyHeaders.set('x-admin-token', adminToken);
         }
 

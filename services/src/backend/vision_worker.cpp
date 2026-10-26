@@ -18,6 +18,7 @@
 #include <glaze/glaze.hpp>
 
 #include "bawal/ipc/shm_consumer.hpp"
+#include "bawal/server/inspection_dto.hpp"
 #include "bawal/server/jpeg_utils.hpp"
 #include "bawal/server/rolling_image_store.hpp"
 #include "bawal/server/sha256.hpp"
@@ -27,30 +28,6 @@
 
 namespace bawal::backend {
 namespace {
-
-struct LambdaBboxDto {
-    int x{0};
-    int y{0};
-    int width{0};
-    int height{0};
-};
-
-struct LambdaDetectionItemDto {
-    std::string class_name;
-    float confidence{0.0f};
-    LambdaBboxDto bbox;
-    float spoilage_score{0.0f};
-    float freshness_score{0.0f};
-};
-
-struct LambdaInspectionResultDto {
-    uint32_t frame_id{0};
-    std::string status;
-    std::string device_id;
-    std::string engine_pipeline;
-    double processing_time_ms{0.0};
-    std::vector<LambdaDetectionItemDto> detections;
-};
 
 bool invokeRemoteLambdaInference(const cv::Mat& frame,
                                  const std::string& endpoint,
@@ -74,9 +51,21 @@ bool invokeRemoteLambdaInference(const cv::Mat& frame,
         headers = curl_slist_append(headers, bawal_hdr.c_str());
     }
 
-    const char* sigv4 = std::getenv("BAWAL_AWS_SIGV4");
-    if (sigv4 != nullptr && *sigv4 != '\0') {
-        curl_easy_setopt(curl, CURLOPT_AWS_SIGV4, sigv4);
+    const char* ak = std::getenv("AWS_ACCESS_KEY_ID");
+    const char* sk = std::getenv("AWS_SECRET_ACCESS_KEY");
+    if (ak != nullptr && sk != nullptr && *ak != '\0' && *sk != '\0') {
+        const std::string userpwd = std::string(ak) + ":" + sk;
+        curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd.c_str());
+        const char* sigv4_service = std::getenv("BAWAL_AWS_SIGV4");
+        const std::string service_str = (sigv4_service != nullptr && *sigv4_service != '\0')
+            ? sigv4_service : "aws:amz:us-east-1:execute-api";
+        curl_easy_setopt(curl, CURLOPT_AWS_SIGV4, service_str.c_str());
+
+        const char* session_token = std::getenv("AWS_SESSION_TOKEN");
+        if (session_token != nullptr && *session_token != '\0') {
+            const std::string token_hdr = std::string("X-Amz-Security-Token: ") + session_token;
+            headers = curl_slist_append(headers, token_hdr.c_str());
+        }
     }
 
     std::string response_body;
@@ -85,8 +74,8 @@ bool invokeRemoteLambdaInference(const cv::Mat& frame,
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, reinterpret_cast<const char*>(jpeg_buf.data()));
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(jpeg_buf.size()));
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 4000L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1200L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 800L);
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, +[](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
         auto* str = static_cast<std::string*>(userdata);
@@ -105,8 +94,15 @@ bool invokeRemoteLambdaInference(const cv::Mat& frame,
         return false;
     }
 
-    LambdaInspectionResultDto dto;
-    if (const auto err = glz::read_json(dto, response_body); err) {
+    std::string payload_to_parse = std::move(response_body);
+    bawal::server::LambdaProxyResponse proxy_resp;
+    if (!glz::read<glz::opts{.error_on_unknown_keys = false}>(proxy_resp, payload_to_parse) &&
+        !proxy_resp.body.empty() && proxy_resp.body.front() == '{') {
+        payload_to_parse = std::move(proxy_resp.body);
+    }
+
+    bawal::server::InspectionResponse dto;
+    if (const auto err = glz::read<glz::opts{.error_on_unknown_keys = false}>(dto, payload_to_parse); err) {
         return false;
     }
 
@@ -116,8 +112,11 @@ bool invokeRemoteLambdaInference(const cv::Mat& frame,
         bawal::vision::DetectionResult d;
         d.class_name = item.class_name;
         d.confidence = item.confidence;
-        d.bbox = cv::Rect(item.bbox.x, item.bbox.y, item.bbox.width, item.bbox.height);
+        if (item.bbox.size() == 4) {
+            d.bbox = cv::Rect(item.bbox[0], item.bbox[1], item.bbox[2], item.bbox[3]);
+        }
         d.spoilage.discoloration_ratio = item.spoilage_score / 100.0f;
+        d.spoilage.is_visually_spoiled = (d.spoilage.discoloration_ratio >= 0.45f);
         d.class_id = 0;
         detected.push_back(d);
     }
@@ -419,6 +418,9 @@ VisionWorker::VisionWorker(BackendState& state, std::string model_path, Database
     if (const char* token = std::getenv("BAWAL_LAMBDA_AUTH_TOKEN"); token != nullptr && *token != '\0') {
         m_lambda_auth_token = token;
     }
+    if (const char* req = std::getenv("BAWAL_LAMBDA_REQUIRED"); req != nullptr) {
+        m_lambda_required = (std::string_view(req) == "1" || std::string_view(req) == "true");
+    }
 }
 
 VisionWorker::~VisionWorker() {
@@ -499,20 +501,52 @@ void VisionWorker::run() {
             continue;
         }
 
+        const auto now = std::chrono::steady_clock::now();
+        constexpr auto kLambdaSampleInterval = std::chrono::milliseconds(250); // ~4 FPS cloud inference
+        const bool sample_time = (m_last_lambda_invoke.time_since_epoch().count() == 0 ||
+                                  now - m_last_lambda_invoke >= kLambdaSampleInterval);
+
         const int64_t t0 = cv::getTickCount();
         std::vector<bawal::vision::DetectionResult> detected;
         bool inferred = false;
+        std::string active_pipeline = engine_pipeline;
+
         if (!m_lambda_endpoint.empty()) {
-            inferred = invokeRemoteLambdaInference(frame, m_lambda_endpoint, m_lambda_auth_token, detected);
+            if (sample_time) {
+                inferred = invokeRemoteLambdaInference(frame, m_lambda_endpoint, m_lambda_auth_token, detected);
+                if (inferred) {
+                    m_last_lambda_invoke = now;
+                    m_last_detected = detected;
+                    active_pipeline = "AWS Lambda YOLOv8 (Remote Serverless)";
+                } else if (m_lambda_required) {
+                    std::cerr << "[WARN] BAWAL_LAMBDA_REQUIRED=1: remote inference failed for frame #"
+                              << frame_id << "\n";
+                }
+            } else if (!m_last_detected.empty()) {
+                // Keep the live stream smooth by reusing the recent sample between intervals
+                detected = m_last_detected;
+                inferred = true;
+                active_pipeline = "AWS Lambda YOLOv8 (Remote Serverless)";
+            }
         }
-        if (!inferred) {
+
+        // Only fallback to local ONNX model if Lambda is NOT strictly required
+        if (!inferred && !m_lambda_required) {
             inferred = pipeline.runInference(frame, detected);
+            active_pipeline = engine_pipeline;
         }
+
         const double infer_ms =
             ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
 
         if (!inferred) {
-            std::cerr << "[VISION] inference failed for frame #" << frame_id << "\n";
+            if (m_lambda_required) {
+                DetectionSoA empty_soa{};
+                SceneOpticalSoA optical =
+                    toOpticalSoA(pipeline.getClassifier().getLastOpticalMetrics());
+                m_state.updateInspection(device_id, frame_id, empty_soa, optical,
+                                         "AWS Lambda (Unavailable / Error)");
+            }
             continue;
         }
 
@@ -532,7 +566,7 @@ void VisionWorker::run() {
         fillDetectionSoA(valid, soa);
         const SceneOpticalSoA optical =
             toOpticalSoA(pipeline.getClassifier().getLastOpticalMetrics());
-        m_state.updateInspection(device_id, frame_id, soa, optical, engine_pipeline);
+        m_state.updateInspection(device_id, frame_id, soa, optical, active_pipeline);
 
         // Always render the overlay for the stream and keep an annotated JPEG
         // snapshot for manual audits; only the debounced tray emit persists it.
@@ -546,7 +580,6 @@ void VisionWorker::run() {
             ? stream_output.annotated_image
             : frame;
 
-        const auto now = std::chrono::steady_clock::now();
         if (m_last_annotated_encode.time_since_epoch().count() == 0 ||
             now - m_last_annotated_encode >= kAnnotatedCacheInterval) {
             m_last_annotated_encode = now;

@@ -224,6 +224,18 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
     }
 
     const LambdaHttpRoute route = LambdaEventParser::extractHttpRoute(event_payload);
+
+    // Unauthenticated Health Check for CI RIE, API Gateway, and monitoring probes
+    if (route.is_http_event &&
+        (route.path.find("/lambda/health") != std::string::npos ||
+         route.path.find("/health") != std::string::npos)) {
+        LambdaInspectionResponse resp;
+        resp.status_code = 200;
+        resp.is_success = true;
+        resp.json_payload = R"({"status":"ok","runtime":"bawal::lambda","ready":true,"arch":"aarch64_graviton3"})";
+        return resp;
+    }
+
     if (route.is_http_event && route.method != "OPTIONS" &&
         m_config.enforce_http_auth &&
         !LambdaEventParser::isIamAuthorized(event_payload)) {
@@ -406,7 +418,11 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             }
 
             if (route.path.find("/system/engines") != std::string::npos) {
-                resp.json_payload = R"({"arch":"x86_64_avx2","graviton_available":false,"local_engine_available":true,"cloud_lambda_active":true,"runtime":"aws_lambda_cpp"})";
+#if defined(__aarch64__) || defined(_M_ARM64)
+                resp.json_payload = R"({"arch":"aarch64_graviton3","graviton_available":true,"local_engine_available":false,"cloud_lambda_active":true,"runtime":"aws_lambda_cpp"})";
+#else
+                resp.json_payload = R"({"arch":"x86_64_simd","graviton_available":true,"local_engine_available":false,"cloud_lambda_active":true,"runtime":"aws_lambda_cpp"})";
+#endif
                 return resp;
             }
             if (route.path.find("/camera/status") != std::string::npos ||

@@ -489,8 +489,11 @@ void BackendApp::setLambdaHandler(
 }
 
 bool BackendApp::verifyDeviceAuth(const crow::request& req) const noexcept {
+    if (m_config.lan_mode && m_config.device_token.empty()) {
+        return false;
+    }
     if (m_config.device_token.empty()) {
-        return true;
+        return looksDockerOrLoopbackIp(req.remote_ip_address);
     }
     const std::string dev_token = req.get_header_value("X-Device-Token");
     if (!dev_token.empty() && dev_token == m_config.device_token) {
@@ -511,8 +514,11 @@ bool BackendApp::verifyDeviceAuth(const crow::request& req) const noexcept {
 }
 
 bool BackendApp::verifyAdminAuth(const crow::request& req) const noexcept {
+    if (m_config.lan_mode && m_config.admin_token.empty()) {
+        return false;
+    }
     if (m_config.admin_token.empty()) {
-        return true;
+        return looksDockerOrLoopbackIp(req.remote_ip_address);
     }
     const std::string admin_token = req.get_header_value("X-Admin-Token");
     if (!admin_token.empty() && admin_token == m_config.admin_token) {

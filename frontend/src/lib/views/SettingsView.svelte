@@ -44,6 +44,7 @@
     let backendOnline = $state(true);
     let detectingLocalBackend = $state(false);
     let localBackendMessage = $state('');
+    let espDeviceToken = $state(typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_device_token') || '' : '');
     let portOptions = $derived.by(() => detectedUsbPorts.map((p) => p.port));
     let detectedHostIp = $state('');
     let gatewayHostIp = $state('');
@@ -240,9 +241,17 @@
                     if (targetPass) payload.pass = targetPass;
                 }
 
-                const res = await fetch(`http://${nodeIp}/api/v1/config`, {
+                const configHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+                if (espDeviceToken) {
+                    configHeaders['X-Device-Token'] = espDeviceToken;
+                }
+                const configEndpoint = espDeviceToken
+                    ? `http://${nodeIp}/api/v1/config?token=${encodeURIComponent(espDeviceToken)}`
+                    : `http://${nodeIp}/api/v1/config`;
+
+                const res = await fetch(configEndpoint, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: configHeaders,
                     body: JSON.stringify(payload),
                     signal: controller.signal
                 }).catch(() => null);
@@ -598,9 +607,17 @@
             try {
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 3500);
-                const res = await fetch(`http://${nodeIp}/api/v1/config`, {
+                const configHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+                if (espDeviceToken) {
+                    configHeaders['X-Device-Token'] = espDeviceToken;
+                }
+                const configEndpoint = espDeviceToken
+                    ? `http://${nodeIp}/api/v1/config?token=${encodeURIComponent(espDeviceToken)}`
+                    : `http://${nodeIp}/api/v1/config`;
+
+                const res = await fetch(configEndpoint, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: configHeaders,
                     body: JSON.stringify({
                         ssid,
                         pass: connectPassword || '',

@@ -84,6 +84,9 @@ private:
     std::string m_model_path;
     std::string m_lambda_endpoint;
     std::string m_lambda_auth_token;
+    bool m_lambda_required{false};
+    std::chrono::steady_clock::time_point m_last_lambda_invoke{};
+    std::vector<bawal::vision::DetectionResult> m_last_detected;
     std::thread m_thread;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_consumer_ready{false};

@@ -302,12 +302,14 @@
         const timeoutId = setTimeout(() => controller.abort(), 25000);
 
         try {
-            // Check & auto-detect local C++ backend if current base is unconfirmed or cloud default
-            if (!backendOnline || currentBackendUrl === '/api/v1') {
-                const detected = await detectLocalBackend(1000);
-                if (detected) {
-                    currentBackendUrl = detected;
-                    backendOnline = true;
+            // Check & auto-detect local C++ backend only when running on plain HTTP/localhost
+            if (typeof window !== 'undefined' && window.location.protocol !== 'https:') {
+                if (!backendOnline || currentBackendUrl === '/api/v1') {
+                    const detected = await detectLocalBackend(1000);
+                    if (detected) {
+                        currentBackendUrl = detected;
+                        backendOnline = true;
+                    }
                 }
             }
 
@@ -317,7 +319,7 @@
             }
 
             stage = 'processing';
-            noticeMessage = 'Uploading ZIP archive and running multi-core YOLOv8s INT8 inspection in parallel...';
+            noticeMessage = 'Uploading ZIP archive and running YOLOv8s INT8 inspection...';
 
             const response = await fetch(endpoint, {
                 method: 'POST',
@@ -355,9 +357,9 @@
             clearTimers();
             stage = 'error';
             if (err?.name === 'AbortError') {
-                errorMessage = `Connection to C++ backend timed out after 25s. Make sure bawal_backend is running locally on port 8080 (run "just run-backend").`;
+                errorMessage = `Connection timed out after 25s. For cloud mobile execution, ensure AWS Lambda is deployed (run "just deploy-lambda"). For local edge stations, ensure bawal_backend is active.`;
             } else if (err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError') || err?.message?.includes('502')) {
-                errorMessage = `Cannot reach C++ backend at ${getBatchEndpoint()}. If browsing from Vercel (bawal-vision.vercel.app), open the local frontend at http://localhost:5173 (run "just run-frontend") or configure your laptop LAN IP in Settings.`;
+                errorMessage = `Cannot reach backend at ${getBatchEndpoint()}. When running in cloud mode (Vercel), ensure AWS Lambda is provisioned or configure the backend endpoint in Settings.`;
             } else {
                 errorMessage = err instanceof Error ? err.message : 'Batch ZIP processing failed.';
             }
