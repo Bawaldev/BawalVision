@@ -837,6 +837,8 @@ static esp_err_t snapshot_handler(httpd_req_t *req) {
     if (err == ESP_OK && frame.header.buffer_len > 0) {
         httpd_resp_set_type(req, "image/jpeg");
         httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
         err = httpd_resp_send(req, (const char *)frame.data, frame.header.buffer_len);
     } else {
         httpd_resp_set_status(req, "503 Service Unavailable");
@@ -856,6 +858,7 @@ static void mjpeg_stream_task(void *arg) {
         httpd_resp_set_type(req, "multipart/x-mixed-replace; boundary=frame");
         httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
         uint32_t last_frame_id = UINT32_MAX;
         bool first = true;
         int64_t last_send_us = esp_timer_get_time();
@@ -951,6 +954,7 @@ static esp_err_t options_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
@@ -965,6 +969,7 @@ static esp_err_t status_handler(httpd_req_t *req) {
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
 
