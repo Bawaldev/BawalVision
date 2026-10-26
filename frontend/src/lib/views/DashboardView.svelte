@@ -20,6 +20,7 @@
         passRate: number;
         isOnline: boolean;
         hasCamera?: boolean;
+        isActive?: boolean;
         bufferedRecords: number;
         isInspecting: boolean;
         sceneOptical?: SceneOpticalMetrics;
@@ -38,6 +39,7 @@
         passRate = 100,
         isOnline = true,
         hasCamera = false,
+        isActive = true,
         bufferedRecords = 0,
         isInspecting = false,
         sceneOptical = undefined,
@@ -66,6 +68,7 @@
             deviceId={telemetry?.device_id}
             isLive={isOnline}
             {hasCamera}
+            {isActive}
             sceneOptical={sceneOptical || telemetry?.scene_optical}
         />
 

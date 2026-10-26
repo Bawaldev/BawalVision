@@ -8,6 +8,7 @@
         deviceId?: string;
         isLive?: boolean;
         hasCamera?: boolean;
+        isActive?: boolean;
         streamUrl?: string;
         sceneOptical?: SceneOpticalMetrics;
     }
@@ -17,6 +18,7 @@
         deviceId = '',
         isLive = true,
         hasCamera = false,
+        isActive = true,
         streamUrl = '',
         sceneOptical = undefined
     }: Props = $props();
@@ -401,8 +403,82 @@
         }
     }
 
+    let isBlobStreamRunning = false;
+    let blobStreamAbortController: AbortController | null = null;
+
+    async function runBlobStream(targetStreamUrl: string) {
+        if (!targetStreamUrl) return;
+        stopBlobStream();
+        isBlobStreamRunning = true;
+
+        // Derive snapshot URL from stream URL (e.g. http://172.20.167.236/stream -> http://172.20.167.236/snapshot)
+        let snapshotUrl = targetStreamUrl.replace(/\/stream(?:\?.*)?$/i, '/snapshot');
+        if (!snapshotUrl.includes('/snapshot')) {
+            snapshotUrl = snapshotUrl.replace(/\/+$/, '') + '/snapshot';
+        }
+
+        const devToken = typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_device_token') || '' : '';
+        if (devToken && !snapshotUrl.includes('token=')) {
+            const sep = snapshotUrl.includes('?') ? '&' : '?';
+            snapshotUrl = `${snapshotUrl}${sep}token=${encodeURIComponent(devToken)}`;
+        }
+
+        while (isBlobStreamRunning && isTabVisible && isActive && sourceMode === 'live') {
+            try {
+                blobStreamAbortController = new AbortController();
+                const timeoutId = setTimeout(() => blobStreamAbortController?.abort(), 2500);
+
+                const res = await fetch(snapshotUrl, {
+                    signal: blobStreamAbortController.signal,
+                    cache: 'no-store',
+                    mode: 'cors'
+                });
+                clearTimeout(timeoutId);
+
+                if (res.ok) {
+                    const blob = await res.blob();
+                    if (blob && blob.size > 200) {
+                        const newBlobUrl = URL.createObjectURL(blob);
+                        if (wsLiveFrameUrl) {
+                            URL.revokeObjectURL(wsLiveFrameUrl);
+                        }
+                        wsLiveFrameUrl = newBlobUrl;
+                        isLiveFeedActive = true;
+                        streamError = false;
+                        localBackendNotice = '';
+                    }
+                    // Yield ~40ms to target ~25 FPS
+                    await new Promise((resolve) => setTimeout(resolve, 40));
+                } else {
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                }
+            } catch {
+                if (!isBlobStreamRunning) break;
+                await new Promise((resolve) => setTimeout(resolve, 800));
+            }
+        }
+        isBlobStreamRunning = false;
+    }
+
+    function stopBlobStream() {
+        isBlobStreamRunning = false;
+        if (blobStreamAbortController) {
+            blobStreamAbortController.abort();
+            blobStreamAbortController = null;
+        }
+    }
+
+    $effect(() => {
+        const stream = discoveredStreamUrl || manualEspStreamUrl || streamUrl;
+        if (isHttpsDomain && sourceMode === 'live' && isTabVisible && isActive && stream && stream.startsWith('http://')) {
+            runBlobStream(stream);
+        } else if (!isActive || !isTabVisible || sourceMode !== 'live') {
+            stopBlobStream();
+        }
+    });
+
     let activeStreamUrl = $derived.by(() => {
-        if (!isTabVisible) return '';
+        if (!isTabVisible || !isActive) return '';
         if (streamUrl) {
             let url = withApiOrigin(streamUrl, activeApiBase);
             if (url && url.includes('/stream') && !url.includes(':8080') && !url.includes('token=')) {
@@ -412,9 +488,15 @@
                     url = `${url}${sep}token=${encodeURIComponent(devToken)}`;
                 }
             }
+            if (isHttpsDomain && url.startsWith('http://')) {
+                return ''; // Let blobStream handle it via safe blob: URL
+            }
             return url;
         }
         if (discoveredStreamUrl) {
+            if (isHttpsDomain && discoveredStreamUrl.startsWith('http://')) {
+                return ''; // Let blobStream handle it via safe blob: URL
+            }
             return withApiOrigin(discoveredStreamUrl, activeApiBase);
         }
         // Never poll /camera/stream on serverless cloud when no stream is published
@@ -1376,6 +1458,7 @@
         stopLivePushing();
         stopDeviceCam();
         disconnectLiveWebSocket();
+        stopBlobStream();
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);
         }

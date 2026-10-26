@@ -808,6 +808,7 @@
                 class:slide-backward={transitionDirection === 'backward'}
             >
                 <DashboardView
+                    isActive={activeTab === 'Live Inspection'}
                     {detections}
                     {telemetry}
                     {logs}
