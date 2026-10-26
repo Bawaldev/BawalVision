@@ -11,8 +11,6 @@
 
 #include <fmt/core.h>
 
-namespace bawal::report {
-
 namespace fs = std::filesystem;
 
 namespace {
@@ -140,7 +138,7 @@ std::string markdownCell(std::string_view value) {
     return out;
 }
 
-std::string buildDetectionRows(const backend::InspectionHistoryEntry& entry) {
+std::string buildDetectionRows(const bawal::backend::InspectionHistoryEntry& entry) {
     if (entry.detections.empty()) {
         return "1 & \\textit{No Food Detected} & [0, 0, 0, 0] & 0.0\\% & 0.00 & "
                "\\textcolor{rejectedred}{\\textbf{FAIL}} \\\\\n";
@@ -166,6 +164,8 @@ std::string buildDetectionRows(const backend::InspectionHistoryEntry& entry) {
 }
 
 } // namespace
+
+namespace bawal::report {
 
 std::string LatexPdfGenerator::generateReportMarkdown(
     const backend::InspectionHistoryEntry& entry) {

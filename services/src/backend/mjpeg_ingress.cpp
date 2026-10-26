@@ -1,6 +1,7 @@
 #include "bawal/backend/mjpeg_ingress.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -11,8 +12,27 @@
 #include "bawal/backend/state.hpp"
 #include "bawal/ipc/shm_producer.hpp"
 
-namespace bawal::backend {
 namespace {
+
+using bawal::backend::MjpegIngress;
+
+/**
+ * @brief Internal per-pull libcurl callback context.
+ *
+ * Scoped strictly to mjpeg_ingress.cpp; holds ingress pointer, generation counter,
+ * starting monotonic timestamp, and accumulating JPEG header/payload buffer.
+ */
+struct alignas(8) MjpegTransferContext {
+    MjpegIngress* ingress{nullptr};
+    uint64_t generation{0};
+    int64_t started_ns{0};
+    std::string pending;
+};
+
+static_assert(alignof(MjpegTransferContext) == 8,
+              "MjpegTransferContext must be strictly 8-byte aligned for libcurl user pointers");
+static_assert(sizeof(MjpegTransferContext) >= sizeof(void*) * 3,
+              "Invalid MjpegTransferContext memory layout: missing expected pointer and timestamp fields");
 
 int64_t steadyNowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -37,8 +57,13 @@ size_t parseContentLength(std::string_view header) {
 }
 
 size_t receiveMjpeg(char* data, size_t size, size_t count, void* user) {
+    assert(user != nullptr && "CURL write callback user pointer must not be null");
     const size_t bytes = size * count;
     auto& ctx = *static_cast<MjpegTransferContext*>(user);
+    assert(ctx.ingress != nullptr && "MjpegIngress instance in callback context must not be null");
+    assert(ctx.started_ns > 0 && "Transfer start timestamp must be positive");
+    assert(data != nullptr || bytes == 0);
+
     constexpr size_t kMaxPendingBytes = 512 * 1024;
     if (bytes == 0 || ctx.pending.size() + bytes > kMaxPendingBytes) return 0;
     ctx.pending.append(data, bytes);
@@ -62,7 +87,10 @@ size_t receiveMjpeg(char* data, size_t size, size_t count, void* user) {
 }
 
 int transferProgress(void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    assert(user != nullptr && "CURL progress callback user pointer must not be null");
     auto& ctx = *static_cast<MjpegTransferContext*>(user);
+    assert(ctx.ingress != nullptr && "MjpegIngress instance in callback context must not be null");
+
     if (ctx.ingress->shouldStop(ctx.generation) || ctx.ingress->sourcePaused()) return 1;
 
     // A TCP connection can stay half-open after an ESP reboot while the
@@ -75,6 +103,8 @@ int transferProgress(void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
 }
 
 } // namespace
+
+namespace bawal::backend {
 
 MjpegIngress::MjpegIngress(BackendState& state, ipc::ShmProducer& producer)
     : m_state(state), m_producer(producer) {}
@@ -157,6 +187,10 @@ void MjpegIngress::run() {
         }
 
         MjpegTransferContext context{this, generation, steadyNowNs(), {}};
+        assert(context.ingress == this);
+        assert(context.generation == generation);
+        assert(context.started_ns > 0);
+        assert(context.pending.empty());
         const std::string url = "http://" + peer + "/stream";
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receiveMjpeg);

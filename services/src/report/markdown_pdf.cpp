@@ -21,8 +21,6 @@
 
 #include <fmt/core.h>
 
-namespace bawal::report {
-
 namespace fs = std::filesystem;
 
 namespace {
@@ -721,7 +719,7 @@ std::optional<fs::path> resolveImageTarget(std::string_view target) {
 
 class Renderer {
 public:
-    explicit Renderer(MarkdownPdfOptions options) : m_options(std::move(options)) {
+    explicit Renderer(bawal::report::MarkdownPdfOptions options) : m_options(std::move(options)) {
         newPage();
     }
 
@@ -1379,7 +1377,7 @@ private:
         return buffer;
     }
 
-    MarkdownPdfOptions m_options;
+    bawal::report::MarkdownPdfOptions m_options;
     std::vector<Page> m_pages;
     std::vector<EmbeddedImage> m_images;
     double m_cursor{kMarginTop};
@@ -1391,6 +1389,8 @@ std::mutex& fileMutex() {
 }
 
 } // namespace
+
+namespace bawal::report {
 
 std::vector<uint8_t> MarkdownPdfGenerator::render(
     std::string_view markdown, const MarkdownPdfOptions& options) {

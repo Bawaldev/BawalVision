@@ -6,7 +6,6 @@
 #include <chrono>
 #include <cstdlib>
 
-namespace bawal::backend {
 namespace {
 
 constexpr auto kCameraFrameStaleAfter = std::chrono::milliseconds(1500);
@@ -21,6 +20,8 @@ bool isMockDeviceId(std::string_view device_id) {
 }
 
 } // namespace
+
+namespace bawal::backend {
 
 uint64_t BackendState::nowNs() noexcept {
     return static_cast<uint64_t>(

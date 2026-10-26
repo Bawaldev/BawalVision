@@ -16,8 +16,9 @@
 
 #include "bawal/lambda/base64.hpp"
 
-namespace bawal::lambda {
 namespace {
+
+using bawal::lambda::decodeBase64;
 
 using Clock = std::chrono::steady_clock;
 using JsonObject = glz::json_t::object_t;
@@ -163,6 +164,8 @@ struct DeviceAccumulator {
 };
 
 } // namespace
+
+namespace bawal::lambda {
 
 bool BatchSummaryProcessor::looksLikeBatch(std::string_view event_payload) {
     if (event_payload.find("\"records\"") != std::string_view::npos ||

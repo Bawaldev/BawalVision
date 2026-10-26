@@ -18,8 +18,11 @@
 #include <unistd.h>
 #endif
 
-namespace bawal::backend {
 namespace {
+
+using bawal::backend::EspSerialAck;
+using bawal::backend::EspSerialResult;
+using bawal::backend::trimCopy;
 
 /**
  * One USB serial link is shared by probe and provision calls; Crow worker
@@ -236,6 +239,8 @@ EspSerialResult runCommand(const std::string& port,
 #endif // _WIN32
 
 } // namespace
+
+namespace bawal::backend {
 
 EspSerialResult probeEspSerial(const std::string& port, int timeout_ms) {
 #ifdef _WIN32

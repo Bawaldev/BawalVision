@@ -42,7 +42,6 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/core/version.hpp>
 
-namespace bawal::backend {
 namespace {
 
 std::string boundedString(const char* data, size_t capacity) {
@@ -466,6 +465,8 @@ crow::json::wvalue buildExamplesJson() {
 }
 
 } // namespace
+
+namespace bawal::backend {
 
 BackendApp::BackendApp(BackendState& state, ipc::ShmProducer& producer, ServerConfig config,
                        Database* database, server::RollingImageStore* image_store)

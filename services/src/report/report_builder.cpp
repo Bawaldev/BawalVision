@@ -10,8 +10,6 @@
 #include "bawal/server/inspection_dto.hpp"
 #include "bawal/vision/image/batch_inspector.hpp"
 
-namespace bawal::report {
-
 namespace {
 
 std::string markdownEscape(std::string_view value) {
@@ -30,6 +28,8 @@ std::string markdownEscape(std::string_view value) {
 }
 
 } // namespace
+
+namespace bawal::report {
 
 std::string buildBatchMarkdown(
     const vision::image::BatchReportSummary& summary) {

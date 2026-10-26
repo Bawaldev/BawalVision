@@ -21,8 +21,10 @@
 #include "bawal/server/inspection_dto.hpp"
 #include "bawal/vision/pipeline.hpp"
 
-namespace bawal::lambda {
 namespace {
+
+using bawal::lambda::LambdaInspectionResponse;
+using bawal::lambda::LambdaReportRequest;
 
 using Clock = std::chrono::steady_clock;
 
@@ -166,6 +168,8 @@ LambdaInspectionResponse makePdfResponse(std::vector<uint8_t> pdf,
 }
 
 } // namespace
+
+namespace bawal::lambda {
 
 VisionLambdaHandler::VisionLambdaHandler() = default;
 VisionLambdaHandler::~VisionLambdaHandler() = default;

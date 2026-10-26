@@ -7,17 +7,18 @@
 
 #include "bawal/backend/text_utils.hpp"
 
-namespace bawal::backend {
 namespace {
 
 std::string readSysfsValue(const std::string& path) {
     std::ifstream input(path);
     std::string value;
     std::getline(input, value);
-    return trimCopy(value);
+    return bawal::backend::trimCopy(value);
 }
 
 } // namespace
+
+namespace bawal::backend {
 
 bool isEspUsbVendor(std::string_view vendor_id) {
     return vendor_id == "303a" || vendor_id == "10c4" ||

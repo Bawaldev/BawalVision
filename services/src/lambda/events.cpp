@@ -15,8 +15,12 @@
 #include "bawal/lambda/base64.hpp"
 #include "bawal/server/inspection_dto.hpp"
 
-namespace bawal::lambda {
 namespace {
+
+using bawal::lambda::decodeBase64;
+using bawal::lambda::kMaxImageBytes;
+using bawal::lambda::kMaxImageDimension;
+using bawal::lambda::kMaxImagePixels;
 
 constexpr std::string_view kBase64Alphabet =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -214,7 +218,30 @@ std::vector<uint8_t> extractImageBytes(const bawal::server::LambdaEvent& event) 
     return std::vector<uint8_t>(body.begin(), body.end());
 }
 
+const glz::json_t* findJsonMember(const glz::json_t& object,
+                                  std::string_view key) {
+    const auto* map = object.get_if<glz::json_t::object_t>();
+    if (map == nullptr) {
+        return nullptr;
+    }
+    const auto it = map->find(key);
+    if (it == map->end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+bool hasArn(const glz::json_t* value) {
+    if (value == nullptr) {
+        return false;
+    }
+    const auto* text = value->get_if<std::string>();
+    return text != nullptr && text->rfind("arn:aws:", 0) == 0;
+}
+
 } // namespace
+
+namespace bawal::lambda {
 
 bool validateImagePayload(const std::vector<uint8_t>& image) {
     return imageWithinLimits(image);
@@ -269,31 +296,6 @@ LambdaHttpRoute LambdaEventParser::extractHttpRoute(std::string_view payload) {
     }
     return route;
 }
-
-namespace {
-
-const glz::json_t* findJsonMember(const glz::json_t& object,
-                                  std::string_view key) {
-    const auto* map = object.get_if<glz::json_t::object_t>();
-    if (map == nullptr) {
-        return nullptr;
-    }
-    const auto it = map->find(key);
-    if (it == map->end()) {
-        return nullptr;
-    }
-    return &it->second;
-}
-
-bool hasArn(const glz::json_t* value) {
-    if (value == nullptr) {
-        return false;
-    }
-    const auto* text = value->get_if<std::string>();
-    return text != nullptr && text->rfind("arn:aws:", 0) == 0;
-}
-
-} // namespace
 
 bool LambdaEventParser::isIamAuthorized(std::string_view payload) {
     glz::json_t root;

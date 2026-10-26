@@ -16,8 +16,6 @@
 #include <span>
 #include <opencv2/imgproc.hpp>
 
-namespace bawal::vision {
-
 namespace {
 
 bool envFlagValue(const char* name, bool default_value) noexcept {
@@ -30,7 +28,9 @@ bool envFlagValue(const char* name, bool default_value) noexcept {
            value == "yes" || value == "on";
 }
 
-} // anonymous namespace
+} // namespace
+
+namespace bawal::vision {
 
 bool InspectionPipeline::initialize(std::string_view model_path, int target_width, int target_height) {
     m_width = target_width;

@@ -30,6 +30,144 @@ static_assert(CV_VERSION_MAJOR >= 4, "BawalVision vision_service strictly requir
 using namespace bawal::vision;
 using namespace bawal::server;
 
+namespace {
+
+enum class IngressMode : uint8_t {
+    POSIX_SHM,
+    HTTP_STREAM,
+    LOCAL_VIDEO
+};
+
+/**
+ * @brief Cohesive, RAII-safe frame ingestion manager.
+ *
+ * Encapsulates the zero-copy POSIX shared memory IPC consumer worker thread and
+ * the HTTP stream fallback grabber, providing unified frame acquisition semantics.
+ */
+class FrameIngressChannel {
+public:
+    explicit FrameIngressChannel(VideoSource& video_source)
+        : m_grabber(video_source) {}
+
+    ~FrameIngressChannel() {
+        stop();
+    }
+
+    FrameIngressChannel(const FrameIngressChannel&) = delete;
+    FrameIngressChannel& operator=(const FrameIngressChannel&) = delete;
+
+    void initialize(bool force_video_source,
+                    const std::string& stream_url,
+                    const std::string& raw_fallback_url) {
+        if (force_video_source) {
+            m_mode = IngressMode::LOCAL_VIDEO;
+            m_grabber.start();
+            return;
+        }
+
+        if (m_shm_consumer.init()) {
+            m_mode = IngressMode::POSIX_SHM;
+            m_shm_running.store(true, std::memory_order_release);
+            m_shm_worker = std::thread([this]() { runShmWorker(); });
+            fmt::print("[IPC] POSIX shared memory zero-copy consumer active!\n");
+        } else {
+            fmt::print("[WARN] Failed to enable SHM. Falling back to the HTTP frame grabber.\n");
+            m_mode = IngressMode::HTTP_STREAM;
+            m_grabber.setStreamUrl(stream_url, raw_fallback_url);
+            m_grabber.start();
+        }
+    }
+
+    void setStreamUrl(const std::string& primary_url, const std::string& fallback_url) {
+        if (m_mode == IngressMode::HTTP_STREAM) {
+            m_grabber.setStreamUrl(primary_url, fallback_url);
+        }
+    }
+
+    void stop() noexcept {
+        if (m_shm_running.exchange(false, std::memory_order_acq_rel)) {
+            if (m_shm_worker.joinable()) {
+                m_shm_worker.join();
+            }
+        }
+        m_grabber.stop();
+    }
+
+    bool waitTake(cv::Mat& out_frame,
+                  uint32_t& out_fid,
+                  bool& out_rewound,
+                  bool& out_duplicate,
+                  uint64_t fallback_seq) {
+        out_rewound = false;
+        out_duplicate = false;
+
+        if (m_mode == IngressMode::POSIX_SHM) {
+            if (!m_shm_mailbox.waitTake(out_frame, std::chrono::milliseconds(10)) || out_frame.empty()) {
+                return false;
+            }
+            out_fid = m_shm_latest_frame_id.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        CapturedFrame captured;
+        const auto wait_budget = (m_mode == IngressMode::LOCAL_VIDEO)
+            ? std::chrono::milliseconds(50)
+            : std::chrono::milliseconds(10);
+
+        if (!m_grabber.waitTake(captured, wait_budget) || captured.image.empty()) {
+            return false;
+        }
+
+        out_frame = std::move(captured.image);
+        out_fid = static_cast<uint32_t>(fallback_seq + 1);
+        out_rewound = captured.rewound;
+        out_duplicate = captured.duplicate;
+        return true;
+    }
+
+    [[nodiscard]] IngressMode mode() const noexcept { return m_mode; }
+    [[nodiscard]] bool isShm() const noexcept { return m_mode == IngressMode::POSIX_SHM; }
+    [[nodiscard]] const char* waitingMessage() const noexcept {
+        return (m_mode == IngressMode::POSIX_SHM)
+            ? "Waiting for SHM Frame..."
+            : "Waiting for ESP32-S3 Stream...";
+    }
+
+private:
+    void runShmWorker() {
+        cv::Mat decoded;
+        uint32_t fid = 0;
+        while (m_shm_running.load(std::memory_order_acquire)) {
+            try {
+                if (m_shm_consumer.waitForNextFrame(decoded, fid)) {
+                    if (!decoded.empty()) {
+                        m_shm_latest_frame_id.store(fid, std::memory_order_relaxed);
+                        m_shm_mailbox.publish(decoded);
+                    }
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+            } catch (const std::exception& e) {
+                fmt::print(stderr, "[SHM] frame decode failed: {}\n", e.what());
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            } catch (...) {
+                fmt::print(stderr, "[SHM] frame decode failed with unknown error\n");
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+    }
+
+    IngressMode m_mode{IngressMode::POSIX_SHM};
+    bawal::ipc::ShmFrameConsumer m_shm_consumer;
+    LatestMatMailbox m_shm_mailbox{2};
+    std::atomic<bool> m_shm_running{false};
+    std::atomic<uint32_t> m_shm_latest_frame_id{0};
+    std::thread m_shm_worker;
+    LatestFrameGrabber m_grabber;
+};
+
+}  // namespace
+
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
@@ -75,8 +213,6 @@ int main(int argc, char** argv) {
         }
         return id;
     };
-
-    // 1. Priority 1: CLI Argument
     if (argc > 1 && std::string(argv[1]).length() > 0) {
         device_id = sanitizeID(argv[1]);
         if (!device_id.empty()) {
@@ -84,7 +220,6 @@ int main(int argc, char** argv) {
             std::cout << "[CONFIG] Device ID resolved from CLI Argument: " << device_id << "\n";
         }
     } 
-    // 2. Priority 2: Environment Variable
     if (device_id.empty()) {
         if (const char* env_dev = std::getenv("DEVICE_ID")) {
             device_id = sanitizeID(env_dev);
@@ -95,7 +230,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 3. Priority 3: Dynamic Discovery via Backend API Endpoint
     if (device_id.empty()) {
         std::cout << "[INFO] No Device ID supplied. Querying backend for active streams...\n";
         device_id = discoverActiveDeviceID(curl, backend_base_url);
@@ -167,58 +301,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    bool use_shm = false;
-    bawal::ipc::ShmFrameConsumer shm_consumer;
-    LatestMatMailbox shm_mailbox(2);
-    std::atomic<bool> shm_worker_running{false};
-    std::atomic<uint32_t> shm_latest_frame_id{0};
-    std::thread shm_worker;
-
-    // Fallback HTTP frame grabber (only active for local video mode or when SHM fails)
-    LatestFrameGrabber frame_grabber(pipeline.getVideoSource());
-
-    if (use_video_source) {
-        frame_grabber.start();
-    } else {
-        // Try to initialize the modular SHM consumer
-        if (shm_consumer.init()) {
-            use_shm = true;
-            shm_worker_running.store(true, std::memory_order_release);
-
-            // Asynchronous ingestion worker: waits for SHM frame signals without blocking the GUI main loop
-            shm_worker = std::thread([&]() {
-                cv::Mat decoded;
-                uint32_t fid = 0;
-                while (shm_worker_running.load(std::memory_order_acquire)) {
-                    try {
-                        if (shm_consumer.waitForNextFrame(decoded, fid)) {
-                            if (!decoded.empty()) {
-                                shm_latest_frame_id.store(fid, std::memory_order_relaxed);
-                                shm_mailbox.publish(decoded);
-                            }
-                        } else {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                        }
-                    } catch (const std::exception& e) {
-                        // A corrupt/torn SHM frame (or allocation failure) must
-                        // not take down the whole vision service.
-                        fmt::print(stderr, "[SHM] frame decode failed: {}\n", e.what());
-                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                    } catch (...) {
-                        fmt::print(stderr, "[SHM] frame decode failed with unknown error\n");
-                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                    }
-                }
-            });
-            fmt::print("[IPC] POSIX shared memory zero-copy consumer active!\n");
-        } else {
-            fmt::print("[WARN] Failed to enable SHM. Falling back to the HTTP frame grabber.\n");
-            (void)pipeline.openVideoSource(SourceMode::ESP32_STREAM, stream_url);
-            pipeline.getVideoSource().setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
-            frame_grabber.setStreamUrl(stream_url, backend_base_url + "/api/v1/camera/latest/raw");
-            frame_grabber.start();
-        }
-    }
+    FrameIngressChannel ingress(pipeline.getVideoSource());
+    ingress.initialize(use_video_source, stream_url, backend_base_url + "/api/v1/camera/latest/raw");
 
     uint64_t frame_seq = 0;
     auto last_ai_dispatch = std::chrono::steady_clock::now() - std::chrono::seconds(1);
@@ -481,36 +565,24 @@ int main(int argc, char** argv) {
 
         cv::Mat frame_to_stream;
         uint32_t active_fid = 0;
+        bool is_rewound = false;
+        bool is_duplicate = false;
 
-        // INGESTION: POSIX SHM IPC vs HTTP Grabber (Mock Video)
-        if (use_shm) {
-            if (!shm_mailbox.waitTake(frame_to_stream, std::chrono::milliseconds(10)) || frame_to_stream.empty()) {
-                if (!headless) (void)cv::waitKey(1);
-                continue;
-            }
-            active_fid = shm_latest_frame_id.load(std::memory_order_relaxed);
-        } else {
-            CapturedFrame captured;
-            const auto wait_budget = use_video_source ? std::chrono::milliseconds(50)
-                                                      : std::chrono::milliseconds(10);
-            if (!frame_grabber.waitTake(captured, wait_budget) || captured.image.empty()) {
-                if (!headless) (void)cv::waitKey(1);
-                continue;
-            }
+        // INGESTION: POSIX SHM IPC vs HTTP Grabber (Mock Video) via FrameIngressChannel
+        if (!ingress.waitTake(frame_to_stream, active_fid, is_rewound, is_duplicate, frame_seq)) {
+            if (!headless) (void)cv::waitKey(1);
+            continue;
+        }
 
-            frame_to_stream = std::move(captured.image);
-            active_fid = static_cast<uint32_t>(frame_seq + 1);
+        if (is_rewound) {
+            pipeline.resetTracker();
+            video_has_rewound.store(true, std::memory_order_relaxed);
+            fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
+        }
 
-            if (captured.rewound) {
-                pipeline.resetTracker();
-                video_has_rewound.store(true, std::memory_order_relaxed);
-                fmt::print("[INFO] Video rewind detected: duplicate inspection writes suppressed.\n");
-            }
-
-            const bool detections_changed = ai_detections_updated.exchange(false, std::memory_order_relaxed);
-            if (captured.duplicate && !detections_changed) {
-                continue;
-            }
+        const bool detections_changed = ai_detections_updated.exchange(false, std::memory_order_relaxed);
+        if (is_duplicate && !detections_changed) {
+            continue;
         }
 
         if (!use_video_source) {
@@ -546,9 +618,7 @@ int main(int argc, char** argv) {
                 stream_url = device_id.empty()
                     ? fmt::format("{}/api/v1/camera/latest/raw", backend_base_url)
                     : fmt::format("{}/api/v1/camera/latest/{}/raw", backend_base_url, device_id);
-                if (!use_shm) {
-                    frame_grabber.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
-                }
+                ingress.setStreamUrl(stream_url, fmt::format("{}/api/v1/camera/latest/raw", backend_base_url));
                 fmt::print("[INFO] Active camera stream: {}\n", device_id.empty() ? "<none>" : device_id);
                 fmt::print("[INFO] Ingestion URL: {}\n", stream_url);
             }
@@ -593,7 +663,7 @@ int main(int argc, char** argv) {
                 display_frame = cv::Mat::zeros(480, 640, CV_8UC3);
                 cv::putText(display_frame, "BAWAL VISION AI1 PIPELINE", cv::Point(145, 180),
                             cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
-                cv::putText(display_frame, use_shm ? "Waiting for SHM Frame..." : "Waiting for ESP32-S3 Stream...",
+                cv::putText(display_frame, ingress.waitingMessage(),
                             cv::Point(145, 230), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(200, 200, 200), 1, cv::LINE_AA);
                 cv::putText(display_frame, "Target Device: " + device_id, cv::Point(145, 265),
                             cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(100, 255, 100), 1, cv::LINE_AA);
@@ -613,16 +683,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Prosedur Shutdown Urut & Bersih
-    if (use_shm) {
-        shm_worker_running.store(false, std::memory_order_release);
-        if (shm_worker.joinable()) {
-            shm_worker.join();
-        }
-        // shm_consumer otomatis dieksekusi destruktornya (RAII)
-    } else {
-        frame_grabber.stop();
-    }
+    // Prosedur Shutdown Urut & Bersih via RAII Ingress Channel
+    ingress.stop();
 
     discovery_running.store(false, std::memory_order_release);
     ai_worker_running.store(false, std::memory_order_release);

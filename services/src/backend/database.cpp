@@ -14,7 +14,6 @@
 #include <libpq-fe.h>
 #endif
 
-namespace bawal::backend {
 namespace {
 
 std::string envOr(const char* key, const char* fallback) {
@@ -95,6 +94,8 @@ const char* tupleValue(const PGresult* result, int row, int column) {
 #endif
 
 } // namespace
+
+namespace bawal::backend {
 
 DatabaseConfig DatabaseConfig::fromEnvironment() {
     DatabaseConfig config;

@@ -10,23 +10,10 @@
 #include <vector>
 
 #include "bawal/backend/state.hpp"
+#include "bawal/fwd.hpp"
 #include "bawal/ipc/shm_producer.hpp"
 
-namespace bawal::server {
-class RollingImageStore;
-}
-
-namespace bawal::vision {
-class FoodClassifier;
-}
-
-namespace bawal::lambda {
-class LambdaRuntimeHandler;
-}
-
 namespace bawal::backend {
-
-class Database;
 
 struct ServerConfig {
     std::string bind_address{"127.0.0.1"};

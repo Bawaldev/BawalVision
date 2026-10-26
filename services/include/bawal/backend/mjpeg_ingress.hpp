@@ -9,30 +9,9 @@
 #include <thread>
 #include <vector>
 
-namespace bawal::backend {
-
-class BackendState;
-}
-namespace bawal::ipc {
-class ShmProducer;
-}
+#include "bawal/fwd.hpp"
 
 namespace bawal::backend {
-
-class MjpegIngress;
-
-/**
- * @brief Per-pull libcurl callback context.
- *
- * Lives in the public header so the C callbacks in mjpeg_ingress.cpp can share
- * one definition instead of duplicating private layout.
- */
-struct alignas(8) MjpegTransferContext {
-    MjpegIngress* ingress;
-    uint64_t generation;
-    int64_t started_ns;
-    std::string pending;
-};
 
 /** Pulls the ESP32's multipart MJPEG stream and publishes only complete latest frames. */
 class MjpegIngress {

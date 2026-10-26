@@ -26,7 +26,6 @@
 #include "bawal/vision/pipeline.hpp"
 #include "bawal/vision/types.hpp"
 
-namespace bawal::backend {
 namespace {
 
 bool invokeRemoteLambdaInference(const cv::Mat& frame,
@@ -254,6 +253,8 @@ std::string canonicalAuditPayload(const InspectionHistoryEntry& entry) {
 }
 
 } // namespace
+
+namespace bawal::backend {
 
 std::string resolveModelPath() {
     if (const char* env_model = std::getenv("MODEL_PATH")) {

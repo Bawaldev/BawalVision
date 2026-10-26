@@ -18,8 +18,6 @@
 #include <opencv2/imgproc.hpp>
 #include <omp.h>
 
-namespace bawal::vision::image {
-
 namespace fs = std::filesystem;
 
 namespace {
@@ -100,7 +98,7 @@ std::string utcTimestampNow() {
 }
 
 /** Weighted 0..100 batch quality index; rejects carry a 25-point penalty. */
-float qualityIndex(const BatchQualityMetrics& q) noexcept {
+float qualityIndex(const bawal::vision::image::BatchQualityMetrics& q) noexcept {
     const float base = 100.0f * (0.45f * q.avg_similarity + 0.55f * q.avg_quality / 100.0f);
     const float reject_ratio = q.total_detections > 0
         ? static_cast<float>(q.reject_detections) / static_cast<float>(q.total_detections)
@@ -125,6 +123,8 @@ std::string latexBar(uint64_t value, uint64_t max_value, const char* color,
 }
 
 } // namespace
+
+namespace bawal::vision::image {
 
 BatchReportSummary BatchInspector::processZipBuffer(
     const uint8_t* zip_data,

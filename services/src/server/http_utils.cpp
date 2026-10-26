@@ -10,8 +10,6 @@
 #include <unordered_map>
 #include <utility>
 
-namespace bawal::server {
-
 namespace {
 
 /**
@@ -47,7 +45,9 @@ std::pair<std::string, std::string> splitUrlBaseAndPath(std::string_view full_ur
     return {std::move(base), std::move(path)};
 }
 
-} // anonymous namespace
+} // namespace
+
+namespace bawal::server {
 
 /**
  * @brief Returns a thread-local persistent httplib::Client configured with Keep-Alive and TCP_NODELAY.

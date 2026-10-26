@@ -8,11 +8,8 @@
 
 #include "bawal/backend/database.hpp"
 #include "bawal/backend/state.hpp"
+#include "bawal/fwd.hpp"
 #include "bawal/vision/classifier.hpp"
-
-namespace bawal::server {
-class RollingImageStore;
-}
 
 namespace bawal::backend {
 

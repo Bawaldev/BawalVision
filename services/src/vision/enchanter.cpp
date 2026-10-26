@@ -27,8 +27,6 @@
 #define BAWAL_HAVE_NCNN 0
 #endif
 
-namespace bawal::vision {
-
 namespace {
 
 #if BAWAL_HAVE_NCNN
@@ -44,7 +42,9 @@ int getOptimalCpuThreads() {
 }
 #endif
 
-} // anonymous namespace
+} // namespace
+
+namespace bawal::vision {
 
 // Per-instance NCNN graph holder (defined out-of-line because the header stays
 // independent of the optional NCNN dependency).

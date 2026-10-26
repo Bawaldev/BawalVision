@@ -9,8 +9,10 @@
 
 #include "bawal/backend/text_utils.hpp"
 
-namespace bawal::backend {
 namespace {
+
+using bawal::backend::WifiNetworkInfo;
+using bawal::backend::trimCopy;
 
 std::string runShellCommand(const std::string& command, int* exit_status = nullptr) {
     std::string output;
@@ -129,6 +131,8 @@ std::vector<WifiNetworkInfo> parseWifiNetworks(const std::string& output) {
 }
 
 } // namespace
+
+namespace bawal::backend {
 
 std::vector<WifiNetworkInfo> scanWifiNetworks(std::string* raw_output,
                                               std::string* executed_command,

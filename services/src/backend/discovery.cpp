@@ -10,12 +10,13 @@
 #include <cstring>
 #include <string>
 
-namespace bawal::backend {
 namespace {
 
 constexpr const char* kProbePrefix = "BAWAL_DISCOVER";
 
 } // namespace
+
+namespace bawal::backend {
 
 DiscoveryResponder::~DiscoveryResponder() {
     stop();

@@ -10,8 +10,6 @@
 #include <cstring>
 #include <thread>
 
-namespace bawal::vision {
-
 namespace {
 
 uint64_t computeFastFingerprint(const std::vector<uint8_t>& buf) noexcept {
@@ -32,7 +30,9 @@ uint64_t computeFastFingerprint(const std::vector<uint8_t>& buf) noexcept {
     return h;
 }
 
-} // anonymous namespace
+} // namespace
+
+namespace bawal::vision {
 
 VideoSource::VideoSource() {
     clahe = cv::createCLAHE(1.5, cv::Size(8, 8));
