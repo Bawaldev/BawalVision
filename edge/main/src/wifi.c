@@ -1112,7 +1112,7 @@ esp_err_t wifi_http_stream_server_start(void) {
     config.server_port = 80;
     config.ctrl_port = 32768;
     config.max_open_sockets = 7;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
     config.stack_size = 8192;
     esp_err_t err = httpd_start(&s_http_server, &config);
@@ -1122,13 +1122,25 @@ esp_err_t wifi_http_stream_server_start(void) {
         .uri = "/stream", .method = HTTP_GET,
         .handler = stream_handler, .user_ctx = NULL
     };
+    const httpd_uri_t stream_options_uri = {
+        .uri = "/stream", .method = HTTP_OPTIONS,
+        .handler = options_handler, .user_ctx = NULL
+    };
     const httpd_uri_t snapshot_uri = {
         .uri = "/snapshot", .method = HTTP_GET,
         .handler = snapshot_handler, .user_ctx = NULL
     };
+    const httpd_uri_t snapshot_options_uri = {
+        .uri = "/snapshot", .method = HTTP_OPTIONS,
+        .handler = options_handler, .user_ctx = NULL
+    };
     const httpd_uri_t status_uri = {
         .uri = "/status", .method = HTTP_GET,
         .handler = status_handler, .user_ctx = NULL
+    };
+    const httpd_uri_t status_options_short_uri = {
+        .uri = "/status", .method = HTTP_OPTIONS,
+        .handler = options_handler, .user_ctx = NULL
     };
     const httpd_uri_t status_api_uri = {
         .uri = "/api/v1/status", .method = HTTP_GET,
@@ -1156,8 +1168,11 @@ esp_err_t wifi_http_stream_server_start(void) {
     };
 
     (void)httpd_register_uri_handler(s_http_server, &stream_uri);
+    (void)httpd_register_uri_handler(s_http_server, &stream_options_uri);
     (void)httpd_register_uri_handler(s_http_server, &snapshot_uri);
+    (void)httpd_register_uri_handler(s_http_server, &snapshot_options_uri);
     (void)httpd_register_uri_handler(s_http_server, &status_uri);
+    (void)httpd_register_uri_handler(s_http_server, &status_options_short_uri);
     (void)httpd_register_uri_handler(s_http_server, &status_api_uri);
     (void)httpd_register_uri_handler(s_http_server, &config_post_uri);
     (void)httpd_register_uri_handler(s_http_server, &config_post_short_uri);

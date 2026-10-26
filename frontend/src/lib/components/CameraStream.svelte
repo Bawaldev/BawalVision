@@ -280,8 +280,8 @@
         }
 
         if (!isValidStreamHost(url)) {
-            localBackendNotice = `⚠️ <strong>Format IP tidak valid: <code>${safeRaw}</code></strong>.<br/>` +
-                `Alamat IP harus terdiri dari 4 angka (contoh: <code>172.20.167.236</code> sesuai yang tertera di layar LCD ESP32 Anda).`;
+            localBackendNotice = `⚠️ <strong>Invalid IP address format: <code>${safeRaw}</code></strong>.<br/>` +
+                `An IPv4 address must have 4 octets between 0-255 (e.g. <code>192.168.1.150</code> as shown on your node LCD).`;
             return;
         }
 
@@ -411,7 +411,7 @@
         stopBlobStream();
         isBlobStreamRunning = true;
 
-        // Derive snapshot URL from stream URL (e.g. http://172.20.167.236/stream -> http://172.20.167.236/snapshot)
+        // Derive snapshot URL from stream URL (e.g. http://<node-ip>/stream -> http://<node-ip>/snapshot)
         let snapshotUrl = targetStreamUrl.replace(/\/stream(?:\?.*)?$/i, '/snapshot');
         if (!snapshotUrl.includes('/snapshot')) {
             snapshotUrl = snapshotUrl.replace(/\/+$/, '') + '/snapshot';

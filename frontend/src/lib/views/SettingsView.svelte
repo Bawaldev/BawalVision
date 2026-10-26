@@ -305,28 +305,28 @@
     async function handleSyncWifiUsb() {
         const ssidToUse = (espWifiSsid || serverWifiSsid || espNodeStatus?.wifi_ssid || '').trim();
         if (!ssidToUse) {
-            espDeployMessage = '⚠️ Masukkan nama Wi-Fi (SSID) target terlebih dahulu.';
+            espDeployMessage = '⚠️ Please enter target Wi-Fi (SSID) first.';
             espDeploySuccess = false;
             return;
         }
 
         isDeployingToEsp = true;
-        espDeployMessage = '⏳ Menghubungkan ke ESP32 via USB CDC (/dev/ttyACM0)...';
+        espDeployMessage = '⏳ Connecting to ESP32 node via USB CDC (/dev/ttyACM0)...';
         try {
             const res = await provisionViaBrowserSerial(ssidToUse, espWifiPassword, '');
             if (res.success) {
                 espDeploySuccess = true;
                 const ip = res.ipAddress && res.ipAddress !== 'USB Serial' ? res.ipAddress : '';
-                espDeployMessage = `✓ Berhasil disinkronkan! ESP32 tersambung ke "${res.provisionedSsid || ssidToUse}". ` +
-                    (ip ? `IP: ${ip}. ` : '') +
-                    `Buka tab Live Inspection untuk melihat video stream!`;
+                espDeployMessage = `✓ Wi-Fi successfully provisioned! ESP32 connected to "${res.provisionedSsid || ssidToUse}". ` +
+                    (ip ? `Node IP: ${ip}. ` : '') +
+                    `Switch to Live Inspection to view video stream!`;
             } else {
                 espDeploySuccess = false;
-                espDeployMessage = `⚠️ Gagal sinkronisasi: ${res.message}`;
+                espDeployMessage = `⚠️ Sync failed: ${res.message}`;
             }
         } catch (err: any) {
             espDeploySuccess = false;
-            espDeployMessage = `⚠️ Error: ${err?.message || 'Gagal sinkronisasi USB'}`;
+            espDeployMessage = `⚠️ Error: ${err?.message || 'USB provisioning failed'}`;
         } finally {
             isDeployingToEsp = false;
         }
@@ -934,7 +934,7 @@
                 return failure(
                     ack
                         ? wifiProvisionErrorMessage(ack, ssid)
-                        : 'ESP32 belum merespons via USB (timeout 30 detik). Pastikan kabel USB terpasang erat, lalu klik tombol Sync sekali lagi.'
+                        : 'ESP32 did not respond over USB (30s timeout). Ensure USB cable is firmly connected, then click Sync again.'
                 );
             }
 
@@ -1410,7 +1410,7 @@
                         <div>
                             <strong style="font-size: 0.88rem; color: #38bdf8;">⚡ One-Click Wi-Fi Sync (via USB /dev/ttyACM0)</strong>
                             <p class="port-subdetail-muted" style="font-size: 0.75rem; margin-top: 2px;">
-                                Colok ESP32 ke laptop. Masukkan Wi-Fi yang sedang Anda pakai &rarr; klik <strong>Sync Wi-Fi</strong>. ESP32 otomatis berganti ke Wi-Fi Anda <strong>tanpa perlu tahu atau mengetik alamat IP apa pun!</strong>
+                                Connect ESP32 via USB. Enter target Wi-Fi credentials &rarr; click <strong>Sync Wi-Fi</strong>. The node automatically switches to your network <strong>without typing or guessing any IP address!</strong>
                             </p>
                         </div>
                     </div>
@@ -1418,23 +1418,23 @@
                     <!-- Wi-Fi Inputs -->
                     <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
                         <div style="flex: 1; min-width: 170px;">
-                            <label for="espWifiSsidInput" class="compact-label">Nama Wi-Fi Target (SSID)</label>
+                            <label for="espWifiSsidInput" class="compact-label">Target Wi-Fi Network (SSID)</label>
                             <input
                                 id="espWifiSsidInput"
                                 class="fedora-input"
                                 bind:value={espWifiSsid}
-                                placeholder={serverWifiSsid ? `Saran: ${serverWifiSsid}` : 'Ketik nama Wi-Fi / Hotspot'}
+                                placeholder={serverWifiSsid ? `Suggested: ${serverWifiSsid}` : 'Enter Wi-Fi / Hotspot name'}
                                 spellcheck="false"
                             />
                         </div>
                         <div style="flex: 1; min-width: 170px;">
-                            <label for="espWifiPassInput" class="compact-label">Password Wi-Fi</label>
+                            <label for="espWifiPassInput" class="compact-label">Wi-Fi Password</label>
                             <input
                                 id="espWifiPassInput"
                                 type="password"
                                 class="fedora-input"
                                 bind:value={espWifiPassword}
-                                placeholder="Password Wi-Fi (kosongkan jika tanpa password)"
+                                placeholder="Wi-Fi Password (leave blank for open networks)"
                                 autocomplete="new-password"
                             />
                         </div>
@@ -1451,14 +1451,14 @@
                                 disabled={isDeployingToEsp}
                             >
                                 {#if isDeployingToEsp}
-                                    <span class="btn-spinner"></span> Menyambungkan ESP32...
+                                    <span class="btn-spinner"></span> Connecting ESP32...
                                 {:else}
-                                    ⚡ Sync Wi-Fi ke ESP32 (via USB ACM0)
+                                    ⚡ Sync Wi-Fi to ESP32 (via USB ACM0)
                                 {/if}
                             </button>
                         {:else}
                             <div class="port-detail-text" style="color: #f59e0b; font-size: 0.78rem;">
-                                ⚠️ Web Serial tidak aktif di browser ini. Buka via Google Chrome atau Edge untuk menyambungkan USB secara langsung.
+                                ⚠️ Web Serial is unavailable in this browser. Open via Google Chrome or Edge to pair USB directly.
                             </div>
                         {/if}
 
@@ -1468,7 +1468,7 @@
                             style="font-size: 0.72rem; margin-left: auto;"
                             onclick={() => (showAdvancedEspIp = !showAdvancedEspIp)}
                         >
-                            {showAdvancedEspIp ? '▴ Tutup Setelan IP Manual' : '▸ Setelan IP Manual / OTA (Opsional)'}
+                            {showAdvancedEspIp ? '▴ Hide Manual IP Configuration' : '▸ Manual IP / OTA Settings (Optional)'}
                         </button>
                     </div>
 
@@ -1477,22 +1477,22 @@
                         <div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-subtle);">
                             <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
                                 <div style="flex: 1; min-width: 160px;">
-                                    <label for="espNodeIpInput" class="compact-label">Alamat IP ESP32 (Manual OTA)</label>
+                                    <label for="espNodeIpInput" class="compact-label">ESP32 IP Address (Manual OTA)</label>
                                     <input
                                         id="espNodeIpInput"
                                         class="fedora-input"
                                         bind:value={espNodeIp}
-                                        placeholder="contoh: 192.168.1.150"
+                                        placeholder="e.g. 192.168.1.150"
                                         spellcheck="false"
                                     />
                                 </div>
                                 <div style="flex: 1; min-width: 160px;">
-                                    <label for="targetIpInput" class="compact-label">Host Backend IP Target</label>
+                                    <label for="targetIpInput" class="compact-label">Target Backend Host IP</label>
                                     <input
                                         id="targetIpInput"
                                         class="fedora-input"
                                         bind:value={espTargetBackendIp}
-                                        placeholder="contoh: 192.168.1.100"
+                                        placeholder="e.g. 192.168.1.100"
                                         spellcheck="false"
                                     />
                                 </div>
