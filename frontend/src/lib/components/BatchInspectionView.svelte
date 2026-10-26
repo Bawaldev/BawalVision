@@ -242,7 +242,7 @@
             return raw as BatchSummary;
         }
 
-        const candidate = raw.body ?? raw.data ?? raw.result ?? raw.payload;
+        const candidate = raw.body ?? raw.data ?? raw.result ?? raw.payload ?? raw.summary;
         if (candidate !== undefined && candidate !== null) {
             if (typeof candidate === 'string') {
                 try {
@@ -381,11 +381,35 @@
             }
 
             const rawPayload: any = await response.json();
+
+            // Detect and extract any explicit server errors or Lambda envelope errors
+            let serverError = '';
+            if (rawPayload && typeof rawPayload === 'object') {
+                if (rawPayload.error) {
+                    serverError = String(rawPayload.error);
+                } else if (rawPayload.errorMessage) {
+                    serverError = String(rawPayload.errorMessage);
+                } else if (rawPayload.statusCode && rawPayload.statusCode >= 400) {
+                    let bodyObj = rawPayload.body;
+                    if (typeof bodyObj === 'string') {
+                        try { bodyObj = JSON.parse(bodyObj); } catch {}
+                    }
+                    serverError = bodyObj?.error || bodyObj?.message || `API Gateway error (HTTP ${rawPayload.statusCode})`;
+                } else if (rawPayload.message && !rawPayload.batch_id) {
+                    serverError = String(rawPayload.message);
+                }
+            }
+            if (serverError) {
+                console.error('[BatchInspection] Server returned error:', serverError, rawPayload);
+                throw new Error(serverError);
+            }
+
             const payload = unwrapBatchPayload(rawPayload) || (rawPayload as BatchSummary);
 
             if (!payload || (!payload.batch_id && (!payload.items || !Array.isArray(payload.items)))) {
                 console.error('[BatchInspection] Malformed API response payload:', rawPayload);
-                throw new Error('Received unexpected response format from batch vision service. Check developer console.');
+                const rawSnippet = typeof rawPayload === 'object' ? JSON.stringify(rawPayload).slice(0, 200) : String(rawPayload);
+                throw new Error(`Unexpected server response: ${rawSnippet}`);
             }
 
             clearTimers();

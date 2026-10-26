@@ -71,7 +71,15 @@ export const handle: Handle = async ({ event, resolve }) => {
     }
 
     if (event.url.pathname.startsWith('/api/') || event.url.pathname.startsWith('/inspections/')) {
-        const backendUrl = env.BACKEND_URL || (globalThis as any).process?.env?.BACKEND_URL || 'http://127.0.0.1:8080';
+        const isVercel = Boolean((globalThis as any).process?.env?.VERCEL);
+        const defaultBackend = isVercel
+            ? 'https://5g715bm2v5.execute-api.ap-southeast-3.amazonaws.com/default/bawalvision-service'
+            : 'http://127.0.0.1:8080';
+        const backendUrl = env.BACKEND_URL ||
+            (globalThis as any).process?.env?.BACKEND_URL ||
+            (env as any).PUBLIC_API_URL ||
+            (globalThis as any).process?.env?.PUBLIC_API_URL ||
+            defaultBackend;
         const lambdaAuthToken = env.BAWAL_LAMBDA_AUTH_TOKEN ||
             (globalThis as any).process?.env?.BAWAL_LAMBDA_AUTH_TOKEN || '';
         const adminToken = env.BAWAL_ADMIN_TOKEN ||
@@ -137,8 +145,10 @@ export const handle: Handle = async ({ event, resolve }) => {
             }), { status: 413, headers: jsonHeaders });
         }
 
+        const isBatchRequest = event.url.pathname.includes('/batch');
+        const timeoutMs = isBatchRequest ? 30000 : 3500;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
         try {
             const res = await fetch(target, {
@@ -259,6 +269,11 @@ export const handle: Handle = async ({ event, resolve }) => {
                     is_live: false,
                     detections: []
                 }), { status: 200, headers: jsonHeaders });
+            }
+            if (path.includes('/batch')) {
+                return new Response(JSON.stringify({
+                    error: `Batch vision engine unreachable at ${target} (${err instanceof Error ? err.message : String(err)}). Ensure AWS Lambda is deployed and healthy.`
+                }), { status: 502, headers: jsonHeaders });
             }
             if (path.includes('/records') || path.includes('/inspections')) {
                 return new Response(JSON.stringify({
