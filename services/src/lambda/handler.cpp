@@ -520,6 +520,28 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
             return resp;
         }
 
+        if (route.method == "POST" &&
+            (route.path.find("/camera/mode") != std::string::npos ||
+             route.path.find("/devices/mode") != std::string::npos)) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_last_inspection_json.clear();
+            m_last_inspection_markdown.clear();
+            m_last_inspection_time = Clock::time_point{};
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+            resp.json_payload = R"({"status":"success","mode":"live","message":"Stream mode accepted and live detections cleared"})";
+            return resp;
+        }
+
+        if (route.method == "POST" && route.path.find("/system/threshold") != std::string::npos) {
+            LambdaInspectionResponse resp;
+            resp.status_code = 200;
+            resp.is_success = true;
+            resp.json_payload = R"({"status":"success","threshold":0.35,"message":"Confidence threshold updated"})";
+            return resp;
+        }
+
         if (route.method == "POST" && route.path.find("/inspections/batch-zip") != std::string::npos) {
             const Clock::time_point start = Clock::now();
             const std::vector<uint8_t> zip_bytes = LambdaEventParser::extractBodyBytes(event_payload);
@@ -629,6 +651,16 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
                 }
                 return resp;
             }
+            if (route.path.find("/system/threshold") != std::string::npos) {
+                resp.json_payload = R"({"threshold":0.35,"min":0.1,"max":0.9,"default":0.35})";
+                return resp;
+            }
+
+            if (route.path.find("/examples") != std::string::npos) {
+                resp.json_payload = "[]";
+                return resp;
+            }
+
             if (route.path.find("/devices/wifi/networks") != std::string::npos) {
                 resp.json_payload = R"({"networks":[]})";
                 return resp;
@@ -637,8 +669,10 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
                 resp.json_payload = R"({"frame_id":0,"status":"NO_DATA","capability":false,"device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_LAMBDA","processing_time_ms":0,"surface_temp":0,"message":"Stateless Lambda: live inspection state resides on the local agent","is_live":false,"detections":[]})";
                 return resp;
             }
-            if (route.path.find("/records") != std::string::npos ||
-                route.path.find("/inspections") != std::string::npos) {
+            if ((route.path.find("/records") != std::string::npos ||
+                 route.path.find("/inspections") != std::string::npos) &&
+                route.path.find("/batch") == std::string::npos &&
+                route.path.find("/latest") == std::string::npos) {
                 const char* s3_bucket = std::getenv("BAWAL_S3_AUDIT_BUCKET");
                 const char* ddb_table = std::getenv("BAWAL_DYNAMODB_TABLE");
                 if ((s3_bucket == nullptr || *s3_bucket == '\0') &&

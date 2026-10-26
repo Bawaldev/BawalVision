@@ -36,7 +36,18 @@ export function getConfiguredApiBase(): string {
         return DEFAULT_API_BASE;
     }
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored && !isValidBackendHost(stored)) {
+    if (!stored) {
+        return DEFAULT_API_BASE;
+    }
+    // Mixed Content / Private Network Access Guard:
+    // When the frontend runs on HTTPS (e.g. Vercel), browsers strictly block plain HTTP requests
+    // to loopback or LAN IP addresses (localhost, 127.0.0.1) with CORS / ERR_FAILED.
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+        if (/^http:\/\//i.test(stored) || stored.includes('localhost') || stored.includes('127.0.0.1')) {
+            return DEFAULT_API_BASE;
+        }
+    }
+    if (!isValidBackendHost(stored)) {
         try { localStorage.removeItem(STORAGE_KEY); } catch {}
         return DEFAULT_API_BASE;
     }
@@ -58,6 +69,11 @@ export function setConfiguredApiBase(raw: string): string {
 export function resolveApiBase(baseUrl?: string): string {
     if (baseUrl && baseUrl !== DEFAULT_API_BASE &&
         baseUrl !== `${DEFAULT_API_BASE}/`) {
+        if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+            if (/^http:\/\//i.test(baseUrl) || baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) {
+                return DEFAULT_API_BASE;
+            }
+        }
         return normalizeApiBase(baseUrl);
     }
     return getConfiguredApiBase();

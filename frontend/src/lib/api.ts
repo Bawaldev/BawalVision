@@ -27,7 +27,10 @@ export async function fetchRecords(baseUrl = resolveApiBase()): Promise<Inspecti
         if (!response.ok) {
             throw new Error(`HTTP error ${response.status}`);
         }
-        return await response.json();
+        const data = await response.json();
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray((data as any).records)) return (data as any).records;
+        return [];
     } catch (err) {
         console.warn('[API] Could not fetch records from backend:', err);
         return [];

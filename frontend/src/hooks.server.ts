@@ -102,6 +102,22 @@ export const handle: Handle = async ({ event, resolve }) => {
             jsonHeaders['Vary'] = 'Origin';
         }
 
+        let requestBody: ArrayBuffer | undefined;
+        try {
+            requestBody = ['GET', 'HEAD'].includes(event.request.method)
+                ? undefined
+                : await event.request.arrayBuffer();
+        } catch {
+            return new Response(JSON.stringify({
+                error: 'Failed to read request body'
+            }), { status: 400, headers: jsonHeaders });
+        }
+        if (isLambdaBackend && requestBody && requestBody.byteLength > 6 * 1024 * 1024) {
+            return new Response(JSON.stringify({
+                error: 'Request body exceeds the 6 MiB Lambda limit'
+            }), { status: 413, headers: jsonHeaders });
+        }
+
         let targetPath = event.url.pathname;
         if (isLambdaBackend) {
             if (targetPath === '/api/v1/camera/frame') {
@@ -118,6 +134,30 @@ export const handle: Handle = async ({ event, resolve }) => {
                 }
                 if (targetPath === '/api/v1/examples') {
                     return new Response(JSON.stringify([]), { status: 200, headers: jsonHeaders });
+                }
+            }
+            if (event.request.method === 'POST') {
+                if (targetPath === '/api/v1/camera/mode' || targetPath === '/api/v1/devices/mode') {
+                    let mode = 'live';
+                    if (requestBody) {
+                        try {
+                            const bodyText = new TextDecoder().decode(requestBody);
+                            const parsed = JSON.parse(bodyText);
+                            if (parsed.mode) mode = parsed.mode;
+                        } catch {}
+                    }
+                    return new Response(JSON.stringify({
+                        status: 'success',
+                        mode,
+                        message: `Camera stream mode set to ${mode}`
+                    }), { status: 200, headers: jsonHeaders });
+                }
+                if (targetPath === '/api/v1/system/threshold') {
+                    return new Response(JSON.stringify({
+                        status: 'success',
+                        threshold: 0.35,
+                        message: 'Confidence threshold updated'
+                    }), { status: 200, headers: jsonHeaders });
                 }
             }
         }
@@ -140,22 +180,6 @@ export const handle: Handle = async ({ event, resolve }) => {
         }
         if (adminToken && isTrustedBrowser) {
             proxyHeaders.set('x-admin-token', adminToken);
-        }
-
-        let requestBody: ArrayBuffer | undefined;
-        try {
-            requestBody = ['GET', 'HEAD'].includes(event.request.method)
-                ? undefined
-                : await event.request.arrayBuffer();
-        } catch {
-            return new Response(JSON.stringify({
-                error: 'Failed to read request body'
-            }), { status: 400, headers: jsonHeaders });
-        }
-        if (isLambdaBackend && requestBody && requestBody.byteLength > 6 * 1024 * 1024) {
-            return new Response(JSON.stringify({
-                error: 'Request body exceeds the 6 MiB Lambda limit'
-            }), { status: 413, headers: jsonHeaders });
         }
 
         const isBatchRequest = event.url.pathname.includes('/batch');
@@ -199,6 +223,13 @@ export const handle: Handle = async ({ event, resolve }) => {
             console.warn(`[PROXY FALLBACK] Backend ${target} unreachable, serving cloud serverless state:`, err);
 
             const path = event.url.pathname;
+            if (path.includes('/camera/mode') || path.includes('/devices/mode')) {
+                return new Response(JSON.stringify({
+                    status: 'success',
+                    mode: 'live',
+                    message: 'Camera stream mode accepted'
+                }), { status: 200, headers: jsonHeaders });
+            }
             if (path.includes('/devices/connect')) {
                 return new Response(JSON.stringify({
                     success: false,

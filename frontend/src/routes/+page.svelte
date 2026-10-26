@@ -145,6 +145,7 @@
     // Real Backend Polling Step
     let lastLiveDetectionTime = 0;
     let lastTrackedSummary = '';
+    let hasLiveDetections = false;
 
     function saveLiveAuditRecord(activeDetections: FoodDetection[], status: string, metadata?: any) {
         if (typeof localStorage === 'undefined' || !activeDetections || activeDetections.length === 0) return;
@@ -346,7 +347,7 @@
             }
 
             // 4. Live Real-time Inspections & Dynamic Bounding Boxes
-            let hasLiveDetections = false;
+            hasLiveDetections = false;
             const isLiveStreamActive = Boolean(latestLive?.is_live) || cam.active;
             if (latestLive && latestLive.scene_optical) {
                 latestOptical = latestLive.scene_optical;
@@ -362,9 +363,12 @@
             }
 
             // 5. Inspections & Records from DB
-            if (allRecords) {
+            const recordList = Array.isArray(allRecords)
+                ? allRecords
+                : (allRecords && Array.isArray((allRecords as any).records) ? (allRecords as any).records : []);
+            if (recordList.length > 0) {
                 const seenKeys = new Set<string>();
-                const dedupedRecords = (allRecords || []).filter(r => {
+                const dedupedRecords = recordList.filter((r: any) => {
                     if (!r.inspection_foods || r.inspection_foods.length === 0) return false;
                     const key = r.video_uuid || r.id;
                     if (seenKeys.has(key)) return false;
@@ -377,7 +381,7 @@
                 const validRecords = dedupedRecords;
 
                 if (validRecords.length > 0) {
-                    const spoiled = validRecords.filter(r => r.is_spoiled || (r.inspection_foods && r.inspection_foods.some(f => f.status === 'REJECT'))).length;
+                    const spoiled = validRecords.filter((r: any) => r.is_spoiled || (r.inspection_foods && r.inspection_foods.some((f: any) => f.status === 'REJECT'))).length;
                     const accepted = validRecords.length - spoiled;
                     totalRejected = spoiled;
                     totalAccepted = accepted;
@@ -385,7 +389,7 @@
                     if (!hasLiveDetections && !isLiveStreamActive) {
                         const latest = validRecords[0];
                         if (latest && latest.inspection_foods && latest.inspection_foods.length > 0) {
-                            detections = latest.inspection_foods.map(item => {
+                            detections = latest.inspection_foods.map((item: any) => {
                                 const name = item.food_item?.name || 'food_item';
                                 const sp = Number(item.spoilage_score) || 0;
                                 const cf = Number(item.similarity_rate) || 0.0;
@@ -408,6 +412,8 @@
                 } else if (!hasLiveDetections && !isLiveStreamActive) {
                     detections = [];
                 }
+            } else if (!hasLiveDetections && !isLiveStreamActive) {
+                detections = [];
             }
         } catch (err) {
             console.warn('[BACKEND POLL] Offline or waiting for backend service:', err);
@@ -543,6 +549,9 @@
 
     function handleClearDetections() {
         detections = [];
+        hasLiveDetections = false;
+        lastLiveDetectionTime = 0;
+        lastTrackedSummary = '';
     }
 
     onDestroy(() => {
