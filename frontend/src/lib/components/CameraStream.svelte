@@ -330,21 +330,25 @@
 
     let activeStreamUrl = $derived.by(() => {
         if (!isTabVisible) return '';
-        let url = streamUrl
-            ? withApiOrigin(streamUrl, activeApiBase)
-            : discoveredStreamUrl
-                ? withApiOrigin(discoveredStreamUrl, activeApiBase)
-                : `${activeApiBase}/camera/stream?t=${streamEpoch}`;
-
-        // Direct ESP node streaming: append token query parameter if device authentication is active
-        if (url && url.includes('/stream') && !url.includes(':8080') && !url.includes('token=')) {
-            const devToken = typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_device_token') || '' : '';
-            if (devToken) {
-                const sep = url.includes('?') ? '&' : '?';
-                url = `${url}${sep}token=${encodeURIComponent(devToken)}`;
+        if (streamUrl) {
+            let url = withApiOrigin(streamUrl, activeApiBase);
+            if (url && url.includes('/stream') && !url.includes(':8080') && !url.includes('token=')) {
+                const devToken = typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_device_token') || '' : '';
+                if (devToken) {
+                    const sep = url.includes('?') ? '&' : '?';
+                    url = `${url}${sep}token=${encodeURIComponent(devToken)}`;
+                }
             }
+            return url;
         }
-        return url;
+        if (discoveredStreamUrl) {
+            return withApiOrigin(discoveredStreamUrl, activeApiBase);
+        }
+        // Never poll /camera/stream on serverless cloud when no stream is published
+        if (activeApiBase.includes(':8080') || (typeof window !== 'undefined' && window.location.protocol !== 'https:')) {
+            return `${activeApiBase}/camera/stream?t=${streamEpoch}`;
+        }
+        return '';
     });
 
     let isLiveStreamPreAnnotated = $derived(
@@ -747,6 +751,19 @@
             h *= 480;
         }
         return [Math.round(x), Math.round(y), Math.round(w), Math.round(h)];
+    }
+
+    function formatHudLabel(det: any): { label: string; strokeColor: string; status: string; badgeW: number } {
+        const name = det.food_name || det.class_name || 'food_item';
+        const confRaw = Number(det.similarity_rate ?? det.confidence) || 0;
+        const confPct = Math.round(confRaw <= 1 ? confRaw * 100 : confRaw);
+        const status = getItemStatus(det);
+        const spoilage = Number(det.spoilage_score) || 0;
+        const freshness = Math.max(0, Math.min(100, Math.round(100 - spoilage)));
+        const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444');
+        const label = `${name} ${confPct}% [${status} ${freshness}%]`;
+        const badgeW = Math.max(88, label.length * 7.5 + 16);
+        return { label, strokeColor, status, badgeW };
     }
 
     function buildAnnotatedThumbnail(canvas: HTMLCanvasElement, detList: any[]): string {
@@ -1420,7 +1437,6 @@
                     src={resolvedMockVideoSrc}
                     aria-label="Mock Video Feed"
                     class="feed-video"
-                    class:hidden-video={Boolean(mockAnnotatedFrameUrl)}
                     crossorigin="anonymous"
                     playsinline
                     muted
@@ -1435,13 +1451,45 @@
                     onerror={handleVideoError}
                 ></video>
 
-                {#if mockAnnotatedFrameUrl}
-                    <!-- Backend OpenCV Annotated AI Frame (Authoritative Backend Bounding Boxes) -->
-                    <img
-                        src={mockAnnotatedFrameUrl}
-                        alt="Backend OpenCV Annotated AI Frame"
-                        class="feed-video"
-                    />
+                <!-- Dynamic AI Bounding Box HUD Overlay for Mock Video (Active ONLY during playback with detections) -->
+                {#if !isSwitchingMode && mockIsPlaying && detections && detections.length > 0}
+                    <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
+                        {#each detections as det}
+                            {@const box = getDetectionBox(det)}
+                            {#if box}
+                                {@const hud = formatHudLabel(det)}
+                                {@const [bx, by, bw, bh] = box}
+                                <rect
+                                    x={bx}
+                                    y={by}
+                                    width={bw}
+                                    height={bh}
+                                    fill="none"
+                                    stroke={hud.strokeColor}
+                                    stroke-width="2.5"
+                                    rx="4"
+                                />
+                                <rect
+                                    x={bx}
+                                    y={Math.max(0, by - 20)}
+                                    width={hud.badgeW}
+                                    height="20"
+                                    fill={hud.strokeColor}
+                                    rx="3"
+                                />
+                                <text
+                                    x={bx + 6}
+                                    y={Math.max(14, by - 6)}
+                                    fill="#ffffff"
+                                    font-size="11"
+                                    font-weight="bold"
+                                    font-family="sans-serif"
+                                >
+                                    {hud.label}
+                                </text>
+                            {/if}
+                        {/each}
+                    </svg>
                 {/if}
             {:else if sourceMode === 'device_cam'}
                 <!-- Direct Smartphone / Webcam Video Feed (Always mounted so element reference is bound) -->
@@ -1449,20 +1497,52 @@
                     bind:this={deviceCamVideoEl}
                     aria-label="Device Camera Stream"
                     class="feed-video"
-                    class:hidden-video={!isDeviceCamActive || Boolean(deviceCamAnnotatedUrl)}
+                    class:hidden-video={!isDeviceCamActive}
                     playsinline
                     autoplay
                     muted
                 ></video>
 
                 {#if isDeviceCamActive}
-                    {#if deviceCamAnnotatedUrl}
-                        <!-- Backend OpenCV Annotated AI Frame for Smartphone Camera -->
-                        <img
-                            src={deviceCamAnnotatedUrl}
-                            alt="Backend OpenCV Annotated AI Frame"
-                            class="feed-video"
-                        />
+                    <!-- Dynamic AI Bounding Box HUD Overlay for Device Cam (Active ONLY when camera is running with detections) -->
+                    {#if !isSwitchingMode && detections && detections.length > 0}
+                        <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
+                            {#each detections as det}
+                                {@const box = getDetectionBox(det)}
+                                {#if box}
+                                    {@const hud = formatHudLabel(det)}
+                                    {@const [bx, by, bw, bh] = box}
+                                    <rect
+                                        x={bx}
+                                        y={by}
+                                        width={bw}
+                                        height={bh}
+                                        fill="none"
+                                        stroke={hud.strokeColor}
+                                        stroke-width="2.5"
+                                        rx="4"
+                                    />
+                                    <rect
+                                        x={bx}
+                                        y={Math.max(0, by - 20)}
+                                        width={hud.badgeW}
+                                        height="20"
+                                        fill={hud.strokeColor}
+                                        rx="3"
+                                    />
+                                    <text
+                                        x={bx + 6}
+                                        y={Math.max(14, by - 6)}
+                                        fill="#ffffff"
+                                        font-size="11"
+                                        font-weight="bold"
+                                        font-family="sans-serif"
+                                    >
+                                        {hud.label}
+                                    </text>
+                                {/if}
+                            {/each}
+                        </svg>
                     {/if}
                 {:else}
                     <!-- Device Cam Standby / Permission Notice -->
@@ -1484,7 +1564,7 @@
                 {/if}
             {:else}
                 <!-- Live Stream Mode (Unified MJPEG Ingress from ESP32-S3 Camera via Backend OpenCV) -->
-                {#if (hasCamera || isAttemptingLocalStream || discoveredStreamUrl) && !streamError}
+                {#if Boolean(activeStreamUrl) && (hasCamera || isAttemptingLocalStream || discoveredStreamUrl) && !streamError}
                     <img
                         bind:this={liveImgEl}
                         src={activeStreamUrl}
@@ -1494,6 +1574,47 @@
                         onload={handleLiveImgLoaded}
                         onerror={handleLiveImgError}
                     />
+
+                    <!-- Dynamic AI Bounding Box HUD Overlay for Live ESP Stream (Active ONLY when streaming with detections) -->
+                    {#if !isLiveStreamPreAnnotated && !isSwitchingMode && isLiveFeedActive && !streamError && detections && detections.length > 0}
+                        <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
+                            {#each detections as det}
+                                {@const box = getDetectionBox(det)}
+                                {#if box}
+                                    {@const hud = formatHudLabel(det)}
+                                    {@const [bx, by, bw, bh] = box}
+                                    <rect
+                                        x={bx}
+                                        y={by}
+                                        width={bw}
+                                        height={bh}
+                                        fill="none"
+                                        stroke={hud.strokeColor}
+                                        stroke-width="2.5"
+                                        rx="4"
+                                    />
+                                    <rect
+                                        x={bx}
+                                        y={Math.max(0, by - 20)}
+                                        width={hud.badgeW}
+                                        height="20"
+                                        fill={hud.strokeColor}
+                                        rx="3"
+                                    />
+                                    <text
+                                        x={bx + 6}
+                                        y={Math.max(14, by - 6)}
+                                        fill="#ffffff"
+                                        font-size="11"
+                                        font-weight="bold"
+                                        font-family="sans-serif"
+                                    >
+                                        {hud.label}
+                                    </text>
+                                {/if}
+                            {/each}
+                        </svg>
+                    {/if}
                 {:else}
                     <!-- Standby State -->
                     <div class="standby-box">
@@ -2233,6 +2354,16 @@
         justify-content: center;
         aspect-ratio: 4 / 3;
         overflow: hidden;
+    }
+
+    .hud-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 5;
     }
 
     .feed-video {

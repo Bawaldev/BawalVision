@@ -629,6 +629,11 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
                 }
                 return resp;
             }
+            if (route.path.find("/camera/stream") != std::string::npos) {
+                resp.status_code = 204;
+                resp.json_payload = "";
+                return resp;
+            }
             if (route.path.find("/telemetry/latest") != std::string::npos) {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 const auto now = std::chrono::steady_clock::now();

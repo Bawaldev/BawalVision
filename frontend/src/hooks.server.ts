@@ -135,6 +135,9 @@ export const handle: Handle = async ({ event, resolve }) => {
                 if (targetPath === '/api/v1/examples') {
                     return new Response(JSON.stringify([]), { status: 200, headers: jsonHeaders });
                 }
+                if (targetPath === '/api/v1/camera/stream') {
+                    return new Response(null, { status: 204, headers: jsonHeaders });
+                }
             }
             if (event.request.method === 'POST') {
                 if (targetPath === '/api/v1/camera/mode' || targetPath === '/api/v1/devices/mode') {
@@ -223,6 +226,9 @@ export const handle: Handle = async ({ event, resolve }) => {
             console.warn(`[PROXY FALLBACK] Backend ${target} unreachable, serving cloud serverless state:`, err);
 
             const path = event.url.pathname;
+            if (path.includes('/camera/stream')) {
+                return new Response(null, { status: 204, headers: jsonHeaders });
+            }
             if (path.includes('/camera/mode') || path.includes('/devices/mode')) {
                 return new Response(JSON.stringify({
                     status: 'success',
