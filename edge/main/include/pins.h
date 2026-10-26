@@ -71,9 +71,48 @@
 #define PIN_LED_FLASH 2
 
 /* =========================================================================
- * OV3660 / OV5640 DVP Camera Interface Wiring (esp_camera.h)
+ * OV3660 / OV5640 / OV2640 DVP Camera Interface Wiring (esp_camera.h)
+ * Auto-adapts to selected ESP32-S3 board profile
  * ========================================================================= */
 
+#if defined(CONFIG_BOARD_WAVESHARE_ESP32S3_CAM)
+#define CAM_PIN_PWDN  -1
+#define CAM_PIN_RESET -1
+#define CAM_PIN_XCLK  10
+#define CAM_PIN_SIOD  40
+#define CAM_PIN_SIOC  39
+#define CAM_PIN_D7    48
+#define CAM_PIN_D6    11
+#define CAM_PIN_D5    12
+#define CAM_PIN_D4    14
+#define CAM_PIN_D3    16
+#define CAM_PIN_D2    18
+#define CAM_PIN_D1    17
+#define CAM_PIN_D0    15
+#define CAM_PIN_VSYNC 38
+#define CAM_PIN_HREF  47
+#define CAM_PIN_PCLK  13
+
+#elif defined(CONFIG_BOARD_XIAO_ESP32S3_SENSE)
+#define CAM_PIN_PWDN  -1
+#define CAM_PIN_RESET -1
+#define CAM_PIN_XCLK  10
+#define CAM_PIN_SIOD  40
+#define CAM_PIN_SIOC  39
+#define CAM_PIN_D7    48
+#define CAM_PIN_D6    11
+#define CAM_PIN_D5    12
+#define CAM_PIN_D4    14
+#define CAM_PIN_D3    16
+#define CAM_PIN_D2    18
+#define CAM_PIN_D1    17
+#define CAM_PIN_D0    15
+#define CAM_PIN_VSYNC 38
+#define CAM_PIN_HREF  47
+#define CAM_PIN_PCLK  13
+
+#else
+/* Default Profile: Freenove / AI-Thinker S3 / Custom BawalVision PCB */
 #ifndef CAM_PIN_PWDN
 #define CAM_PIN_PWDN -1 /* PWDN tied to GND */
 #endif
@@ -136,4 +175,6 @@
 
 #ifndef CAM_PIN_PCLK
 #define CAM_PIN_PCLK 13 /* IO13 / Pin 18 */
+#endif
+
 #endif

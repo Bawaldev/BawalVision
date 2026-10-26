@@ -812,6 +812,36 @@ void BackendApp::registerCameraRoutes() {
         .methods(crow::HTTPMethod::Get)([serve_raw]() {
             return serve_raw({});
         });
+
+    CROW_WEBSOCKET_ROUTE(m_app, "/api/v1/camera/ws/stream")
+        .onopen([this](crow::websocket::connection& conn) {
+            std::lock_guard<std::mutex> lock(m_ws_mutex);
+            m_ws_clients.insert(&conn);
+        })
+        .onclose([this](crow::websocket::connection& conn, const std::string& /*reason*/, uint16_t /*status*/) {
+            std::lock_guard<std::mutex> lock(m_ws_mutex);
+            m_ws_clients.erase(&conn);
+        })
+        .onmessage([this](crow::websocket::connection& conn, const std::string& data, bool is_binary) {
+            if (is_binary && data.size() >= 4 &&
+                static_cast<uint8_t>(data[0]) == 0xFF && static_cast<uint8_t>(data[1]) == 0xD8) {
+                // Ingress from camera node via WebSocket: ingest frame directly into SHM pipeline
+                const uint32_t id = m_state.camera().frame_id + 1;
+                const std::vector<uint8_t> jpeg(data.begin(), data.end());
+                m_state.updateFrame("ESP32_CAMERA", id, jpeg, 640, 480);
+                (void)m_producer.writeFrame(id, reinterpret_cast<const uint8_t*>(data.data()), data.size(), 640, 480);
+
+                // Broadcast frame to all viewing browser sessions
+                std::lock_guard<std::mutex> lock(m_ws_mutex);
+                for (auto* client : m_ws_clients) {
+                    if (client != &conn) {
+                        client->send_binary(data);
+                    }
+                }
+            } else if (!is_binary && data == "ping") {
+                conn.send_text("pong");
+            }
+        });
 }
 
 void BackendApp::registerTelemetryRoutes() {

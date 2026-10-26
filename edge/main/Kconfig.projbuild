@@ -6,4 +6,21 @@ menu "Bawal Edge Node Configuration"
         help
             Static Device ID sent to the backend.
 
+    choice BOARD_TYPE
+        prompt "ESP32-S3 Camera Board Model"
+        default BOARD_ESP32S3_DEFAULT
+        help
+            Select the hardware pinout matching your ESP32-S3 camera module.
+
+        config BOARD_ESP32S3_DEFAULT
+            bool "Default (Freenove / AI-Thinker S3 / Custom BawalVision PCB)"
+
+        config BOARD_WAVESHARE_ESP32S3_CAM
+            bool "Waveshare ESP32-S3 CAM"
+
+        config BOARD_XIAO_ESP32S3_SENSE
+            bool "Seeed Studio XIAO ESP32-S3 Sense"
+
+    endchoice
+
 endmenu

@@ -30,9 +30,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && rm -rf /var/lib/apt/lists/*
 
 # ONNX Runtime is not packaged by Debian; install the official CPU release.
+# Supports both x86_64 (amd64) and AWS Graviton / ARM64 (aarch64).
+ARG TARGETARCH
 ARG ONNXRUNTIME_VERSION=1.19.2
 RUN mkdir -p /opt/onnxruntime && \
-    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz" \
+    ARCH=$(case "${TARGETARCH:-amd64}" in arm64|aarch64) echo "aarch64" ;; *) echo "x64" ;; esac) && \
+    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION}.tgz" \
         | tar -xz -C /opt/onnxruntime --strip-components=1
 
 WORKDIR /src
@@ -89,10 +92,18 @@ COPY --from=builder /src/services/build/bin/bawal_backend /app/bawal_backend
 # LaTeX audit templates resolved by LatexPdfGenerator (/app/services/templates).
 COPY --from=builder /src/services/templates/ /app/services/templates/
 
-ENV LD_LIBRARY_PATH=/usr/local/lib
-ENV OMP_WAIT_POLICY=PASSIVE \
+# Pre-packaged INT8 ONNX model for out-of-the-box YOLO inference
+COPY ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx /app/ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx
+
+ENV LD_LIBRARY_PATH=/usr/local/lib \
+    PORT=8080 \
+    CROW_PORT=8080 \
+    OMP_WAIT_POLICY=PASSIVE \
     OMP_SCHEDULE=static \
     OMP_PROC_BIND=true
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8080}/api/v1/health || exit 1
 
 EXPOSE 8080
 

@@ -32,7 +32,7 @@ std::string envOr(const char* key, const char* fallback) {
 }
 
 uint16_t envPort() {
-    const std::string value = envOr("CROW_PORT", envOr("BACKEND_PORT", "8080").c_str());
+    const std::string value = envOr("PORT", envOr("CROW_PORT", envOr("BACKEND_PORT", "8080").c_str()).c_str());
     char* end = nullptr;
     const unsigned long port = std::strtoul(value.c_str(), &end, 10);
     if (end == value.c_str() || port == 0 || port > 65535) {

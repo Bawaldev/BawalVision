@@ -1189,6 +1189,13 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
                             (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddStringToObject(root, "camera_model", camera_get_sensor_name());
 
+    esp_netif_ip_info_t esp_ip_info;
+    if (get_sta_ip_info(&esp_ip_info)) {
+        char esp_ip_str[24] = {0};
+        snprintf(esp_ip_str, sizeof(esp_ip_str), IPSTR, IP2STR(&esp_ip_info.ip));
+        cJSON_AddStringToObject(root, "ip_address", esp_ip_str);
+    }
+
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!json) return ESP_ERR_NO_MEM;

@@ -7,6 +7,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "bawal/backend/state.hpp"
@@ -115,6 +116,9 @@ private:
     bawal::vision::FoodClassifier* m_batch_classifier{nullptr};
     bawal::lambda::LambdaRuntimeHandler* m_lambda_handler{nullptr};
     std::mutex m_batch_mutex; ///< Serializes ZIP batch jobs sharing one classifier.
+
+    std::mutex m_ws_mutex;
+    std::unordered_set<crow::websocket::connection*> m_ws_clients;
 };
 
 } // namespace bawal::backend

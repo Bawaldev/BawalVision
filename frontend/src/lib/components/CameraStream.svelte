@@ -328,6 +328,53 @@
     const MAX_RETRIES = 3;
     let isTabVisible = $state(true);
 
+    let wsLiveStream: WebSocket | null = null;
+    let wsLiveFrameUrl = $state('');
+
+    function connectLiveWebSocket() {
+        if (typeof window === 'undefined') return;
+        disconnectLiveWebSocket();
+
+        const base = activeApiBase.replace(/\/+$/, '');
+        const wsOrigin = base.startsWith('http')
+            ? base.replace(/^http/i, 'ws')
+            : (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + base;
+        const targetWsUrl = `${wsOrigin}/camera/ws/stream`;
+
+        try {
+            wsLiveStream = new WebSocket(targetWsUrl);
+            wsLiveStream.binaryType = 'arraybuffer';
+            wsLiveStream.onmessage = (event) => {
+                if (event.data instanceof ArrayBuffer && event.data.byteLength > 4) {
+                    const blob = new Blob([event.data], { type: 'image/jpeg' });
+                    if (wsLiveFrameUrl) {
+                        URL.revokeObjectURL(wsLiveFrameUrl);
+                    }
+                    wsLiveFrameUrl = URL.createObjectURL(blob);
+                    isLiveFeedActive = true;
+                    streamError = false;
+                }
+            };
+            wsLiveStream.onerror = () => {
+                // Graceful fallback to HTTP MJPEG stream
+            };
+            wsLiveStream.onclose = () => {
+                wsLiveStream = null;
+            };
+        } catch {}
+    }
+
+    function disconnectLiveWebSocket() {
+        if (wsLiveStream) {
+            wsLiveStream.close();
+            wsLiveStream = null;
+        }
+        if (wsLiveFrameUrl) {
+            URL.revokeObjectURL(wsLiveFrameUrl);
+            wsLiveFrameUrl = '';
+        }
+    }
+
     let activeStreamUrl = $derived.by(() => {
         if (!isTabVisible) return '';
         if (streamUrl) {
@@ -691,8 +738,10 @@
             });
 
         if (sourceMode === 'live') {
+            connectLiveWebSocket();
             startLivePushing();
         } else {
+            disconnectLiveWebSocket();
             startMockPushing();
         }
     });
@@ -1032,6 +1081,7 @@
 
         try {
             if (mode === 'mock') {
+                disconnectLiveWebSocket();
                 // 1. Immediately request backend mode change and wipe frames/detections
                 await postCameraMode({
                     mode: 'mock',
@@ -1051,6 +1101,7 @@
                 }
                 startMockPushing();
             } else if (mode === 'device_cam') {
+                disconnectLiveWebSocket();
                 await postCameraMode({ mode: 'live' });
                 await new Promise(r => setTimeout(r, 300));
                 await startDeviceCam();
@@ -1058,6 +1109,7 @@
                 await postCameraMode({ mode: 'live' });
                 await new Promise(r => setTimeout(r, 300));
                 streamEpoch = Date.now();
+                connectLiveWebSocket();
                 startLivePushing();
             }
         } catch (err) {
@@ -1268,6 +1320,7 @@
         stopMockPushing();
         stopLivePushing();
         stopDeviceCam();
+        disconnectLiveWebSocket();
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);
         }
@@ -1563,11 +1616,11 @@
                     </div>
                 {/if}
             {:else}
-                <!-- Live Stream Mode (Unified MJPEG Ingress from ESP32-S3 Camera via Backend OpenCV) -->
-                {#if Boolean(activeStreamUrl) && (hasCamera || isAttemptingLocalStream || discoveredStreamUrl) && !streamError}
+                <!-- Live Stream Mode (Unified WebSocket / MJPEG Ingress from ESP32-S3 Camera via Backend OpenCV) -->
+                {#if Boolean(wsLiveFrameUrl || activeStreamUrl) && (hasCamera || isAttemptingLocalStream || discoveredStreamUrl || wsLiveFrameUrl) && !streamError}
                     <img
                         bind:this={liveImgEl}
-                        src={activeStreamUrl}
+                        src={wsLiveFrameUrl || activeStreamUrl}
                         alt="AI Live Inspection Stream"
                         class="feed-video"
                         crossorigin="anonymous"
