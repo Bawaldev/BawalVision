@@ -17,8 +17,7 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
                       +-----------------------------+
                       |   ESP32-S3 Edge Node        |
                       | - OV5640 DVP Camera (VGA)   |
-                      | - ST7789 128x160 LVGL TFT   |
-                      | - GY-906 IR Temp Sensor     |
+                      | - st7735 128x160 LVGL TFT   |
                       | - FreeRTOS Static Tasks     |
                       +--------------+--------------+
                                      | HTTP POST (Keep-Alive) / Wi-Fi
@@ -55,7 +54,7 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
 | Subsystem | Primary Technologies | Handbook & Documentation | Key Responsibilities |
 | :--- | :--- | :--- | :--- |
 | **Vision & Backend Engine** | C++20, OpenCV 4, ONNX Runtime, OpenMP, Crow, mimalloc | 📖 [`services/README.md`](services/README.md) | High-speed POSIX SHM frame ingress, in-process YOLOv8s INT8 inference, 8-lane AVX2 spoilage evaluation, Crow REST/WebSocket API, and LaTeX PDF audit generation. |
-| **Edge Hardware Node** | ESP32-S3, FreeRTOS, LVGL 8, OV5640 DVP, MLX90614 I2C | 📖 [`edge/README.md`](edge/README.md) | Deterministic static-allocated FreeRTOS firmware, 20 FPS video streaming over HTTP Keep-Alive, UDP auto-discovery, and local SPI TFT RGB dashboard. |
+| **Edge Hardware Node** | ESP32-S3, FreeRTOS, LVGL 8, OV5640 DVP| 📖 [`edge/README.md`](edge/README.md) | Deterministic static-allocated FreeRTOS firmware, 20 FPS video streaming over HTTP Keep-Alive, UDP auto-discovery, and local SPI TFT RGB dashboard. |
 | **Frontend Web HMI** | SvelteKit 5 (Runes), TypeScript, Vite, Tailwind CSS, DaisyUI | 📖 [`frontend/README.md`](frontend/README.md) | Real-time supervision dashboard, 30+ FPS live inspection stream, high-throughput batch ZIP uploader, interactive PDF report viewer, and USB Wi-Fi provisioning. |
 | **Machine Learning & Pipeline**| PyTorch, Ultralytics YOLOv8, ONNX, Real-ESRGAN | 📖 [`ml/README.md`](ml/README.md) | Autonomous data gathering, dHash deduplication, zero-shot YOLO-World relabeling, YOLOv8s training, layer-frozen incremental fine-tuning, and INT8 Post-Training Quantization (PTQ). |
 | **Deployment & Orchestration** | Docker Compose, PostgreSQL 16, Grafana OSS, AWS Lambda | 📖 [`deploy/README.md`](deploy/README.md) | Production Docker stack, automated PostgreSQL telemetry persistence, pre-provisioned Grafana analytics, and serverless AWS Lambda C++ container packaging. |
@@ -81,21 +80,63 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
 
 | Function | Signal Name | ESP32-S3 GPIO | Pin Header / Notes |
 |---|---|---|---|
-| **TFT Display (SPI)** | `LCD_MOSI` | `GPIO 14` | Pin 19 (`IO14`) |
-| | `LCD_SCK` | `GPIO 21` | Pin 37 (`IO21`) |
-| | `LCD_DC` | `GPIO 45` | Pin 34 (`IO45`) |
-| | `LCD_CS` | Tied to `GND` | Direct Ground (CS-less mode) |
-| | `LCD_RST` | Tied to `RES/EN` | Hardware Reset Line |
-| | `LCD_BCKL` | Tied to `3V3` | Always On |
-| **Thermal Sensor (I2C)** | `I2C_SDA` | `GPIO 1` | Pin 23 (`IO1`) |
-| | `I2C_SCL` | `GPIO 47` | Pin 36 (`IO47`) |
-| **OV5640 Camera (DVP)** | `CAM_XCLK` | `GPIO 15` | Pin 7 |
-| | `CAM_PCLK` | `GPIO 13` | Pin 18 |
-| | `CAM_VSYNC` | `GPIO 6` | Pin 5 |
-| | `CAM_HREF` | `GPIO 7` | Pin 6 |
-| | `CAM_SIOD` | `GPIO 4` | Pin 3 |
-| | `CAM_SIOC` | `GPIO 5` | Pin 4 |
+| **ST7735 TFT Display (SPI)** | `LCD_MOSI` | `GPIO 14` | Pin 19 (`IO14` / Master Out Slave In) |
+| | `LCD_SCK` | `GPIO 21` | Pin 37 (`IO21` / SPI Clock) |
+| | `LCD_DC` | `GPIO 45` | Pin 34 (`IO45` / Data-Command Select) |
+| | `LCD_RST` | `GPIO 39` | Pin 39 (`IO39` / Panel Hardware Reset) |
+| | `LCD_BCKL` | `GPIO 38` | Pin 38 (`IO38` / Display Backlight Control) |
+| | `LCD_CS` | `-1` | Tied to `GND` (Direct Ground, CS-less mode) |
+| **System Control & I/O** | `PIN_BTN_TRIGGER` | `GPIO 48` | Inspection trigger switch (Active LOW with internal pull-up) |
+| | `PIN_LED_FLASH` | `GPIO 2` | Pin 24 (`IO2` / Illumination LED trigger) |
+| | `PIN_BTN_BOOT` | `GPIO 0` | Pin 33 (`IO0` / Bootloader mode switch) |
+| **OV3660 / OV5640 Camera (DVP)** | `CAM_XCLK` | `GPIO 15` | Pin 7 (`IO15` / Master Clock 20 MHz) |
+| | `CAM_PCLK` | `GPIO 13` | Pin 18 (`IO13` / Pixel Clock) |
+| | `CAM_VSYNC` | `GPIO 6` | Pin 5 (`IO6` / Vertical Sync) |
+| | `CAM_HREF` | `GPIO 7` | Pin 6 (`IO7` / Horizontal Reference) |
+| | `CAM_SIOD` | `GPIO 4` | Pin 3 (`IO4` / SCCB I2C SDA) |
+| | `CAM_SIOC` | `GPIO 5` | Pin 4 (`IO5` / SCCB I2C SCL) |
 | | `CAM_D0..D7` (Y2..Y9) | `11, 9, 8, 10, 12, 18, 17, 16` | 8-bit Parallel DVP Data Bus |
+| | `CAM_PWDN` | `-1` | Tied to `GND` |
+| | `CAM_RESET` | `-1` | Tied to `3V3` |
+
+---
+
+## 🧾 Hardware Bill of Materials (BOM) — BawalVision v7
+
+The complete engineering Bill of Materials sourced from [`hardware/bom/BawalVision v7.xlsx`](hardware/bom/BawalVision%20v7.xlsx):
+
+| Reference Designator | Model / Part | Quantity | Description / Application |
+|---|---|:---:|---|
+| **Microcontroller** | ESP32-S3-WROOM CAM Dev Board | 1 | Dual-core Xtensa LX7 @ 240 MHz, 8 MB PSRAM, 16 MB Flash |
+| **CAM1** | OmniVision OV3660 | 1 | 3-Megapixel CMOS image sensor with 24-pin 0.5 mm pitch FPC interface |
+| **TFT Screen** | 1.8" SPI TFT (ST7735) | 1 | 128×160 RGB display for on-device LVGL telemetry HUD |
+| **IC1** | LM7805 | 1 | 5V linear voltage regulator with aluminum heatsink |
+| **TP5100** | TP5100 | 1 | 2A lithium battery charge management controller |
+| **FDC-2S-200** | FDC-2S-200 | 1 | 2S Lithium-Ion Battery Management System (BMS) protection board |
+| **BT1** | 2S Battery Pack | 1 | Portable DC battery power pack |
+| **PPTC** | Resettable PolySwitch | 2 | 0.7A in series for overcurrent & thermal cutoff protection |
+| **9mm-DC-JACK** | Female DC Jack (9 mm) | 1 | External DC power input port |
+| **S3** | Rocker Switch | 1 | Master power ON/OFF switch |
+| **S1** | Pushbutton Switch | 1 | Inspection illumination trigger switch |
+| **D1** | White LED | 1 | Food tray target area lighting |
+| **C** | Ceramic Capacitor | 2 | Decoupling capacitors |
+| **Thermal Putty** | Thermal interface compound | 1 tub | PPTC thermal coupling & heat management |
+| **Pin Header** | 2.54 mm Female Header | 1 set | Socket mount for ESP32-S3 CAM development board |
+| **Terminal Block** | 2-pin Screw Terminal (1×2) | 3 | Modular wire interconnects |
+| **Perfboard** | Prototyping Board | 2 | FR2 for power assembly, FR4 for motherboard |
+| **Hardware** | Nuts, bolts, standoffs, cabling | Assorted | Chassis standoffs, mechanical fasteners, and hookup wires |
+| **Enclosure** | Generic Electronic Box | 1 | Enclosure with cutouts for LCD, camera, switches, and DC jack |
+
+---
+
+### 📸 Physical Device Gallery
+Detailed teardown, schematics, and internal layout photos are documented in [**`hardware/README.md`**](hardware/README.md).
+
+| Enclosure & Display HUD | Motherboard & ESP32-S3 | Power Assembly & BMS |
+|:---:|:---:|:---:|
+| <img src="hardware/docs/assets/Screen.jpeg" width="240" alt="Screen View" /> | <img src="hardware/docs/assets/motherboard.jpeg" width="240" alt="Motherboard" /> | <img src="hardware/docs/assets/power_assemvly.jpeg" width="240" alt="Power Assembly" /> |
+| **Top Chassis View** | **Internal Exploded Assembly** | |
+| <img src="hardware/docs/assets/topview.jpeg" width="240" alt="Top View" /> | <img src="hardware/docs/assets/exploded_view.jpeg" width="240" alt="Exploded View" /> | |
 
 ---
 
@@ -245,7 +286,7 @@ just run-edge /dev/ttyACM0
 |:---|:---|:---|
 | **Faris Wirakusuma** ([@fariswirakusuma](https://github.com/fariswirakusuma)) | Lead Architect & Backend Lead | C++20 Vision Engine, AVX2 SIMD, POSIX SHM Ingress, Crow REST Backend, AWS Lambda C++ |
 | **Rasya Khairi** ([@OurangIlang](https://github.com/OurangIlang)) | ML & Frontend Lead | YOLO-World Relabeling, YOLOv8 Training & Layer-Frozen Fine-Tuning, INT8 PTQ Quantization, SvelteKit 5 HMI |
-| **Daffa Rizqy Andika** ([@pondwatr](https://github.com/pondwatr)) | Embedded & Hardware Lead | ESP32-S3 Static FreeRTOS Firmware, OV5640 DVP Camera, ST7789 LVGL Display, I2C Thermal |
+| **Daffa Rizqy Andika** ([@pondwatr](https://github.com/pondwatr)) | Embedded & Hardware Lead | ESP32-S3 Static FreeRTOS Firmware, OV5640 DVP Camera, st7735 LVGL Display|
 
 > See full team profiles, acknowledgments, and code ownership in [**`CONTRIBUTORS.md`**](CONTRIBUTORS.md) and [`.github/CODEOWNERS`](.github/CODEOWNERS).
 
