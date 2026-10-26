@@ -7,6 +7,7 @@ export IDF_PATH    := env_var_or_default("IDF_PATH", env_var("HOME") + "/esp/esp
 import 'scripts/backend.just'
 import 'scripts/edge.just'
 import 'scripts/ml.just'
+import 'scripts/relay.just'
 
 # Generate or refresh cryptographically secure secrets in .env
 [group('Setup')]

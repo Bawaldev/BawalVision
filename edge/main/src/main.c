@@ -21,6 +21,7 @@
 #include "data.h"
 #include "lcd_task.h"
 #include "camera_task.h"
+#include "camera_relay.h"
 #include "wifi.h"
 #include "led_strip.h"
 #include "pins.h"
@@ -260,6 +261,8 @@ void app_main(void) {
         ESP_LOGE(TAG, "Failed to start MJPEG HTTP server: %s",
                  esp_err_to_name(stream_server_err));
     }
+
+    camera_relay_start();
 
     s_wifi_task_handle = xTaskCreateStaticPinnedToCore(
         WiFi_Server_Task, "WiFi_Server_Task", WIFI_TASK_STACK_SIZE,

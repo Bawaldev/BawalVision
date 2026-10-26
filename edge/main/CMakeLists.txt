@@ -5,6 +5,7 @@ idf_component_register(
         "src/system_monitor.c"
         "src/lcd_task.c"
         "src/camera_task.c"
+        "src/camera_relay.c"
     INCLUDE_DIRS 
         "include"
         "src"
@@ -20,6 +21,7 @@ idf_component_register(
         esp_netif
         esp_http_client
         esp_http_server
+        esp_websocket_client
         esp_timer
         driver
         esp_hw_support
@@ -52,6 +54,16 @@ if(EXISTS "${ENV_FILE}")
                 set(CONFIG_BACKEND_PORT "${VAL}")
             elseif(KEY STREQUAL "BAWAL_DEVICE_TOKEN")
                 set(CONFIG_DEVICE_AUTH_TOKEN "${VAL}")
+            elseif(KEY STREQUAL "CAMERA_RELAY_URL")
+                set(CONFIG_CAMERA_RELAY_URL "${VAL}")
+            elseif(KEY STREQUAL "CAMERA_RELAY_KEY")
+                set(CONFIG_CAMERA_RELAY_KEY "${VAL}")
+            elseif(KEY STREQUAL "RELAY_INGEST_KEY")
+                set(CONFIG_CAMERA_RELAY_KEY "${VAL}")
+            elseif(KEY STREQUAL "CAMERA_RELAY_FPS")
+                set(CONFIG_CAMERA_RELAY_FPS "${VAL}")
+            elseif(KEY STREQUAL "CAMERA_RELAY_DEVICE")
+                set(CONFIG_CAMERA_RELAY_DEVICE "${VAL}")
             endif()
         endif()
     endforeach()
@@ -76,6 +88,22 @@ endif()
 
 if(DEFINED CONFIG_DEVICE_AUTH_TOKEN)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_DEVICE_AUTH_TOKEN="${CONFIG_DEVICE_AUTH_TOKEN}")
+endif()
+
+if(DEFINED CONFIG_CAMERA_RELAY_URL)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_CAMERA_RELAY_URL="${CONFIG_CAMERA_RELAY_URL}")
+endif()
+
+if(DEFINED CONFIG_CAMERA_RELAY_KEY)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_CAMERA_RELAY_KEY="${CONFIG_CAMERA_RELAY_KEY}")
+endif()
+
+if(DEFINED CONFIG_CAMERA_RELAY_FPS AND NOT CONFIG_CAMERA_RELAY_FPS STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_CAMERA_RELAY_FPS=${CONFIG_CAMERA_RELAY_FPS})
+endif()
+
+if(DEFINED CONFIG_CAMERA_RELAY_DEVICE)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_CAMERA_RELAY_DEVICE="${CONFIG_CAMERA_RELAY_DEVICE}")
 endif()
 
 # Enable DEBUG log level for this component (Level 4 = DEBUG)

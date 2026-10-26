@@ -1,0 +1,8 @@
+# Caddy reverse proxy for the BawalVision camera relay.
+# RELAY_DOMAIN must resolve to the VM's public IP (Let's Encrypt HTTP challenge).
+{$RELAY_DOMAIN} {
+	reverse_proxy relay:8080 {
+		# Stream JPEG frames immediately instead of buffering.
+		flush_interval -1
+	}
+}

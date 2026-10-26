@@ -12,6 +12,8 @@
 #include <unistd.h>
 
 #include "cJSON.h"
+#include "camera_relay.h"
+#include "esp_sntp.h"
 #include "camera_task.h"
 #include "driver/usb_serial_jtag.h"
 #include "esp_camera.h"
@@ -53,6 +55,7 @@ static char s_discovered_ip[32] = {0};
 static bool s_nvs_wifi_pass_key_present = false;
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static bool s_wifi_initialized = false;
+static bool s_sntp_started = false;
 static volatile bool s_provisioning_active = false;
 static httpd_handle_t s_http_server = NULL;
 static atomic_int s_mjpeg_clients = 0;
@@ -706,6 +709,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         lcd_update_wifi_status(true, ip_str);
         lcd_update_http_status("WIFI READY", false);
 
+        if (!s_sntp_started) {
+            esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+            esp_sntp_setservername(0, "pool.ntp.org");
+            esp_sntp_init();
+            s_sntp_started = true;
+            ESP_LOGI(TAG, "SNTP started (needed for WSS certificate checks)");
+        }
+
         char target_url[URL_BUFFER_SIZE] = {0};
         if (get_backend_url(CAMERA_FRAME_ENDPOINT, target_url, sizeof(target_url)) == ESP_OK) {
             ESP_LOGI(TAG, "Target backend URL: %s", target_url);
@@ -1019,6 +1030,21 @@ static esp_err_t status_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "heap_free", (double)esp_get_free_heap_size());
     cJSON_AddBoolToObject(root, "streaming", is_camera_streaming());
 
+    char relay_url[RELAY_URL_MAX] = {0};
+    int relay_fps = RELAY_DEFAULT_FPS;
+    bool relay_configured = camera_relay_get_config(
+        relay_url, sizeof(relay_url), NULL, 0, &relay_fps);
+    cJSON_AddBoolToObject(root, "relay_configured", relay_configured);
+    cJSON_AddBoolToObject(root, "relay_connected", camera_relay_is_connected());
+    cJSON_AddNumberToObject(root, "relay_fps", relay_fps);
+    cJSON_AddNumberToObject(root, "relay_frames_sent",
+                            (double)camera_relay_frames_sent());
+    cJSON_AddNumberToObject(root, "relay_send_errors",
+                            (double)camera_relay_send_errors());
+    if (relay_configured) {
+        cJSON_AddStringToObject(root, "relay_url", relay_url);
+    }
+
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (json) {
@@ -1042,7 +1068,7 @@ static esp_err_t config_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
 
-    char buf[512] = {0};
+    char buf[1024] = {0};
     int total_len = req->content_len;
     if (total_len <= 0 || total_len >= sizeof(buf)) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1084,15 +1110,47 @@ static esp_err_t config_handler(httpd_req_t *req) {
         snprintf(port_buf, sizeof(port_buf), "%u", get_backend_port());
     }
 
+    cJSON *relay_url = cJSON_GetObjectItemCaseSensitive(root, "relay_url");
+    if (!relay_url) relay_url = cJSON_GetObjectItemCaseSensitive(root, "camera_relay_url");
+    cJSON *relay_key = cJSON_GetObjectItemCaseSensitive(root, "relay_key");
+    if (!relay_key) relay_key = cJSON_GetObjectItemCaseSensitive(root, "camera_relay_key");
+    cJSON *relay_fps = cJSON_GetObjectItemCaseSensitive(root, "relay_fps");
+
+    bool relay_ok = true;
+    if (relay_url || relay_key || relay_fps) {
+        char cur_url[RELAY_URL_MAX] = {0};
+        char cur_key[RELAY_KEY_MAX] = {0};
+        int cur_fps = RELAY_DEFAULT_FPS;
+        (void)camera_relay_get_config(cur_url, sizeof(cur_url),
+                                      cur_key, sizeof(cur_key), &cur_fps);
+        const char *url_val = (cJSON_IsString(relay_url) && relay_url->valuestring)
+                                  ? relay_url->valuestring : cur_url;
+        const char *key_val = (cJSON_IsString(relay_key) && relay_key->valuestring)
+                                  ? relay_key->valuestring : cur_key;
+        int fps_val = cJSON_IsNumber(relay_fps) ? relay_fps->valueint : cur_fps;
+        relay_ok = camera_relay_set_config(url_val, key_val, fps_val);
+    }
+
     bool ok = wifi_apply_runtime_credentials(ssid_val, pass_val, ip_val, port_buf);
     cJSON_Delete(root);
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "status", ok ? "ok" : "error");
+    cJSON_AddStringToObject(resp, "status", (ok && relay_ok) ? "ok" : "error");
     cJSON_AddStringToObject(resp, "message", ok ? "ESP32 Target Backend updated and persisted to NVS" : "Failed to apply configuration");
     cJSON_AddStringToObject(resp, "backend_ip", g_backend_ip);
     cJSON_AddNumberToObject(resp, "backend_port", (double)get_backend_port());
     cJSON_AddStringToObject(resp, "ssid", g_wifi_ssid);
+
+    char relay_url_out[RELAY_URL_MAX] = {0};
+    int relay_fps_out = RELAY_DEFAULT_FPS;
+    bool relay_configured = camera_relay_get_config(
+        relay_url_out, sizeof(relay_url_out), NULL, 0, &relay_fps_out);
+    cJSON_AddBoolToObject(resp, "relay_configured", relay_configured);
+    cJSON_AddBoolToObject(resp, "relay_connected", camera_relay_is_connected());
+    cJSON_AddNumberToObject(resp, "relay_fps", relay_fps_out);
+    if (!relay_ok) {
+        cJSON_AddStringToObject(resp, "relay_error", "invalid relay configuration");
+    }
 
     char *resp_str = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
@@ -1343,7 +1401,41 @@ static void handle_provisioning_line(char *line) {
             }
 
             bool ok = wifi_apply_runtime_credentials(ssid_val, pass_val, ip_val, port_buf);
+
+            cJSON *relay_url = cJSON_GetObjectItemCaseSensitive(cmd_json, "relay_url");
+            cJSON *relay_key = cJSON_GetObjectItemCaseSensitive(cmd_json, "relay_key");
+            cJSON *relay_fps = cJSON_GetObjectItemCaseSensitive(cmd_json, "relay_fps");
+            if (relay_url || relay_key || relay_fps) {
+                char cur_url[RELAY_URL_MAX] = {0};
+                char cur_key[RELAY_KEY_MAX] = {0};
+                int cur_fps = RELAY_DEFAULT_FPS;
+                (void)camera_relay_get_config(cur_url, sizeof(cur_url),
+                                              cur_key, sizeof(cur_key), &cur_fps);
+                const char *url_val = (cJSON_IsString(relay_url) && relay_url->valuestring)
+                                          ? relay_url->valuestring : cur_url;
+                const char *key_val = (cJSON_IsString(relay_key) && relay_key->valuestring)
+                                          ? relay_key->valuestring : cur_key;
+                int fps_val = cJSON_IsNumber(relay_fps) ? relay_fps->valueint : cur_fps;
+                ok = camera_relay_set_config(url_val, key_val, fps_val) && ok;
+            }
+
             usb_send_ack(ok ? "wifi_provisioned" : "error");
+        } else if (strcmp(cmd_item->valuestring, "set_relay") == 0) {
+            cJSON *relay_url = cJSON_GetObjectItemCaseSensitive(cmd_json, "relay_url");
+            cJSON *relay_key = cJSON_GetObjectItemCaseSensitive(cmd_json, "relay_key");
+            cJSON *relay_fps = cJSON_GetObjectItemCaseSensitive(cmd_json, "relay_fps");
+            char cur_url[RELAY_URL_MAX] = {0};
+            char cur_key[RELAY_KEY_MAX] = {0};
+            int cur_fps = RELAY_DEFAULT_FPS;
+            (void)camera_relay_get_config(cur_url, sizeof(cur_url),
+                                          cur_key, sizeof(cur_key), &cur_fps);
+            const char *url_val = (cJSON_IsString(relay_url) && relay_url->valuestring)
+                                      ? relay_url->valuestring : cur_url;
+            const char *key_val = (cJSON_IsString(relay_key) && relay_key->valuestring)
+                                      ? relay_key->valuestring : cur_key;
+            int fps_val = cJSON_IsNumber(relay_fps) ? relay_fps->valueint : cur_fps;
+            bool ok = camera_relay_set_config(url_val, key_val, fps_val);
+            usb_send_ack(ok ? "relay_configured" : "error");
         } else if (strcmp(cmd_item->valuestring, "status") == 0 ||
                    strcmp(cmd_item->valuestring, "get_status") == 0) {
             usb_send_ack("ok");
@@ -1373,7 +1465,7 @@ static void provisioning_feed_bytes(const uint8_t *data, size_t len,
 
 void usb_serial_provisioning_task(void *pvParameters) {
     (void)pvParameters;
-    char line[256];
+    char line[512];
     size_t idx = 0;
     uint8_t buf[128];
 

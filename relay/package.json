@@ -1,0 +1,17 @@
+{
+  "name": "bawal-camera-relay",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

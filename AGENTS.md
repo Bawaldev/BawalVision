@@ -16,6 +16,10 @@ source of truth — README tables can lag behind).
   **no test suite**.
 - `ml/` — Python training/quantization pipeline, runs in root `.venv`.
 - `deploy/` — `docker-compose.yml` + Dockerfiles (compose file is NOT at repo root).
+- `relay/` — stateful Node/WSS camera relay. ESP32 publishes JPEG frames to
+  `/ingest`, browsers subscribe to `/watch`; keeps only the latest frame per
+  device and drops frames for slow watchers. Oracle Always Free VM stack:
+  `deploy/docker-compose.relay.yml` + `deploy/Caddyfile.relay` (Caddy TLS).
 - `.github/CODEOWNERS` maps subsystem ownership; `.github/workflows/` CI is
   path-scoped per subsystem.
 
@@ -30,6 +34,8 @@ source of truth — README tables can lag behind).
 - Frontend: `just install-frontend`, `just check-frontend` (the typecheck), `just run-frontend`.
 - Edge: `just build-edge` / `just run-edge [port]` — requires ESP-IDF; recipes source
   `$IDF_PATH/export.sh` (default `$HOME/esp/esp-idf`), `idf.py` is not on PATH.
+- Relay: `just run-relay` / `just test-relay` / `just build-relay` — Node 20+, reads
+  `RELAY_*` from `.env`; image is `deploy/Dockerfile.relay` (context = repo root).
 - ML: `just setup-ml` (installs CUDA torch from `--extra-index-url`, heavy), then
   `just pipeline-ai1` end-to-end; see `ml/README.md`.
 - Stack: `just compose-up [service]` / `just compose-build` / `just compose-logs`.
@@ -77,6 +83,14 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
   (pulls `/api/v1/camera/latest/...`, POSTs results) and supports
   `VIDEO_PATH=/path/file.mp4` (device id `MOCK_VIDEO_CAM`); it opens an OpenCV GUI
   window unless `HEADLESS=1`.
+- **An HTTPS dashboard cannot fetch the ESP32's `http://<lan-ip>/stream` or `/snapshot`.**
+  Chrome blocks it as mixed content, and Private/Local Network Access denies the
+  request before it leaves the browser; ESP32 CORS/PNA headers cannot override that.
+  Use `relay/` (ESP32 → WSS `/ingest`, browser → WSS `/watch`) for the Vercel build.
+  Env: `CAMERA_RELAY_URL`/`RELAY_INGEST_KEY` (ESP32), `PUBLIC_CAMERA_RELAY_URL`
+  (browser), optional `PUBLIC_CAMERA_RELAY_VIEW_KEY`; keep
+  `CAMERA_RELAY_DEVICE` = `PUBLIC_CAMERA_RELAY_DEVICE`. Local HTTP dashboards can
+  still read the ESP directly when `PUBLIC_CAMERA_RELAY_URL` is unset.
 - **Docker Desktop for Linux cannot serve LAN TCP payloads through published ports**
   (TCP connect succeeds, HTTP requests never reach the container). The compose stack
   publishes the C++ backend on `0.0.0.0:8080`; on affected Docker Desktop setups use

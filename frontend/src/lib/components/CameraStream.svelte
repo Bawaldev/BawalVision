@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount, onDestroy, tick } from 'svelte';
+    import { env as publicEnv } from '$env/dynamic/public';
     import { resolveApiBase, setConfiguredApiBase } from '../backendConfig';
     import type { FoodDetection, SceneOpticalMetrics } from '../types';
 
@@ -353,8 +354,87 @@
 
     let wsLiveStream: WebSocket | null = null;
     let wsLiveFrameUrl = $state('');
+    let relayReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    function connectLiveWebSocket() {
+    const relayBaseUrl = (publicEnv.PUBLIC_CAMERA_RELAY_URL || '').trim();
+    const relayDeviceId = (publicEnv.PUBLIC_CAMERA_RELAY_DEVICE || 'default').trim() || 'default';
+    const relayViewKey = (publicEnv.PUBLIC_CAMERA_RELAY_VIEW_KEY || '').trim();
+    const relayConfigured = relayBaseUrl.length > 0;
+
+    function relayWatchUrl(): string {
+        let base = relayBaseUrl;
+        if (/^https:\/\//i.test(base)) base = `wss://${base.slice(8)}`;
+        else if (/^http:\/\//i.test(base)) base = `ws://${base.slice(7)}`;
+        else if (!/^wss?:\/\//i.test(base)) base = `wss://${base}`;
+        if (!/^wss?:\/\/[^/]+\/[^/]/.test(base)) {
+            base = `${base.replace(/\/+$/, '')}/watch`;
+        }
+        const query = new URLSearchParams({ device: relayDeviceId });
+        if (relayViewKey) query.set('key', relayViewKey);
+        return `${base}${base.includes('?') ? '&' : '?'}${query.toString()}`;
+    }
+
+    function applyLiveFrame(event: MessageEvent, socket: WebSocket) {
+        if (wsLiveStream !== socket) return;
+        if (!(event.data instanceof ArrayBuffer) || event.data.byteLength <= 4) return;
+        const blob = new Blob([event.data], { type: 'image/jpeg' });
+        if (wsLiveFrameUrl) {
+            URL.revokeObjectURL(wsLiveFrameUrl);
+        }
+        wsLiveFrameUrl = URL.createObjectURL(blob);
+        isLiveFeedActive = true;
+        streamError = false;
+        localBackendNotice = '';
+    }
+
+    function scheduleRelayReconnect(attempt: number) {
+        if (relayReconnectTimer !== null) return;
+        const delay = Math.min(15000, 2000 * Math.max(1, attempt));
+        relayReconnectTimer = setTimeout(() => {
+            relayReconnectTimer = null;
+            if (sourceMode === 'live' && isActive && isTabVisible) {
+                connectRelayWebSocket(attempt);
+            }
+        }, delay);
+    }
+
+    function connectRelayWebSocket(attempt = 0) {
+        if (!relayConfigured || typeof window === 'undefined') return;
+        if (!isActive || !isTabVisible || sourceMode !== 'live') return;
+        if (relayReconnectTimer !== null) {
+            clearTimeout(relayReconnectTimer);
+            relayReconnectTimer = null;
+        }
+
+        try {
+            const socket = new WebSocket(relayWatchUrl());
+            socket.binaryType = 'arraybuffer';
+            wsLiveStream = socket;
+            let opened = false;
+
+            socket.onopen = () => {
+                if (wsLiveStream !== socket) return;
+                opened = true;
+                localBackendNotice = '✓ Cloud camera relay connected. Waiting for ESP32 frames…';
+            };
+            socket.onmessage = (event) => applyLiveFrame(event, socket);
+            socket.onerror = () => {};
+            socket.onclose = () => {
+                if (wsLiveStream === socket) wsLiveStream = null;
+                if (!isActive || !isTabVisible || sourceMode !== 'live') return;
+                if (!opened && attempt === 0) {
+                    localBackendNotice = '⚠️ Cloud camera relay is unreachable. Check <code>PUBLIC_CAMERA_RELAY_URL</code> and the relay deployment.';
+                    connectBackendLiveWebSocket();
+                    return;
+                }
+                scheduleRelayReconnect(attempt + 1);
+            };
+        } catch {
+            connectBackendLiveWebSocket();
+        }
+    }
+
+    function connectBackendLiveWebSocket() {
         if (typeof window === 'undefined') return;
         disconnectLiveWebSocket();
 
@@ -370,32 +450,38 @@
         const targetWsUrl = `${wsOrigin}/camera/ws/stream`;
 
         try {
-            wsLiveStream = new WebSocket(targetWsUrl);
-            wsLiveStream.binaryType = 'arraybuffer';
-            wsLiveStream.onmessage = (event) => {
-                if (event.data instanceof ArrayBuffer && event.data.byteLength > 4) {
-                    const blob = new Blob([event.data], { type: 'image/jpeg' });
-                    if (wsLiveFrameUrl) {
-                        URL.revokeObjectURL(wsLiveFrameUrl);
-                    }
-                    wsLiveFrameUrl = URL.createObjectURL(blob);
-                    isLiveFeedActive = true;
-                    streamError = false;
-                }
-            };
-            wsLiveStream.onerror = () => {
+            const socket = new WebSocket(targetWsUrl);
+            wsLiveStream = socket;
+            socket.binaryType = 'arraybuffer';
+            socket.onmessage = (event) => applyLiveFrame(event, socket);
+            socket.onerror = () => {
                 // Graceful fallback to HTTP MJPEG stream
             };
-            wsLiveStream.onclose = () => {
-                wsLiveStream = null;
+            socket.onclose = () => {
+                if (wsLiveStream === socket) wsLiveStream = null;
             };
         } catch {}
     }
 
+    function connectLiveWebSocket() {
+        if (typeof window === 'undefined') return;
+        disconnectLiveWebSocket();
+        if (relayConfigured) {
+            connectRelayWebSocket();
+            return;
+        }
+        connectBackendLiveWebSocket();
+    }
+
     function disconnectLiveWebSocket() {
+        if (relayReconnectTimer !== null) {
+            clearTimeout(relayReconnectTimer);
+            relayReconnectTimer = null;
+        }
         if (wsLiveStream) {
-            wsLiveStream.close();
+            const socket = wsLiveStream;
             wsLiveStream = null;
+            try { socket.close(); } catch {}
         }
         if (wsLiveFrameUrl) {
             URL.revokeObjectURL(wsLiveFrameUrl);
@@ -470,15 +556,16 @@
 
     $effect(() => {
         const stream = discoveredStreamUrl || manualEspStreamUrl || streamUrl;
-        if (isHttpsDomain && sourceMode === 'live' && isTabVisible && isActive && stream && stream.startsWith('http://')) {
+        if (!relayConfigured && isHttpsDomain && sourceMode === 'live' && isTabVisible && isActive && stream && stream.startsWith('http://')) {
             runBlobStream(stream);
-        } else if (!isActive || !isTabVisible || sourceMode !== 'live') {
+        } else if (!isActive || !isTabVisible || sourceMode !== 'live' || relayConfigured) {
             stopBlobStream();
         }
     });
 
     let activeStreamUrl = $derived.by(() => {
         if (!isTabVisible || !isActive) return '';
+        if (relayConfigured) return '';
         if (streamUrl) {
             let url = withApiOrigin(streamUrl, activeApiBase);
             if (url && url.includes('/stream') && !url.includes(':8080') && !url.includes('token=')) {

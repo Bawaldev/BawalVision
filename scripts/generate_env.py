@@ -27,6 +27,7 @@ SECRET_CONFIG = {
     "BAWAL_DEVICE_TOKEN": lambda: generate_hex_token(16),
     "BAWAL_ADMIN_TOKEN": lambda: generate_hex_token(16),
     "BAWAL_LAMBDA_AUTH_TOKEN": lambda: generate_hex_token(16),
+    "RELAY_INGEST_KEY": lambda: generate_hex_token(24),
     "POSTGRES_PASSWORD": lambda: generate_alphanumeric_password(24),
     "GRAFANA_ADMIN_PASSWORD": lambda: generate_alphanumeric_password(24),
 }

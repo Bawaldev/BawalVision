@@ -1,0 +1,12 @@
+# ==============================================================================
+# Build-context allowlist for deploy/Dockerfile.relay
+#
+# BuildKit uses this file instead of the repository-root .dockerignore when the
+# relay image is built with `--file deploy/Dockerfile.relay`.
+# ==============================================================================
+
+# Keep only the relay service sources
+*
+!relay/
+!relay/package.json
+!relay/server.js
