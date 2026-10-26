@@ -229,7 +229,13 @@ export const handle: Handle = async ({ event, resolve }) => {
                         cpu_load: 12
                     }), { status: 200, headers: jsonHeaders });
                 }
-                if (path.includes('/records') || path.includes('/inspections')) {
+                if (path.includes('/batch')) {
+                    return new Response(JSON.stringify({
+                        status: 'error',
+                        error: 'Cloud Lambda Batch Inference requires valid BAWAL_LAMBDA_AUTH_TOKEN in Settings or a running host backend.'
+                    }), { status: 401, headers: jsonHeaders });
+                }
+                if (event.request.method === 'GET' && (path.includes('/records') || path.includes('/inspections'))) {
                     return new Response(JSON.stringify({
                         status: 'OK',
                         records: [],
