@@ -38,7 +38,9 @@ LAMBDA_AUTH_MODE="${LAMBDA_AUTH_MODE:-NONE}"
 LAMBDA_AUTH_TOKEN="${BAWAL_LAMBDA_AUTH_TOKEN:-}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
-for tool in docker aws sam; do
+FUNCTION_NAME="${FUNCTION_NAME:-bawalvision-service}"
+
+for tool in docker aws; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "[ERROR] Required tool not found: $tool" >&2
         exit 1
@@ -81,34 +83,78 @@ docker build \
 echo "[INFO] Pushing container image..."
 docker push "$IMAGE_URI"
 
-echo "[INFO] Deploying SAM stack..."
-sam deploy \
-    --template-file "$ROOT_DIR/aws-infra/template.yaml" \
-    --stack-name "$STACK_NAME" \
-    --region "$REGION" \
-    --capabilities CAPABILITY_IAM \
-    --resolve-s3 \
-    --image-repository "${ECR_REGISTRY}/${ECR_REPOSITORY}" \
-    --no-confirm-changeset \
-    --parameter-overrides \
-        "ImageUri=${IMAGE_URI}" \
-        "StageName=${STAGE_NAME}" \
-        "MemorySize=${MEMORY_SIZE}" \
-        "Timeout=${LAMBDA_TIMEOUT}" \
-        "MaxConcurrency=${MAX_CONCURRENCY}" \
-        "LambdaPrewarm=${LAMBDA_PREWARM}" \
-        "LambdaAuthMode=${LAMBDA_AUTH_MODE}" \
-        "AuthToken=${LAMBDA_AUTH_TOKEN}"
+echo "[INFO] Checking target Lambda function '${FUNCTION_NAME}' in ${REGION}..."
+if aws lambda get-function --region "$REGION" --function-name "$FUNCTION_NAME" >/dev/null 2>&1; then
+    echo "[INFO] Updating existing Lambda function code for '${FUNCTION_NAME}'..."
+    aws lambda update-function-code \
+        --region "$REGION" \
+        --function-name "$FUNCTION_NAME" \
+        --image-uri "$IMAGE_URI" >/dev/null
 
-API_ENDPOINT="$(aws cloudformation describe-stacks --region "$REGION" \
-    --stack-name "$STACK_NAME" \
-    --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
-    --output text)"
+    echo "[INFO] Waiting for code update to finish..."
+    aws lambda wait function-updated --region "$REGION" --function-name "$FUNCTION_NAME"
 
-echo "[SUCCESS] Deployed ${STACK_NAME}"
-echo "[INFO] Snapshot: ${API_ENDPOINT}/api/v1/lambda/inspect"
-echo "[INFO] Batch:    ${API_ENDPOINT}/api/v1/lambda/batch"
-echo "[INFO] PDF:      ${API_ENDPOINT}/api/v1/reports/pdf"
-echo "[INFO] PDF alias: ${API_ENDPOINT}/api/v1/lambda/report"
-echo "[INFO] API Gateway routes require AWS_IAM SigV4 authorization."
-echo "[INFO] Function URL/HTTP invocations require X-Bawal-Token: set BAWAL_LAMBDA_AUTH_TOKEN in the proxy."
+    ENV_VARS="MODEL_PATH=/var/task/models/yolov8s_int8.onnx,OMP_NUM_THREADS=2,OPENCV_LOG_LEVEL=ERROR"
+    if [[ -n "$LAMBDA_AUTH_TOKEN" ]]; then
+        ENV_VARS="${ENV_VARS},BAWAL_LAMBDA_AUTH_TOKEN=${LAMBDA_AUTH_TOKEN}"
+    fi
+    if [[ -n "${LAMBDA_PREWARM:-}" ]]; then
+        ENV_VARS="${ENV_VARS},LAMBDA_PREWARM=${LAMBDA_PREWARM}"
+    fi
+
+    echo "[INFO] Updating function environment configuration..."
+    aws lambda update-function-configuration \
+        --region "$REGION" \
+        --function-name "$FUNCTION_NAME" \
+        --environment "Variables={${ENV_VARS}}" >/dev/null
+
+    aws lambda wait function-updated --region "$REGION" --function-name "$FUNCTION_NAME"
+
+    echo "[SUCCESS] Successfully deployed ${IMAGE_URI} to Lambda function '${FUNCTION_NAME}' in ${REGION}!"
+    FN_URL="$(aws lambda get-function-url-config --region "$REGION" --function-name "$FUNCTION_NAME" --query "FunctionUrl" --output text 2>/dev/null || true)"
+    if [[ -n "$FN_URL" && "$FN_URL" != "None" ]]; then
+        echo "[INFO] Function URL: ${FN_URL}"
+    fi
+    if [[ -f "$ROOT_DIR/.env" ]]; then
+        PUB_URL="$(grep "PUBLIC_API_URL" "$ROOT_DIR/.env" | cut -d '=' -f 2- | tr -d ' "' || true)"
+        if [[ -n "$PUB_URL" ]]; then
+            echo "[INFO] Frontend Active API: ${PUB_URL}"
+        fi
+    fi
+    exit 0
+fi
+
+if command -v sam >/dev/null 2>&1; then
+    echo "[INFO] Function '${FUNCTION_NAME}' not found. Deploying new SAM stack '${STACK_NAME}'..."
+    sam deploy \
+        --template-file "$ROOT_DIR/aws-infra/template.yaml" \
+        --stack-name "$STACK_NAME" \
+        --region "$REGION" \
+        --capabilities CAPABILITY_IAM \
+        --resolve-s3 \
+        --image-repository "${ECR_REGISTRY}/${ECR_REPOSITORY}" \
+        --no-confirm-changeset \
+        --parameter-overrides \
+            "ImageUri=${IMAGE_URI}" \
+            "StageName=${STAGE_NAME}" \
+            "MemorySize=${MEMORY_SIZE}" \
+            "Timeout=${LAMBDA_TIMEOUT}" \
+            "MaxConcurrency=${MAX_CONCURRENCY}" \
+            "LambdaPrewarm=${LAMBDA_PREWARM}" \
+            "LambdaAuthMode=${LAMBDA_AUTH_MODE}" \
+            "AuthToken=${LAMBDA_AUTH_TOKEN}"
+
+    API_ENDPOINT="$(aws cloudformation describe-stacks --region "$REGION" \
+        --stack-name "$STACK_NAME" \
+        --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+        --output text)"
+
+    echo "[SUCCESS] Deployed SAM stack ${STACK_NAME}"
+    echo "[INFO] Snapshot: ${API_ENDPOINT}/api/v1/lambda/inspect"
+    echo "[INFO] Batch:    ${API_ENDPOINT}/api/v1/lambda/batch"
+    echo "[INFO] PDF:      ${API_ENDPOINT}/api/v1/reports/pdf"
+    echo "[INFO] PDF alias: ${API_ENDPOINT}/api/v1/lambda/report"
+else
+    echo "[ERROR] Lambda function '${FUNCTION_NAME}' does not exist in ${REGION}, and 'sam' is not installed to create a new stack." >&2
+    exit 1
+fi
