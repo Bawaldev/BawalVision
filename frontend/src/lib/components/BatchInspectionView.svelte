@@ -235,6 +235,39 @@
         void uploadBatch(file);
     }
 
+    function unwrapBatchPayload(raw: any): BatchSummary | null {
+        if (!raw || typeof raw !== 'object') return null;
+
+        if ('batch_id' in raw || ('items' in raw && Array.isArray(raw.items))) {
+            return raw as BatchSummary;
+        }
+
+        const candidate = raw.body ?? raw.data ?? raw.result ?? raw.payload;
+        if (candidate !== undefined && candidate !== null) {
+            if (typeof candidate === 'string') {
+                try {
+                    const parsed = JSON.parse(candidate);
+                    const unwrapped = unwrapBatchPayload(parsed);
+                    if (unwrapped) return unwrapped;
+                } catch {}
+
+                try {
+                    if (typeof atob === 'function') {
+                        const decoded = atob(candidate);
+                        const parsed = JSON.parse(decoded);
+                        const unwrapped = unwrapBatchPayload(parsed);
+                        if (unwrapped) return unwrapped;
+                    }
+                } catch {}
+            } else if (typeof candidate === 'object') {
+                const unwrapped = unwrapBatchPayload(candidate);
+                if (unwrapped) return unwrapped;
+            }
+        }
+
+        return null;
+    }
+
     async function ensureDataUrl(it: BatchItem): Promise<string> {
         if (it.annotated_data_url && it.annotated_data_url.startsWith('data:')) {
             return it.annotated_data_url;
@@ -347,31 +380,45 @@
                 throw new Error(detail);
             }
 
-            let rawPayload: any = await response.json();
-            if (rawPayload && typeof rawPayload === 'object' && typeof rawPayload.body === 'string') {
-                try {
-                    const parsed = JSON.parse(rawPayload.body);
-                    if (parsed && typeof parsed === 'object') {
-                        rawPayload = parsed;
-                    }
-                } catch {}
-            } else if (rawPayload && typeof rawPayload === 'object' && rawPayload.body && typeof rawPayload.body === 'object') {
-                rawPayload = rawPayload.body;
+            const rawPayload: any = await response.json();
+            const payload = unwrapBatchPayload(rawPayload) || (rawPayload as BatchSummary);
+
+            if (!payload || (!payload.batch_id && (!payload.items || !Array.isArray(payload.items)))) {
+                console.error('[BatchInspection] Malformed API response payload:', rawPayload);
+                throw new Error('Received unexpected response format from batch vision service. Check developer console.');
             }
-            const payload = rawPayload as BatchSummary;
+
             clearTimers();
 
+            if (Array.isArray(payload.items)) {
+                if (payload.total_trays === undefined) payload.total_trays = payload.items.length;
+                if (payload.accepted === undefined) payload.accepted = payload.items.filter(it => it.accepted).length;
+                if (payload.rejected === undefined) payload.rejected = payload.items.filter(it => !it.accepted).length;
+            } else {
+                payload.items = [];
+            }
+            if (!payload.batch_id) {
+                payload.batch_id = 'BATCH-' + Date.now().toString(36).toUpperCase();
+            }
+            if (payload.total_trays === undefined) payload.total_trays = 0;
+            if (payload.accepted === undefined) payload.accepted = 0;
+            if (payload.rejected === undefined) payload.rejected = 0;
+            if (payload.throughput_trays_per_sec === undefined) {
+                const sec = (payload.processing_time_ms || elapsedMs) / 1000;
+                payload.throughput_trays_per_sec = sec > 0 ? (payload.total_trays / sec) : 0;
+            }
+
             const origin = resolveApiOrigin();
-            for (const it of payload.items || []) {
+            for (const it of payload.items) {
                 if (it.annotated_url && it.annotated_url.startsWith('/') && origin) {
                     it.annotated_url = `${origin}${it.annotated_url}`;
                 }
             }
 
             summary = payload;
-            elapsedMs = payload.processing_time_ms;
+            elapsedMs = payload.processing_time_ms || elapsedMs;
             stage = 'done';
-            noticeMessage = `Batch ${payload.batch_id} completed: ${payload.accepted} accepted / ${payload.rejected} rejected across ${payload.total_trays || (payload.items ? payload.items.length : 0)} trays.`;
+            noticeMessage = `Batch ${payload.batch_id} completed: ${payload.accepted} accepted / ${payload.rejected} rejected across ${payload.total_trays} trays.`;
         } catch (err: any) {
             clearTimeout(timeoutId);
             clearTimers();
