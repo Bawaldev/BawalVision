@@ -244,14 +244,6 @@ void app_main(void) {
         }
     }
 
-    ESP_LOGI(TAG, "Connecting to Wi-Fi Network...");
-    wifi_init_sta();
-    esp_err_t stream_server_err = wifi_http_stream_server_start();
-    if (stream_server_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start MJPEG HTTP server: %s",
-                 esp_err_to_name(stream_server_err));
-    }
-
     ESP_LOGI(TAG, "Starting 128x160 SPI TFT LVGL Task (Static)...");
     TaskHandle_t lcd_task_handle = xTaskCreateStaticPinnedToCore(
         lcd_task, "lcd_task", LCD_TASK_STACK_SIZE, NULL, 5,
@@ -259,6 +251,14 @@ void app_main(void) {
     if (lcd_task_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create lcd_task");
         return;
+    }
+
+    ESP_LOGI(TAG, "Connecting to Wi-Fi Network...");
+    wifi_init_sta();
+    esp_err_t stream_server_err = wifi_http_stream_server_start();
+    if (stream_server_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start MJPEG HTTP server: %s",
+                 esp_err_to_name(stream_server_err));
     }
 
     s_wifi_task_handle = xTaskCreateStaticPinnedToCore(

@@ -792,6 +792,35 @@ void wifi_init_sta(void) {
     s_wifi_initialized = true;
 }
 
+static bool is_request_authorized(httpd_req_t *req) {
+    if (CONFIG_DEVICE_AUTH_TOKEN[0] == '\0') {
+        return true;
+    }
+    char buf[128] = {0};
+    if (httpd_req_get_hdr_value_str(req, "X-Device-Token", buf, sizeof(buf)) == ESP_OK) {
+        if (strcmp(buf, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
+            return true;
+        }
+    }
+    if (httpd_req_get_hdr_value_str(req, "Authorization", buf, sizeof(buf)) == ESP_OK) {
+        if (strncmp(buf, "Bearer ", 7) == 0 && strcmp(buf + 7, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
+            return true;
+        }
+    }
+    size_t query_len = httpd_req_get_url_query_len(req);
+    if (query_len > 0 && query_len < sizeof(buf)) {
+        if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+            char param[64] = {0};
+            if (httpd_query_key_value(buf, "token", param, sizeof(param)) == ESP_OK) {
+                if (strcmp(param, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 static esp_err_t snapshot_handler(httpd_req_t *req) {
     if (!is_request_authorized(req)) {
         httpd_resp_set_status(req, "401 Unauthorized");
@@ -880,35 +909,6 @@ static void mjpeg_stream_task(void *arg) {
     (void)httpd_req_async_handler_complete(req);
     atomic_fetch_sub(&s_mjpeg_clients, 1);
     vTaskDelete(NULL);
-}
-
-static bool is_request_authorized(httpd_req_t *req) {
-    if (CONFIG_DEVICE_AUTH_TOKEN[0] == '\0') {
-        return true;
-    }
-    char buf[128] = {0};
-    if (httpd_req_get_hdr_value_str(req, "X-Device-Token", buf, sizeof(buf)) == ESP_OK) {
-        if (strcmp(buf, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
-            return true;
-        }
-    }
-    if (httpd_req_get_hdr_value_str(req, "Authorization", buf, sizeof(buf)) == ESP_OK) {
-        if (strncmp(buf, "Bearer ", 7) == 0 && strcmp(buf + 7, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
-            return true;
-        }
-    }
-    size_t query_len = httpd_req_get_url_query_len(req);
-    if (query_len > 0 && query_len < sizeof(buf)) {
-        if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
-            char param[64] = {0};
-            if (httpd_query_key_value(buf, "token", param, sizeof(param)) == ESP_OK) {
-                if (strcmp(param, CONFIG_DEVICE_AUTH_TOKEN) == 0) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
 }
 
 static esp_err_t stream_handler(httpd_req_t *req) {

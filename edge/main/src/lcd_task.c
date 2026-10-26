@@ -55,6 +55,7 @@ static bool s_is_connected = false;
 static uint32_t s_current_latency_ms = 0;
 static float s_current_line_speed = 0.35f; // default 0.35 m/s conveyor line rate
 static char s_wifi_ip_str[24] = "DISCONNECTED";
+static volatile bool s_lvgl_ready = false;
 
 const char *lcd_status_to_string(system_status_t status) {
   switch (status) {
@@ -137,6 +138,7 @@ static void apply_status_style(system_status_t status) {
 }
 
 void lcd_update_status(system_status_t status) {
+  if (!s_lvgl_ready) return;
   s_current_status = status;
   if (lvgl_port_lock(0)) {
     apply_status_style(status);
@@ -145,6 +147,7 @@ void lcd_update_status(system_status_t status) {
 }
 
 void lcd_update_connection_status(bool connected, uint32_t latency_ms) {
+  if (!s_lvgl_ready) return;
   s_is_connected = connected;
   s_current_latency_ms = latency_ms;
 
@@ -170,6 +173,7 @@ void lcd_update_connection_status(bool connected, uint32_t latency_ms) {
 }
 
 void lcd_update_line_speed(float speed_mps) {
+  if (!s_lvgl_ready) return;
   s_current_line_speed = speed_mps;
   if (lvgl_port_lock(0)) {
     if (s_speed_label) {
@@ -181,7 +185,7 @@ void lcd_update_line_speed(float speed_mps) {
 }
 
 void lcd_update_http_status(const char *status_str, bool is_error) {
-  if (status_str == NULL) {
+  if (!s_lvgl_ready || status_str == NULL) {
     return;
   }
 
@@ -197,6 +201,7 @@ void lcd_update_http_status(const char *status_str, bool is_error) {
 }
 
 void lcd_update_wifi_status(bool connected, const char *ip_address) {
+  if (!s_lvgl_ready) return;
   s_is_connected = connected;
   if (ip_address && strlen(ip_address) > 0) {
     strncpy(s_wifi_ip_str, ip_address, sizeof(s_wifi_ip_str) - 1);
@@ -222,6 +227,7 @@ void lcd_update_wifi_status(bool connected, const char *ip_address) {
 }
 
 void lcd_update_telemetry_display(float temperature, uint8_t cpu_load) {
+  if (!s_lvgl_ready) return;
   if (lvgl_port_lock(0)) {
     if (s_esp_temp_label) {
       lv_label_set_text_fmt(s_esp_temp_label, "TEMP  : %.1f C",
@@ -488,6 +494,7 @@ void lcd_task(void *pvParameters) {
     create_dashboard_ui();
     lvgl_port_unlock();
   }
+  s_lvgl_ready = true;
 
 // 6. Start Heartbeat / Connection Monitor Task (Static Allocation)
 #define LCD_HB_TASK_STACK_SIZE 3072

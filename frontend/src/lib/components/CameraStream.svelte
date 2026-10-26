@@ -335,6 +335,11 @@
         if (typeof window === 'undefined') return;
         disconnectLiveWebSocket();
 
+        // Vercel serverless does not host stateful WebSockets; skip if no external backend URL is configured
+        if (window.location.hostname.endsWith('.vercel.app') && !activeApiBase.startsWith('http')) {
+            return;
+        }
+
         const base = activeApiBase.replace(/\/+$/, '');
         const wsOrigin = base.startsWith('http')
             ? base.replace(/^http/i, 'ws')
@@ -694,8 +699,11 @@
             const savedEspUrl = localStorage.getItem('bawal_esp32_stream_url');
             if (savedEspUrl) {
                 manualEspStreamUrl = savedEspUrl;
-                if (!discoveredStreamUrl) {
-                    discoveredStreamUrl = savedEspUrl;
+                // If on HTTPS, do not auto-bind insecure HTTP stream to <img> to avoid Mixed Content errors
+                if (!(typeof window !== 'undefined' && window.location.protocol === 'https:' && savedEspUrl.startsWith('http://'))) {
+                    if (!discoveredStreamUrl) {
+                        discoveredStreamUrl = savedEspUrl;
+                    }
                 }
             }
             const savedVideo = localStorage.getItem('bawal_mock_selected_video');
