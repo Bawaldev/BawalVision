@@ -4,6 +4,11 @@ Stateful WebSocket relay that lets the ESP32-S3 publish camera frames from any
 network and lets the HTTPS dashboard subscribe without mixed-content or
 Private Network Access blocks.
 
+For the free serverless deployment, use
+[`relay-cloudflare/`](../relay-cloudflare/README.md) instead. It implements the
+same `/ingest` and `/watch` protocol with a Worker and one Durable Object per
+device; its health endpoint is per device (`/health?device=<id>`).
+
 ```
 ESP32-S3  --WSS /ingest-->  relay  --WSS /watch-->  browser
 ```

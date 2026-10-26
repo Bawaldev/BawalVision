@@ -37,9 +37,9 @@ static const char *TAG = "CAM_RELAY";
 #define CONFIG_CAMERA_RELAY_DEVICE "default"
 #endif
 
-#define RELAY_TASK_STACK 6144
+#define RELAY_TASK_STACK 4096
 #define RELAY_PUMP_MS 2000
-#define RELAY_SEND_TIMEOUT_MS 250
+#define RELAY_SEND_TIMEOUT_MS 5000
 
 static char s_url[RELAY_URL_MAX];
 static char s_key[RELAY_KEY_MAX];
@@ -166,11 +166,26 @@ static void relay_event_handler(void *arg, esp_event_base_t base,
             s_connected = false;
             ESP_LOGW(TAG, "Disconnected from camera relay");
             break;
-        case WEBSOCKET_EVENT_ERROR:
+        case WEBSOCKET_EVENT_ERROR: {
             s_connected = false;
             s_send_errors++;
-            ESP_LOGW(TAG, "Camera relay websocket error");
+            esp_websocket_event_data_t *data = (esp_websocket_event_data_t *)event_data;
+            if (data) {
+                ESP_LOGW(TAG, "Camera relay websocket error type=%d tls=%d sock_errno=%d",
+                         (int)data->error_handle.error_type,
+                         data->error_handle.esp_tls_last_esp_err,
+                         data->error_handle.esp_transport_sock_errno);
+            } else {
+                ESP_LOGW(TAG, "Camera relay websocket error");
+            }
             break;
+        }
+        case WEBSOCKET_EVENT_CLOSED: {
+            esp_websocket_event_data_t *data = (esp_websocket_event_data_t *)event_data;
+            ESP_LOGW(TAG, "Camera relay closed code=%d",
+                     data ? data->close_status_code : -1);
+            break;
+        }
         default:
             break;
     }
@@ -190,10 +205,10 @@ static bool start_client(const char *uri) {
     cfg.uri = uri;
     cfg.reconnect_timeout_ms = 3000;
     cfg.network_timeout_ms = 8000;
-    cfg.buffer_size = 8192;
+    cfg.buffer_size = 4096;
     cfg.task_stack = 8192;
-    cfg.ping_interval_sec = 10;
-    cfg.pingpong_timeout_sec = 20;
+    cfg.ping_interval_sec = 3600;
+    cfg.pingpong_timeout_sec = 0;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_websocket_client_handle_t client = esp_websocket_client_init(&cfg);
@@ -226,7 +241,10 @@ static void pump_frames(int fps) {
     TickType_t until = xTaskGetTickCount() + pdMS_TO_TICKS(RELAY_PUMP_MS);
 
     while (xTaskGetTickCount() < until) {
-        if (!s_client || !esp_websocket_client_is_connected(s_client)) break;
+        if (!s_client || !esp_websocket_client_is_connected(s_client)) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            break;
+        }
 
         camera_frame_buffer_t frame = s_frame;
         if (camera_copy_current_frame(&frame) == ESP_OK &&
@@ -238,11 +256,12 @@ static void pump_frames(int fps) {
                     s_client, (const char *)frame.data,
                     (int)frame.header.buffer_len,
                     pdMS_TO_TICKS(RELAY_SEND_TIMEOUT_MS));
-                if (sent < 0) {
+                if (sent <= 0) {
                     s_send_errors++;
                     if (s_send_errors <= 5) {
-                        ESP_LOGW(TAG, "Relay send failed");
+                        ESP_LOGW(TAG, "Relay send failed (%d)", sent);
                     }
+                    vTaskDelay(pdMS_TO_TICKS(50));
                     break;
                 }
                 last_id = frame.header.frame_id;

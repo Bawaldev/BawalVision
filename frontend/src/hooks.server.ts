@@ -186,7 +186,8 @@ export const handle: Handle = async ({ event, resolve }) => {
         }
 
         const isBatchRequest = event.url.pathname.includes('/batch');
-        const timeoutMs = isBatchRequest ? 30000 : 3500;
+        const isRelayFrameRequest = event.url.pathname === '/api/v1/camera/frame';
+        const timeoutMs = isBatchRequest ? 30000 : (isRelayFrameRequest && isLambdaBackend ? 15000 : 3500);
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

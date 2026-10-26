@@ -347,18 +347,19 @@
             }
 
             // 4. Live Real-time Inspections & Dynamic Bounding Boxes
-            hasLiveDetections = false;
-            const isLiveStreamActive = Boolean(latestLive?.is_live) || cam.active;
+            const relayDetectionRecent = lastLiveDetectionTime > 0 && (Date.now() - lastLiveDetectionTime) < 5000;
+            hasLiveDetections = relayDetectionRecent;
+            const isLiveStreamActive = Boolean(latestLive?.is_live) || cam.active || isCameraStreamingActive;
             if (latestLive && latestLive.scene_optical) {
                 latestOptical = latestLive.scene_optical;
             }
-            if (latestLive && Array.isArray(latestLive.detections) && latestLive.detections.length > 0) {
+            if (!relayDetectionRecent && latestLive && Array.isArray(latestLive.detections) && latestLive.detections.length > 0) {
                 if (latestLive.is_live && (cam.active || (telemetry && telemetry.is_connected))) {
                     isOnline = true;
                 }
                 hasLiveDetections = true;
                 applyDetections(latestLive.detections);
-            } else if (isLiveStreamActive && (Date.now() - lastLiveDetectionTime > 4000)) {
+            } else if (!relayDetectionRecent && isLiveStreamActive && (Date.now() - lastLiveDetectionTime > 4000)) {
                 detections = [];
             }
 
@@ -515,7 +516,6 @@
             isCameraStreamingActive = true;
             hasCamera = true;
             isOnline = true;
-            lastLiveDetectionTime = Date.now();
             applyDetections(e.detail.detections, e.detail);
             if (e.detail.scene_optical) {
                 latestOptical = e.detail.scene_optical;

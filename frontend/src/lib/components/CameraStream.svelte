@@ -346,6 +346,8 @@
     let isLiveFeedActive = $state(false);
     let isPushingLiveFrame = false;
     let livePushTimer: ReturnType<typeof setInterval> | null = null;
+    let livePushKickoff: ReturnType<typeof setTimeout> | null = null;
+    let livePushIntervalMs = 0;
     let liveFrameSeq = 0;
     let deviceStatusTimer: ReturnType<typeof setInterval> | null = null;
     let retryCount = $state(0);
@@ -688,9 +690,10 @@
         if (sourceMode === 'device_cam') {
             if (!deviceCamVideoEl || !isDeviceCamActive || deviceCamVideoEl.readyState < 2) return;
             sourceEl = deviceCamVideoEl;
+        } else if (sourceMode === 'live') {
+            if (!relayConfigured || !liveImgEl || !liveImgEl.complete || liveImgEl.naturalWidth === 0) return;
+            sourceEl = liveImgEl;
         } else {
-            // Live stream from ESP32 is already ingested natively by the C++ backend (mjpeg_ingress).
-            // Do NOT re-capture and push duplicate frames from the browser canvas.
             return;
         }
 
@@ -723,7 +726,7 @@
                         'X-Stream-Source': sourceMode === 'device_cam' ? 'DEVICE_CAMERA' : 'LIVE_CAMERA',
                         'X-Frame-ID': String(currentSeq),
                         'X-Inference-Target': 'YOLO_OPENCV4',
-                        'X-Return-Annotated': '1'
+                        'X-Return-Annotated': sourceMode === 'device_cam' ? '1' : '0'
                     },
                     body: blob
                 })
@@ -774,24 +777,33 @@
     }
 
     function startLivePushing() {
+        const intervalMs = sourceMode === 'live' && relayConfigured ? 3000 : 1500;
+        if (livePushTimer !== null && livePushIntervalMs === intervalMs) return;
         stopLivePushing();
         // Trigger one immediate frame push
-        setTimeout(() => {
+        livePushKickoff = setTimeout(() => {
+            livePushKickoff = null;
             captureAndPushLiveFrame();
         }, 200);
+        livePushIntervalMs = intervalMs;
         livePushTimer = setInterval(() => {
             if ((sourceMode === 'live' && isLiveFeedActive && !streamError && isTabVisible) ||
                 (sourceMode === 'device_cam' && isDeviceCamActive && isTabVisible)) {
                 captureAndPushLiveFrame();
             }
-        }, 1500);
+        }, intervalMs);
     }
 
     function stopLivePushing() {
+        if (livePushKickoff !== null) {
+            clearTimeout(livePushKickoff);
+            livePushKickoff = null;
+        }
         if (livePushTimer) {
             clearInterval(livePushTimer);
             livePushTimer = null;
         }
+        livePushIntervalMs = 0;
     }
 
     function handleVisibilityChange() {

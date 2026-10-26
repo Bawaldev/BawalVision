@@ -153,6 +153,10 @@ frontend/.svelte-kit/
 frontend/build/
 relay/node_modules/
 relay/dist/
+relay-cloudflare/node_modules/
+relay-cloudflare/dist/
+relay-cloudflare/.wrangler/
+relay-cloudflare/.dev.vars
 .npm
 package-lock.json
 pnpm-lock.yaml

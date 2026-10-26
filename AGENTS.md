@@ -20,6 +20,9 @@ source of truth — README tables can lag behind).
   `/ingest`, browsers subscribe to `/watch`; keeps only the latest frame per
   device and drops frames for slow watchers. Oracle Always Free VM stack:
   `deploy/docker-compose.relay.yml` + `deploy/Caddyfile.relay` (Caddy TLS).
+- `relay-cloudflare/` — free Cloudflare Worker + one SQLite-backed Durable Object
+  per device. Same `/ingest`, `/watch`, `/health?device=` protocol; latest frame
+  in memory, WebSocket hibernation, no per-frame storage.
 - `.github/CODEOWNERS` maps subsystem ownership; `.github/workflows/` CI is
   path-scoped per subsystem.
 
@@ -34,8 +37,11 @@ source of truth — README tables can lag behind).
 - Frontend: `just install-frontend`, `just check-frontend` (the typecheck), `just run-frontend`.
 - Edge: `just build-edge` / `just run-edge [port]` — requires ESP-IDF; recipes source
   `$IDF_PATH/export.sh` (default `$HOME/esp/esp-idf`), `idf.py` is not on PATH.
-- Relay: `just run-relay` / `just test-relay` / `just build-relay` — Node 20+, reads
-  `RELAY_*` from `.env`; image is `deploy/Dockerfile.relay` (context = repo root).
+- Relay (Node/Oracle): `just run-relay` / `just test-relay` / `just build-relay` — Node 20+,
+  reads `RELAY_*` from `.env`; image is `deploy/Dockerfile.relay` (context = repo root).
+- Relay (Cloudflare): `just install-relay-cf` / `just run-relay-cf` / `just deploy-relay-cf` /
+  `just test-relay-cf` / `just tail-relay-cf` — `wrangler`, local secrets in
+  `relay-cloudflare/.dev.vars`, production secrets via `wrangler secret put`.
 - ML: `just setup-ml` (installs CUDA torch from `--extra-index-url`, heavy), then
   `just pipeline-ai1` end-to-end; see `ml/README.md`.
 - Stack: `just compose-up [service]` / `just compose-build` / `just compose-logs`.
@@ -86,11 +92,18 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
 - **An HTTPS dashboard cannot fetch the ESP32's `http://<lan-ip>/stream` or `/snapshot`.**
   Chrome blocks it as mixed content, and Private/Local Network Access denies the
   request before it leaves the browser; ESP32 CORS/PNA headers cannot override that.
-  Use `relay/` (ESP32 → WSS `/ingest`, browser → WSS `/watch`) for the Vercel build.
+  Use `relay-cloudflare/` (free, primary) or `relay/` (Oracle VM fallback):
+  ESP32 → WSS `/ingest`, browser → WSS `/watch`.
   Env: `CAMERA_RELAY_URL`/`RELAY_INGEST_KEY` (ESP32), `PUBLIC_CAMERA_RELAY_URL`
   (browser), optional `PUBLIC_CAMERA_RELAY_VIEW_KEY`; keep
   `CAMERA_RELAY_DEVICE` = `PUBLIC_CAMERA_RELAY_DEVICE`. Local HTTP dashboards can
   still read the ESP directly when `PUBLIC_CAMERA_RELAY_URL` is unset.
+- **Cloudflare relay does video only.** The browser captures the relayed frame
+  every 3 s and POSTs `/api/v1/camera/frame`; on Vercel that proxies to Lambda
+  `/api/v1/lambda/inspect`, and `bawal-live-detections` updates the overlay.
+  15 fps / 3 s fits the free DO + Lambda tiers; 20 fps / 1.5 s does not.
+  Cloudflare Access must stay off or the ESP32/browser WebSocket handshakes fail.
+  The DO health endpoint is per device: `/health?device=default`.
 - **Docker Desktop for Linux cannot serve LAN TCP payloads through published ports**
   (TCP connect succeeds, HTTP requests never reach the container). The compose stack
   publishes the C++ backend on `0.0.0.0:8080`; on affected Docker Desktop setups use
