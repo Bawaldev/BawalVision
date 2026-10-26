@@ -1286,7 +1286,6 @@ static void usb_send_ack(const char *status) {
         if (n > 0) {
             printf("%s", ack_line);
             fflush(stdout);
-            (void)usb_serial_jtag_write_bytes(ack_line, (size_t)n, pdMS_TO_TICKS(50));
         }
         cJSON_free(str);
     }

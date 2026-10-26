@@ -757,14 +757,40 @@
         onDeviceConnectionChange?.(true, res.deviceId);
     }
 
-    async function readBawalAck(port: any, timeoutMs = 4000): Promise<any | null> {
+    async function readBawalAck(port: any, timeoutMs = 4000, payloadToSend?: string): Promise<any | null> {
         let reader: any = null;
         let timer: any = null;
+        let retryInterval: any = null;
         try {
             if (!port?.readable) return null;
             reader = port.readable.getReader();
             const decoder = new TextDecoder();
+            const encoder = new TextEncoder();
             let buffer = '';
+
+            const sendLine = async () => {
+                if (!payloadToSend || !port?.writable) return;
+                try {
+                    const writer = port.writable.getWriter();
+                    await writer.write(encoder.encode('\n' + payloadToSend.trim() + '\n'));
+                    writer.releaseLock();
+                } catch {}
+            };
+
+            // If payload is provided, retry sending every 3.5s for the first 14s in case ESP32 was mid-reboot
+            if (payloadToSend) {
+                let retries = 0;
+                retryInterval = setInterval(async () => {
+                    if (retries < 3) {
+                        retries++;
+                        await sendLine();
+                    } else if (retryInterval) {
+                        clearInterval(retryInterval);
+                        retryInterval = null;
+                    }
+                }, 3500);
+            }
+
             timer = setTimeout(() => {
                 reader?.cancel().catch(() => {});
             }, timeoutMs);
@@ -775,16 +801,21 @@
                 if (value) {
                     buffer += decoder.decode(value, { stream: true });
                 }
-                const ackIndex = buffer.indexOf('BAWAL_ACK:');
-                if (ackIndex >= 0) {
+                while (true) {
+                    const ackIndex = buffer.indexOf('BAWAL_ACK:');
+                    if (ackIndex < 0) break;
                     const lineEnd = buffer.indexOf('\n', ackIndex);
-                    if (lineEnd >= 0) {
-                        const jsonText = buffer.slice(ackIndex + 'BAWAL_ACK:'.length, lineEnd).trim();
-                        try {
-                            return JSON.parse(jsonText);
-                        } catch {
-                            return null;
+                    if (lineEnd < 0) break; // wait for full line to arrive
+
+                    const jsonText = buffer.slice(ackIndex + 'BAWAL_ACK:'.length, lineEnd).trim();
+                    buffer = buffer.slice(lineEnd + 1);
+                    try {
+                        const parsed = JSON.parse(jsonText);
+                        if (parsed && typeof parsed === 'object') {
+                            return parsed;
                         }
+                    } catch {
+                        // ignore corrupted line fragment and keep scanning
                     }
                 }
                 if (buffer.length > 8192) {
@@ -795,6 +826,7 @@
             return null;
         } finally {
             if (timer) clearTimeout(timer);
+            if (retryInterval) clearInterval(retryInterval);
             try {
                 reader?.releaseLock();
             } catch {}
@@ -874,33 +906,30 @@
 
         try {
             await port.open({ baudRate: 115200 });
-            // Opening the CDC port asserts DTR and resets the ESP32-S3; give
-            // the firmware time to boot its provisioning task before writing.
-            await new Promise((resolve) => setTimeout(resolve, 3500));
+            // Brief 1s delay for USB CDC stabilization
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+
+            const payload = JSON.stringify({
+                cmd: 'set_wifi',
+                ssid,
+                pass: password || '',
+                backend_ip: gatewayIp,
+                backend_port: 8080
+            });
 
             const encoder = new TextEncoder();
             const writer = port.writable.getWriter();
-            const payload =
-                JSON.stringify({
-                    cmd: 'set_wifi',
-                    ssid,
-                    pass: password || '',
-                    backend_ip: gatewayIp,
-                    backend_port: 8080
-                }) + '\n';
-
-            await writer.write(encoder.encode(payload));
+            await writer.write(encoder.encode('\n' + payload + '\n'));
             writer.releaseLock();
 
-            // The firmware answers only after it applied the credentials and
-            // waited up to 20 s for the association (rollback on failure), so
-            // a 7 s ACK window times out on every slow AP.
-            const ack = await readBawalAck(port, 30000);
+            // The firmware answers once Wi-Fi is connected (up to 25s association).
+            // Pass payload to readBawalAck so it can retry every 3.5s if ESP32 was mid-boot.
+            const ack = await readBawalAck(port, 30000, payload);
             if (!ack || (ack.status !== 'wifi_provisioned' && ack.status !== 'ok')) {
                 return failure(
                     ack
                         ? wifiProvisionErrorMessage(ack, ssid)
-                        : 'No BAWAL_ACK received from ESP32-S3. Close idf.py monitor or any other serial tool and retry.'
+                        : 'ESP32 belum merespons via USB (timeout 30 detik). Pastikan kabel USB terpasang erat, lalu klik tombol Sync sekali lagi.'
                 );
             }
 
