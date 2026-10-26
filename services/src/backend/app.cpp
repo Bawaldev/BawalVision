@@ -1239,8 +1239,16 @@ void BackendApp::registerInspectionRoutes() {
         res.end();
     });
 
-    const auto markdown_pdf_handler = [](const crow::request& req,
+    const auto markdown_pdf_handler = [this](const crow::request& req,
                                          crow::response& res) {
+        if (!verifyAdminAuth(req)) {
+            res.code = 401;
+            res.set_header("Content-Type", "application/json");
+            res.write("{\"error\":\"Unauthorized: admin token required\"}");
+            res.end();
+            return;
+        }
+
         constexpr std::size_t kMaxMarkdownBytes = 4U * 1024U * 1024U;
         if (req.body.empty()) {
             res.code = 400;
@@ -1336,6 +1344,9 @@ void BackendApp::registerInspectionRoutes() {
     // ------------------------------------------------------------------
     CROW_ROUTE(m_app, "/api/v1/inspections/batch-zip")
         .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyAdminAuth(req)) {
+                return jsonError(401, "Unauthorized: admin token required");
+            }
             if (req.body.empty()) {
                 return jsonError(400, "Empty payload body. Please upload a valid ZIP archive.");
             }
@@ -1961,7 +1972,10 @@ void BackendApp::registerDeviceRoutes() {
         return crow::response(body);
     });
 
-    auto wifi_networks_handler = []() {
+    auto wifi_networks_handler = [this](const crow::request& req) {
+        if (!verifyAdminAuth(req)) {
+            return jsonError(401, "Unauthorized: admin token required");
+        }
         std::string raw_output;
         std::string executed_command;
         int exit_status = -1;
@@ -2357,6 +2371,9 @@ void BackendApp::registerSystemRoutes() {
 
     CROW_ROUTE(m_app, "/api/v1/system/threshold")
         .methods(crow::HTTPMethod::Post)([this](const crow::request& req) {
+            if (!verifyAdminAuth(req)) {
+                return jsonError(401, "Unauthorized: admin token required");
+            }
             const auto doc = crow::json::load(req.body);
             if (!doc || !doc.has("threshold") ||
                 doc["threshold"].t() != crow::json::type::Number) {

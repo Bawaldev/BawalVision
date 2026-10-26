@@ -233,12 +233,22 @@
     let isAttemptingLocalStream = $state(true);
     let isHttpsDomain = $derived(typeof window !== 'undefined' && window.location.protocol === 'https:');
 
+    function escapeHtml(str: string): string {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     function connectManualEspStream() {
         if (!manualEspStreamUrl.trim()) return;
         const raw = manualEspStreamUrl.trim();
+        const safeRaw = escapeHtml(raw);
 
         if (/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(raw)) {
-            localBackendNotice = `⚠️ <strong><code>${raw}</code> is a MAC Address, NOT an IP Address!</strong><br/>` +
+            localBackendNotice = `⚠️ <strong><code>${safeRaw}</code> is a MAC Address, NOT an IP Address!</strong><br/>` +
                 `In your phone's Hotspot list, tap on this device to see its <strong>IP Address</strong> (formatted like <code>192.168.43.xxx</code>).`;
             return;
         }
@@ -418,13 +428,12 @@
         if (isPushingLiveFrame) return;
 
         let sourceEl: CanvasImageSource | null = null;
-        if (sourceMode === 'live') {
-            if (!liveImgEl || streamError || !isLiveFeedActive || !liveImgEl.complete || liveImgEl.naturalWidth === 0) return;
-            sourceEl = liveImgEl;
-        } else if (sourceMode === 'device_cam') {
+        if (sourceMode === 'device_cam') {
             if (!deviceCamVideoEl || !isDeviceCamActive || deviceCamVideoEl.readyState < 2) return;
             sourceEl = deviceCamVideoEl;
         } else {
+            // Live stream from ESP32 is already ingested natively by the C++ backend (mjpeg_ingress).
+            // Do NOT re-capture and push duplicate frames from the browser canvas.
             return;
         }
 
