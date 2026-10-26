@@ -30,6 +30,7 @@ MEMORY_SIZE="${MEMORY_SIZE:-3008}"
 LAMBDA_TIMEOUT="${LAMBDA_TIMEOUT:-29}"
 MAX_CONCURRENCY="${MAX_CONCURRENCY:-5}"
 LAMBDA_PREWARM="${LAMBDA_PREWARM:-0}"
+LAMBDA_AUTH_MODE="${LAMBDA_AUTH_MODE:-AWS_IAM}"
 LAMBDA_AUTH_TOKEN="${BAWAL_LAMBDA_AUTH_TOKEN:-}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
@@ -91,6 +92,7 @@ sam deploy \
         "Timeout=${LAMBDA_TIMEOUT}" \
         "MaxConcurrency=${MAX_CONCURRENCY}" \
         "LambdaPrewarm=${LAMBDA_PREWARM}" \
+        "LambdaAuthMode=${LAMBDA_AUTH_MODE}" \
         "AuthToken=${LAMBDA_AUTH_TOKEN}"
 
 API_ENDPOINT="$(aws cloudformation describe-stacks --region "$REGION" \

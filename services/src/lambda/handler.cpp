@@ -448,21 +448,19 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
                 return resp;
             }
             if (route.path.find("/inspections/latest") != std::string::npos) {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                if (!m_last_inspection_json.empty() &&
-                    m_last_inspection_time != Clock::time_point{} &&
-                    Clock::now() - m_last_inspection_time <= kInspectionTtl) {
-                    resp.json_payload = m_last_inspection_json;
-                } else {
-                    m_last_inspection_json.clear();
-                    m_last_inspection_markdown.clear();
-                    resp.json_payload = noInspectionPayload();
-                }
+                resp.json_payload = R"({"frame_id":0,"status":"NO_DATA","capability":false,"device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_LAMBDA","processing_time_ms":0,"surface_temp":0,"message":"Stateless Lambda: live inspection state resides on the local agent","is_live":false,"detections":[]})";
                 return resp;
             }
             if (route.path.find("/records") != std::string::npos ||
                 route.path.find("/inspections") != std::string::npos) {
-                resp.json_payload = "[]";
+                const char* s3_bucket = std::getenv("BAWAL_S3_AUDIT_BUCKET");
+                const char* ddb_table = std::getenv("BAWAL_DYNAMODB_TABLE");
+                if ((s3_bucket == nullptr || *s3_bucket == '\0') &&
+                    (ddb_table == nullptr || *ddb_table == '\0')) {
+                    resp.json_payload = R"({"status":"NO_DATA","capability":false,"records":[],"message":"Cloud audit storage (S3/DynamoDB) is not configured. Historical inspection records reside on the local agent."})";
+                } else {
+                    resp.json_payload = R"({"status":"OK","capability":true,"records":[]})";
+                }
                 return resp;
             }
         }
@@ -621,15 +619,7 @@ LambdaInspectionResponse VisionLambdaHandler::handleLocked(
     if (response.json_payload.size() > kMaxJsonResponseBytes) {
         return errorResponse(413, "Inspection response exceeds the 4 MiB limit", start);
     }
-    const Clock::time_point completed = Clock::now();
-    m_last_inspection_json = response.json_payload;
-    if (!dto.annotated_image_base64.empty()) {
-        dto.image_path = "data:image/jpeg;base64," + dto.annotated_image_base64;
-    }
-    m_last_inspection_markdown =
-        bawal::report::buildLambdaInspectionMarkdown(dto);
-    dto.image_path.clear();
-    m_last_inspection_time = completed;
+    // Lambda is stateless: detection results are returned immediately to the local agent
     return response;
 }
 

@@ -36,6 +36,11 @@ Parameters:
     Default: "0"
     AllowedValues: ["0", "1"]
     Description: Set to 1 only for snapshot-only workloads that accept ONNX cold start
+  LambdaAuthMode:
+    Type: String
+    Default: AWS_IAM
+    AllowedValues: ["AWS_IAM", "NONE"]
+    Description: Function URL auth mode. AWS_IAM (default, SigV4 from Local Agent) or NONE (protected by X-Bawal-Token)
   AuthToken:
     Type: String
     NoEcho: true
@@ -91,16 +96,21 @@ Resources:
           OMP_NUM_THREADS: "2"
           OPENCV_LOG_LEVEL: ERROR
       FunctionUrlConfig:
-        AuthType: NONE
+        AuthType: !Ref LambdaAuthMode
         Cors:
           AllowOrigins:
-            - "*"
+            - "http://localhost:5173"
+            - "http://127.0.0.1:5173"
+            - "http://localhost:3000"
+            - "http://127.0.0.1:3000"
           AllowMethods:
             - GET
             - POST
             - OPTIONS
           AllowHeaders:
-            - "*"
+            - "Content-Type"
+            - "Authorization"
+            - "X-Bawal-Token"
           MaxAge: 3600
       Events:
         InspectSnapshot:

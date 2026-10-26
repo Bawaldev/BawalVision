@@ -251,7 +251,15 @@ export const handle: Handle = async ({ event, resolve }) => {
                     detections: []
                 }), { status: 200, headers: jsonHeaders });
             }
-            if (path.includes('/records') || path.includes('/inspections') || path.includes('/examples')) {
+            if (path.includes('/records') || path.includes('/inspections')) {
+                return new Response(JSON.stringify({
+                    status: 'NO_DATA',
+                    capability: false,
+                    records: [],
+                    message: 'Cloud audit storage is not configured. Historical inspection records reside on the local agent.'
+                }), { status: 200, headers: jsonHeaders });
+            }
+            if (path.includes('/examples')) {
                 return new Response(JSON.stringify([]), { status: 200, headers: jsonHeaders });
             }
 

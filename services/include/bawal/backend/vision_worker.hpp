@@ -82,6 +82,8 @@ private:
     Database* m_database{nullptr};
     server::RollingImageStore* m_image_store{nullptr};
     std::string m_model_path;
+    std::string m_lambda_endpoint;
+    std::string m_lambda_auth_token;
     std::thread m_thread;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_consumer_ready{false};

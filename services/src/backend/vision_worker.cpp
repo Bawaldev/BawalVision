@@ -13,6 +13,9 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <curl/curl.h>
+#include <glaze/glaze.hpp>
 
 #include "bawal/ipc/shm_consumer.hpp"
 #include "bawal/server/jpeg_utils.hpp"
@@ -24,6 +27,102 @@
 
 namespace bawal::backend {
 namespace {
+
+struct LambdaBboxDto {
+    int x{0};
+    int y{0};
+    int width{0};
+    int height{0};
+};
+
+struct LambdaDetectionItemDto {
+    std::string class_name;
+    float confidence{0.0f};
+    LambdaBboxDto bbox;
+    float spoilage_score{0.0f};
+    float freshness_score{0.0f};
+};
+
+struct LambdaInspectionResultDto {
+    uint32_t frame_id{0};
+    std::string status;
+    std::string device_id;
+    std::string engine_pipeline;
+    double processing_time_ms{0.0};
+    std::vector<LambdaDetectionItemDto> detections;
+};
+
+bool invokeRemoteLambdaInference(const cv::Mat& frame,
+                                 const std::string& endpoint,
+                                 const std::string& auth_token,
+                                 std::vector<bawal::vision::DetectionResult>& detected) {
+    std::vector<uint8_t> jpeg_buf;
+    const std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
+    if (!cv::imencode(".jpg", frame, jpeg_buf, params)) {
+        return false;
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: image/jpeg");
+    if (!auth_token.empty()) {
+        const std::string auth_hdr = "Authorization: Bearer " + auth_token;
+        const std::string bawal_hdr = "X-Bawal-Token: " + auth_token;
+        headers = curl_slist_append(headers, auth_hdr.c_str());
+        headers = curl_slist_append(headers, bawal_hdr.c_str());
+    }
+
+    const char* sigv4 = std::getenv("BAWAL_AWS_SIGV4");
+    if (sigv4 != nullptr && *sigv4 != '\0') {
+        curl_easy_setopt(curl, CURLOPT_AWS_SIGV4, sigv4);
+    }
+
+    std::string response_body;
+    curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, reinterpret_cast<const char*>(jpeg_buf.data()));
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(jpeg_buf.size()));
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 4000L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L);
+
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, +[](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
+        auto* str = static_cast<std::string*>(userdata);
+        str->append(ptr, size * nmemb);
+        return size * nmemb;
+    });
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+
+    const CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK || http_code < 200 || http_code >= 300 || response_body.empty()) {
+        return false;
+    }
+
+    LambdaInspectionResultDto dto;
+    if (const auto err = glz::read_json(dto, response_body); err) {
+        return false;
+    }
+
+    detected.clear();
+    detected.reserve(dto.detections.size());
+    for (const auto& item : dto.detections) {
+        bawal::vision::DetectionResult d;
+        d.class_name = item.class_name;
+        d.confidence = item.confidence;
+        d.bbox = cv::Rect(item.bbox.x, item.bbox.y, item.bbox.width, item.bbox.height);
+        d.spoilage.discoloration_ratio = item.spoilage_score / 100.0f;
+        d.class_id = 0;
+        detected.push_back(d);
+    }
+    return true;
+}
 
 constexpr std::chrono::milliseconds kIdlePoll{2};
 constexpr std::chrono::milliseconds kInitRetry{500};
@@ -313,7 +412,14 @@ VisionWorker::VisionWorker(BackendState& state, std::string model_path, Database
     : m_state(state),
       m_database(database),
       m_image_store(image_store),
-      m_model_path(std::move(model_path)) {}
+      m_model_path(std::move(model_path)) {
+    if (const char* ep = std::getenv("BAWAL_LAMBDA_ENDPOINT"); ep != nullptr && *ep != '\0') {
+        m_lambda_endpoint = ep;
+    }
+    if (const char* token = std::getenv("BAWAL_LAMBDA_AUTH_TOKEN"); token != nullptr && *token != '\0') {
+        m_lambda_auth_token = token;
+    }
+}
 
 VisionWorker::~VisionWorker() {
     stop();
@@ -395,7 +501,13 @@ void VisionWorker::run() {
 
         const int64_t t0 = cv::getTickCount();
         std::vector<bawal::vision::DetectionResult> detected;
-        const bool inferred = pipeline.runInference(frame, detected);
+        bool inferred = false;
+        if (!m_lambda_endpoint.empty()) {
+            inferred = invokeRemoteLambdaInference(frame, m_lambda_endpoint, m_lambda_auth_token, detected);
+        }
+        if (!inferred) {
+            inferred = pipeline.runInference(frame, detected);
+        }
         const double infer_ms =
             ((cv::getTickCount() - t0) * 1000.0) / cv::getTickFrequency();
 

@@ -188,6 +188,30 @@ build-lambda-image tag="bawalvision-lambda:local":
 run-lambda port="9000" tag="bawalvision-lambda:local":
     cd {{ justfile_directory() }} && docker run --rm -p {{ port }}:8080 {{ tag }}
 
+# Build and execute a local RIE smoke test on the Lambda image (no AWS credentials required)
+[group('Lambda')]
+test-lambda-rie tag="bawalvision-lambda:test":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{ justfile_directory() }}
+    echo "[INFO] Building Lambda image {{ tag }}..."
+    docker build --platform linux/amd64 -f deploy/Dockerfile.lambda -t {{ tag }} .
+    echo "[INFO] Starting container with Runtime Interface Emulator..."
+    CONTAINER_ID=$(docker run -d -p 18080:8080 {{ tag }})
+    trap 'echo "[INFO] Cleaning up container $CONTAINER_ID..."; docker kill "$CONTAINER_ID" >/dev/null 2>&1 || true; docker rm "$CONTAINER_ID" >/dev/null 2>&1 || true' EXIT
+    echo "[INFO] Waiting for RIE to start..."
+    for i in {1..30}; do
+        if curl -s "http://localhost:18080/2015-03-31/functions/function/invocations" -d '{}' >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+    echo "[INFO] Sending smoke test event to RIE..."
+    RESPONSE=$(curl -fsSL -X POST "http://localhost:18080/2015-03-31/functions/function/invocations" \
+        -H "Content-Type: application/json" \
+        -d '{"rawPath": "/api/v1/lambda/health", "requestContext": {"http": {"method": "GET"}}}')
+    echo "[SUCCESS] RIE Response: $RESPONSE"
+
 # Build, push to ECR, and deploy with SAM (requires docker, aws, sam)
 [group('Lambda')]
 deploy-lambda:
