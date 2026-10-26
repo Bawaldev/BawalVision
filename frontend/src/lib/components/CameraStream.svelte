@@ -278,6 +278,11 @@
         }
 
         // Concurrently probe the active C++ backend on port 8080 to sync real ESP-IDF hardware telemetry
+        // Skip on HTTPS pages (e.g. Vercel) where browser Private Network Access blocks loopback requests
+        if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+            return;
+        }
+
         const hostMatch = url.match(/https?:\/\/([^/:]+)/i);
         const host = hostMatch ? hostMatch[1] : '';
         const backendCandidates = [
@@ -572,10 +577,12 @@
         const refreshDiscoveredStream = async () => {
             syncApiBase();
             const candidates = [
-                'http://localhost:8080/api/v1/devices/status',
                 apiEndpoint('/api/v1/devices/status')
             ];
-            if (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && !window.location.hostname.endsWith('.vercel.app')) {
+            if (typeof window !== 'undefined' && window.location.protocol !== 'https:') {
+                candidates.unshift('http://localhost:8080/api/v1/devices/status');
+            }
+            if (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && !window.location.hostname.endsWith('.vercel.app') && window.location.protocol !== 'https:') {
                 candidates.unshift(`http://${window.location.hostname}:8080/api/v1/devices/status`);
             }
 

@@ -94,14 +94,6 @@ export const handle: Handle = async ({ event, resolve }) => {
             warnedApiGatewaySigV4 = true;
             console.warn('[PROXY] API Gateway is configured with AWS_IAM, but this proxy does not sign requests with SigV4. Use the Lambda Function URL with BAWAL_LAMBDA_AUTH_TOKEN instead.');
         }
-        let targetPath = event.url.pathname;
-        if (isLambdaBackend) {
-            if (targetPath === '/api/v1/camera/frame') {
-                targetPath = '/api/v1/lambda/inspect';
-            }
-        }
-        const target = `${backendUrl}${targetPath}${event.url.search}`;
-
         const jsonHeaders: Record<string, string> = {
             'Content-Type': 'application/json'
         };
@@ -109,6 +101,27 @@ export const handle: Handle = async ({ event, resolve }) => {
             jsonHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
             jsonHeaders['Vary'] = 'Origin';
         }
+
+        let targetPath = event.url.pathname;
+        if (isLambdaBackend) {
+            if (targetPath === '/api/v1/camera/frame') {
+                targetPath = '/api/v1/lambda/inspect';
+            }
+            if (event.request.method === 'GET') {
+                if (targetPath === '/api/v1/system/threshold') {
+                    return new Response(JSON.stringify({
+                        threshold: 0.35,
+                        min: 0.1,
+                        max: 0.9,
+                        default: 0.35
+                    }), { status: 200, headers: jsonHeaders });
+                }
+                if (targetPath === '/api/v1/examples') {
+                    return new Response(JSON.stringify([]), { status: 200, headers: jsonHeaders });
+                }
+            }
+        }
+        const target = `${backendUrl}${targetPath}${event.url.search}`;
 
         const proxyHeaders = new Headers(event.request.headers);
         proxyHeaders.delete('host');
