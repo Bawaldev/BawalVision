@@ -35,7 +35,7 @@ BawalVision is an edge-to-cloud automated computer vision and telemetry system d
              v                                               v
 +---------------------------+                 +---------------------------+
 | In-Process Vision (SHM)   |                 | SvelteKit 5 HMI (:3001)   |
-| - ONNX Runtime (YOLOv8n)  |                 | - Real-time Live Streams  |
+| - ONNX Runtime (YOLOv8s)  |                 | - Real-time Live Streams  |
 | - OpenCV & OpenMP (AVX2)  |                 | - Visual Inspection Cards |
 | - Color/Hue & Quality QC  |                 | - Telemetry & Analytics   |
 +---------------------------+                 +---------------------------+

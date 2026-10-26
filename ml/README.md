@@ -131,7 +131,7 @@ python ml/AI1/relabel_dataset_tight.py
 ---
 
 ### Stage 4: YOLOv8s Training & Static FP32 ONNX Export (Cold Training)
-Train the primary YOLOv8s (or lightweight YOLOv8n) object detector from scratch with balanced MBG loss weightings.
+Train the primary YOLOv8s object detector from scratch with balanced MBG loss weightings.
 
 ```bash
 # Train YOLOv8s detector from scratch
