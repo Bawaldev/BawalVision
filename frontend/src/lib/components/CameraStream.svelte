@@ -234,6 +234,7 @@
     let autoDetectedBackendIp = $state('');
     let isAttemptingLocalStream = $state(true);
     let isHttpsDomain = $derived(typeof window !== 'undefined' && window.location.protocol === 'https:');
+    let handleExternalCameraOnline: ((e: any) => void) | null = null;
 
     function escapeHtml(str: string): string {
         return str
@@ -242,6 +243,19 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
+    }
+
+    function isValidStreamHost(url: string): boolean {
+        if (!url) return false;
+        const match = url.match(/https?:\/\/([0-9.]+)(?::\d+)?/);
+        if (!match) return url.includes('localhost') || url.includes('.local');
+        const ip = match[1];
+        const parts = ip.split('.');
+        if (parts.length !== 4) return false;
+        return parts.every(p => {
+            const n = parseInt(p, 10);
+            return !isNaN(n) && n >= 0 && n <= 255;
+        });
     }
 
     function connectManualEspStream() {
@@ -262,6 +276,13 @@
         if (!url.includes('/stream') && !url.includes(':8080')) {
             url = url.replace(/\/+$/, '') + '/stream';
         }
+
+        if (!isValidStreamHost(url)) {
+            localBackendNotice = `⚠️ <strong>Format IP tidak valid: <code>${safeRaw}</code></strong>.<br/>` +
+                `Alamat IP harus terdiri dari 4 angka (contoh: <code>172.20.167.236</code> sesuai yang tertera di layar LCD ESP32 Anda).`;
+            return;
+        }
+
         manualEspStreamUrl = url;
         if (typeof localStorage !== 'undefined') {
             try { localStorage.setItem('bawal_esp32_stream_url', url); } catch {}
@@ -695,9 +716,29 @@
         if (typeof document !== 'undefined') {
             document.addEventListener('visibilitychange', handleVisibilityChange);
         }
+        handleExternalCameraOnline = (e: any) => {
+            const detail = e.detail;
+            if (detail?.streamUrl && isValidStreamHost(detail.streamUrl)) {
+                manualEspStreamUrl = detail.streamUrl;
+                discoveredStreamUrl = detail.streamUrl;
+                streamError = false;
+                isLiveFeedActive = true;
+                streamEpoch = Date.now();
+                if (detail?.ip) {
+                    autoDetectedEspIp = detail.ip;
+                }
+            }
+        };
+        if (typeof window !== 'undefined') {
+            window.addEventListener('bawal-camera-online', handleExternalCameraOnline as EventListener);
+        }
         if (typeof localStorage !== 'undefined') {
+            const savedEspIp = localStorage.getItem('bawal_esp_ip');
+            if (savedEspIp && isValidStreamHost(`http://${savedEspIp}`)) {
+                autoDetectedEspIp = savedEspIp;
+            }
             const savedEspUrl = localStorage.getItem('bawal_esp32_stream_url');
-            if (savedEspUrl) {
+            if (savedEspUrl && isValidStreamHost(savedEspUrl)) {
                 manualEspStreamUrl = savedEspUrl;
                 // If on HTTPS, do not auto-bind insecure HTTP stream to <img> to avoid Mixed Content errors
                 if (!(typeof window !== 'undefined' && window.location.protocol === 'https:' && savedEspUrl.startsWith('http://'))) {
@@ -705,6 +746,9 @@
                         discoveredStreamUrl = savedEspUrl;
                     }
                 }
+            } else if (savedEspUrl && !isValidStreamHost(savedEspUrl)) {
+                try { localStorage.removeItem('bawal_esp32_stream_url'); } catch {}
+                manualEspStreamUrl = '';
             }
             const savedVideo = localStorage.getItem('bawal_mock_selected_video');
             if (savedVideo && savedVideo !== 'custom') {
@@ -1313,6 +1357,9 @@
     onDestroy(() => {
         if (typeof window !== 'undefined') {
             window.removeEventListener('bawal-source-mode', handleGlobalSourceMode);
+            if (handleExternalCameraOnline) {
+                window.removeEventListener('bawal-camera-online', handleExternalCameraOnline as EventListener);
+            }
         }
         if (typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', handleVisibilityChange);

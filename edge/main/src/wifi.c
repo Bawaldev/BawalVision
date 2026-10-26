@@ -1271,6 +1271,14 @@ static void usb_send_ack(const char *status) {
     cJSON_AddNumberToObject(ack, "cpu_temperature", (double)get_esp32_cpu_temperature());
     cJSON_AddNumberToObject(ack, "cpu_load", (double)get_cpu_usage_percentage());
 
+    esp_netif_ip_info_t ip_info;
+    if (get_sta_ip_info(&ip_info)) {
+        char ip_str[32];
+        esp_ip4addr_ntoa(&ip_info.ip, ip_str, sizeof(ip_str));
+        cJSON_AddStringToObject(ack, "sta_ip", ip_str);
+        cJSON_AddStringToObject(ack, "ip_address", ip_str);
+    }
+
     char *str = cJSON_PrintUnformatted(ack);
     if (str) {
         char ack_line[512];

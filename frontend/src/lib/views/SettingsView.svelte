@@ -302,6 +302,36 @@
         isDeployingToEsp = false;
     }
 
+    async function handleSyncWifiUsb() {
+        const ssidToUse = (espWifiSsid || serverWifiSsid || espNodeStatus?.wifi_ssid || '').trim();
+        if (!ssidToUse) {
+            espDeployMessage = '⚠️ Masukkan nama Wi-Fi (SSID) target terlebih dahulu.';
+            espDeploySuccess = false;
+            return;
+        }
+
+        isDeployingToEsp = true;
+        espDeployMessage = '⏳ Menghubungkan ke ESP32 via USB CDC (/dev/ttyACM0)...';
+        try {
+            const res = await provisionViaBrowserSerial(ssidToUse, espWifiPassword, '');
+            if (res.success) {
+                espDeploySuccess = true;
+                const ip = res.ipAddress && res.ipAddress !== 'USB Serial' ? res.ipAddress : '';
+                espDeployMessage = `✓ Berhasil disinkronkan! ESP32 tersambung ke "${res.provisionedSsid || ssidToUse}". ` +
+                    (ip ? `IP: ${ip}. ` : '') +
+                    `Buka tab Live Inspection untuk melihat video stream!`;
+            } else {
+                espDeploySuccess = false;
+                espDeployMessage = `⚠️ Gagal sinkronisasi: ${res.message}`;
+            }
+        } catch (err: any) {
+            espDeploySuccess = false;
+            espDeployMessage = `⚠️ Error: ${err?.message || 'Gagal sinkronisasi USB'}`;
+        } finally {
+            isDeployingToEsp = false;
+        }
+    }
+
     async function refreshHardwareStatus() {
         const hw = await fetchDeviceStatus(formState.backendUrl);
         if (!hw) {
@@ -875,13 +905,26 @@
             }
 
             const targetSsid = ack.ssid || ssid;
+            const espIp = ack.sta_ip || ack.ip_address || '';
+            if (espIp && typeof localStorage !== 'undefined') {
+                try {
+                    localStorage.setItem('bawal_esp32_stream_url', `http://${espIp}/stream`);
+                    localStorage.setItem('bawal_esp_ip', espIp);
+                } catch {}
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('bawal-camera-online', {
+                        detail: { active: true, streamUrl: `http://${espIp}/stream`, ip: espIp, deviceId: ack.device_id || 'ESP32S3' }
+                    }));
+                }
+            }
+
             return {
                 success: true,
                 status: ack.status,
                 deviceId: ack.device_id || espUsbStatus?.device_id || formState.deviceId || 'ESP32S3_USB',
                 firmwareVersion: ack.firmware_version || '1.0.0',
                 latencyMs: 4,
-                ipAddress: ack.backend_ip || gatewayIp || 'USB Serial',
+                ipAddress: espIp || ack.backend_ip || gatewayIp || 'USB Serial',
                 usbPort: 'Web Serial',
                 provisionedSsid: targetSsid,
                 gatewayHostIp: gatewayIp || ack.backend_ip || '',
@@ -1357,7 +1400,7 @@
                                 type="button"
                                 class="fedora-btn primary"
                                 style="padding: 8px 18px; font-size: 0.84rem; font-weight: 600;"
-                                onclick={() => provisionViaBrowserSerial(espWifiSsid || serverWifiSsid || '', espWifiPassword, '')}
+                                onclick={handleSyncWifiUsb}
                                 disabled={isDeployingToEsp}
                             >
                                 {#if isDeployingToEsp}
