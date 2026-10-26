@@ -139,8 +139,8 @@
     let mockFrameSeq = 0;
     let isRewound = $state(false);
     let lastVideoTime = 0;
-    let mockViewMode = $state<'video' | 'annotated'>('video');
     let mockAnnotatedFrameUrl = $state<string>('');
+    let deviceCamAnnotatedUrl = $state<string>('');
 
     // Device / Phone Camera Ingestion Pipeline State
     let deviceCamVideoEl = $state<HTMLVideoElement | null>(null);
@@ -269,6 +269,8 @@
         discoveredStreamUrl = url;
         streamError = false;
         retryCount = 0;
+        mockAnnotatedFrameUrl = '';
+        deviceCamAnnotatedUrl = '';
         isLiveFeedActive = true;
         streamEpoch = Date.now();
         startLivePushing();
@@ -355,6 +357,8 @@
     function handleLiveImgLoaded() {
         streamError = false;
         retryCount = 0;
+        mockAnnotatedFrameUrl = '';
+        deviceCamAnnotatedUrl = '';
         isLiveFeedActive = true;
         localBackendNotice = '';
         scheduleLiveRefresh();
@@ -493,6 +497,9 @@
                                     thumb = data.image_path;
                                 }
                             } catch {}
+                            if (thumb && sourceMode === 'device_cam') {
+                                deviceCamAnnotatedUrl = thumb;
+                            }
 
                             if (typeof window !== 'undefined') {
                                 window.dispatchEvent(new CustomEvent('bawal-live-detections', {
@@ -981,6 +988,8 @@
         }
         streamError = false;
         retryCount = 0;
+        mockAnnotatedFrameUrl = '';
+        deviceCamAnnotatedUrl = '';
         if (typeof window !== 'undefined') {
             // Wipe HUD boxes immediately; the backend also clears its snapshot.
             window.dispatchEvent(new CustomEvent('bawal-clear-detections'));
@@ -1325,28 +1334,6 @@
         return 'PASS';
     }
 
-    function getFreshnessScore(det: any): number {
-        if (!det) return 100;
-        if (typeof det.freshness_score === 'number') {
-            const score = det.freshness_score <= 1 ? det.freshness_score * 100 : det.freshness_score;
-            return Math.round(Math.max(0, Math.min(100, score)));
-        }
-        const spoilage = Number(det.spoilage_score) || 0;
-        return Math.round(Math.max(0, Math.min(100, 100 - spoilage)));
-    }
-
-    function formatHudLabel(det: any): { label: string; strokeColor: string; status: string; badgeW: number } {
-        const name = det.food_name || det.class_name || 'food_item';
-        const confRaw = Number(det.similarity_rate ?? det.confidence) || 0;
-        const confPct = Math.round(confRaw <= 1 ? confRaw * 100 : confRaw);
-        const status = getItemStatus(det);
-        const freshness = getFreshnessScore(det);
-        const strokeColor = status === 'PASS' ? '#10b981' : (status === 'REVIEW' ? '#f59e0b' : '#ef4444');
-        const label = `${name} ${confPct}% [${status} ${freshness}%]`;
-        const badgeW = Math.max(88, label.length * 7.5 + 16);
-        return { label, strokeColor, status, badgeW };
-    }
-
     let validDetections = $derived(Array.isArray(detections) ? detections.filter((d): d is FoodDetection => Boolean(d)) : []);
     let passCount = $derived(validDetections.filter(d => getItemStatus(d) === 'PASS').length);
     let reviewCount = $derived(validDetections.filter(d => getItemStatus(d) === 'REVIEW').length);
@@ -1427,74 +1414,34 @@
             ></canvas>
 
             {#if sourceMode === 'mock'}
-                {#if mockViewMode === 'annotated' && mockAnnotatedFrameUrl}
+                <!-- Smooth Native 60 FPS Mock Video Ingestion Player -->
+                <video
+                    bind:this={mockVideoEl}
+                    src={resolvedMockVideoSrc}
+                    aria-label="Mock Video Feed"
+                    class="feed-video"
+                    class:hidden-video={Boolean(mockAnnotatedFrameUrl)}
+                    crossorigin="anonymous"
+                    playsinline
+                    muted
+                    autoplay
+                    preload="auto"
+                    loop
+                    onloadedmetadata={handleVideoLoaded}
+                    oncanplay={handleVideoCanPlay}
+                    ontimeupdate={handleVideoTimeUpdate}
+                    onplay={() => (mockIsPlaying = true)}
+                    onpause={() => (mockIsPlaying = false)}
+                    onerror={handleVideoError}
+                ></video>
+
+                {#if mockAnnotatedFrameUrl}
                     <!-- Backend OpenCV Annotated AI Frame (Authoritative Backend Bounding Boxes) -->
                     <img
                         src={mockAnnotatedFrameUrl}
                         alt="Backend OpenCV Annotated AI Frame"
                         class="feed-video"
                     />
-                {:else}
-                    <!-- Smooth Native 60 FPS Mock Video Player -->
-                    <video
-                        bind:this={mockVideoEl}
-                        src={resolvedMockVideoSrc}
-                        aria-label="Mock Video Feed"
-                        class="feed-video"
-                        crossorigin="anonymous"
-                        playsinline
-                        muted
-                        autoplay
-                        preload="auto"
-                        loop
-                        onloadedmetadata={handleVideoLoaded}
-                        oncanplay={handleVideoCanPlay}
-                        ontimeupdate={handleVideoTimeUpdate}
-                        onplay={() => (mockIsPlaying = true)}
-                        onpause={() => (mockIsPlaying = false)}
-                        onerror={handleVideoError}
-                    ></video>
-
-                    <!-- Dynamic AI Bounding Box HUD Overlay for Mock Video (Turned OFF during mode switching transitions) -->
-                    {#if !isSwitchingMode && detections && detections.length > 0}
-                        <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
-                            {#each detections as det}
-                                {@const box = getDetectionBox(det)}
-                                {#if box}
-                                    {@const hud = formatHudLabel(det)}
-                                    {@const [bx, by, bw, bh] = box}
-                                    <rect
-                                        x={bx}
-                                        y={by}
-                                        width={bw}
-                                        height={bh}
-                                        fill="none"
-                                        stroke={hud.strokeColor}
-                                        stroke-width="2.5"
-                                        rx="4"
-                                    />
-                                    <rect
-                                        x={bx}
-                                        y={Math.max(0, by - 22)}
-                                        width={hud.badgeW}
-                                        height="22"
-                                        fill={hud.strokeColor}
-                                        rx="3"
-                                    />
-                                    <text
-                                        x={bx + 6}
-                                        y={Math.max(15, by - 6)}
-                                        fill="#ffffff"
-                                        font-size="11"
-                                        font-weight="bold"
-                                        font-family="sans-serif"
-                                    >
-                                        {hud.label}
-                                    </text>
-                                {/if}
-                            {/each}
-                        </svg>
-                    {/if}
                 {/if}
             {:else if sourceMode === 'device_cam'}
                 <!-- Direct Smartphone / Webcam Video Feed (Always mounted so element reference is bound) -->
@@ -1502,52 +1449,20 @@
                     bind:this={deviceCamVideoEl}
                     aria-label="Device Camera Stream"
                     class="feed-video"
-                    class:hidden-video={!isDeviceCamActive}
+                    class:hidden-video={!isDeviceCamActive || Boolean(deviceCamAnnotatedUrl)}
                     playsinline
                     autoplay
                     muted
                 ></video>
 
                 {#if isDeviceCamActive}
-                    <!-- Dynamic AI Bounding Box HUD Overlay for Device Cam -->
-                    {#if !isSwitchingMode && detections && detections.length > 0}
-                        <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
-                            {#each detections as det}
-                                {@const box = getDetectionBox(det)}
-                                {#if box}
-                                    {@const hud = formatHudLabel(det)}
-                                    {@const [bx, by, bw, bh] = box}
-                                    <rect
-                                        x={bx}
-                                        y={by}
-                                        width={bw}
-                                        height={bh}
-                                        fill="none"
-                                        stroke={hud.strokeColor}
-                                        stroke-width="2.5"
-                                        rx="4"
-                                    />
-                                    <rect
-                                        x={bx}
-                                        y={Math.max(0, by - 22)}
-                                        width={hud.badgeW}
-                                        height="22"
-                                        fill={hud.strokeColor}
-                                        rx="3"
-                                    />
-                                    <text
-                                        x={bx + 6}
-                                        y={Math.max(15, by - 6)}
-                                        fill="#ffffff"
-                                        font-size="11"
-                                        font-weight="bold"
-                                        font-family="sans-serif"
-                                    >
-                                        {hud.label}
-                                    </text>
-                                {/if}
-                            {/each}
-                        </svg>
+                    {#if deviceCamAnnotatedUrl}
+                        <!-- Backend OpenCV Annotated AI Frame for Smartphone Camera -->
+                        <img
+                            src={deviceCamAnnotatedUrl}
+                            alt="Backend OpenCV Annotated AI Frame"
+                            class="feed-video"
+                        />
                     {/if}
                 {:else}
                     <!-- Device Cam Standby / Permission Notice -->
@@ -1568,7 +1483,7 @@
                     </div>
                 {/if}
             {:else}
-                <!-- Live Stream Mode (Unified MJPEG Ingress from ESP32-S3 Camera) -->
+                <!-- Live Stream Mode (Unified MJPEG Ingress from ESP32-S3 Camera via Backend OpenCV) -->
                 {#if (hasCamera || isAttemptingLocalStream || discoveredStreamUrl) && !streamError}
                     <img
                         bind:this={liveImgEl}
@@ -1579,47 +1494,6 @@
                         onload={handleLiveImgLoaded}
                         onerror={handleLiveImgError}
                     />
-
-                    <!-- Dynamic AI Bounding Box HUD Overlay for Live ESP Stream (Hidden if pre-annotated by backend) -->
-                    {#if !isLiveStreamPreAnnotated && !isSwitchingMode && detections && detections.length > 0}
-                        <svg class="hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="xMidYMid meet">
-                            {#each detections as det}
-                                {@const box = getDetectionBox(det)}
-                                {#if box}
-                                    {@const hud = formatHudLabel(det)}
-                                    {@const [bx, by, bw, bh] = box}
-                                    <rect
-                                        x={bx}
-                                        y={by}
-                                        width={bw}
-                                        height={bh}
-                                        fill="none"
-                                        stroke={hud.strokeColor}
-                                        stroke-width="2.5"
-                                        rx="4"
-                                    />
-                                    <rect
-                                        x={bx}
-                                        y={Math.max(0, by - 22)}
-                                        width={hud.badgeW}
-                                        height="22"
-                                        fill={hud.strokeColor}
-                                        rx="3"
-                                    />
-                                    <text
-                                        x={bx + 6}
-                                        y={Math.max(15, by - 6)}
-                                        fill="#ffffff"
-                                        font-size="11"
-                                        font-weight="bold"
-                                        font-family="sans-serif"
-                                    >
-                                        {hud.label}
-                                    </text>
-                                {/if}
-                            {/each}
-                        </svg>
-                    {/if}
                 {:else}
                     <!-- Standby State -->
                     <div class="standby-box">
@@ -1778,27 +1652,7 @@
                         {/each}
                     </div>
 
-                    <!-- AI View Mode Selector (Backend OpenCV Frame vs Native Video) -->
-                    <div class="speed-switcher">
-                        <button
-                            type="button"
-                            class="speed-btn"
-                            class:active={mockViewMode === 'video'}
-                            onclick={() => (mockViewMode = 'video')}
-                            title="Play native MP4 video with synced HUD overlay"
-                        >
-                            🎥 Video Feed
-                        </button>
-                        <button
-                            type="button"
-                            class="speed-btn"
-                            class:active={mockViewMode === 'annotated'}
-                            onclick={() => (mockViewMode = 'annotated')}
-                            title="Display backend OpenCV annotated AI frame with [PASS 99%] boxes"
-                        >
-                            🧠 Backend AI [PASS]
-                        </button>
-                    </div>
+
                 </div>
 
                 <!-- Source Selection Bar -->
@@ -2439,15 +2293,7 @@
         background: rgba(56, 189, 248, 0.3);
     }
 
-    .hud-overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        z-index: 5;
-    }
+
 
     .standby-box {
         display: flex;

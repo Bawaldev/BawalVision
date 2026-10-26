@@ -327,64 +327,7 @@
                             </div>
                         {/if}
 
-                        <!-- Dynamic AI Bounding Box HUD Overlay for Audit Card (Only if image is raw unannotated blob) -->
-                        {#if (!imgSrc || failedImages[imgSrc]) && record.local_blob_url && detections && detections.length > 0}
-                            <svg class="audit-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
-                                {#each detections as det, detIdx}
-                                    {@const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null)}
-                                    {@const rawX = boxArray ? boxArray[0] : (typeof (det as any).x === 'number' ? (det as any).x : 0)}
-                                    {@const rawY = boxArray ? boxArray[1] : (typeof (det as any).y === 'number' ? (det as any).y : 0)}
-                                    {@const rawW = boxArray ? boxArray[2] : (typeof (det as any).width === 'number' ? (det as any).width : 0)}
-                                    {@const rawH = boxArray ? boxArray[3] : (typeof (det as any).height === 'number' ? (det as any).height : 0)}
-                                    {@const isNorm = rawX <= 1 && rawY <= 1 && rawW <= 1 && rawH <= 1 && (rawW > 0 || rawH > 0)}
-                                    {@const bx = isNorm ? rawX * 640 : rawX}
-                                    {@const by = isNorm ? rawY * 480 : rawY}
-                                    {@const bw = isNorm ? rawW * 640 : rawW}
-                                    {@const bh = isNorm ? rawH * 480 : rawH}
-                                    {@const finalX = bw > 0 ? bx : (detIdx === 0 ? 120 : (detIdx === 1 ? 340 : 160))}
-                                    {@const finalY = bh > 0 ? by : (detIdx === 0 ? 90 : (detIdx === 1 ? 90 : 250))}
-                                    {@const finalW = bw > 0 ? bw : (detIdx === 2 ? 300 : 200)}
-                                    {@const finalH = bh > 0 ? bh : (detIdx === 2 ? 170 : 150)}
-                                    {@const confPct = Math.round(Number(det.confidence ?? (det as any).similarity_rate ?? 0) <= 1 ? Number(det.confidence ?? (det as any).similarity_rate ?? 0) * 100 : Number(det.confidence ?? (det as any).similarity_rate ?? 0))}
-                                    {@const isPass = !isVerdictRejected(record)}
-                                    {@const strokeColor = isPass ? '#10b981' : '#ef4444'}
-                                    {@const fillColor = isPass ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.16)'}
-                                    {@const spoilage = Number((det as any).spoilage_score) || 0}
-                                    {@const freshness = typeof (det as any).freshness_score === 'number' ? Math.round((det as any).freshness_score <= 1 ? (det as any).freshness_score * 100 : (det as any).freshness_score) : Math.round(Math.max(0, Math.min(100, 100 - spoilage)))}
-                                    {@const status = (det as any).status || (isPass ? 'PASS' : 'REJECT')}
-                                    {@const hudLabel = `${det.class_name} ${confPct}% [${status} ${freshness}%]`}
-                                    {@const badgeW = Math.max(88, hudLabel.length * 7.5 + 16)}
-                                    <rect
-                                        x={finalX}
-                                        y={finalY}
-                                        width={finalW}
-                                        height={finalH}
-                                        fill={fillColor}
-                                        stroke={strokeColor}
-                                        stroke-width="3"
-                                        rx="5"
-                                    />
-                                    <rect
-                                        x={finalX}
-                                        y={Math.max(0, finalY - 24)}
-                                        width={badgeW}
-                                        height="22"
-                                        fill={strokeColor}
-                                        rx="4"
-                                    />
-                                    <text
-                                        x={finalX + 6}
-                                        y={Math.max(15, finalY - 8)}
-                                        fill="#ffffff"
-                                        font-size="12"
-                                        font-weight="bold"
-                                        font-family="sans-serif"
-                                    >
-                                        {hudLabel}
-                                    </text>
-                                {/each}
-                            </svg>
-                        {/if}
+
 
                         <span class="verdict-badge" class:rejected={isVerdictRejected(record)}>
                             {record.verdict}
@@ -488,64 +431,7 @@
                         </div>
                     {/if}
 
-                    <!-- Dynamic AI Bounding Box HUD Overlay for Inspection Detail Modal (Only if image is raw unannotated blob) -->
-                    {#if (!modalImg || failedImages[modalImg]) && selectedRecord.local_blob_url && detections && detections.length > 0}
-                        <svg class="audit-hud-overlay" viewBox="0 0 640 480" preserveAspectRatio="none">
-                                {#each detections as det, detIdx}
-                                    {@const boxArray = Array.isArray(det.bbox) ? det.bbox : (Array.isArray((det as any).box) ? (det as any).box : null)}
-                                    {@const rawX = boxArray ? boxArray[0] : (typeof (det as any).x === 'number' ? (det as any).x : 0)}
-                                    {@const rawY = boxArray ? boxArray[1] : (typeof (det as any).y === 'number' ? (det as any).y : 0)}
-                                    {@const rawW = boxArray ? boxArray[2] : (typeof (det as any).width === 'number' ? (det as any).width : 0)}
-                                    {@const rawH = boxArray ? boxArray[3] : (typeof (det as any).height === 'number' ? (det as any).height : 0)}
-                                    {@const isNorm = rawX <= 1 && rawY <= 1 && rawW <= 1 && rawH <= 1 && (rawW > 0 || rawH > 0)}
-                                    {@const bx = isNorm ? rawX * 640 : rawX}
-                                    {@const by = isNorm ? rawY * 480 : rawY}
-                                    {@const bw = isNorm ? rawW * 640 : rawW}
-                                    {@const bh = isNorm ? rawH * 480 : rawH}
-                                    {@const finalX = bw > 0 ? bx : (detIdx === 0 ? 120 : (detIdx === 1 ? 340 : 160))}
-                                    {@const finalY = bh > 0 ? by : (detIdx === 0 ? 90 : (detIdx === 1 ? 90 : 250))}
-                                    {@const finalW = bw > 0 ? bw : (detIdx === 2 ? 300 : 200)}
-                                    {@const finalH = bh > 0 ? bh : (detIdx === 2 ? 170 : 150)}
-                                    {@const confPct = Math.round(Number(det.confidence ?? (det as any).similarity_rate ?? 0) <= 1 ? Number(det.confidence ?? (det as any).similarity_rate ?? 0) * 100 : Number(det.confidence ?? (det as any).similarity_rate ?? 0))}
-                                    {@const isPass = !isVerdictRejected(selectedRecord)}
-                                    {@const strokeColor = isPass ? '#10b981' : '#ef4444'}
-                                    {@const fillColor = isPass ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.16)'}
-                                    {@const spoilage = Number((det as any).spoilage_score) || 0}
-                                    {@const freshness = typeof (det as any).freshness_score === 'number' ? Math.round((det as any).freshness_score <= 1 ? (det as any).freshness_score * 100 : (det as any).freshness_score) : Math.round(Math.max(0, Math.min(100, 100 - spoilage)))}
-                                    {@const status = (det as any).status || (isPass ? 'PASS' : 'REJECT')}
-                                    {@const hudLabel = `${det.class_name} ${confPct}% [${status} ${freshness}%]`}
-                                    {@const badgeW = Math.max(88, hudLabel.length * 7.5 + 16)}
-                                    <rect
-                                        x={finalX}
-                                        y={finalY}
-                                        width={finalW}
-                                        height={finalH}
-                                        fill={fillColor}
-                                        stroke={strokeColor}
-                                        stroke-width="3"
-                                        rx="5"
-                                    />
-                                    <rect
-                                        x={finalX}
-                                        y={Math.max(0, finalY - 24)}
-                                        width={badgeW}
-                                        height="22"
-                                        fill={strokeColor}
-                                        rx="4"
-                                    />
-                                    <text
-                                        x={finalX + 6}
-                                        y={Math.max(15, finalY - 8)}
-                                        fill="#ffffff"
-                                        font-size="12"
-                                        font-weight="bold"
-                                        font-family="sans-serif"
-                                    >
-                                        {hudLabel}
-                                    </text>
-                                {/each}
-                            </svg>
-                        {/if}
+
                 </div>
 
                 <div class="modal-verdict" class:rejected={isVerdictRejected(selectedRecord)}>
@@ -799,15 +685,7 @@
         display: block;
     }
 
-    .audit-hud-overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        z-index: 2;
-    }
+
 
     .thumb-fallback {
         width: 100%;
