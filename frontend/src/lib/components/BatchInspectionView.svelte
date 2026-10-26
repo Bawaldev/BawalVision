@@ -347,7 +347,18 @@
                 throw new Error(detail);
             }
 
-            const payload = (await response.json()) as BatchSummary;
+            let rawPayload: any = await response.json();
+            if (rawPayload && typeof rawPayload === 'object' && typeof rawPayload.body === 'string') {
+                try {
+                    const parsed = JSON.parse(rawPayload.body);
+                    if (parsed && typeof parsed === 'object') {
+                        rawPayload = parsed;
+                    }
+                } catch {}
+            } else if (rawPayload && typeof rawPayload === 'object' && rawPayload.body && typeof rawPayload.body === 'object') {
+                rawPayload = rawPayload.body;
+            }
+            const payload = rawPayload as BatchSummary;
             clearTimers();
 
             const origin = resolveApiOrigin();
