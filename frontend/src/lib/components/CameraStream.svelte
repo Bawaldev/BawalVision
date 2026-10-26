@@ -499,24 +499,105 @@
         stopBlobStream();
         isBlobStreamRunning = true;
 
-        // Derive snapshot URL from stream URL (e.g. http://<node-ip>/stream -> http://<node-ip>/snapshot)
-        let snapshotUrl = targetStreamUrl.replace(/\/stream(?:\?.*)?$/i, '/snapshot');
-        if (!snapshotUrl.includes('/snapshot')) {
-            snapshotUrl = snapshotUrl.replace(/\/+$/, '') + '/snapshot';
-        }
-
         const devToken = typeof localStorage !== 'undefined' ? localStorage.getItem('bawal_device_token') || '' : '';
-        if (devToken && !snapshotUrl.includes('token=')) {
-            const sep = snapshotUrl.includes('?') ? '&' : '?';
-            snapshotUrl = `${snapshotUrl}${sep}token=${encodeURIComponent(devToken)}`;
+
+        // Derive stream and snapshot endpoints
+        let streamEndpoint = targetStreamUrl;
+        if (!streamEndpoint.includes('/stream') && !streamEndpoint.includes(':8080')) {
+            streamEndpoint = streamEndpoint.replace(/\/+$/, '') + '/stream';
+        }
+        if (devToken && !streamEndpoint.includes('token=')) {
+            const sep = streamEndpoint.includes('?') ? '&' : '?';
+            streamEndpoint = `${streamEndpoint}${sep}token=${encodeURIComponent(devToken)}`;
         }
 
+        let snapshotEndpoint = targetStreamUrl.replace(/\/stream(?:\?.*)?$/i, '/snapshot');
+        if (!snapshotEndpoint.includes('/snapshot')) {
+            snapshotEndpoint = snapshotEndpoint.replace(/\/+$/, '') + '/snapshot';
+        }
+        if (devToken && !snapshotEndpoint.includes('token=')) {
+            const sep = snapshotEndpoint.includes('?') ? '&' : '?';
+            snapshotEndpoint = `${snapshotEndpoint}${sep}token=${encodeURIComponent(devToken)}`;
+        }
+
+        // Strategy 1: High-Performance Continuous Multipart Stream Reader (15-20 FPS)
+        // Uses a single persistent TCP connection via ReadableStream, eliminating per-frame HTTP handshakes
+        try {
+            blobStreamAbortController = new AbortController();
+            const res = await fetch(streamEndpoint, {
+                signal: blobStreamAbortController.signal,
+                cache: 'no-store',
+                mode: 'cors'
+            });
+
+            if (res.ok && res.body && typeof res.body.getReader === 'function') {
+                const reader = res.body.getReader();
+                let chunkBuffer = new Uint8Array(0);
+
+                while (isBlobStreamRunning && isTabVisible && isActive && sourceMode === 'live') {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!value || value.length === 0) continue;
+
+                    const merged = new Uint8Array(chunkBuffer.length + value.length);
+                    merged.set(chunkBuffer, 0);
+                    merged.set(value, chunkBuffer.length);
+                    chunkBuffer = merged;
+
+                    // Locate JPEG Start of Image (0xFF 0xD8) and End of Image (0xFF 0xD9)
+                    let startIndex = -1;
+                    for (let i = 0; i < chunkBuffer.length - 1; i++) {
+                        if (chunkBuffer[i] === 0xFF && chunkBuffer[i + 1] === 0xD8) {
+                            startIndex = i;
+                            break;
+                        }
+                    }
+
+                    if (startIndex !== -1) {
+                        let endIndex = -1;
+                        for (let i = startIndex + 2; i < chunkBuffer.length - 1; i++) {
+                            if (chunkBuffer[i] === 0xFF && chunkBuffer[i + 1] === 0xD9) {
+                                endIndex = i + 2;
+                                break;
+                            }
+                        }
+
+                        if (endIndex !== -1) {
+                            const jpegBytes = chunkBuffer.slice(startIndex, endIndex);
+                            chunkBuffer = chunkBuffer.slice(endIndex);
+
+                            if (jpegBytes.length > 500) {
+                                const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+                                const newBlobUrl = URL.createObjectURL(blob);
+                                if (wsLiveFrameUrl) {
+                                    URL.revokeObjectURL(wsLiveFrameUrl);
+                                }
+                                wsLiveFrameUrl = newBlobUrl;
+                                isLiveFeedActive = true;
+                                streamError = false;
+                                localBackendNotice = '';
+                            }
+                        }
+                    }
+
+                    // Prevent buffer overflow if stream is noisy
+                    if (chunkBuffer.length > 500000) {
+                        chunkBuffer = new Uint8Array(0);
+                    }
+                }
+                return;
+            }
+        } catch {
+            // Fallback to Strategy 2 (Snapshot Polling) if multipart stream is closed or unsupported
+        }
+
+        // Strategy 2: Fast Snapshot Polling Fallback
         while (isBlobStreamRunning && isTabVisible && isActive && sourceMode === 'live') {
             try {
                 blobStreamAbortController = new AbortController();
-                const timeoutId = setTimeout(() => blobStreamAbortController?.abort(), 2500);
+                const timeoutId = setTimeout(() => blobStreamAbortController?.abort(), 2000);
 
-                const res = await fetch(snapshotUrl, {
+                const res = await fetch(snapshotEndpoint, {
                     signal: blobStreamAbortController.signal,
                     cache: 'no-store',
                     mode: 'cors'
@@ -535,14 +616,14 @@
                         streamError = false;
                         localBackendNotice = '';
                     }
-                    // Yield ~40ms to target ~25 FPS
-                    await new Promise((resolve) => setTimeout(resolve, 40));
+                    // Yield ~10ms to prevent main thread blocking while allowing high FPS
+                    await new Promise((resolve) => setTimeout(resolve, 10));
                 } else {
-                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                    await new Promise((resolve) => setTimeout(resolve, 600));
                 }
             } catch {
                 if (!isBlobStreamRunning) break;
-                await new Promise((resolve) => setTimeout(resolve, 800));
+                await new Promise((resolve) => setTimeout(resolve, 500));
             }
         }
         isBlobStreamRunning = false;
@@ -777,7 +858,7 @@
     }
 
     function startLivePushing() {
-        const intervalMs = sourceMode === 'live' && relayConfigured ? 3000 : 1500;
+        const intervalMs = sourceMode === 'live' ? 2500 : 1500;
         if (livePushTimer !== null && livePushIntervalMs === intervalMs) return;
         stopLivePushing();
         // Trigger one immediate frame push
@@ -1566,6 +1647,20 @@
     $effect(() => {
         if (hasCamera) {
             streamError = false;
+        }
+    });
+
+    // Reconnect when the dashboard tab becomes active after initial mount.
+    // The live view stays mounted on other tabs, so relying on onMount alone
+    // leaves the relay WebSocket disconnected until a manual mode switch.
+    $effect(() => {
+        if (typeof window === 'undefined') return;
+        const shouldStream = isActive && isTabVisible && sourceMode === 'live';
+        if (shouldStream) {
+            connectLiveWebSocket();
+        } else {
+            disconnectLiveWebSocket();
+            isLiveFeedActive = false;
         }
     });
 
