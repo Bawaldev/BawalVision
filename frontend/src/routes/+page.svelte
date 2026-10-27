@@ -88,6 +88,7 @@
     let isOnline = $state(false);
     let hasCamera = $state(false);
     let isCameraStreamingActive = $state(false);
+    let cameraStreamFps = $state(0.0);
     let isInspecting = $state(false);
     let gravitonAvailable = $state(false);
     let localEngineAvailable = $state(true);
@@ -316,7 +317,7 @@
 
             // 2. Camera Status
             hasCamera = cam.active || isCameraStreamingActive;
-            realFps = cam.active ? cam.fps : (isCameraStreamingActive ? 15.0 : 0.0);
+            realFps = cam.active ? cam.fps : (isCameraStreamingActive ? cameraStreamFps : 0.0);
 
             // 3. Telemetry Ingress from ESP32-S3
             if (tel) {
@@ -462,6 +463,7 @@
             window.addEventListener('bawal-clear-detections', handleClearDetections);
             window.addEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
             window.addEventListener('bawal-camera-online', handleCameraOnline as EventListener);
+            window.addEventListener('bawal-camera-fps', handleCameraFps as EventListener);
             window.addEventListener('bawal-backend-updated', handleBackendUpdated as EventListener);
         }
 
@@ -539,6 +541,17 @@
         }
     }
 
+    function handleCameraFps(e: CustomEvent) {
+        const fps = Number(e.detail?.fps);
+        if (!Number.isFinite(fps)) return;
+        cameraStreamFps = Math.max(0, Math.min(60, fps));
+        if (cameraStreamFps > 0) {
+            isCameraStreamingActive = true;
+            hasCamera = true;
+            isOnline = true;
+        }
+    }
+
     function handleBackendUpdated(e: Event) {
         const url = (e as CustomEvent<string>).detail;
         if (url) {
@@ -563,6 +576,7 @@
             window.removeEventListener('bawal-clear-detections', handleClearDetections);
             window.removeEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
             window.removeEventListener('bawal-camera-online', handleCameraOnline as EventListener);
+            window.removeEventListener('bawal-camera-fps', handleCameraFps as EventListener);
             window.removeEventListener('bawal-backend-updated', handleBackendUpdated as EventListener);
         }
     });

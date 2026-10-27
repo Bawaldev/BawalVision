@@ -357,6 +357,9 @@
     let wsLiveStream: WebSocket | null = null;
     let wsLiveFrameUrl = $state('');
     let relayReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let relayFrameTimes: number[] = [];
+    let lastRelayFpsEmit = 0;
+    let relayFpsStaleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const relayBaseUrl = (publicEnv.PUBLIC_CAMERA_RELAY_URL || '').trim();
     const relayDeviceId = (publicEnv.PUBLIC_CAMERA_RELAY_DEVICE || 'default').trim() || 'default';
@@ -376,6 +379,32 @@
         return `${base}${base.includes('?') ? '&' : '?'}${query.toString()}`;
     }
 
+    function emitCameraFps(fps: number) {
+        if (typeof window === 'undefined') return;
+        window.dispatchEvent(new CustomEvent('bawal-camera-fps', { detail: { fps } }));
+    }
+
+    function recordLiveFrameFps() {
+        if (typeof performance === 'undefined') return;
+        const now = performance.now();
+        relayFrameTimes.push(now);
+        while (relayFrameTimes.length > 2 && now - relayFrameTimes[0] > 3000) {
+            relayFrameTimes.shift();
+        }
+        if (relayFpsStaleTimer) clearTimeout(relayFpsStaleTimer);
+        relayFpsStaleTimer = setTimeout(() => {
+            relayFrameTimes = [];
+            lastRelayFpsEmit = 0;
+            emitCameraFps(0);
+        }, 3500);
+        if (now - lastRelayFpsEmit >= 1000 && relayFrameTimes.length >= 2) {
+            const span = now - relayFrameTimes[0];
+            const fps = span > 0 ? ((relayFrameTimes.length - 1) * 1000) / span : 0;
+            lastRelayFpsEmit = now;
+            emitCameraFps(Math.round(fps * 10) / 10);
+        }
+    }
+
     function applyLiveFrame(event: MessageEvent, socket: WebSocket) {
         if (wsLiveStream !== socket) return;
         if (!(event.data instanceof ArrayBuffer) || event.data.byteLength <= 4) return;
@@ -387,6 +416,7 @@
         isLiveFeedActive = true;
         streamError = false;
         localBackendNotice = '';
+        recordLiveFrameFps();
     }
 
     function scheduleRelayReconnect(attempt: number) {
@@ -489,6 +519,13 @@
             URL.revokeObjectURL(wsLiveFrameUrl);
             wsLiveFrameUrl = '';
         }
+        if (relayFpsStaleTimer !== null) {
+            clearTimeout(relayFpsStaleTimer);
+            relayFpsStaleTimer = null;
+        }
+        relayFrameTimes = [];
+        lastRelayFpsEmit = 0;
+        emitCameraFps(0);
     }
 
     let isBlobStreamRunning = false;
@@ -576,6 +613,7 @@
                                 isLiveFeedActive = true;
                                 streamError = false;
                                 localBackendNotice = '';
+                                recordLiveFrameFps();
                             }
                         }
                     }
@@ -615,6 +653,7 @@
                         isLiveFeedActive = true;
                         streamError = false;
                         localBackendNotice = '';
+                        recordLiveFrameFps();
                     }
                     // Yield ~10ms to prevent main thread blocking while allowing high FPS
                     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1638,6 +1677,10 @@
         stopLivePushing();
         stopDeviceCam();
         disconnectLiveWebSocket();
+        if (relayFpsStaleTimer !== null) {
+            clearTimeout(relayFpsStaleTimer);
+            relayFpsStaleTimer = null;
+        }
         stopBlobStream();
         if (mockVideoSrc.startsWith('blob:')) {
             URL.revokeObjectURL(mockVideoSrc);

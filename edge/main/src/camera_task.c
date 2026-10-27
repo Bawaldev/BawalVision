@@ -20,7 +20,7 @@
 static const char *TAG = "CAMERA";
 
 #define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY
-// Quality 24 keeps VGA 640x480 frames at ~10-14 KB (prevents Wi-Fi TCP bufferbloat)
+// QVGA + quality 24 keeps frames at ~4-6 KB so 10 fps fits the ESP32 Wi-Fi link
 #define STREAM_JPEG_QUALITY 24
 
 static frame_slot_t s_slots[2] = {0};
@@ -97,7 +97,7 @@ esp_err_t camera_task_init(void) {
       .ledc_timer = LEDC_TIMER_0,
       .ledc_channel = LEDC_CHANNEL_0,
       .pixel_format = PIXFORMAT_JPEG,
-      .frame_size = FRAMESIZE_VGA,
+      .frame_size = FRAMESIZE_QVGA,
       .jpeg_quality = STREAM_JPEG_QUALITY,
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
@@ -133,7 +133,7 @@ esp_err_t camera_task_init(void) {
 
     s->set_vflip(s, 1);
     s->set_hmirror(s, 0);
-    s->set_framesize(s, FRAMESIZE_VGA);
+    s->set_framesize(s, FRAMESIZE_QVGA);
     s->set_quality(s, STREAM_JPEG_QUALITY);
 
     s->set_whitebal(s, 1);

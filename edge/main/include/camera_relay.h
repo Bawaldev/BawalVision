@@ -14,7 +14,7 @@ extern "C" {
 
 #define RELAY_URL_MAX 192
 #define RELAY_KEY_MAX 96
-#define RELAY_DEFAULT_FPS 15
+#define RELAY_DEFAULT_FPS 10
 #define RELAY_MAX_FPS 30
 
 void camera_relay_start(void);
