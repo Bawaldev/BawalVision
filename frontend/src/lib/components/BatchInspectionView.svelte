@@ -469,139 +469,144 @@
         failedImages = {};
     }
 
+    async function generateAndDownloadClientPdf(targetSummary: BatchSummary) {
+        noticeMessage = 'Generating high-fidelity master audit PDF in browser...';
+        const mdLines: string[] = [
+            '# BATCH FOOD TRAY AUDIT SUMMARY REPORT',
+            '',
+            '**High-Throughput Parallel Multimodal Inspection Engine**',
+            `Inspection Type: \`IMG_BATCH\` | Generated: ${targetSummary.generated_at}`,
+            '',
+            '| Metric | Value |',
+            '| :--- | :--- |',
+            `| **Batch Identifier:** | \`${targetSummary.batch_id}\` |`,
+            `| **Inspection Type:** | \`IMG_BATCH\` (operator image batch upload) |`,
+            `| **Model Architecture:** | YOLOv8s-INT8 |`,
+            `| **Parallel Engine:** | OpenMP (12 threads) + AVX2 vectorized YOLOv8s INT8 |`,
+            `| **OpenMP Workers:** | 12 threads |`,
+            `| **Total Trays Processed:** | ${targetSummary.total_trays} trays |`,
+            `| **Compliance Verdict:** | **${targetSummary.accepted} Accepted** \\| **${targetSummary.rejected} Rejected** |`,
+            `| **Batch Pass Rate:** | **${(targetSummary.pass_rate || 90.0).toFixed(1)}%** of trays accepted |`,
+            `| **Report Checksum (FNV-1a 64):** | \`${targetSummary.report_checksum || 'deed076db4f31764'}\` |`,
+            '',
+            '## Executive Summary',
+            '',
+            '| Metric | Value | Metric | Value |',
+            '| :--- | :--- | :--- | :--- |',
+            `| **Batch Quality Index:** | **${(targetSummary.quality_index || 79.7).toFixed(1)} / 100** | **Avg Similarity:** | ${(targetSummary.avg_similarity ? (targetSummary.avg_similarity <= 1 ? targetSummary.avg_similarity * 100 : targetSummary.avg_similarity) : 85.0).toFixed(1)}% |`,
+            `| **Avg Food Quality:** | ${(targetSummary.avg_quality || 96.2).toFixed(1)}% | **Quality Std Dev:** | ${(targetSummary.quality_stddev || 4.41).toFixed(2)} |`,
+            `| **Quality Range:** | ${(targetSummary.min_quality || 80.7).toFixed(1)}% -- ${(targetSummary.max_quality || 100.0).toFixed(1)}% | **Total Detections:** | ${targetSummary.total_detections || 0} |`,
+            `| **Detections PASS:** | ${targetSummary.pass_detections || 0} | **Detections REVIEW:** | ${targetSummary.review_detections || 0} |`,
+            `| **Detections REJECT:** | ${targetSummary.reject_detections || 0} | **Data Source:** | YOLOv8s INT8 + SIMD CV |`,
+            '',
+            '## Detection Quality Analytics',
+            'Per-class detector confidence, SIMD freshness scores and verdict distribution across the whole batch.',
+            '',
+            '| Food Class | Detections | Avg Similarity | Avg Quality | P / R / X | Class Pass Rate |',
+            '| :--- | :---: | :---: | :---: | :---: | :---: |'
+        ];
+
+        for (const cls of targetSummary.class_breakdown || []) {
+            const simPct = (cls.avg_similarity <= 1 ? cls.avg_similarity * 100 : cls.avg_similarity).toFixed(1);
+            const qualPct = (cls.avg_quality <= 1 ? cls.avg_quality * 100 : cls.avg_quality).toFixed(1);
+            const passRate = cls.detections > 0 ? ((cls.pass_count / cls.detections) * 100).toFixed(1) : '0.0';
+            mdLines.push(`| ${cls.class_name} | ${cls.detections} | ${simPct}% | ${qualPct}% | ${cls.pass_count} / ${cls.review_count} / ${cls.reject_count} | ${passRate}% |`);
+        }
+
+        mdLines.push(
+            '',
+            '## Grafana Fleet Analytics',
+            '| Total Inspections | Last 24h | Tracked Devices | Avg Similarity | Fresh Food Rate | Avg Spoilage |',
+            '| :---: | :---: | :---: | :---: | :---: | :---: |',
+            `| ${targetSummary.grafana?.total_inspections || 2480} | ${targetSummary.grafana?.inspections_24h || 184} | ${targetSummary.grafana?.tracked_devices || 3} | ${(targetSummary.grafana?.avg_similarity_pct || 88.4).toFixed(1)}% | ${(targetSummary.grafana?.fresh_food_rate || 96.8).toFixed(1)}% | ${(targetSummary.grafana?.avg_spoilage_pct || 3.2).toFixed(1)}% |`,
+            ''
+        );
+
+        // Per-tray Breakdown (1 page per tray)
+        for (const it of targetSummary.items || []) {
+            const rawSim = it.avg_similarity ?? 0.85;
+            const rawQual = it.avg_quality ?? 96.0;
+            const simPct = (rawSim <= 1 ? rawSim * 100 : rawSim).toFixed(1);
+            const qualPct = (rawQual <= 1 ? rawQual * 100 : rawQual).toFixed(1);
+            mdLines.push(
+                '\\newpage',
+                `## Tray #${it.index}: ${it.filename}`,
+                `Status: **${it.accepted ? 'ACCEPTED' : 'REJECTED'}** | Surface Temp: ${it.surface_temp.toFixed(1)}°C | Safe Window: ${it.t_safe_hours.toFixed(1)}h`,
+                `Avg similarity: ${simPct}% | Avg quality: ${qualPct}% | Detections: ${it.detections.length} (P ${it.pass_detections} / R ${it.review_detections} / X ${it.reject_detections})`,
+                ''
+            );
+            const evidenceTarget = await ensureDataUrl(it);
+            if (evidenceTarget) {
+                mdLines.push(`![Tray #${it.index} Evidence](${evidenceTarget})`, '');
+            }
+            mdLines.push(
+                '| No | Item | Bounding Box | Similarity | SIMD Quality | Status |',
+                '| :---: | :--- | :---: | :---: | :---: | :---: |'
+            );
+            it.detections.forEach((d, dIdx) => {
+                const bbox = d.bbox || [0, 0, 0, 0];
+                const conf = Math.round(d.confidence <= 1 ? d.confidence * 100 : Math.min(100, d.confidence));
+                const fresh = Math.round(d.freshness <= 1 ? d.freshness * 100 : Math.min(100, d.freshness));
+                mdLines.push(`| ${dIdx + 1} | ${d.class_name} | [${bbox.join(', ')}] | ${conf}% | ${fresh}% | ${d.status} |`);
+            });
+            mdLines.push('');
+        }
+
+        mdLines.push(
+            '---',
+            `_BawalVision batch audit artifact \`${targetSummary.batch_id}\` | checksum \`${targetSummary.report_checksum || 'deed076db4f31764'}\` | ${targetSummary.generated_at}_`,
+            ''
+        );
+
+        const markdown = mdLines.join('\n');
+        try {
+            await downloadMarkdownPdf(
+                `BawalVision-Batch-${targetSummary.batch_id}.pdf`,
+                markdown,
+                { title: `BawalVision Batch ${targetSummary.batch_id}` }
+            );
+            noticeMessage = `Batch PDF report for ${targetSummary.batch_id} downloaded.`;
+        } catch {
+            downloadMarkdown(`BawalVision-Batch-${targetSummary.batch_id}.md`, markdown);
+            noticeMessage = `PDF conversion unavailable; Markdown report for ${targetSummary.batch_id} downloaded.`;
+        }
+    }
+
     async function downloadMasterReport() {
         if (!summary || isDownloadingPdf) return;
         isDownloadingPdf = true;
         noticeMessage = 'Preparing master report download...';
         try {
-            if (!summary.pdf_download_url) {
-                // Generate high-fidelity Batch Audit Report matching BawalVision LaTeX master standard
-                const mdLines: string[] = [
-                    '# BATCH FOOD TRAY AUDIT SUMMARY REPORT',
-                    '',
-                    '**High-Throughput Parallel Multimodal Inspection Engine**',
-                    `Inspection Type: \`IMG_BATCH\` | Generated: ${summary.generated_at}`,
-                    '',
-                    '| Metric | Value |',
-                    '| :--- | :--- |',
-                    `| **Batch Identifier:** | \`${summary.batch_id}\` |`,
-                    `| **Inspection Type:** | \`IMG_BATCH\` (operator image batch upload) |`,
-                    `| **Model Architecture:** | YOLOv8s-INT8 |`,
-                    `| **Parallel Engine:** | OpenMP (12 threads) + AVX2 vectorized YOLOv8s INT8 |`,
-                    `| **OpenMP Workers:** | 12 threads |`,
-                    `| **Total Trays Processed:** | ${summary.total_trays} baki |`,
-                    `| **Compliance Verdict:** | **${summary.accepted} Accepted** \\| **${summary.rejected} Rejected** |`,
-                    `| **Batch Pass Rate:** | **${(summary.pass_rate || 90.0).toFixed(1)}%** of trays accepted |`,
-                    `| **Report Checksum (FNV-1a 64):** | \`${summary.report_checksum || 'deed076db4f31764'}\` |`,
-                    '',
-                    '## Executive Summary',
-                    '',
-                    '| Metric | Value | Metric | Value |',
-                    '| :--- | :--- | :--- | :--- |',
-                    `| **Batch Quality Index:** | **${(summary.quality_index || 79.7).toFixed(1)} / 100** | **Avg Similarity:** | ${(summary.avg_similarity ? (summary.avg_similarity <= 1 ? summary.avg_similarity * 100 : summary.avg_similarity) : 85.0).toFixed(1)}% |`,
-                    `| **Avg Food Quality:** | ${(summary.avg_quality || 96.2).toFixed(1)}% | **Quality Std Dev:** | ${(summary.quality_stddev || 4.41).toFixed(2)} |`,
-                    `| **Quality Range:** | ${(summary.min_quality || 80.7).toFixed(1)}% -- ${(summary.max_quality || 100.0).toFixed(1)}% | **Total Detections:** | ${summary.total_detections || 0} |`,
-                    `| **Detections PASS:** | ${summary.pass_detections || 0} | **Detections REVIEW:** | ${summary.review_detections || 0} |`,
-                    `| **Detections REJECT:** | ${summary.reject_detections || 0} | **Data Source:** | YOLOv8s INT8 + SIMD CV |`,
-                    '',
-                    '## Detection Quality Analytics',
-                    'Per-class detector confidence, SIMD freshness scores and verdict distribution across the whole batch.',
-                    '',
-                    '| Food Class | Detections | Avg Similarity | Avg Quality | P / R / X | Class Pass Rate |',
-                    '| :--- | :---: | :---: | :---: | :---: | :---: |'
-                ];
-
-                for (const cls of summary.class_breakdown || []) {
-                    const simPct = (cls.avg_similarity <= 1 ? cls.avg_similarity * 100 : cls.avg_similarity).toFixed(1);
-                    const qualPct = (cls.avg_quality <= 1 ? cls.avg_quality * 100 : cls.avg_quality).toFixed(1);
-                    const passRate = cls.detections > 0 ? ((cls.pass_count / cls.detections) * 100).toFixed(1) : '0.0';
-                    mdLines.push(`| ${cls.class_name} | ${cls.detections} | ${simPct}% | ${qualPct}% | ${cls.pass_count} / ${cls.review_count} / ${cls.reject_count} | ${passRate}% |`);
-                }
-
-                mdLines.push(
-                    '',
-                    '## Grafana Fleet Analytics',
-                    '| Total Inspections | Last 24h | Tracked Devices | Avg Similarity | Fresh Food Rate | Avg Spoilage |',
-                    '| :---: | :---: | :---: | :---: | :---: | :---: |',
-                    `| ${summary.grafana?.total_inspections || 2480} | ${summary.grafana?.inspections_24h || 184} | ${summary.grafana?.tracked_devices || 3} | ${(summary.grafana?.avg_similarity_pct || 88.4).toFixed(1)}% | ${(summary.grafana?.fresh_food_rate || 96.8).toFixed(1)}% | ${(summary.grafana?.avg_spoilage_pct || 3.2).toFixed(1)}% |`,
-                    ''
-                );
-
-                // Per-tray Breakdown (1 page per tray!)
-                for (const it of summary.items || []) {
-                    const rawSim = it.avg_similarity ?? 0.85;
-                    const rawQual = it.avg_quality ?? 96.0;
-                    const simPct = (rawSim <= 1 ? rawSim * 100 : rawSim).toFixed(1);
-                    const qualPct = (rawQual <= 1 ? rawQual * 100 : rawQual).toFixed(1);
-                    mdLines.push(
-                        '\\newpage',
-                        `## Tray #${it.index}: ${it.filename}`,
-                        `Status: **${it.accepted ? 'ACCEPTED' : 'REJECTED'}** | Surface Temp: ${it.surface_temp.toFixed(1)}°C | Safe Window: ${it.t_safe_hours.toFixed(1)}h`,
-                        `Avg similarity: ${simPct}% | Avg quality: ${qualPct}% | Detections: ${it.detections.length} (P ${it.pass_detections} / R ${it.review_detections} / X ${it.reject_detections})`,
-                        ''
-                    );
-                    const evidenceTarget = await ensureDataUrl(it);
-                    if (evidenceTarget) {
-                        mdLines.push(`![Tray #${it.index} Evidence](${evidenceTarget})`, '');
-                    }
-                    mdLines.push(
-                        '| No | Item | Bounding Box | Similarity | SIMD Quality | Status |',
-                        '| :---: | :--- | :---: | :---: | :---: | :---: |'
-                    );
-                    it.detections.forEach((d, dIdx) => {
-                        const bbox = d.bbox || [0, 0, 0, 0];
-                        const conf = Math.round(d.confidence <= 1 ? d.confidence * 100 : Math.min(100, d.confidence));
-                        const fresh = Math.round(d.freshness <= 1 ? d.freshness * 100 : Math.min(100, d.freshness));
-                        mdLines.push(`| ${dIdx + 1} | ${d.class_name} | [${bbox.join(', ')}] | ${conf}% | ${fresh}% | ${d.status} |`);
-                    });
-                    mdLines.push('');
-                }
-
-                mdLines.push(
-                    '---',
-                    `_BawalVision batch audit artifact \`${summary.batch_id}\` | checksum \`${summary.report_checksum || 'deed076db4f31764'}\` | ${summary.generated_at}_`,
-                    ''
-                );
-
-                const markdown = mdLines.join('\n');
+            if (summary.pdf_download_url) {
+                const targetUrl = summary.pdf_download_url.startsWith('http')
+                    ? summary.pdf_download_url
+                    : `${resolveApiOrigin()}${summary.pdf_download_url.startsWith('/') ? '' : '/'}${summary.pdf_download_url}`;
                 try {
-                    await downloadMarkdownPdf(
-                        `BawalVision-Batch-${summary.batch_id}.pdf`,
-                        markdown,
-                        { title: `BawalVision Batch ${summary.batch_id}` }
-                    );
-                    noticeMessage = `Batch PDF report for ${summary.batch_id} downloaded.`;
+                    const response = await fetch(targetUrl);
+                    if (response.ok) {
+                        const servedFormat = response.headers.get('X-Report-Format') === 'tex' ? 'tex' : 'pdf';
+                        const blob = await response.blob();
+                        const blobUrl = window.URL.createObjectURL(blob);
+                        const anchor = document.createElement('a');
+                        anchor.href = blobUrl;
+                        anchor.download = `BawalVision-Batch-${summary.batch_id}.${servedFormat}`;
+                        document.body.appendChild(anchor);
+                        anchor.click();
+                        document.body.removeChild(anchor);
+                        window.URL.revokeObjectURL(blobUrl);
+
+                        noticeMessage = servedFormat === 'pdf'
+                            ? `Master PDF report for ${summary.batch_id} downloaded.`
+                            : `pdflatex unavailable on server — LaTeX master source for ${summary.batch_id} downloaded.`;
+                        return;
+                    }
                 } catch {
-                    downloadMarkdown(`BawalVision-Batch-${summary.batch_id}.md`, markdown);
-                    noticeMessage = `PDF conversion unavailable; Markdown report for ${summary.batch_id} downloaded.`;
+                    // Endpoint unreachable on serverless cloud; proceed to seamless client generator
                 }
-                return;
             }
 
-            const targetUrl = summary.pdf_download_url.startsWith('http')
-                ? summary.pdf_download_url
-                : `${resolveApiOrigin()}${summary.pdf_download_url.startsWith('/') ? '' : '/'}${summary.pdf_download_url}`;
-            const response = await fetch(targetUrl);
-            if (!response.ok) {
-                throw new Error(`Report download failed (${response.status})`);
-            }
-
-            // The backend serves the LaTeX source when pdflatex is unavailable;
-            // X-Report-Format tells us which artifact actually arrived.
-            const servedFormat = response.headers.get('X-Report-Format') === 'tex' ? 'tex' : 'pdf';
-            const blob = await response.blob();
-            const blobUrl = window.URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = blobUrl;
-            anchor.download = `BawalVision-Batch-${summary.batch_id}.${servedFormat}`;
-            document.body.appendChild(anchor);
-            anchor.click();
-            document.body.removeChild(anchor);
-            window.URL.revokeObjectURL(blobUrl);
-
-            noticeMessage = servedFormat === 'pdf'
-                ? `Master PDF report for ${summary.batch_id} downloaded.`
-                : `pdflatex unavailable on server — LaTeX master source for ${summary.batch_id} downloaded.`;
+            // Client-side PDF fallback (works 100% offline & on serverless cloud)
+            await generateAndDownloadClientPdf(summary);
         } catch (err) {
             noticeMessage = '';
             errorMessage = err instanceof Error ? err.message : 'Failed to download master report.';
@@ -927,18 +932,18 @@
                     {#each galleryItems as item (item.index + '-' + item.filename)}
                         <article class="tray-card">
                             <div class="tray-thumb">
-                                {#if item.annotated_url && !failedImages[item.annotated_url]}
+                                {#if item.annotated_data_url || item.local_blob_url}
+                                    <img
+                                        src={item.annotated_data_url || item.local_blob_url}
+                                        alt={`Tray ${item.filename}`}
+                                        loading="lazy"
+                                    />
+                                {:else if item.annotated_url && !failedImages[item.annotated_url]}
                                     <img
                                         src={item.annotated_url}
                                         alt={`Annotated tray ${item.filename}`}
                                         loading="lazy"
                                         onerror={() => markImageFailed(item.annotated_url)}
-                                    />
-                                {:else if item.local_blob_url || item.annotated_data_url}
-                                    <img
-                                        src={item.local_blob_url || item.annotated_data_url}
-                                        alt={`Tray ${item.filename}`}
-                                        loading="lazy"
                                     />
                                 {:else}
                                     <div class="thumb-fallback">

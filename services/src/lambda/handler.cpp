@@ -411,6 +411,7 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
 
         if (route.method == "GET" &&
             route.path.find("/inspections/") != std::string::npos &&
+            route.path.find("/inspections/batch/") == std::string::npos &&
             route.path.find("report.pdf") != std::string::npos) {
             const Clock::time_point start = Clock::now();
             std::string markdown;

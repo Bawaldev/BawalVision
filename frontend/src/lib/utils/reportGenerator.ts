@@ -112,9 +112,9 @@ function qualityChecklist(record: InspectionAuditRecord): string[] {
     const safeTemperature = record.surface_temp > 60;
 
     return [
-        `- [${carbohydrate ? 'x' : ' '}] Karbohidrat Terpenuhi`,
-        `- [${protein ? 'x' : ' '}] Protein Utama Terdeteksi`,
-        `- [${safeTemperature ? 'x' : ' '}] Suhu Penyajian Aman (> 60°C)`
+        `- [${carbohydrate ? 'x' : ' '}] Carbohydrate Requirement Met`,
+        `- [${protein ? 'x' : ' '}] Primary Protein Detected`,
+        `- [${safeTemperature ? 'x' : ' '}] Safe Serving Temperature (> 60°C)`
     ];
 }
 
@@ -232,7 +232,7 @@ export function generateBatchInspectionMarkdown(
         `| **Model Architecture:** | YOLOv8s-INT8 |`,
         `| **Parallel Engine:** | OpenMP (12 threads) + AVX2 vectorized YOLOv8s INT8 |`,
         `| **OpenMP Workers:** | 12 threads |`,
-        `| **Total Trays Processed:** | ${records.length} baki |`,
+        `| **Total Trays Processed:** | ${records.length} trays |`,
         `| **Compliance Verdict:** | **${accepted} Accepted** \\| **${rejected} Rejected** |`,
         `| **Batch Pass Rate:** | **${passRate}%** of trays accepted |`,
         `| **Report Checksum (FNV-1a 64):** | \`deed076db4f31764\` |`,
