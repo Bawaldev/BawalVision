@@ -56,6 +56,12 @@ static bool s_nvs_wifi_pass_key_present = false;
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static bool s_wifi_initialized = false;
 static bool s_sntp_started = false;
+static size_t s_sntp_server_index = 0;
+static const char *const s_sntp_servers[] = {
+    "pool.ntp.org",
+    "time.google.com",
+    "time.cloudflare.com",
+};
 static volatile bool s_provisioning_active = false;
 static httpd_handle_t s_http_server = NULL;
 static atomic_int s_mjpeg_clients = 0;
@@ -711,10 +717,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
         if (!s_sntp_started) {
             esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-            esp_sntp_setservername(0, "pool.ntp.org");
+            esp_sntp_setservername(0, s_sntp_servers[s_sntp_server_index]);
             esp_sntp_init();
             s_sntp_started = true;
-            ESP_LOGI(TAG, "SNTP started (needed for WSS certificate checks)");
+            ESP_LOGI(TAG, "SNTP started with %s (needed for WSS certificate checks)",
+                     s_sntp_servers[s_sntp_server_index]);
         }
 
         char target_url[URL_BUFFER_SIZE] = {0};
@@ -722,6 +729,16 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             ESP_LOGI(TAG, "Target backend URL: %s", target_url);
         }
     }
+}
+
+void wifi_sntp_restart(void) {
+    if (!s_sntp_started) return;
+    s_sntp_server_index = (s_sntp_server_index + 1) %
+        (sizeof(s_sntp_servers) / sizeof(s_sntp_servers[0]));
+    esp_sntp_setservername(0, s_sntp_servers[s_sntp_server_index]);
+    esp_sntp_restart();
+    ESP_LOGW(TAG, "SNTP restart with fallback server %s",
+             s_sntp_servers[s_sntp_server_index]);
 }
 
 void wifi_init_sta(void) {

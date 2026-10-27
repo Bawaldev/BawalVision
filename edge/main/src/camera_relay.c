@@ -40,6 +40,8 @@ static const char *TAG = "CAM_RELAY";
 #define RELAY_TASK_STACK 4096
 #define RELAY_PUMP_MS 2000
 #define RELAY_SEND_TIMEOUT_MS 5000
+#define RELAY_MIN_VALID_TIME 1700000000LL
+#define RELAY_SNTP_RESTART_MS 30000
 
 static char s_url[RELAY_URL_MAX];
 static char s_key[RELAY_KEY_MAX];
@@ -57,6 +59,8 @@ static esp_websocket_client_handle_t s_client;
 static camera_frame_buffer_t s_frame;
 static bool s_started;
 static bool s_time_wait_logged;
+static int64_t s_time_wait_started_ms;
+static int64_t s_time_last_log_ms;
 
 static void copy_str(char *dst, size_t dst_len, const char *src) {
     if (!dst || dst_len == 0) return;
@@ -166,6 +170,8 @@ static void relay_event_handler(void *arg, esp_event_base_t base,
             s_time_wait_logged = false;
             s_last_sent_id = 0;
             s_last_sent_ms = 0;
+            s_time_wait_started_ms = 0;
+            s_time_last_log_ms = 0;
             ESP_LOGI(TAG, "Connected to camera relay");
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
@@ -330,14 +336,28 @@ static void relay_task(void *arg) {
         }
 
         if (!s_client) {
-            if (relay_needs_valid_time(uri) && time(NULL) < 1700000000) {
-                if (!s_time_wait_logged) {
-                    ESP_LOGW(TAG, "Waiting for SNTP time before WSS handshake");
+            if (relay_needs_valid_time(uri) && time(NULL) < RELAY_MIN_VALID_TIME) {
+                int64_t now_ms = esp_timer_get_time() / 1000;
+                if (s_time_wait_started_ms == 0) {
+                    s_time_wait_started_ms = now_ms;
+                }
+                if (!s_time_wait_logged ||
+                    now_ms - s_time_last_log_ms >= RELAY_SNTP_RESTART_MS) {
+                    ESP_LOGW(TAG,
+                             "Waiting for SNTP time before WSS handshake (%.0fs)",
+                             (double)(now_ms - s_time_wait_started_ms) / 1000.0);
                     s_time_wait_logged = true;
+                    s_time_last_log_ms = now_ms;
+                }
+                if (now_ms - s_time_wait_started_ms >= RELAY_SNTP_RESTART_MS) {
+                    wifi_sntp_restart();
+                    s_time_wait_started_ms = now_ms;
                 }
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 continue;
             }
+            s_time_wait_started_ms = 0;
+            s_time_last_log_ms = 0;
             if (!start_client(uri)) {
                 ESP_LOGW(TAG, "Could not start camera relay client");
                 vTaskDelay(pdMS_TO_TICKS(3000));

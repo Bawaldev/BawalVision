@@ -113,6 +113,11 @@ esp_err_t get_backend_url(const char *endpoint, char *out_url, size_t max_len);
  */
 uint16_t get_backend_port(void);
 
+/**
+ * @brief Restart SNTP with the next fallback server after a time-sync timeout.
+ */
+void wifi_sntp_restart(void);
+
 void wifi_notify_backend_failure(void);
 void wifi_notify_backend_success(void);
 
