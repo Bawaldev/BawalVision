@@ -1,5 +1,6 @@
 const MAX_FRAME_BYTES = 2 * 1024 * 1024;
 const STALE_MS = 5000;
+const MAX_WATCHER_PENDING = 3;
 
 function isJpegFrame(message) {
     if (!(message instanceof ArrayBuffer)) return false;
@@ -54,10 +55,13 @@ export class RelayRoom {
         const [client, server] = Object.values(pair);
         this.state.acceptWebSocket(server, [role]);
 
-        if (role === 'watch' && this.latest) {
-            try {
-                server.send(this.latest);
-            } catch {}
+        if (role === 'watch') {
+            server.serializeAttachment({ pending: 0, ackCapable: false });
+            if (this.latest) {
+                try {
+                    server.send(this.latest);
+                } catch {}
+            }
         }
 
         if (role === 'ingest') {
@@ -74,6 +78,15 @@ export class RelayRoom {
 
     async webSocketMessage(ws, message) {
         const tags = this.state.getTags(ws);
+        if (tags.includes('watch')) {
+            if (typeof message === 'string' && message === 'ack') {
+                const state = ws.deserializeAttachment() || {};
+                state.ackCapable = true;
+                state.pending = Math.max(0, Number(state.pending || 0) - 1);
+                ws.serializeAttachment(state);
+            }
+            return;
+        }
         if (!tags.includes('ingest')) return;
         if (!isJpegFrame(message)) return;
 
@@ -94,6 +107,13 @@ export class RelayRoom {
         }
 
         for (const watcher of this.state.getWebSockets('watch')) {
+            const state = watcher.deserializeAttachment() || {};
+            if (state.ackCapable && Number(state.pending || 0) >= MAX_WATCHER_PENDING) {
+                this.dropped++;
+                continue;
+            }
+            state.pending = Number(state.pending || 0) + 1;
+            watcher.serializeAttachment(state);
             try {
                 watcher.send(message);
             } catch {
@@ -118,12 +138,13 @@ export class RelayRoom {
     stats() {
         const now = Date.now();
         const age = this.latestAt ? now - this.latestAt : null;
+        const online = age !== null && age <= STALE_MS;
         return {
-            online: age !== null && age <= STALE_MS,
+            online,
             frame_age_ms: age,
             watchers: this.state.getWebSockets('watch').length,
             ingest_connected: this.state.getWebSockets('ingest').length > 0,
-            fps: Number(this.fps.toFixed(1)),
+            fps: online ? Number(this.fps.toFixed(1)) : 0,
             frames: this.frames,
             dropped: this.dropped,
             bytes: this.latest ? this.latest.byteLength : 0,

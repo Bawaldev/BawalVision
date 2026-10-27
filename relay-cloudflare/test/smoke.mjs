@@ -70,6 +70,7 @@ try {
     const message = await received;
     assert.equal(message.isBinary, true);
     assert.deepEqual(new Uint8Array(message.data), frame);
+    watch.send('ack');
 
     const healthRes = await fetch(healthUrl);
     assert.equal(healthRes.status, 200);

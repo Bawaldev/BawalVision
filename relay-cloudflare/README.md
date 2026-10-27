@@ -137,8 +137,9 @@ Lower `CAMERA_RELAY_FPS` or use fewer devices.
   devices at `/health`.
 - Counters and the latest frame live in Durable Object memory and reset on
   eviction/hibernation.
-- Slow watchers are closed when a send fails. The Node relay also checks
-  `bufferedAmount`.
+- Watchers that send an application-level `ack` are limited to 3 unacknowledged
+  frames; the relay skips frames until the watcher catches up, and closes the
+  socket if `send()` fails. The Node relay also checks `bufferedAmount`.
 - There is no `/stats` registry across devices.
 
 ## Troubleshooting
@@ -148,8 +149,9 @@ Lower `CAMERA_RELAY_FPS` or use fewer devices.
 - **Health says offline:** no frame has arrived within 5 seconds. Check the ESP
   serial log for `Connected to camera relay` and the Worker with
   `npx wrangler tail`.
-- **TLS/clock errors on the ESP:** WSS needs SNTP. The firmware waits for a valid
-  clock before connecting.
+- **TLS/clock errors on the ESP:** WSS needs SNTP. The firmware rotates
+  `pool.ntp.org`, `time.google.com`, and `time.cloudflare.com` every 30 seconds
+  while the clock is invalid; if all NTP traffic is blocked, WSS cannot start.
 - **No frames in the browser:** confirm `PUBLIC_CAMERA_RELAY_URL` and the device
   id match `CAMERA_RELAY_URL` / `CAMERA_RELAY_DEVICE`.
 - **Daily limit errors:** lower `CAMERA_RELAY_FPS` to 12 and monitor the
