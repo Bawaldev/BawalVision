@@ -2063,66 +2063,17 @@
                             <span class="standby-icon">📷</span>
                         </div>
                         <h4>ESP32-S3 Live Stream Awaiting Signal</h4>
-                        <p>No active MJPEG stream received on <code>/api/v1/camera/stream</code>. The physical camera node is either in standby or on a local subnet.</p>
+                        <p>
+                            {#if relayConfigured}
+                                Streaming securely over Cloudflare Camera Relay (WebSocket WSS). Waiting for ESP32 to publish frames.
+                            {:else}
+                                No active stream received on <code>/api/v1/camera/stream</code>. The camera node is either in standby or on a local subnet.
+                            {/if}
+                        </p>
 
                         {#if localBackendNotice}
                             <div class="local-backend-alert">
                                 <span>{@html localBackendNotice}</span>
-                            </div>
-                        {/if}
-
-                        {#if autoDetectedEspIp || autoDetectedBackendIp}
-                            <div class="auto-detected-row">
-                                <span class="auto-detected-label">⚡ Auto-Discovered:</span>
-                                {#if autoDetectedEspIp}
-                                    <button
-                                        type="button"
-                                        class="auto-detected-pill"
-                                        onclick={() => {
-                                            manualEspStreamUrl = `http://${autoDetectedEspIp}/stream`;
-                                            connectManualEspStream();
-                                        }}
-                                        title="Click to auto-connect ESP32 camera without typing IP"
-                                    >
-                                        📹 ESP32 Camera ({autoDetectedEspIp}) &rarr; Connect
-                                    </button>
-                                {/if}
-                                {#if autoDetectedBackendIp}
-                                    <button
-                                        type="button"
-                                        class="auto-detected-pill backend"
-                                        onclick={() => {
-                                            manualEspStreamUrl = `http://${autoDetectedBackendIp}:8080/api/v1/camera/stream`;
-                                            connectManualEspStream();
-                                        }}
-                                        title="Click to sync with Host C++ Backend"
-                                    >
-                                        🖥️ Host Backend ({autoDetectedBackendIp}:8080) &rarr; Connect
-                                    </button>
-                                {/if}
-                            </div>
-                        {/if}
-
-                        <div class="esp-ip-connect-bar">
-                            <input
-                                type="text"
-                                bind:value={manualEspStreamUrl}
-                                placeholder="Enter ESP32 IP (e.g. 192.168.43.50 or http://192.168.43.50/stream)"
-                                class="esp-ip-input"
-                            />
-                            <button type="button" class="esp-ip-btn" onclick={connectManualEspStream}>
-                                ⚡ Connect ESP IP
-                            </button>
-                        </div>
-
-                        {#if isHttpsDomain}
-                            <div class="bypass-card">
-                                <h5>💡 Viewing Local ESP32 Stream on HTTPS Vercel (Mobile Chrome / Brave):</h5>
-                                <ol>
-                                    <li>Tap the <strong>Site Settings icon (tune / lock)</strong> beside <code>bawal-vision.vercel.app</code> in your phone address bar.</li>
-                                    <li>Tap <strong>Site settings</strong> &rarr; <strong>Insecure content</strong> &rarr; change to <strong>Allow</strong>.</li>
-                                    <li>Refresh the page. The ESP32 camera stream will load immediately without browser blocking!</li>
-                                </ol>
                             </div>
                         {/if}
 
@@ -2133,14 +2084,7 @@
                             <button type="button" class="switch-mock-btn" onclick={() => { setSourceMode('mock'); togglePlayPause(); }}>
                                 🎬 Switch to Mock Video (Simulation)
                             </button>
-                            <button type="button" class="local-backend-btn" onclick={connectLocalBackendStream} disabled={isProbingLocal}>
-                                {#if isProbingLocal}
-                                    <span class="btn-spinner"></span> Checking :8080...
-                                {:else}
-                                    🔌 Connect Localhost Backend (:8080)
-                                {/if}
-                            </button>
-                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); localBackendNotice = ''; }}>
+                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); connectLiveWebSocket(); }}>
                                 ↻ Reconnect Camera
                             </button>
                         </div>
@@ -2827,53 +2771,6 @@
         display: none !important;
     }
 
-    .auto-detected-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-        justify-content: center;
-        width: 100%;
-        margin-top: 6px;
-        margin-bottom: 2px;
-    }
-
-    .auto-detected-label {
-        font-size: 0.76rem;
-        font-weight: 700;
-        color: var(--accent-amber, #d97706);
-    }
-
-    .auto-detected-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 5px 12px;
-        border-radius: var(--radius-pill, 20px);
-        font-size: 0.74rem;
-        font-weight: 600;
-        background: var(--accent-green-dim, #dcfce7);
-        color: var(--accent-green, #16a34a);
-        border: 1px solid rgba(22, 163, 74, 0.3);
-        cursor: pointer;
-        transition: all 0.15s ease;
-    }
-
-    .auto-detected-pill:hover {
-        background: #bbf7d0;
-        transform: translateY(-1px);
-    }
-
-    .auto-detected-pill.backend {
-        background: var(--accent-blue-dim, #e8f2f9);
-        color: var(--accent-blue-num, #2e719f);
-        border-color: rgba(54, 121, 168, 0.3);
-    }
-
-    .auto-detected-pill.backend:hover {
-        background: #d0e7f7;
-    }
-
     .standby-box {
         display: flex;
         flex-direction: column;
@@ -2957,27 +2854,6 @@
         filter: brightness(1.08);
     }
 
-    .local-backend-btn {
-        background: var(--accent-blue, #3679a8);
-        color: #ffffff;
-        font-weight: 700;
-        font-size: 0.76rem;
-        border: none;
-        padding: 8px 16px;
-        border-radius: var(--radius-pill, 20px);
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        transition: transform 0.15s ease, filter 0.15s ease;
-        box-shadow: 0 1px 3px rgba(54, 121, 168, 0.25);
-    }
-
-    .local-backend-btn:hover {
-        transform: translateY(-1px);
-        filter: brightness(1.08);
-    }
-
     .local-backend-alert {
         background: #fef2f2;
         border: 1px solid #fecaca;
@@ -2990,102 +2866,6 @@
         width: 100%;
         margin: 6px auto;
         text-align: center;
-    }
-
-    .local-backend-alert a {
-        color: #b91c1c;
-        font-weight: 600;
-        text-decoration: underline;
-    }
-
-    .esp-ip-connect-bar {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        width: 100%;
-        max-width: 520px;
-        margin: 8px auto 4px auto;
-        flex-wrap: wrap;
-    }
-
-    .esp-ip-input {
-        flex: 1;
-        min-width: 200px;
-        background: #ffffff;
-        border: 1px solid var(--border-card, #d8e0ea);
-        color: var(--text-primary, #1e293b);
-        padding: 9px 12px;
-        font-size: 0.8rem;
-        border-radius: var(--radius-sm, 4px);
-        outline: none;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease;
-    }
-
-    .esp-ip-input:focus {
-        border-color: var(--accent-blue, #3679a8);
-        box-shadow: 0 0 0 2px rgba(54, 121, 168, 0.18);
-    }
-
-    .esp-ip-input::placeholder {
-        color: var(--text-dim, #94a3b8);
-    }
-
-    .esp-ip-btn {
-        background: var(--accent-blue, #3679a8);
-        color: #ffffff;
-        font-weight: 700;
-        font-size: 0.78rem;
-        border: none;
-        padding: 9px 16px;
-        border-radius: var(--radius-sm, 4px);
-        cursor: pointer;
-        white-space: nowrap;
-        transition: background 0.15s ease, transform 0.15s ease;
-    }
-
-    .esp-ip-btn:hover {
-        background: var(--accent-blue-num, #2e719f);
-        transform: translateY(-1px);
-    }
-
-    .bypass-card {
-        background: #f0f9ff;
-        border: 1px solid #bae6fd;
-        border-radius: var(--radius-sm, 4px);
-        padding: 12px 14px;
-        margin: 6px auto;
-        width: 100%;
-        max-width: 520px;
-        text-align: left;
-        font-size: 0.75rem;
-        color: #0369a1;
-    }
-
-    .bypass-card h5 {
-        margin: 0 0 6px 0;
-        color: #0284c7;
-        font-size: 0.78rem;
-        font-weight: 700;
-    }
-
-    .bypass-card ol {
-        margin: 0;
-        padding-left: 18px;
-        line-height: 1.5;
-        color: var(--text-secondary, #475569);
-    }
-
-    .bypass-card li strong {
-        color: var(--text-primary, #1e293b);
-    }
-
-    .bypass-card li code {
-        background: rgba(2, 132, 199, 0.1);
-        color: #0284c7;
-        padding: 1px 4px;
-        border-radius: 3px;
-        font-size: 0.72rem;
-        font-family: var(--font-mono);
     }
 
     .retry-btn {
@@ -3593,16 +3373,6 @@
             gap: 8px;
         }
 
-        .esp-ip-connect-bar {
-            flex-direction: column;
-            width: 100%;
-        }
-
-        .esp-ip-input,
-        .esp-ip-btn {
-            width: 100%;
-        }
-
         .standby-actions-row {
             flex-direction: column;
             width: 100%;
@@ -3610,15 +3380,9 @@
         }
 
         .switch-mock-btn,
-        .local-backend-btn,
         .retry-btn {
             width: 100%;
             justify-content: center;
-        }
-
-        .bypass-card {
-            padding: 10px 12px;
-            font-size: 0.72rem;
         }
 
         .mock-control-bar {
