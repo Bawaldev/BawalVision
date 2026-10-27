@@ -15,6 +15,15 @@ set -euo pipefail
 AWS_REGION="${AWS_REGION:-ap-southeast-1}"
 FUNCTION_NAME="${FUNCTION_NAME:-bawal-vision-lambda}"
 ECR_REPO_NAME="${ECR_REPO_NAME:-bawal-vision-lambda}"
+AUTH_TOKEN="${BAWAL_LAMBDA_AUTH_TOKEN:-}"
+
+if [[ ${#AUTH_TOKEN} -lt 32 ]]; then
+    echo "[ERROR] BAWAL_LAMBDA_AUTH_TOKEN must be at least 32 characters." >&2
+    echo "        Generate one with: openssl rand -hex 32" >&2
+    exit 1
+fi
+
+LAMBDA_ENV="Variables={MODEL_PATH=/var/task/models/yolov8s_int8.onnx,OMP_NUM_THREADS=2,OPENCV_LOG_LEVEL=ERROR,ENFORCE_HTTP_AUTH=1,BAWAL_LAMBDA_AUTH_TOKEN=${AUTH_TOKEN}}"
 
 echo "=== [1/5] Checking AWS CLI Authentication ==="
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -48,6 +57,12 @@ fi
 if aws lambda get-function --function-name "${FUNCTION_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
     echo "Updating existing Lambda function code..."
     aws lambda update-function-code --function-name "${FUNCTION_NAME}" --image-uri "${ECR_URI}" --region "${AWS_REGION}" >/dev/null
+    aws lambda wait function-updated --function-name "${FUNCTION_NAME}" --region "${AWS_REGION}"
+    aws lambda update-function-configuration \
+        --function-name "${FUNCTION_NAME}" \
+        --environment "${LAMBDA_ENV}" \
+        --region "${AWS_REGION}" >/dev/null
+    aws lambda wait function-updated --function-name "${FUNCTION_NAME}" --region "${AWS_REGION}"
     aws lambda update-function-url-config \
         --function-name "${FUNCTION_NAME}" \
         --auth-type NONE \
@@ -62,6 +77,7 @@ else
         --role "${ROLE_ARN}" \
         --timeout 15 \
         --memory-size 512 \
+        --environment "${LAMBDA_ENV}" \
         --region "${AWS_REGION}" >/dev/null
 
     aws lambda create-function-url-config \

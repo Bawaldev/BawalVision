@@ -549,6 +549,8 @@
             isCameraStreamingActive = true;
             hasCamera = true;
             isOnline = true;
+        } else {
+            isCameraStreamingActive = false;
         }
     }
 

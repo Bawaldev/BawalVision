@@ -53,7 +53,7 @@ flowchart TD
 | **`bawal_backend`** | `8080/tcp` | **`8080/tcp`** | Crow REST API, WebSocket streams, and JPEG frame ingress. |
 | **`bawal_backend`** | `8765/udp` | **`8765/udp`** | UDP Auto-discovery responder (`BAWAL_DISCOVER_V1`). |
 | **`bawal_frontend`** | `3000/tcp` | **`3001/tcp`** | SvelteKit 5 Web HMI dashboard and operator portal. |
-| **`bawal_grafana`** | `3000/tcp` | **`3002/tcp`** | Provisioned Grafana analytics (`admin / admin`). |
+| **`bawal_grafana`** | `3000/tcp` | **`3002/tcp`** | Provisioned Grafana analytics (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from `.env`). |
 | **`bawal_postgres`** | `5432/tcp` | **`5433/tcp`** | PostgreSQL 16 audit trail and telemetry storage. |
 
 > **Host Port Note**: PostgreSQL publishes on host port **`5433`** (`5433:5432`) to avoid port collisions with host-installed PostgreSQL instances. Within the Docker bridge network (`bawal-net`), containers address Postgres directly via `postgres:5432`.
@@ -103,7 +103,7 @@ curl -XPOST "http://localhost:8080/api/v1/reports/pdf" \
 ```
 
 * **Portable PDF Engine**: Lambda renders Markdown reports with an embedded C++ PDF writer, so `pdflatex`/`tectonic` are not required in the serverless image.
-* **HTTP Authentication**: Set `BAWAL_LAMBDA_AUTH_TOKEN` (32+ characters) for `deploy_lambda.sh` and the Vercel/server proxy. The Lambda handler rejects HTTP invocations without a matching `X-Bawal-Token` (or `Authorization: Bearer <token>`); direct AWS invocations remain IAM-protected. Browser clients must call the SvelteKit `/api` proxy (or the Local Agent), not the raw Function URL, because the token is injected server-side.
+* **HTTP Authentication**: Set `BAWAL_LAMBDA_AUTH_TOKEN` (32+ characters) for `deploy_lambda.sh` and the Vercel/server proxy. The Lambda handler rejects HTTP invocations without a matching `X-Bawal-Token` (or `Authorization: Bearer <token>`); direct AWS invocations remain IAM-protected. Browser clients must call the SvelteKit `/api` proxy (or the Local Agent), not the raw Function URL, because the token is injected server-side. In Vercel, set `AWS_LAMBDA_URL` to the Function URL printed by `deploy_lambda.sh`; API Gateway `execute-api` URLs are rejected because the SvelteKit proxy does not sign SigV4. For a custom-domain Lambda Function URL, set `AWS_LAMBDA_URL` to that domain (or set `BACKEND_MODE=lambda`).
 * **Security Hardening**: `deploy/Dockerfile.lambda` runs `apt-get upgrade -y` and purges unused FFmpeg video device capture packages (`libavdevice*`), ensuring **zero Critical or High CVEs** during AWS ECR Inspector scans.
 * **Cold-Start Pre-Warming**: Model loading occurs during initialization before the first request, yielding warm execution times under $30\text{ ms}$.
 

@@ -51,6 +51,8 @@ static volatile bool s_connected;
 static volatile uint32_t s_frames_sent;
 static volatile uint32_t s_send_errors;
 static volatile int64_t s_last_frame_ms;
+static volatile uint32_t s_last_sent_id;
+static volatile uint32_t s_last_sent_ms;
 static esp_websocket_client_handle_t s_client;
 static camera_frame_buffer_t s_frame;
 static bool s_started;
@@ -117,6 +119,8 @@ static void normalize_base(const char *base, char *out, size_t out_len) {
     } else {
         copy_str(out, out_len, base);
     }
+    size_t len = strlen(out);
+    while (len > 0 && out[len - 1] == '/') out[--len] = '\0';
 }
 
 static void append_ingest_path(const char *base, char *out, size_t out_len) {
@@ -160,6 +164,8 @@ static void relay_event_handler(void *arg, esp_event_base_t base,
             s_connected = true;
             s_send_errors = 0;
             s_time_wait_logged = false;
+            s_last_sent_id = 0;
+            s_last_sent_ms = 0;
             ESP_LOGI(TAG, "Connected to camera relay");
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
@@ -181,6 +187,7 @@ static void relay_event_handler(void *arg, esp_event_base_t base,
             break;
         }
         case WEBSOCKET_EVENT_CLOSED: {
+            s_connected = false;
             esp_websocket_event_data_t *data = (esp_websocket_event_data_t *)event_data;
             ESP_LOGW(TAG, "Camera relay closed code=%d",
                      data ? data->close_status_code : -1);
@@ -236,8 +243,6 @@ static void pump_frames(int fps) {
     if (fps <= 0 || fps > RELAY_MAX_FPS) fps = RELAY_DEFAULT_FPS;
 
     uint32_t interval_ms = 1000U / (uint32_t)fps;
-    uint32_t last_id = 0;
-    uint32_t last_sent = 0;
     TickType_t until = xTaskGetTickCount() + pdMS_TO_TICKS(RELAY_PUMP_MS);
 
     while (xTaskGetTickCount() < until) {
@@ -250,8 +255,8 @@ static void pump_frames(int fps) {
         if (camera_copy_current_frame(&frame) == ESP_OK &&
             frame.header.buffer_len > 0) {
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            bool due = (last_sent == 0) || (now_ms - last_sent >= interval_ms);
-            if (frame.header.frame_id != last_id && due) {
+            bool due = (s_last_sent_ms == 0) || (now_ms - s_last_sent_ms >= interval_ms);
+            if (frame.header.frame_id != s_last_sent_id && due) {
                 int sent = esp_websocket_client_send_bin(
                     s_client, (const char *)frame.data,
                     (int)frame.header.buffer_len,
@@ -264,8 +269,8 @@ static void pump_frames(int fps) {
                     vTaskDelay(pdMS_TO_TICKS(50));
                     break;
                 }
-                last_id = frame.header.frame_id;
-                last_sent = now_ms;
+                s_last_sent_id = frame.header.frame_id;
+                s_last_sent_ms = now_ms;
                 s_last_frame_ms = (int64_t)now_ms;
                 s_frames_sent++;
             }

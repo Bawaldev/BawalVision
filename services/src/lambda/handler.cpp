@@ -354,8 +354,11 @@ LambdaInspectionResponse VisionLambdaHandler::handleEvent(
     }
 
     if (route.is_http_event && route.method != "OPTIONS" &&
-        m_config.enforce_http_auth && !m_config.auth_token.empty() &&
+        m_config.enforce_http_auth &&
         !LambdaEventParser::isIamAuthorized(event_payload)) {
+        if (m_config.auth_token.empty()) {
+            return errorResponse(503, "HTTP auth is not configured", request_start);
+        }
         const std::string authorization = trimView(
             LambdaEventParser::extractHeader(event_payload, "authorization"));
         const std::string header_token = trimView(

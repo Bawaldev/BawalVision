@@ -395,6 +395,11 @@
         relayFpsStaleTimer = setTimeout(() => {
             relayFrameTimes = [];
             lastRelayFpsEmit = 0;
+            isLiveFeedActive = false;
+            if (wsLiveFrameUrl) {
+                URL.revokeObjectURL(wsLiveFrameUrl);
+                wsLiveFrameUrl = '';
+            }
             emitCameraFps(0);
         }, 3500);
         if (now - lastRelayFpsEmit >= 1000 && relayFrameTimes.length >= 2) {
@@ -811,7 +816,7 @@
             if (!deviceCamVideoEl || !isDeviceCamActive || deviceCamVideoEl.readyState < 2) return;
             sourceEl = deviceCamVideoEl;
         } else if (sourceMode === 'live') {
-            if (!relayConfigured || !liveImgEl || !liveImgEl.complete || liveImgEl.naturalWidth === 0) return;
+            if (!liveImgEl || !liveImgEl.complete || liveImgEl.naturalWidth === 0) return;
             sourceEl = liveImgEl;
         } else {
             return;
@@ -897,7 +902,7 @@
     }
 
     function startLivePushing() {
-        const intervalMs = sourceMode === 'live' ? 2500 : 1500;
+        const intervalMs = sourceMode === 'live' && relayConfigured ? 3000 : 1500;
         if (livePushTimer !== null && livePushIntervalMs === intervalMs) return;
         stopLivePushing();
         // Trigger one immediate frame push

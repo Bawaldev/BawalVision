@@ -9,8 +9,7 @@ Description: >
 Parameters:
   ImageUri:
     Type: String
-    Default: "431618680115.dkr.ecr.ap-southeast-3.amazonaws.com/bawalvision-service:latest"
-    Description: ECR image URI for the BawalVision Lambda image
+    Description: ECR image URI for the BawalVision Lambda image (required)
   StageName:
     Type: String
     Default: prod
@@ -40,9 +39,15 @@ Parameters:
   AuthToken:
     Type: String
     NoEcho: true
-    Default: "bawalvision_secure_auth_token_32chars_long"
     MinLength: 32
-    Description: Shared bearer token required by the Lambda handler for HTTP events
+    Description: Shared bearer token required by the Lambda handler for HTTP events (required; generate with `openssl rand -hex 32`)
+  LambdaAuthMode:
+    Type: String
+    Default: NONE
+    AllowedValues:
+      - NONE
+      - AWS_IAM
+    Description: Function URL auth type; NONE relies on AuthToken, AWS_IAM requires signed requests
 
 Globals:
   Function:
@@ -90,11 +95,12 @@ Resources:
           MODEL_PATH: /var/task/models/yolov8s_int8.onnx
           LAMBDA_PREWARM: !Ref LambdaPrewarm
           BAWAL_LAMBDA_AUTH_TOKEN: !Ref AuthToken
+          ENFORCE_HTTP_AUTH: "1"
           ENABLE_SR: "0"
           OMP_NUM_THREADS: "2"
           OPENCV_LOG_LEVEL: ERROR
       FunctionUrlConfig:
-        AuthType: NONE
+        AuthType: !Ref LambdaAuthMode
         Cors:
           AllowOrigins:
             - "http://localhost:5173"

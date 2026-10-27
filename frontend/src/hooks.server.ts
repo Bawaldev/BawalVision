@@ -3,6 +3,98 @@ import { env } from '$env/dynamic/private';
 
 let warnedMissingLambdaToken = false;
 let warnedApiGatewaySigV4 = false;
+let warnedMissingBackend = false;
+
+type BackendKind = 'local' | 'lambda' | 'api-gateway' | 'custom';
+
+interface BackendConfig {
+    url: string;
+    kind: BackendKind;
+    source: string;
+    forcedMode: string;
+}
+
+function readEnv(name: string): string {
+    const fromSvelte = (env as Record<string, string | undefined>)[name];
+    const fromProcess = (globalThis as any).process?.env?.[name];
+    const value = fromSvelte ?? fromProcess;
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function stripTrailingSlashes(value: string): string {
+    return value.replace(/\/+$/, '');
+}
+
+function normalizeBackendUrl(raw: string): string {
+    let value = stripTrailingSlashes(raw.trim());
+    // Accept the full snapshot endpoint from BAWAL_LAMBDA_ENDPOINT, not just the origin.
+    value = value.replace(/\/api\/v1\/lambda\/(?:inspect|invoke)$/i, '');
+    return stripTrailingSlashes(value);
+}
+
+function backendHostname(url: string): string {
+    try {
+        return new URL(url).hostname.toLowerCase();
+    } catch {
+        return '';
+    }
+}
+
+function isLambdaHost(url: string): boolean {
+    const host = backendHostname(url);
+    return host.includes('.lambda-url.') || host.endsWith('.lambda-url.on.aws');
+}
+
+function isApiGatewayHost(url: string): boolean {
+    return backendHostname(url).includes('.execute-api.');
+}
+
+function resolveBackendConfig(isVercel: boolean): BackendConfig {
+    const forcedMode = (readEnv('BACKEND_MODE') || readEnv('BAWAL_BACKEND_MODE')).toLowerCase();
+    const lambdaUrl = normalizeBackendUrl(
+        readEnv('AWS_LAMBDA_URL') || readEnv('BAWAL_LAMBDA_URL') || readEnv('BAWAL_LAMBDA_ENDPOINT')
+    );
+    const backendUrl = normalizeBackendUrl(readEnv('BACKEND_URL'));
+    const publicApiUrl = normalizeBackendUrl(readEnv('PUBLIC_API_URL'));
+
+    let url = '';
+    let source = '';
+
+    // Prefer a usable BACKEND_URL, but never silently select an unsigned API Gateway.
+    if (backendUrl && !isApiGatewayHost(backendUrl)) {
+        url = backendUrl;
+        source = 'BACKEND_URL';
+    } else if (lambdaUrl) {
+        url = lambdaUrl;
+        source = 'AWS_LAMBDA_URL';
+    } else if (backendUrl) {
+        url = backendUrl;
+        source = 'BACKEND_URL';
+    } else if (publicApiUrl && !isApiGatewayHost(publicApiUrl)) {
+        url = publicApiUrl;
+        source = 'PUBLIC_API_URL';
+    } else if (!isVercel) {
+        url = 'http://127.0.0.1:8080';
+        source = 'default';
+    }
+
+    let kind: BackendKind = 'custom';
+    if (forcedMode === 'local') {
+        kind = 'local';
+    } else if (forcedMode === 'lambda') {
+        kind = 'lambda';
+    } else if (forcedMode === 'api-gateway') {
+        kind = 'api-gateway';
+    } else if (source === 'AWS_LAMBDA_URL' || isLambdaHost(url)) {
+        kind = 'lambda';
+    } else if (isApiGatewayHost(url)) {
+        kind = 'api-gateway';
+    } else if (url.includes('127.0.0.1') || url.includes('localhost')) {
+        kind = 'local';
+    }
+
+    return { url, kind, source, forcedMode };
+}
 
 function getAllowedOrigin(requestOrigin: string | null, requestUrl: URL): string | null {
     if (!requestOrigin) return null;
@@ -72,34 +164,46 @@ export const handle: Handle = async ({ event, resolve }) => {
 
     if (event.url.pathname.startsWith('/api/') || event.url.pathname.startsWith('/inspections/')) {
         const isVercel = Boolean((globalThis as any).process?.env?.VERCEL);
-        const defaultBackend = isVercel
-            ? 'https://5g715bm2v5.execute-api.ap-southeast-3.amazonaws.com/default/bawalvision-service'
-            : 'http://127.0.0.1:8080';
-        const backendUrl = env.BACKEND_URL ||
-            (globalThis as any).process?.env?.BACKEND_URL ||
-            (env as any).PUBLIC_API_URL ||
-            (globalThis as any).process?.env?.PUBLIC_API_URL ||
-            defaultBackend;
-        const lambdaAuthToken = env.BAWAL_LAMBDA_AUTH_TOKEN ||
-            (globalThis as any).process?.env?.BAWAL_LAMBDA_AUTH_TOKEN || '';
-        const adminToken = env.BAWAL_ADMIN_TOKEN ||
-            (globalThis as any).process?.env?.BAWAL_ADMIN_TOKEN || '';
+        const backend = resolveBackendConfig(isVercel);
+        const backendUrl = backend.url;
+        const lambdaAuthToken = readEnv('BAWAL_LAMBDA_AUTH_TOKEN');
+        const adminToken = readEnv('BAWAL_ADMIN_TOKEN');
 
-        const isLambdaBackend = backendUrl.includes('execute-api') || backendUrl.includes('lambda-url');
-        if (isLambdaBackend && !lambdaAuthToken && !warnedMissingLambdaToken) {
-            warnedMissingLambdaToken = true;
-            console.warn('[PROXY] BAWAL_LAMBDA_AUTH_TOKEN is not configured; Lambda HTTP invocations will be rejected.');
-        }
-        if (backendUrl.includes('execute-api') && !warnedApiGatewaySigV4) {
-            warnedApiGatewaySigV4 = true;
-            console.warn('[PROXY] API Gateway is configured with AWS_IAM, but this proxy does not sign requests with SigV4. Use the Lambda Function URL with BAWAL_LAMBDA_AUTH_TOKEN instead.');
-        }
+        const isLambdaBackend = backend.kind === 'lambda';
+        const isApiGatewayBackend = backend.kind === 'api-gateway';
         const jsonHeaders: Record<string, string> = {
             'Content-Type': 'application/json'
         };
         if (allowedOrigin) {
             jsonHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
             jsonHeaders['Vary'] = 'Origin';
+        }
+
+        if (!backendUrl) {
+            if (!warnedMissingBackend) {
+                warnedMissingBackend = true;
+                console.warn('[PROXY] No backend configured. Set AWS_LAMBDA_URL (Lambda Function URL) or BACKEND_URL.');
+            }
+            return new Response(JSON.stringify({
+                error: 'Backend is not configured',
+                message: 'Set AWS_LAMBDA_URL to the Lambda Function URL printed by deploy/deploy_lambda.sh, or set BACKEND_URL to a host backend. API Gateway execute-api URLs are not used because this proxy cannot sign SigV4 requests.'
+            }), { status: 503, headers: jsonHeaders });
+        }
+
+        if (isApiGatewayBackend && backend.forcedMode !== 'api-gateway') {
+            if (!warnedApiGatewaySigV4) {
+                warnedApiGatewaySigV4 = true;
+                console.warn('[PROXY] API Gateway requires SigV4, which this proxy does not implement. Set AWS_LAMBDA_URL to the Lambda Function URL (or BACKEND_MODE=api-gateway only for an unauthenticated API).');
+            }
+            return new Response(JSON.stringify({
+                error: 'API Gateway backend requires SigV4',
+                message: 'Set AWS_LAMBDA_URL to the Lambda Function URL printed by deploy/deploy_lambda.sh. If this API Gateway is intentionally unauthenticated, set BACKEND_MODE=api-gateway.'
+            }), { status: 503, headers: jsonHeaders });
+        }
+
+        if (isLambdaBackend && !lambdaAuthToken && !warnedMissingLambdaToken) {
+            warnedMissingLambdaToken = true;
+            console.warn('[PROXY] BAWAL_LAMBDA_AUTH_TOKEN is not configured; Lambda HTTP invocations will be rejected.');
         }
 
         let requestBody: ArrayBuffer | undefined;

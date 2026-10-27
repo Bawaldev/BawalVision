@@ -75,7 +75,7 @@ int main() {
         "LAMBDA_AUTH_TOKEN",
         "BAWAL_AUTH_TOKEN"
     });
-    config.enforce_http_auth = envFlag("ENFORCE_HTTP_AUTH", !config.auth_token.empty());
+    config.enforce_http_auth = envFlag("ENFORCE_HTTP_AUTH", true);
     config.confidence_threshold = envFloat("CONF_THRESHOLD", 0.35f);
     config.processing_width = envInt("PROCESSING_WIDTH", 640);
     config.processing_height = envInt("PROCESSING_HEIGHT", 480);

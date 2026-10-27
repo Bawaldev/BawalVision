@@ -94,7 +94,7 @@ if aws lambda get-function --region "$REGION" --function-name "$FUNCTION_NAME" >
     echo "[INFO] Waiting for code update to finish..."
     aws lambda wait function-updated --region "$REGION" --function-name "$FUNCTION_NAME"
 
-    ENV_VARS="MODEL_PATH=/var/task/models/yolov8s_int8.onnx,OMP_NUM_THREADS=2,OPENCV_LOG_LEVEL=ERROR"
+    ENV_VARS="MODEL_PATH=/var/task/models/yolov8s_int8.onnx,OMP_NUM_THREADS=2,OPENCV_LOG_LEVEL=ERROR,ENFORCE_HTTP_AUTH=1"
     if [[ -n "$LAMBDA_AUTH_TOKEN" ]]; then
         ENV_VARS="${ENV_VARS},BAWAL_LAMBDA_AUTH_TOKEN=${LAMBDA_AUTH_TOKEN}"
     fi

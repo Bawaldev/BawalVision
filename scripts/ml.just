@@ -312,7 +312,7 @@ clean-ml:
 [group('ML')]
 mlflow-ui:
     mlflow server \
-      --backend-store-uri postgresql://postgres:1234@127.0.0.1:5433/mlflow_db \
+      --backend-store-uri "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@127.0.0.1:${POSTGRES_PORT:-5433}/mlflow_db" \
       --default-artifact-root ./ml/mlflow_artifacts \
       --host 127.0.0.1 \
       --port 5000
