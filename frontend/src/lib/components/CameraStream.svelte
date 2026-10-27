@@ -360,6 +360,7 @@
     let relayFrameTimes: number[] = [];
     let lastRelayFpsEmit = 0;
     let relayFpsStaleTimer: ReturnType<typeof setTimeout> | null = null;
+    let relayFrameWatchdog: ReturnType<typeof setTimeout> | null = null;
 
     const relayBaseUrl = (publicEnv.PUBLIC_CAMERA_RELAY_URL || '').trim();
     const relayDeviceId = (publicEnv.PUBLIC_CAMERA_RELAY_DEVICE || 'default').trim() || 'default';
@@ -384,8 +385,30 @@
         window.dispatchEvent(new CustomEvent('bawal-camera-fps', { detail: { fps } }));
     }
 
+    function clearRelayFrameWatchdog() {
+        if (relayFrameWatchdog !== null) {
+            clearTimeout(relayFrameWatchdog);
+            relayFrameWatchdog = null;
+        }
+    }
+
+    function armRelayFrameWatchdog() {
+        clearRelayFrameWatchdog();
+        if (!relayConfigured || typeof WebSocket === 'undefined') return;
+        relayFrameWatchdog = setTimeout(() => {
+            relayFrameWatchdog = null;
+            if (!isActive || !isTabVisible || sourceMode !== 'live' || !relayConfigured) return;
+            if (!wsLiveStream || wsLiveStream.readyState !== WebSocket.OPEN) {
+                connectRelayWebSocket();
+            } else {
+                connectLiveWebSocket();
+            }
+        }, 6000);
+    }
+
     function recordLiveFrameFps() {
         if (typeof performance === 'undefined') return;
+        armRelayFrameWatchdog();
         const now = performance.now();
         relayFrameTimes.push(now);
         while (relayFrameTimes.length > 2 && now - relayFrameTimes[0] > 3000) {
@@ -422,6 +445,11 @@
         streamError = false;
         localBackendNotice = '';
         recordLiveFrameFps();
+        if (relayConfigured) {
+            try {
+                socket.send('ack');
+            } catch {}
+        }
     }
 
     function scheduleRelayReconnect(attempt: number) {
@@ -452,12 +480,15 @@
             socket.onopen = () => {
                 if (wsLiveStream !== socket) return;
                 opened = true;
+                armRelayFrameWatchdog();
                 localBackendNotice = '✓ Cloud camera relay connected. Waiting for ESP32 frames…';
             };
             socket.onmessage = (event) => applyLiveFrame(event, socket);
             socket.onerror = () => {};
             socket.onclose = () => {
-                if (wsLiveStream === socket) wsLiveStream = null;
+                if (wsLiveStream !== socket) return;
+                wsLiveStream = null;
+                clearRelayFrameWatchdog();
                 if (!isActive || !isTabVisible || sourceMode !== 'live') return;
                 if (!opened && attempt === 0) {
                     localBackendNotice = '⚠️ Cloud camera relay is unreachable. Check <code>PUBLIC_CAMERA_RELAY_URL</code> and the relay deployment.';
@@ -511,6 +542,7 @@
     }
 
     function disconnectLiveWebSocket() {
+        clearRelayFrameWatchdog();
         if (relayReconnectTimer !== null) {
             clearTimeout(relayReconnectTimer);
             relayReconnectTimer = null;
@@ -935,6 +967,7 @@
         if (typeof document !== 'undefined') {
             if (document.hidden) {
                 isTabVisible = false;
+                clearRelayFrameWatchdog();
                 if (liveRefreshTimer !== null) {
                     clearTimeout(liveRefreshTimer);
                     liveRefreshTimer = null;
@@ -942,6 +975,10 @@
             } else {
                 streamEpoch = Date.now();
                 isTabVisible = true;
+                if (sourceMode === 'live') {
+                    connectLiveWebSocket();
+                    startLivePushing();
+                }
             }
         }
     }
