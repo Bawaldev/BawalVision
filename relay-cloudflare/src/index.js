@@ -99,7 +99,11 @@ export default {
             }
             try {
                 const id = env.RELAY.idFromName(device);
-                const statsRes = await env.RELAY.get(id).fetch('https://relay.internal/stats');
+                const statsRequest = withClientIp(
+                    new Request('https://relay.internal/stats'),
+                    clientIp(request)
+                );
+                const statsRes = await env.RELAY.get(id).fetch(statsRequest);
                 const stats = await statsRes.json();
                 return json({
                     status: 'ok',

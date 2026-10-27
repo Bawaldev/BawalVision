@@ -261,6 +261,9 @@ static void send_telemetry_over_relay(void) {
     if (!root) return;
 
     const float temperature = get_esp32_cpu_temperature();
+    uint8_t core0_load = 0;
+    uint8_t core1_load = 0;
+    get_cpu_core_loads(&core0_load, &core1_load);
     cJSON_AddStringToObject(root, "type", "telemetry");
     cJSON_AddStringToObject(root, "device_id", meta.device_id);
     cJSON_AddStringToObject(root, "firmware_version", meta.firmware_version);
@@ -268,6 +271,8 @@ static void send_telemetry_over_relay(void) {
     cJSON_AddNumberToObject(root, "temperature", (double)temperature);
     cJSON_AddNumberToObject(root, "cpu_temperature", (double)temperature);
     cJSON_AddNumberToObject(root, "cpu_load", (double)get_cpu_usage_percentage());
+    cJSON_AddNumberToObject(root, "cpu_core0_load", (double)core0_load);
+    cJSON_AddNumberToObject(root, "cpu_core1_load", (double)core1_load);
     cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "free_heap_internal",
                             (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));

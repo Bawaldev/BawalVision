@@ -21,6 +21,7 @@
         updateConfidenceThreshold
     } from '$lib/api';
     import { detectLocalBackend, getConfiguredApiBase } from '$lib/backendConfig';
+    import { env as publicEnv } from '$env/dynamic/public';
 
     import type {
         FoodDetection,
@@ -138,6 +139,7 @@
     let telemetryHistory = $state<TelemetryPayload[]>([]);
     let latestOptical = $state<SceneOpticalMetrics | undefined>(undefined);
     let lastRelayTelemetryAt = 0;
+    let lastRelayTelemetryFetch = 0;
 
     let pollingTimer: any = null;
     let lastSlowPoll = 0;
@@ -255,6 +257,47 @@
         }
     }
 
+    async function fetchRelayTelemetry(): Promise<TelemetryPayload | null> {
+        const base = (publicEnv.PUBLIC_CAMERA_RELAY_URL || '').trim();
+        if (!base) return null;
+        const device = (publicEnv.PUBLIC_CAMERA_RELAY_DEVICE || 'default').trim() || 'default';
+        const url = `${base.replace(/\/+$/, '')}/health?device=${encodeURIComponent(device)}`;
+        try {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (!res.ok) return null;
+            const data = await res.json();
+            const t = data?.telemetry;
+            if (!t || typeof t !== 'object') return null;
+            const age = Number(data.telemetry_age_ms);
+            if (Number.isFinite(age) && age > 30000) return null;
+            const num = (value: unknown): number | null => {
+                if (value == null) return null;
+                const parsed = Number(value);
+                return Number.isFinite(parsed) ? parsed : null;
+            };
+            return {
+                device_id: t.device_id ? String(t.device_id) : 'ESP32S3',
+                firmware_version: t.firmware_version ? String(t.firmware_version) : '1.0.0',
+                device_core: num(t.device_core) ?? 0,
+                cpu_temperature: num(t.cpu_temperature) ?? num(t.temperature),
+                temperature: num(t.temperature),
+                cpu_load: num(t.cpu_load),
+                cpu_core0_load: num(t.cpu_core0_load),
+                cpu_core1_load: num(t.cpu_core1_load),
+                heap_free: num(t.free_heap),
+                free_heap: num(t.free_heap),
+                free_heap_internal: num(t.free_heap_internal),
+                free_heap_psram: num(t.free_heap_psram),
+                rssi: num(t.rssi),
+                camera_model: t.camera_model ? String(t.camera_model) : null,
+                timestamp: num(t.timestamp) ?? Math.floor(Date.now() / 1000),
+                is_connected: true
+            };
+        } catch {
+            return null;
+        }
+    }
+
     async function pollBackendData() {
         if (isPolling) return;
         isPolling = true;
@@ -274,6 +317,19 @@
                 fetchLatestInspection(systemConfig.backendUrl),
                 shouldRunSlowPoll ? fetchRecords(systemConfig.backendUrl) : Promise.resolve(null)
             ]);
+
+            // Cloud relay telemetry is independent of the Live tab / WebSocket,
+            // so the Telemetry page also works while the camera view is hidden.
+            if ((!tel || !tel.is_connected || tel.temperature == null) &&
+                typeof window !== 'undefined' &&
+                Date.now() - lastRelayTelemetryFetch >= 2500) {
+                lastRelayTelemetryFetch = Date.now();
+                const relayTel = await fetchRelayTelemetry();
+                if (relayTel) {
+                    tel = relayTel;
+                    lastRelayTelemetryAt = Date.now();
+                }
+            }
 
             // If current backend returned no active telemetry, probe local/LAN C++ backends where real ESP32-S3 data arrives
             if ((!tel || !tel.is_connected || tel.temperature == null) && typeof window !== 'undefined') {
@@ -317,8 +373,13 @@
             }
 
             // 2. Camera Status
+            // On the cloud relay path the Lambda's camera metric is the upload/
+            // inference rate, not the live video FPS. Prefer the relay's own
+            // frame-arrival FPS so the top bar reflects the stream.
             hasCamera = cam.active || isCameraStreamingActive;
-            realFps = cam.active ? cam.fps : (isCameraStreamingActive ? cameraStreamFps : 0.0);
+            realFps = (isCameraStreamingActive && cameraStreamFps > 0)
+                ? cameraStreamFps
+                : (cam.active ? cam.fps : 0.0);
 
             // 3. Telemetry Ingress from ESP32-S3
             // The relay carries live telemetry over the same WebSocket as the
@@ -576,6 +637,8 @@
                 ? Number(d.cpu_temperature)
                 : (d.temperature != null ? Number(d.temperature) : telemetry.cpu_temperature),
             cpu_load: d.cpu_load != null ? Number(d.cpu_load) : telemetry.cpu_load,
+            cpu_core0_load: d.cpu_core0_load != null ? Number(d.cpu_core0_load) : telemetry.cpu_core0_load,
+            cpu_core1_load: d.cpu_core1_load != null ? Number(d.cpu_core1_load) : telemetry.cpu_core1_load,
             heap_free: d.free_heap != null ? Number(d.free_heap) : telemetry.heap_free,
             free_heap: d.free_heap != null ? Number(d.free_heap) : telemetry.free_heap,
             free_heap_internal: d.free_heap_internal != null ? Number(d.free_heap_internal) : telemetry.free_heap_internal,

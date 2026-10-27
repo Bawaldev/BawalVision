@@ -119,6 +119,90 @@ uint8_t get_cpu_usage_percentage(void) {
 }
 
 
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+static uint32_t s_prev_core_total = 0;
+static uint32_t s_prev_core_idle[2] = {0, 0};
+static uint8_t s_last_core_percent[2] = {0, 0};
+static portMUX_TYPE s_core_mux = portMUX_INITIALIZER_UNLOCKED;
+#endif
+
+void get_cpu_core_loads(uint8_t *core0, uint8_t *core1) {
+    uint8_t c0 = 0;
+    uint8_t c1 = 0;
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    UBaseType_t task_count = uxTaskGetNumberOfTasks();
+    UBaseType_t array_size = task_count + 8;
+    TaskStatus_t *task_array =
+        (TaskStatus_t *)pvPortMalloc(array_size * sizeof(TaskStatus_t));
+    if (task_array == NULL) {
+        if (core0) *core0 = s_last_core_percent[0];
+        if (core1) *core1 = s_last_core_percent[1];
+        return;
+    }
+
+    uint32_t current_total_time = 0;
+    UBaseType_t actual_count =
+        uxTaskGetSystemState(task_array, array_size, &current_total_time);
+    if (actual_count == 0) {
+        vPortFree(task_array);
+        if (core0) *core0 = s_last_core_percent[0];
+        if (core1) *core1 = s_last_core_percent[1];
+        return;
+    }
+
+    uint32_t current_idle[2] = {0, 0};
+    for (UBaseType_t i = 0; i < actual_count; i++) {
+        const char *name = task_array[i].pcTaskName;
+        if (strncmp(name, "IDLE", 4) != 0) continue;
+        // ESP-IDF SMP names the per-core idle tasks "IDLE0" and "IDLE1".
+        const int core = (name[4] == '1') ? 1 : 0;
+        current_idle[core] += (uint32_t)task_array[i].ulRunTimeCounter;
+    }
+    vPortFree(task_array);
+
+    portENTER_CRITICAL(&s_core_mux);
+    if (s_prev_core_total == 0) {
+        s_prev_core_total = current_total_time;
+        s_prev_core_idle[0] = current_idle[0];
+        s_prev_core_idle[1] = current_idle[1];
+        portEXIT_CRITICAL(&s_core_mux);
+        if (core0) *core0 = s_last_core_percent[0];
+        if (core1) *core1 = s_last_core_percent[1];
+        return;
+    }
+
+    uint32_t delta_total = current_total_time - s_prev_core_total;
+    if (delta_total < 25000) {
+        portEXIT_CRITICAL(&s_core_mux);
+        if (core0) *core0 = s_last_core_percent[0];
+        if (core1) *core1 = s_last_core_percent[1];
+        return;
+    }
+
+    for (int core = 0; core < 2; core++) {
+        uint32_t delta_idle = current_idle[core] - s_prev_core_idle[core];
+        if (delta_idle > delta_total) delta_idle = delta_total;
+        uint32_t busy = delta_total - delta_idle;
+        uint32_t percent = (busy * 100) / delta_total;
+        if (percent > 100) percent = 100;
+        s_last_core_percent[core] = (uint8_t)percent;
+        s_prev_core_idle[core] = current_idle[core];
+    }
+    s_prev_core_total = current_total_time;
+    c0 = s_last_core_percent[0];
+    c1 = s_last_core_percent[1];
+    portEXIT_CRITICAL(&s_core_mux);
+#else
+    (void)core0;
+    (void)core1;
+    return;
+#endif
+
+    if (core0) *core0 = c0;
+    if (core1) *core1 = c1;
+}
+
 const char* get_esp_chip_model_name(void) {
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);

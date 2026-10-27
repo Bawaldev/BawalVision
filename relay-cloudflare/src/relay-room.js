@@ -82,7 +82,16 @@ export class RelayRoom {
     async fetch(request) {
         const url = new URL(request.url);
         if (url.pathname.endsWith('/stats')) {
-            return Response.json(this.stats());
+            const requestIp = String(request.headers.get('x-relay-client-ip') || '').trim();
+            let includeTelemetry = true;
+            if (this.restrictViews) {
+                const expected = this.currentIngestIp() ||
+                    String(await this.state.storage.get('ingestIp') || '');
+                if (expected && requestIp) {
+                    includeTelemetry = sameNetwork(expected, requestIp);
+                }
+            }
+            return Response.json(this.stats(includeTelemetry));
         }
 
         const upgrade = String(request.headers.get('Upgrade') || '').toLowerCase();
@@ -263,7 +272,7 @@ export class RelayRoom {
         console.log('relay socket error', role, String(error && error.message || error));
     }
 
-    stats() {
+    stats(includeTelemetry = true) {
         const now = Date.now();
         const age = this.latestAt ? now - this.latestAt : null;
         const online = age !== null && age <= STALE_MS;
@@ -277,8 +286,8 @@ export class RelayRoom {
             dropped: this.dropped,
             bytes: this.latest ? this.latest.byteLength : 0,
             view_restricted: this.restrictViews,
-            telemetry: this.telemetry ? JSON.parse(this.telemetry) : null,
-            telemetry_age_ms: this.telemetryAt ? now - this.telemetryAt : null,
+            telemetry: includeTelemetry && this.telemetry ? JSON.parse(this.telemetry) : null,
+            telemetry_age_ms: includeTelemetry && this.telemetryAt ? now - this.telemetryAt : null,
             uptime_s: Math.round((now - this.startedAt) / 1000)
         };
     }

@@ -1277,6 +1277,9 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
     const char *dev_id = (data && data->device_id[0]) ? data->device_id : meta.device_id;
     float temp = get_esp32_cpu_temperature();
     uint8_t load = get_cpu_usage_percentage();
+    uint8_t core0_load = 0;
+    uint8_t core1_load = 0;
+    get_cpu_core_loads(&core0_load, &core1_load);
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return ESP_ERR_NO_MEM;
@@ -1285,6 +1288,8 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
     cJSON_AddNumberToObject(root, "timestamp", (double)time(NULL));
     cJSON_AddNumberToObject(root, "temperature", (double)temp);
     cJSON_AddNumberToObject(root, "cpu_load", (double)load);
+    cJSON_AddNumberToObject(root, "cpu_core0_load", (double)core0_load);
+    cJSON_AddNumberToObject(root, "cpu_core1_load", (double)core1_load);
     cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "free_heap_internal",
                             (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));

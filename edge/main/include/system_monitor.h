@@ -23,6 +23,14 @@ extern "C" {
 uint8_t get_cpu_usage_percentage(void);
 
 /**
+ * @brief Per-core CPU utilization from FreeRTOS idle-task runtime counters.
+ *
+ * @param[out] core0 Core 0 (Wi-Fi/protocol) usage percentage, 0 - 100.
+ * @param[out] core1 Core 1 (application/camera) usage percentage, 0 - 100.
+ */
+void get_cpu_core_loads(uint8_t *core0, uint8_t *core1);
+
+/**
  * @brief Retrieve the hardware chip family name string from internal registers.
  *
  * @return const char* Chip model name (e.g. "ESP32S3", "ESP32C3", or "ESP32_UNKNOWN").

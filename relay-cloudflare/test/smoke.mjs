@@ -110,7 +110,10 @@ try {
         assert.equal(outsider, null);
     }
 
-    const healthRes = await fetch(healthUrl);
+    const healthHeaders = testIp
+        ? { 'CF-Connecting-IP': testIp, 'x-relay-client-ip': testIp }
+        : undefined;
+    const healthRes = await fetch(healthUrl, { headers: healthHeaders });
     assert.equal(healthRes.status, 200);
     const health = await healthRes.json();
     assert.equal(health.status, 'ok');
