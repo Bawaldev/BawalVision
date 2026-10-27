@@ -471,6 +471,12 @@
 
     async function generateAndDownloadClientPdf(targetSummary: BatchSummary) {
         noticeMessage = 'Generating high-fidelity master audit PDF in browser...';
+        const isLambda = currentBackendUrl.includes('amazonaws.com') || currentBackendUrl.includes('lambda');
+        const ompWorkers = targetSummary.omp_threads ?? (isLambda ? 2 : 12);
+        const engineDesc = targetSummary.engine || (isLambda
+            ? `OpenMP (${ompWorkers} threads) + ARM NEON YOLOv8s INT8 (AWS Graviton3)`
+            : `OpenMP (${ompWorkers} threads) + AVX2 vectorized YOLOv8s INT8`);
+
         const mdLines: string[] = [
             '# BATCH FOOD TRAY AUDIT SUMMARY REPORT',
             '',
@@ -482,8 +488,8 @@
             `| **Batch Identifier:** | \`${targetSummary.batch_id}\` |`,
             `| **Inspection Type:** | \`IMG_BATCH\` (operator image batch upload) |`,
             `| **Model Architecture:** | YOLOv8s-INT8 |`,
-            `| **Parallel Engine:** | OpenMP (12 threads) + AVX2 vectorized YOLOv8s INT8 |`,
-            `| **OpenMP Workers:** | 12 threads |`,
+            `| **Parallel Engine:** | ${engineDesc} |`,
+            `| **OpenMP Workers:** | ${ompWorkers} threads |`,
             `| **Total Trays Processed:** | ${targetSummary.total_trays} trays |`,
             `| **Compliance Verdict:** | **${targetSummary.accepted} Accepted** \\| **${targetSummary.rejected} Rejected** |`,
             `| **Batch Pass Rate:** | **${(targetSummary.pass_rate || 90.0).toFixed(1)}%** of trays accepted |`,
@@ -661,7 +667,11 @@
             <span class="batch-type-badge">{summary?.inspection_type ?? 'IMG_BATCH'}</span>
             <div class="batch-badge">
                 <span class="badge-dot"></span>
-                OpenMP + AVX2
+                {#if currentBackendUrl.includes('localhost') || currentBackendUrl.includes('127.0.0.1')}
+                    OpenMP + AVX2
+                {:else}
+                    OpenMP + ARM NEON
+                {/if}
             </div>
         </div>
     </header>
@@ -789,7 +799,7 @@
                 <div class="kpi-card">
                     <span class="kpi-label">Avg Food Quality</span>
                     <strong class="kpi-value">{(summary.avg_quality ?? 0).toFixed(1)}%</strong>
-                    <span class="kpi-sub">SIMD freshness (AVX2)</span>
+                    <span class="kpi-sub">SIMD freshness ({currentBackendUrl.includes('localhost') || currentBackendUrl.includes('127.0.0.1') ? 'AVX2' : 'NEON'})</span>
                 </div>
                 <div class="kpi-card">
                     <span class="kpi-label">Detections P / R / X</span>

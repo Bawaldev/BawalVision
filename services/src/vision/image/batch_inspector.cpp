@@ -153,8 +153,15 @@ BatchReportSummary BatchInspector::processZipBuffer(
     }
     const int max_threads = omp_get_max_threads();
     summary.omp_threads = max_threads > 0 ? max_threads : 1;
-    summary.engine = fmt::format("OpenMP ({} threads) + AVX2 vectorized YOLOv8s INT8",
-                                 summary.omp_threads);
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    const char* simd_str = "ARM NEON";
+#elif defined(__AVX2__)
+    const char* simd_str = "AVX2";
+#else
+    const char* simd_str = "SIMD";
+#endif
+    summary.engine = fmt::format("OpenMP ({} threads) + {} vectorized YOLOv8s INT8",
+                                 summary.omp_threads, simd_str);
     if (grafana != nullptr) {
         summary.grafana = *grafana;
     }

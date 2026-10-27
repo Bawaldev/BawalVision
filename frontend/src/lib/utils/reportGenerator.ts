@@ -6,6 +6,8 @@ export interface ReportOptions {
     deviceId?: string;
     batchId?: string;
     generatedAt?: string;
+    engine?: string;
+    ompThreads?: number;
 }
 
 const CARBOHYDRATE_KEYS = ['rice', 'nasi', 'beras', 'karbohidrat', 'potato', 'kentang', 'bread', 'roti'];
@@ -219,6 +221,9 @@ export function generateBatchInspectionMarkdown(
     const rejectRatio = records.length > 0 ? (rejected / records.length) : 0;
     const qualityIndex = Math.max(0, Math.min(100, 100 * (0.45 * (Number(avgSim) / 100) + 0.55 * (Number(avgQual) / 100)) - 25 * rejectRatio)).toFixed(1);
 
+    const ompWorkers = options.ompThreads ?? 2;
+    const engineDesc = options.engine || `OpenMP (${ompWorkers} threads) + YOLOv8s INT8`;
+
     const lines = [
         '# BATCH FOOD TRAY AUDIT SUMMARY REPORT',
         '',
@@ -230,8 +235,8 @@ export function generateBatchInspectionMarkdown(
         `| **Batch Identifier:** | \`${batchId}\` |`,
         `| **Inspection Type:** | \`IMG_BATCH\` (operator image batch upload) |`,
         `| **Model Architecture:** | YOLOv8s-INT8 |`,
-        `| **Parallel Engine:** | OpenMP (12 threads) + AVX2 vectorized YOLOv8s INT8 |`,
-        `| **OpenMP Workers:** | 12 threads |`,
+        `| **Parallel Engine:** | ${engineDesc} |`,
+        `| **OpenMP Workers:** | ${ompWorkers} threads |`,
         `| **Total Trays Processed:** | ${records.length} trays |`,
         `| **Compliance Verdict:** | **${accepted} Accepted** \\| **${rejected} Rejected** |`,
         `| **Batch Pass Rate:** | **${passRate}%** of trays accepted |`,
