@@ -74,7 +74,7 @@ flowchart LR
 * **Multi-Format Export**: Direct download in both compiled PDF (`X-Report-Format: pdf`) and raw LaTeX source (`X-Report-Format: tex`).
 
 ### 5. Hardware Telemetry & Provisioning (`/telemetry` & `/settings`)
-* **USB Serial Auto-Provisioning**: Scan host `/dev/ttyACM*` serial interfaces and provision Wi-Fi credentials to ESP32 nodes directly from the web browser.
+* **USB Serial Auto-Provisioning**: Web Serial lets you pick any OS serial port (`COMx` on Windows, `/dev/ttyACM*` or `/dev/ttyUSB*` on Linux), including CH343/CP210x/FTDI bridges. Server-side scanning remains Linux-only.
 * **Camera Sensor Calibration**: Interactive horizontal/vertical flip controls (`CAMERA_HFLIP`, `CAMERA_VFLIP`) and exposure adjustment.
 
 ---

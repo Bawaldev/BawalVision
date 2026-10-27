@@ -111,7 +111,7 @@
     let usbProbeMsg = $state('');
     let espUsbStatus = $state<{ port: string; device_id: string; current_ssid: string; wifi_connected: boolean; temperature: number } | null>(null);
 
-    // Web Serial direct hardware connection state (Fedora / Browser direct access)
+    // Web Serial direct hardware connection state (Chromium: Linux, Windows, macOS)
     let isWebSerialConnecting = $state(false);
     let webSerialMsg = $state('');
     let webSerialStatus = $state<'idle' | 'success' | 'error'>('idle');
@@ -733,7 +733,7 @@
         if (info?.product) {
             return `${port} (${info.product})`;
         }
-        if (port.startsWith('/dev/ttyACM')) return `${port} (ESP32-S3 JTAG / Serial)`;
+        if (port.startsWith('/dev/ttyACM') || /^COM\d+$/i.test(port)) return `${port} (ESP32-S3 JTAG / Serial)`;
         return `${port} (USB Serial)`;
     }
 
@@ -862,6 +862,26 @@
         return typeof navigator !== 'undefined' && 'serial' in navigator;
     }
 
+    // Show every OS serial port in the chooser. Linux uses /dev/ttyACM* or
+    // /dev/ttyUSB*; Windows uses COMx. Filtering by USB vendor ID hides boards
+    // that use a CH343/CP210x/FTDI bridge, so filtering is deliberately omitted.
+    function requestBrowserSerialPort(timeoutMs: number): Promise<any> {
+        return withTimeout((navigator as any).serial.requestPort(), timeoutMs);
+    }
+
+    function webSerialRequestError(err: any): string {
+        if (err?.name === 'NotFoundError') {
+            return 'No serial port selected. Connect the ESP32-S3 with a data cable, ' +
+                'install the USB-UART driver (CH343/CP210x/FTDI) or use its native USB port, ' +
+                'and close idf.py monitor / Arduino IDE before retrying. ' +
+                'On Windows, verify the board appears as COMx in Device Manager.';
+        }
+        if (err?.name === 'SecurityError') {
+            return 'Serial access is blocked by the browser. Allow serial ports for this site in Chrome/Edge, then retry.';
+        }
+        return err?.message || 'Unable to request USB serial access.';
+    }
+
     function wifiProvisionErrorMessage(ack: any, ssid: string): string {
         const status = ack?.status || 'unknown';
         const connected = ack?.wifi_connected ? 'board Wi-Fi is connected' : 'board Wi-Fi is still offline';
@@ -895,18 +915,9 @@
 
         let port: any = null;
         try {
-            port = await withTimeout(
-                (navigator as any).serial.requestPort({
-                    filters: [{ usbVendorId: 0x303a }] // Espressif Systems
-                }),
-                20000
-            );
+            port = await requestBrowserSerialPort(20000);
         } catch (err: any) {
-            return failure(
-                err?.name === 'NotFoundError'
-                    ? 'Serial port selection canceled.'
-                    : err?.message || 'Unable to request USB serial access.'
-            );
+            return failure(webSerialRequestError(err));
         }
 
         try {
@@ -1016,7 +1027,7 @@
             webSerialStatus = 'idle';
             webSerialMsg =
                 '💡 Cloud backend cannot see local laptop USB directly. ' +
-                'Click "⚡ Direct Browser Connect" above to connect your ESP32-S3 (/dev/ttyACM0) natively via Web Serial in Chrome/Edge!';
+                'Click "⚡ Direct Browser Connect" above to connect your ESP32-S3 via Web Serial in Chrome/Edge!';
             return false;
         }
         if (!visiblePorts.some((p) => p.port === targetPort)) {
@@ -1132,14 +1143,16 @@
                 return;
             }
             webSerialStatus = 'error';
-            webSerialMsg = 'Web Serial API is available in Chromium, Google Chrome, or Microsoft Edge on Fedora Linux.';
+            webSerialMsg = 'Web Serial API is required. Open this page in Chromium, Google Chrome, or Microsoft Edge on Linux, Windows, or macOS.';
             return;
         }
 
         isWebSerialConnecting = true;
         pairingPort = targetPort;
         webSerialStatus = 'idle';
-        webSerialMsg = `Requesting serial port authorization for ${targetPort}...`;
+        webSerialMsg = targetPort
+            ? `Requesting serial port authorization for ${targetPort}...`
+            : 'Requesting serial port authorization (COMx / ttyACM*)...';
         let port: any = null;
 
         try {
@@ -1180,15 +1193,7 @@
             }
 
             try {
-                // Request access to Espressif USB serial (or any serial port if unlisted)
-                port = await withTimeout(
-                    (navigator as any).serial.requestPort({
-                        filters: [
-                            { usbVendorId: 0x303a } // Espressif Systems
-                        ]
-                    }),
-                    30000
-                );
+                port = await requestBrowserSerialPort(30000);
             } catch (authErr: any) {
                 if (!allowBackendFallback) throw authErr;
                 await provisionViaServer(targetPort, serverWifiSsid);
@@ -1256,9 +1261,7 @@
                 await provisionViaServer(targetPort, serverWifiSsid);
             } else {
                 webSerialStatus = 'error';
-                webSerialMsg = err?.name === 'NotFoundError'
-                    ? 'Serial port selection canceled.'
-                    : (err?.message || 'Failed to open serial port.');
+                webSerialMsg = webSerialRequestError(err);
             }
         } finally {
             if (port) {
@@ -1408,7 +1411,7 @@
                 <div class="iot-deploy-card" style="margin-top: 8px; background: rgba(30, 41, 59, 0.45); padding: 14px; border-radius: 10px; border: 1px solid rgba(56, 189, 248, 0.25);">
                     <div class="esp-header-row" style="margin-bottom: 10px;">
                         <div>
-                            <strong style="font-size: 0.88rem; color: #38bdf8;">⚡ One-Click Wi-Fi Sync (via USB /dev/ttyACM0)</strong>
+                            <strong style="font-size: 0.88rem; color: #38bdf8;">⚡ One-Click Wi-Fi Sync (via USB — COMx/ttyACM*)</strong>
                             <p class="port-subdetail-muted" style="font-size: 0.75rem; margin-top: 2px;">
                                 Connect ESP32 via USB. Enter target Wi-Fi credentials &rarr; click <strong>Sync Wi-Fi</strong>. The node automatically switches to your network <strong>without typing or guessing any IP address!</strong>
                             </p>
@@ -1453,7 +1456,7 @@
                                 {#if isDeployingToEsp}
                                     <span class="btn-spinner"></span> Connecting ESP32...
                                 {:else}
-                                    ⚡ Sync Wi-Fi to ESP32 (via USB ACM0)
+                                    ⚡ Sync Wi-Fi to ESP32 (via USB)
                                 {/if}
                             </button>
                         {:else}
@@ -1934,7 +1937,7 @@
                                             <option value={port}>{portLabel(port)}</option>
                                         {/each}
                                         {#if isWebSerialAvailable()}
-                                            <option value="web_serial">⚡ Direct Browser Connect (Web Serial - /dev/ttyACM0)</option>
+                                            <option value="web_serial">⚡ Direct Browser Connect (Web Serial - COMx/ttyACM*)</option>
                                         {/if}
                                         {#if portOptions.length === 0 && !isWebSerialAvailable()}
                                             <option value="">No USB serial ports detected</option>
@@ -1942,7 +1945,7 @@
                                     </select>
                                     {#if portOptions.length === 0 && !isWebSerialAvailable()}
                                         <p class="port-detail-text" style="color: #ea580c; font-size: 0.75rem; margin-top: 4px;">
-                                            ⚠️ Web Serial is blocked or unsupported in this browser (e.g. Brave Shields). Use Chrome/Edge or enable Serial in brave://settings/content/serialPorts to pair /dev/ttyACM0 directly.
+                                            ⚠️ Web Serial is blocked or unsupported in this browser (e.g. Brave Shields). Use Chrome/Edge or enable Serial in brave://settings/content/serialPorts to pair the board directly.
                                         </p>
                                     {/if}
                                 </div>
