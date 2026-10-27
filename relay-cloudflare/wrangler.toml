@@ -15,3 +15,6 @@ new_sqlite_classes = ["RelayRoom"]
 
 [vars]
 RELAY_DEFAULT_DEVICE = "default"
+# Only allow browsers on the same public network (same NAT as the ESP32) to
+# watch. Set to "1" to restore the old public view-key-only behaviour.
+RELAY_ALLOW_REMOTE_VIEW = "0"

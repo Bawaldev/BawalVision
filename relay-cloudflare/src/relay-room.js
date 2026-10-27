@@ -1,6 +1,9 @@
 const MAX_FRAME_BYTES = 2 * 1024 * 1024;
+const MAX_TELEMETRY_BYTES = 8 * 1024;
 const STALE_MS = 5000;
-const MAX_WATCHER_PENDING = 3;
+// Keep enough headroom for a browser that acks on the next animation frame;
+// three in-flight frames was too aggressive at 10 fps.
+const MAX_WATCHER_PENDING = 8;
 
 function isJpegFrame(message) {
     if (!(message instanceof ArrayBuffer)) return false;
@@ -9,18 +12,71 @@ function isJpegFrame(message) {
     return header[0] === 0xff && header[1] === 0xd8;
 }
 
+function normalizeIp(raw) {
+    return String(raw || '').trim().toLowerCase().split('%')[0];
+}
+
+function expandIpv6(ip) {
+    let value = normalizeIp(ip);
+    const v4 = value.match(/(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4) {
+        const parts = v4[1].split('.').map(Number);
+        const hi = (((parts[0] << 8) | parts[1]) >>> 0).toString(16);
+        const lo = (((parts[2] << 8) | parts[3]) >>> 0).toString(16);
+        value = `${value.slice(0, -v4[1].length)}${hi}:${lo}`;
+    }
+    const [head, tail] = value.split('::');
+    const headGroups = head ? head.split(':').filter(Boolean) : [];
+    const tailGroups = tail ? tail.split(':').filter(Boolean) : [];
+    const missing = Math.max(0, 8 - headGroups.length - tailGroups.length);
+    const groups = [
+        ...headGroups,
+        ...(tail !== undefined ? Array(missing).fill('0') : []),
+        ...tailGroups
+    ];
+    return groups.map((group) => (group || '0').replace(/^0+/, '') || '0');
+}
+
+function sameNetwork(a, b) {
+    const left = normalizeIp(a);
+    const right = normalizeIp(b);
+    if (!left || !right) return true;
+    if (left === right) return true;
+    const leftV6 = left.includes(':');
+    const rightV6 = right.includes(':');
+    if (leftV6 !== rightV6) return false;
+    if (!leftV6) return false;
+    // Home ISPs usually delegate a /64; compare the network prefix because
+    // IPv6 privacy addresses change per device/tab.
+    return expandIpv6(left).slice(0, 4).join(':') ===
+        expandIpv6(right).slice(0, 4).join(':');
+}
+
 export class RelayRoom {
     constructor(state, env) {
         this.state = state;
         this.env = env;
         this.latest = null;
         this.latestAt = 0;
+        this.telemetry = null;
+        this.telemetryAt = 0;
         this.frames = 0;
         this.dropped = 0;
         this.fpsStart = 0;
         this.fpsCount = 0;
         this.fps = 0;
+        this.ingestIp = '';
+        this.restrictViews = String(env.RELAY_ALLOW_REMOTE_VIEW || '') !== '1';
         this.startedAt = Date.now();
+    }
+
+    currentIngestIp() {
+        if (this.ingestIp) return this.ingestIp;
+        for (const socket of this.state.getWebSockets('ingest')) {
+            const attachment = socket.deserializeAttachment() || {};
+            if (attachment.ip) return attachment.ip;
+        }
+        return '';
     }
 
     async fetch(request) {
@@ -43,11 +99,41 @@ export class RelayRoom {
             return new Response('not found', { status: 404 });
         }
 
+        const requestIp = String(request.headers.get('x-relay-client-ip') || '').trim();
+
+        if (role === 'watch' && this.restrictViews) {
+            const expected = this.currentIngestIp() ||
+                String(await this.state.storage.get('ingestIp') || '');
+            if (expected && requestIp && !sameNetwork(expected, requestIp)) {
+                return new Response(JSON.stringify({
+                    error: 'watch requires the same network as the camera'
+                }), {
+                    status: 403,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+        }
+
         if (role === 'ingest') {
+            this.ingestIp = requestIp;
+            if (requestIp) {
+                const stored = String(await this.state.storage.get('ingestIp') || '');
+                if (stored !== requestIp) {
+                    await this.state.storage.put('ingestIp', requestIp);
+                }
+            }
             for (const existing of this.state.getWebSockets('ingest')) {
                 try {
                     existing.close(1012, 'replaced');
                 } catch {}
+            }
+            if (this.restrictViews && requestIp) {
+                for (const watcher of this.state.getWebSockets('watch')) {
+                    const attachment = watcher.deserializeAttachment() || {};
+                    if (attachment.ip && !sameNetwork(requestIp, attachment.ip)) {
+                        try { watcher.close(1008, 'network changed'); } catch {}
+                    }
+                }
             }
         }
 
@@ -56,15 +142,21 @@ export class RelayRoom {
         this.state.acceptWebSocket(server, [role]);
 
         if (role === 'watch') {
-            server.serializeAttachment({ pending: 0, ackCapable: false });
+            server.serializeAttachment({ pending: 0, ackCapable: false, ip: requestIp });
             if (this.latest) {
                 try {
                     server.send(this.latest);
                 } catch {}
             }
+            if (this.telemetry) {
+                try {
+                    server.send(this.telemetry);
+                } catch {}
+            }
         }
 
         if (role === 'ingest') {
+            server.serializeAttachment({ ip: requestIp });
             try {
                 server.send(JSON.stringify({
                     type: 'watchers',
@@ -88,6 +180,10 @@ export class RelayRoom {
             return;
         }
         if (!tags.includes('ingest')) return;
+        if (typeof message === 'string') {
+            this.handleTelemetry(message);
+            return;
+        }
         if (!isJpegFrame(message)) return;
 
         const now = Date.now();
@@ -106,8 +202,15 @@ export class RelayRoom {
             this.fpsCount = 0;
         }
 
+        const ingestIp = this.currentIngestIp();
+
         for (const watcher of this.state.getWebSockets('watch')) {
             const state = watcher.deserializeAttachment() || {};
+            if (this.restrictViews && ingestIp && state.ip &&
+                !sameNetwork(ingestIp, state.ip)) {
+                try { watcher.close(1008, 'network changed'); } catch {}
+                continue;
+            }
             if (state.ackCapable && Number(state.pending || 0) >= MAX_WATCHER_PENDING) {
                 this.dropped++;
                 continue;
@@ -122,6 +225,31 @@ export class RelayRoom {
                     watcher.close(1011, 'send failed');
                 } catch {}
             }
+        }
+    }
+
+    handleTelemetry(message) {
+        if (message.length > MAX_TELEMETRY_BYTES) return;
+        let parsed;
+        try {
+            parsed = JSON.parse(message);
+        } catch {
+            return;
+        }
+        if (!parsed || parsed.type !== 'telemetry') return;
+        this.telemetry = message;
+        this.telemetryAt = Date.now();
+        const ingestIp = this.currentIngestIp();
+        for (const watcher of this.state.getWebSockets('watch')) {
+            const state = watcher.deserializeAttachment() || {};
+            if (this.restrictViews && ingestIp && state.ip &&
+                !sameNetwork(ingestIp, state.ip)) {
+                try { watcher.close(1008, 'network changed'); } catch {}
+                continue;
+            }
+            try {
+                watcher.send(message);
+            } catch {}
         }
     }
 
@@ -148,6 +276,9 @@ export class RelayRoom {
             frames: this.frames,
             dropped: this.dropped,
             bytes: this.latest ? this.latest.byteLength : 0,
+            view_restricted: this.restrictViews,
+            telemetry: this.telemetry ? JSON.parse(this.telemetry) : null,
+            telemetry_age_ms: this.telemetryAt ? now - this.telemetryAt : null,
             uptime_s: Math.round((now - this.startedAt) / 1000)
         };
     }

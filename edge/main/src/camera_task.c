@@ -20,8 +20,13 @@
 static const char *TAG = "CAMERA";
 
 #define FIXED_FRAME_CAPACITY INITIAL_BUF_CAPACITY
-// QVGA + quality 24 keeps frames at ~4-6 KB so 10 fps fits the ESP32 Wi-Fi link
+// VGA (640x480) keeps the tray/label detail the dashboard needs. Quality 24
+// keeps a bright frame around 15-30 KB so 10 fps still fits a 2.4 GHz link.
+#define STREAM_FRAME_SIZE FRAMESIZE_VGA
 #define STREAM_JPEG_QUALITY 24
+// In-sensor sharpening for detail; 0 disables it. OV5640 accepts -3..3,
+// OV2640 accepts -2..2, so 2 is safe for the OV56xx series.
+#define STREAM_JPEG_SHARPNESS 2
 
 static frame_slot_t s_slots[2] = {0};
 static volatile int s_ready_idx = 0;
@@ -97,7 +102,7 @@ esp_err_t camera_task_init(void) {
       .ledc_timer = LEDC_TIMER_0,
       .ledc_channel = LEDC_CHANNEL_0,
       .pixel_format = PIXFORMAT_JPEG,
-      .frame_size = FRAMESIZE_QVGA,
+      .frame_size = STREAM_FRAME_SIZE,
       .jpeg_quality = STREAM_JPEG_QUALITY,
       .fb_count = 2,
       .fb_location = CAMERA_FB_IN_PSRAM,
@@ -133,15 +138,15 @@ esp_err_t camera_task_init(void) {
 
     s->set_vflip(s, 1);
     s->set_hmirror(s, 0);
-    s->set_framesize(s, FRAMESIZE_QVGA);
+    s->set_framesize(s, STREAM_FRAME_SIZE);
     s->set_quality(s, STREAM_JPEG_QUALITY);
 
     s->set_whitebal(s, 1);
     s->set_awb_gain(s, 1);
     s->set_wb_mode(s, 0);
     
-    // Disable artificial sharpening so VBR does not balloon on motion
-    s->set_sharpness(s, 0);
+    // Sharpening improves tray/label edges without ballooning VBR frames.
+    s->set_sharpness(s, STREAM_JPEG_SHARPNESS);
 
     s->set_exposure_ctrl(s, 1);
     s->set_aec2(s, 0);

@@ -5,18 +5,22 @@
 #include <string.h>
 #include <time.h>
 
+#include "cJSON.h"
 #include "camera_task.h"
 #include "data.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "nvs.h"
+#include "system_monitor.h"
 #include "wifi.h"
 
 static const char *TAG = "CAM_RELAY";
@@ -40,6 +44,7 @@ static const char *TAG = "CAM_RELAY";
 #define RELAY_TASK_STACK 4096
 #define RELAY_PUMP_MS 2000
 #define RELAY_SEND_TIMEOUT_MS 5000
+#define RELAY_TELEMETRY_MS 3000
 #define RELAY_MIN_VALID_TIME 1700000000LL
 #define RELAY_SNTP_RESTART_MS 30000
 
@@ -55,6 +60,7 @@ static volatile uint32_t s_send_errors;
 static volatile int64_t s_last_frame_ms;
 static volatile uint32_t s_last_sent_id;
 static volatile uint32_t s_last_sent_ms;
+static volatile uint32_t s_last_telemetry_ms;
 static esp_websocket_client_handle_t s_client;
 static camera_frame_buffer_t s_frame;
 static bool s_started;
@@ -170,6 +176,7 @@ static void relay_event_handler(void *arg, esp_event_base_t base,
             s_time_wait_logged = false;
             s_last_sent_id = 0;
             s_last_sent_ms = 0;
+            s_last_telemetry_ms = 0;
             s_time_wait_started_ms = 0;
             s_time_last_log_ms = 0;
             ESP_LOGI(TAG, "Connected to camera relay");
@@ -244,6 +251,51 @@ static bool start_client(const char *uri) {
     return true;
 }
 
+static void send_telemetry_over_relay(void) {
+    if (!s_client || !esp_websocket_client_is_connected(s_client)) return;
+
+    telemetry_data_t meta;
+    init_device_metadata(&meta);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return;
+
+    const float temperature = get_esp32_cpu_temperature();
+    cJSON_AddStringToObject(root, "type", "telemetry");
+    cJSON_AddStringToObject(root, "device_id", meta.device_id);
+    cJSON_AddStringToObject(root, "firmware_version", meta.firmware_version);
+    cJSON_AddNumberToObject(root, "timestamp", (double)time(NULL));
+    cJSON_AddNumberToObject(root, "temperature", (double)temperature);
+    cJSON_AddNumberToObject(root, "cpu_temperature", (double)temperature);
+    cJSON_AddNumberToObject(root, "cpu_load", (double)get_cpu_usage_percentage());
+    cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
+    cJSON_AddNumberToObject(root, "free_heap_internal",
+                            (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(root, "free_heap_psram",
+                            (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cJSON_AddStringToObject(root, "camera_model", camera_get_sensor_name());
+
+    char ip[24] = {0};
+    if (wifi_get_sta_ip(ip, sizeof(ip))) {
+        cJSON_AddStringToObject(root, "ip_address", ip);
+    }
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        cJSON_AddNumberToObject(root, "rssi", ap.rssi);
+    }
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) return;
+
+    int sent = esp_websocket_client_send_text(
+        s_client, json, (int)strlen(json), pdMS_TO_TICKS(1000));
+    if (sent <= 0) {
+        s_send_errors++;
+    }
+    cJSON_free(json);
+}
+
 static void pump_frames(int fps) {
     if (!s_frame.data) return;
     if (fps <= 0 || fps > RELAY_MAX_FPS) fps = RELAY_DEFAULT_FPS;
@@ -257,10 +309,16 @@ static void pump_frames(int fps) {
             break;
         }
 
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        if (s_last_telemetry_ms == 0 ||
+            now_ms - s_last_telemetry_ms >= RELAY_TELEMETRY_MS) {
+            send_telemetry_over_relay();
+            s_last_telemetry_ms = now_ms;
+        }
+
         camera_frame_buffer_t frame = s_frame;
         if (camera_copy_current_frame(&frame) == ESP_OK &&
             frame.header.buffer_len > 0) {
-            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             bool due = (s_last_sent_ms == 0) || (now_ms - s_last_sent_ms >= interval_ms);
             if (frame.header.frame_id != s_last_sent_id && due) {
                 int sent = esp_websocket_client_send_bin(

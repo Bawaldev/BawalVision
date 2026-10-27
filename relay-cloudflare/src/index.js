@@ -36,6 +36,23 @@ function json(payload, status = 200) {
     });
 }
 
+function clientIp(request) {
+    // CF-Connecting-IP is authoritative on Workers. The fallback lets local
+    // `wrangler dev` / tests exercise the same-network check.
+    return String(
+        request.headers.get('CF-Connecting-IP') ||
+        request.headers.get('x-relay-client-ip') ||
+        ''
+    ).trim();
+}
+
+function withClientIp(request, ip) {
+    const headers = new Headers(request.headers);
+    if (ip) headers.set('x-relay-client-ip', ip);
+    else headers.delete('x-relay-client-ip');
+    return new Request(request, { headers });
+}
+
 function upgradeError(status, message) {
     return json({ error: message }, status);
 }
@@ -119,6 +136,6 @@ export default {
         }
 
         const id = env.RELAY.idFromName(device);
-        return env.RELAY.get(id).fetch(request);
+        return env.RELAY.get(id).fetch(withClientIp(request, clientIp(request)));
     }
 };

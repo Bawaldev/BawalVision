@@ -451,6 +451,14 @@ uint16_t get_backend_port(void) {
     return 8080;
 }
 
+bool wifi_get_sta_ip(char *out, size_t max_len) {
+    if (!out || max_len == 0) return false;
+    esp_netif_ip_info_t info;
+    if (!get_sta_ip_info(&info)) return false;
+    snprintf(out, max_len, IPSTR, IP2STR(&info.ip));
+    return true;
+}
+
 static uint32_t s_backend_failure_count = 0;
 
 bool get_backend_ip(char *out_ip, size_t max_len) {
@@ -1326,15 +1334,24 @@ esp_err_t send_telemetry_to_backend(const char *backend_ip, uint16_t port, telem
 void WiFi_Server_Task(void *pvParameters) {
     (void)pvParameters;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        // Keep trying the LAN backend, but do not hammer it every 3 s while the
+        // camera relay is already carrying telemetry to the cloud dashboard.
+        uint32_t delay_ms = 3000;
+        if (camera_relay_is_connected() && s_backend_failure_count >= 3) {
+            delay_ms = 30000;
+        }
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
         if (!(g_wifi_event_group && (xEventGroupGetBits(g_wifi_event_group) & WIFI_CONNECTED_BIT))) continue;
 
         char backend_ip[32];
         if (get_backend_ip(backend_ip, sizeof(backend_ip))) {
             esp_err_t err = send_telemetry_to_backend(backend_ip, get_backend_port(), NULL);
             if (err != ESP_OK) {
-                ESP_LOGW(TAG, "Telemetry to %s:%u failed: %s; refreshing backend discovery (failures: %u)",
-                         backend_ip, get_backend_port(), esp_err_to_name(err), (unsigned)s_backend_failure_count);
+                const uint32_t failures = s_backend_failure_count + 1;
+                if (failures <= 3 || (failures % 10) == 0) {
+                    ESP_LOGW(TAG, "Telemetry to %s:%u failed: %s; refreshing backend discovery (failures: %u)",
+                             backend_ip, get_backend_port(), esp_err_to_name(err), (unsigned)failures);
+                }
                 wifi_notify_backend_failure();
             } else {
                 wifi_notify_backend_success();

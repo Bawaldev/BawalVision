@@ -401,9 +401,15 @@
             if (!wsLiveStream || wsLiveStream.readyState !== WebSocket.OPEN) {
                 connectRelayWebSocket();
             } else {
-                connectLiveWebSocket();
+                connectLiveWebSocket(true);
             }
         }, 6000);
+    }
+
+    function hasLiveSocket(): boolean {
+        return !!wsLiveStream &&
+            (wsLiveStream.readyState === WebSocket.CONNECTING ||
+             wsLiveStream.readyState === WebSocket.OPEN);
     }
 
     function recordLiveFrameFps() {
@@ -435,6 +441,15 @@
 
     function applyLiveFrame(event: MessageEvent, socket: WebSocket) {
         if (wsLiveStream !== socket) return;
+        if (typeof event.data === 'string') {
+            try {
+                const message = JSON.parse(event.data);
+                if (message?.type === 'telemetry' && typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('bawal-camera-telemetry', { detail: message }));
+                }
+            } catch {}
+            return;
+        }
         if (!(event.data instanceof ArrayBuffer) || event.data.byteLength <= 4) return;
         const blob = new Blob([event.data], { type: 'image/jpeg' });
         if (wsLiveFrameUrl) {
@@ -463,12 +478,18 @@
         }, delay);
     }
 
-    function connectRelayWebSocket(attempt = 0) {
+    function connectRelayWebSocket(attempt = 0, force = false) {
         if (!relayConfigured || typeof window === 'undefined') return;
         if (!isActive || !isTabVisible || sourceMode !== 'live') return;
+        if (!force && hasLiveSocket()) return;
         if (relayReconnectTimer !== null) {
             clearTimeout(relayReconnectTimer);
             relayReconnectTimer = null;
+        }
+        if (force && wsLiveStream) {
+            const stale = wsLiveStream;
+            wsLiveStream = null;
+            try { stale.close(); } catch {}
         }
 
         try {
@@ -491,7 +512,7 @@
                 clearRelayFrameWatchdog();
                 if (!isActive || !isTabVisible || sourceMode !== 'live') return;
                 if (!opened && attempt === 0) {
-                    localBackendNotice = '⚠️ Cloud camera relay is unreachable. Check <code>PUBLIC_CAMERA_RELAY_URL</code> and the relay deployment.';
+                    localBackendNotice = '⚠️ Cloud camera relay rejected the connection. Join the camera\'s Wi-Fi (same network) or check <code>PUBLIC_CAMERA_RELAY_URL</code> / <code>RELAY_VIEW_KEY</code>.';
                     connectBackendLiveWebSocket();
                     return;
                 }
@@ -531,11 +552,12 @@
         } catch {}
     }
 
-    function connectLiveWebSocket() {
+    function connectLiveWebSocket(force = false) {
         if (typeof window === 'undefined') return;
+        if (!force && hasLiveSocket()) return;
         disconnectLiveWebSocket();
         if (relayConfigured) {
-            connectRelayWebSocket();
+            connectRelayWebSocket(0, true);
             return;
         }
         connectBackendLiveWebSocket();
@@ -550,7 +572,16 @@
         if (wsLiveStream) {
             const socket = wsLiveStream;
             wsLiveStream = null;
-            try { socket.close(); } catch {}
+            if (socket.readyState === WebSocket.CONNECTING) {
+                // Defer the close until the handshake finishes so the browser
+                // does not log "closed before the connection is established".
+                socket.onopen = () => { try { socket.close(); } catch {} };
+                socket.onerror = () => {};
+                socket.onclose = () => {};
+                socket.onmessage = null;
+            } else {
+                try { socket.close(); } catch {}
+            }
         }
         if (wsLiveFrameUrl) {
             URL.revokeObjectURL(wsLiveFrameUrl);
@@ -2121,7 +2152,7 @@
                             <button type="button" class="switch-mock-btn" onclick={() => { setSourceMode('mock'); togglePlayPause(); }}>
                                 🎬 Switch to Mock Video (Simulation)
                             </button>
-                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); connectLiveWebSocket(); }}>
+                            <button type="button" class="retry-btn" onclick={() => { streamError = false; retryCount = 0; streamEpoch = Date.now(); connectLiveWebSocket(true); }}>
                                 ↻ Reconnect Camera
                             </button>
                         </div>

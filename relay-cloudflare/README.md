@@ -17,6 +17,27 @@ Frames must be binary JPEG starting with `FF D8`. The relay never decodes or
 persists frames. A new watcher receives the latest frame immediately when one is
 in memory.
 
+`/ingest` also accepts small JSON text messages (`{"type":"telemetry", ...}`).
+The latest payload is cached in memory, included in `/health?device=` as
+`telemetry`, and forwarded to watchers as a text message. The firmware sends one
+every 3 seconds so the dashboard keeps showing temperature/CPU/heap data even
+when no local C++ backend is reachable.
+
+## Same-network viewing (default)
+
+By default `/watch` only accepts connections from the same public IP family and
+prefix as the current `/ingest` connection. On a home/office network the ESP32
+and the browser share the router's public address, so the dashboard works
+locally, while a friend on a different Wi-Fi is rejected with HTTP 403. IPv6
+privacy addresses are compared by their `/64` prefix.
+
+Set `RELAY_ALLOW_REMOTE_VIEW=1` in `wrangler.toml` (or as a Worker variable) to
+restore the old public relay behaviour. The optional `RELAY_VIEW_KEY` still
+applies on top of this check, but it is bundled into the browser and is not a
+substitute for network isolation. If the ESP32 is IPv4-only and the browser
+prefers IPv6, use an IPv4-only relay hostname (custom domain with only an `A`
+record); otherwise the two families cannot be compared.
+
 ## Cloudflare setup
 
 1. Create a Cloudflare account.
@@ -122,8 +143,10 @@ dashboard tab is open.
 
 At 15 fps, one device sends about 1.296M WebSocket messages per day. Durable
 Objects bill incoming messages at 20:1, or about 64.8k requests/day against the
-100k/day free limit. A 24/7 object at 128 MB uses about 11,059 GB-s/day against
-the 13,000 GB-s/day free limit. Outgoing WebSocket messages are free.
+100k/day free limit. The 3-second telemetry heartbeat adds only 28.8k messages
+per day (about 1.4k billed requests). A 24/7 object at 128 MB uses about
+11,059 GB-s/day against the 13,000 GB-s/day free limit. Outgoing WebSocket
+messages are free.
 
 Do not raise the camera to 20 fps for 24/7 use; that is about 86.4k DO
 requests/day and leaves little headroom.
@@ -146,6 +169,9 @@ Lower `CAMERA_RELAY_FPS` or use fewer devices.
 
 - **401 on ingest/watch:** the key in the URL does not match the Worker secret.
   Re-run `npx wrangler secret put ...` and update the ESP `.env` or Vercel env.
+- **403 on watch:** the browser is not on the same network as the ESP32. Join
+  the camera's Wi-Fi, or set `RELAY_ALLOW_REMOTE_VIEW=1` for intentional remote
+  viewing.
 - **Health says offline:** no frame has arrived within 5 seconds. Check the ESP
   serial log for `Connected to camera relay` and the Worker with
   `npx wrangler tail`.

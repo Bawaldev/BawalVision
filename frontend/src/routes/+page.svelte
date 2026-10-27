@@ -137,6 +137,7 @@
     let bufferedRecords = $state(0);
     let telemetryHistory = $state<TelemetryPayload[]>([]);
     let latestOptical = $state<SceneOpticalMetrics | undefined>(undefined);
+    let lastRelayTelemetryAt = 0;
 
     let pollingTimer: any = null;
     let lastSlowPoll = 0;
@@ -320,7 +321,11 @@
             realFps = cam.active ? cam.fps : (isCameraStreamingActive ? cameraStreamFps : 0.0);
 
             // 3. Telemetry Ingress from ESP32-S3
-            if (tel) {
+            // The relay carries live telemetry over the same WebSocket as the
+            // video. Do not let a stateless cloud/Lambda response overwrite it.
+            const relayTelemetryFresh = lastRelayTelemetryAt > 0 &&
+                (Date.now() - lastRelayTelemetryAt) < 10000;
+            if (tel && (!relayTelemetryFresh || (tel.is_connected && tel.temperature != null))) {
                 telemetry = {
                     ...tel,
                     device_id: (cam.active && cam.deviceId && (!tel.device_id || tel.device_id === 'DISCONNECTED' || tel.device_id === 'NO_ESP32_NODE'))
@@ -332,9 +337,8 @@
                 if (telemetry.is_connected && telemetry.temperature != null && !telemetryHistory.some(h => h.timestamp === telemetry.timestamp)) {
                     telemetryHistory = [...telemetryHistory.slice(-19), telemetry];
                 }
-                if (tel.scene_optical) {
-                    latestOptical = tel.scene_optical;
-                }
+            } else if (relayTelemetryFresh) {
+                isOnline = true;
             } else {
                 isOnline = cam.active || isCameraStreamingActive;
                 telemetry = {
@@ -345,6 +349,9 @@
                     cpu_load: telemetry.cpu_load ?? null,
                     is_connected: isCameraStreamingActive && telemetry.temperature != null
                 };
+            }
+            if (tel?.scene_optical) {
+                latestOptical = tel.scene_optical;
             }
 
             // 4. Live Real-time Inspections & Dynamic Bounding Boxes
@@ -464,6 +471,7 @@
             window.addEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
             window.addEventListener('bawal-camera-online', handleCameraOnline as EventListener);
             window.addEventListener('bawal-camera-fps', handleCameraFps as EventListener);
+            window.addEventListener('bawal-camera-telemetry', handleRelayTelemetry as EventListener);
             window.addEventListener('bawal-backend-updated', handleBackendUpdated as EventListener);
         }
 
@@ -554,6 +562,37 @@
         }
     }
 
+    function handleRelayTelemetry(e: CustomEvent) {
+        const d = e.detail;
+        if (!d || typeof d !== 'object') return;
+        lastRelayTelemetryAt = Date.now();
+        const nextTimestamp = d.timestamp ? Number(d.timestamp) : Math.floor(Date.now() / 1000);
+        telemetry = {
+            ...telemetry,
+            device_id: d.device_id ? String(d.device_id) : telemetry.device_id,
+            firmware_version: d.firmware_version ? String(d.firmware_version) : telemetry.firmware_version,
+            temperature: d.temperature != null ? Number(d.temperature) : telemetry.temperature,
+            cpu_temperature: d.cpu_temperature != null
+                ? Number(d.cpu_temperature)
+                : (d.temperature != null ? Number(d.temperature) : telemetry.cpu_temperature),
+            cpu_load: d.cpu_load != null ? Number(d.cpu_load) : telemetry.cpu_load,
+            heap_free: d.free_heap != null ? Number(d.free_heap) : telemetry.heap_free,
+            free_heap: d.free_heap != null ? Number(d.free_heap) : telemetry.free_heap,
+            free_heap_internal: d.free_heap_internal != null ? Number(d.free_heap_internal) : telemetry.free_heap_internal,
+            free_heap_psram: d.free_heap_psram != null ? Number(d.free_heap_psram) : telemetry.free_heap_psram,
+            rssi: d.rssi != null ? Number(d.rssi) : telemetry.rssi,
+            camera_model: d.camera_model ? String(d.camera_model) : telemetry.camera_model,
+            timestamp: nextTimestamp,
+            is_connected: true
+        };
+        isOnline = true;
+        hasCamera = true;
+        isCameraStreamingActive = true;
+        if (telemetry.temperature != null && !telemetryHistory.some(h => h.timestamp === telemetry.timestamp)) {
+            telemetryHistory = [...telemetryHistory.slice(-19), { ...telemetry }];
+        }
+    }
+
     function handleBackendUpdated(e: Event) {
         const url = (e as CustomEvent<string>).detail;
         if (url) {
@@ -579,6 +618,7 @@
             window.removeEventListener('bawal-live-detections', handleLiveDetectionsEvent as EventListener);
             window.removeEventListener('bawal-camera-online', handleCameraOnline as EventListener);
             window.removeEventListener('bawal-camera-fps', handleCameraFps as EventListener);
+            window.removeEventListener('bawal-camera-telemetry', handleRelayTelemetry as EventListener);
             window.removeEventListener('bawal-backend-updated', handleBackendUpdated as EventListener);
         }
     });

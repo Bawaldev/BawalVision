@@ -114,6 +114,11 @@ esp_err_t get_backend_url(const char *endpoint, char *out_url, size_t max_len);
 uint16_t get_backend_port(void);
 
 /**
+ * @brief Copy the current STA IPv4 address as a dotted string.
+ */
+bool wifi_get_sta_ip(char *out, size_t max_len);
+
+/**
  * @brief Restart SNTP with the next fallback server after a time-sync timeout.
  */
 void wifi_sntp_restart(void);
