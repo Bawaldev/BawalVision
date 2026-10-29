@@ -50,7 +50,7 @@ RUN /bin/bash -c "source /opt/intel/oneapi/setvars.sh && \
 # ------------------------------------------------------------------------------
 # Stage 2: Minimal Production Runtime
 # ------------------------------------------------------------------------------
-FROM ubuntu:24.04 AS runner
+FROM ubuntu:25.10 AS runner
 
 ENV DEBIAN_FRONTEND=noninteractive
 
