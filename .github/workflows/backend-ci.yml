@@ -62,7 +62,7 @@ jobs:
             tar
 
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
           key: ccache-backend-${{ runner.os }}-${{ github.sha }}
@@ -71,7 +71,7 @@ jobs:
 
       - name: Cache ONNX Runtime v1.19.2 C++
         id: cache-ort
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /opt/onnxruntime
           key: onnxruntime-linux-x64-1.19.2
