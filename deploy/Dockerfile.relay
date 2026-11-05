@@ -6,7 +6,7 @@
 #
 # The relay only needs the Node runtime, package.json, and server.js.
 # ==============================================================================
-FROM node:22-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 ENV NODE_ENV=production
