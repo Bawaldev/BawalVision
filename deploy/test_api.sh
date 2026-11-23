@@ -17,6 +17,16 @@ CACHE_DIR="${CACHE_DIR:-.cache_trash}"
 DEVICE_ID="ESP32-S3-CURL-TEST"
 FRAME_FILE="${CACHE_DIR}/crow_test_frame.jpg"
 
+# The backend enforces BAWAL_DEVICE_TOKEN / BAWAL_ADMIN_TOKEN when .env sets
+# them, so send the same values instead of relying on the loopback fallback.
+AUTH_HEADERS=()
+if [[ -n "${BAWAL_DEVICE_TOKEN:-}" ]]; then
+  AUTH_HEADERS+=(-H "X-Device-Token: ${BAWAL_DEVICE_TOKEN}")
+fi
+if [[ -n "${BAWAL_ADMIN_TOKEN:-}" ]]; then
+  AUTH_HEADERS+=(-H "X-Admin-Token: ${BAWAL_ADMIN_TOKEN}")
+fi
+
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
@@ -29,7 +39,7 @@ curl_json() {
   local method="$1"
   local url="$2"
   shift 2
-  curl -sS --max-time 15 -X "${method}" "${url}" "$@"
+  curl -sS --max-time 15 -X "${method}" "${url}" "${AUTH_HEADERS[@]}" "$@"
 }
 
 assert_contains() {
@@ -174,6 +184,7 @@ REPORT_HEADERS="${CACHE_DIR}/crow_report_headers.txt"
 REPORT_BODY="${CACHE_DIR}/crow_report.pdf"
 REPORT_CODE=$(curl -sS --max-time 30 -D "${REPORT_HEADERS}" -o "${REPORT_BODY}" \
   -w '%{http_code}' -X POST "${BASE_URL}/reports/pdf" \
+  "${AUTH_HEADERS[@]}" \
   -H "Content-Type: application/json" \
   -d '{"markdown":"# BawalVision API Test\n\n| Metric | Value |\n| --- | --- |\n| Verdict | ACCEPTED |\n| PDF Engine | C++ |\n","title":"BawalVision API Test","filename":"api-test.pdf"}')
 if [[ "${REPORT_CODE}" != "200" ]] || ! head -c 4 "${REPORT_BODY}" | grep -q '%PDF'; then

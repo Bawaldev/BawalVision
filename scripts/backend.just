@@ -114,6 +114,9 @@ run-backend:
         CROW_PORT={{ BACKEND_PORT }} \
         DB_HOST={{ env_var_or_default("DB_HOST", "localhost") }} \
         DB_PORT={{ POSTGRES_PORT }} \
+        DB_USER={{ env_var_or_default("DB_USER", env_var_or_default("POSTGRES_USER", "postgres")) }} \
+        DB_PASSWORD={{ env_var_or_default("DB_PASSWORD", env_var_or_default("POSTGRES_PASSWORD", "postgres")) }} \
+        DB_NAME={{ env_var_or_default("DB_NAME", env_var_or_default("POSTGRES_DB", "bawal_vision")) }} \
         ./services/build/bin/bawal_backend
 
 # Start PostgreSQL and the C++ backend in Docker (native Docker Engine only;
