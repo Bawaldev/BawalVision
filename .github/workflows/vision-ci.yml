@@ -84,9 +84,11 @@ jobs:
       - name: Install ONNX Runtime C++ Library
         if: steps.cache-ort.outputs.cache-hit != 'true'
         run: |
-          sudo mkdir -p /opt/onnxruntime
-          sudo curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | \
-            sudo tar -xz -C /opt/onnxruntime --strip-components=1
+          sudo mkdir -p /opt/onnxruntime/include /opt/onnxruntime/lib
+          curl -fsSL https://globalcdn.nuget.org/packages/microsoft.ml.onnxruntime.1.19.2.nupkg -o /tmp/ort.nupkg
+          unzip -q /tmp/ort.nupkg -d /tmp/ort
+          sudo cp /tmp/ort/build/native/include/*.h /opt/onnxruntime/include/
+          sudo cp /tmp/ort/runtimes/linux-x64/native/*.so* /opt/onnxruntime/lib/
           sudo cp -r /opt/onnxruntime/include/* /usr/local/include/
           sudo cp -r /opt/onnxruntime/lib/* /usr/local/lib/
           sudo ldconfig

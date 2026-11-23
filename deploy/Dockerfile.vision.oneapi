@@ -25,10 +25,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install ONNX Runtime with oneDNN Execution Provider
+# Install ONNX Runtime with oneDNN Execution Provider (Microsoft NuGet package)
 WORKDIR /opt/onnxruntime
-RUN curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | \
-    tar -xz --strip-components=1 && \
+RUN curl -fsSL https://globalcdn.nuget.org/packages/microsoft.ml.onnxruntime.1.19.2.nupkg -o /tmp/ort.nupkg && \
+    unzip -q /tmp/ort.nupkg -d /tmp/ort && \
+    mkdir -p include lib && \
+    cp /tmp/ort/build/native/include/*.h include/ && \
+    cp /tmp/ort/runtimes/linux-x64/native/*.so* lib/ && \
+    rm -rf /tmp/ort /tmp/ort.nupkg && \
     cp -r include/* /usr/local/include/ && \
     cp -r lib/* /usr/local/lib/ && \
     ldconfig

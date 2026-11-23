@@ -32,10 +32,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     tar \
     unzip \
     dos2unix && \
-    # 2. ONNX Runtime v1.19.2
-    mkdir -p /opt/onnxruntime && \
-    curl -fsSL https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz | \
-        tar -xz -C /opt/onnxruntime --strip-components=1 && \
+    # 2. ONNX Runtime v1.19.2 (Microsoft NuGet package; GitHub asset 404s)
+    mkdir -p /opt/onnxruntime/include /opt/onnxruntime/lib && \
+    curl -fsSL https://globalcdn.nuget.org/packages/microsoft.ml.onnxruntime.1.19.2.nupkg -o /tmp/ort.nupkg && \
+    unzip -q /tmp/ort.nupkg -d /tmp/ort && \
+    cp /tmp/ort/build/native/include/*.h /opt/onnxruntime/include/ && \
+    cp /tmp/ort/runtimes/linux-x64/native/*.so* /opt/onnxruntime/lib/ && \
+    rm -rf /tmp/ort /tmp/ort.nupkg && \
     cp -r /opt/onnxruntime/include/* /usr/local/include/ && \
     cp -r /opt/onnxruntime/lib/* /usr/local/lib/ && \
     # 3. NCNN 20240410

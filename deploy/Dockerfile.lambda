@@ -37,11 +37,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ONNX Runtime is not packaged by Ubuntu; use the official CPU release.
+# ONNX Runtime is not packaged by Ubuntu; install the official CPU build from
+# the Microsoft NuGet package (the GitHub release asset 404s).
 ARG ONNXRUNTIME_VERSION=1.19.2
-RUN mkdir -p /opt/onnxruntime && \
-    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz" \
-        | tar -xz -C /opt/onnxruntime --strip-components=1
+RUN mkdir -p /opt/onnxruntime/include /opt/onnxruntime/lib && \
+    curl -fsSL "https://globalcdn.nuget.org/packages/microsoft.ml.onnxruntime.${ONNXRUNTIME_VERSION}.nupkg" -o /tmp/ort.nupkg && \
+    unzip -q /tmp/ort.nupkg -d /tmp/ort && \
+    cp /tmp/ort/build/native/include/*.h /opt/onnxruntime/include/ && \
+    cp /tmp/ort/runtimes/linux-x64/native/*.so* /opt/onnxruntime/lib/ && \
+    rm -rf /tmp/ort /tmp/ort.nupkg
 
 # AWS Lambda C++ Runtime Interface Client (provides AWS::aws-lambda-runtime).
 ARG AWS_LAMBDA_CPP_VERSION=v1.0.1
