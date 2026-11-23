@@ -95,9 +95,11 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
   Use `relay-cloudflare/` (free, primary) or `relay/` (Oracle VM fallback):
   ESP32 → WSS `/ingest`, browser → WSS `/watch`.
   Env: `CAMERA_RELAY_URL`/`RELAY_INGEST_KEY` (ESP32), `PUBLIC_CAMERA_RELAY_URL`
-  (browser), optional `PUBLIC_CAMERA_RELAY_VIEW_KEY`; keep
-  `CAMERA_RELAY_DEVICE` = `PUBLIC_CAMERA_RELAY_DEVICE`. Local HTTP dashboards can
-  still read the ESP directly when `PUBLIC_CAMERA_RELAY_URL` is unset.
+  (browser); keep `CAMERA_RELAY_DEVICE` = `PUBLIC_CAMERA_RELAY_DEVICE`. Use a
+  Worker secret `RELAY_VIEW_KEY` (not `PUBLIC_CAMERA_RELAY_VIEW_KEY`, which is
+  bundled and public) and open `/live?view_key=...` once; the browser stores it
+  in `localStorage`. Local HTTP dashboards can still read the ESP directly when
+  `PUBLIC_CAMERA_RELAY_URL` is unset.
 - **Cloudflare relay carries video plus telemetry.** The ESP32 sends JPEG
   frames and a small `{"type":"telemetry"}` text message every 3 s over
   `/ingest`; the DO caches the latest telemetry and forwards it to `/watch`, so
@@ -105,10 +107,12 @@ Commits follow Conventional Commits with scope: `feat(vision):`, `fix(backend):`
   also captures the relayed frame every 3 s and POSTs `/api/v1/camera/frame`; on
   Vercel that proxies to Lambda `/api/v1/lambda/inspect`, and
   `bawal-live-detections` updates the overlay. 15 fps / 3 s fits the free DO +
-  Lambda tiers; 20 fps / 1.5 s does not. `/watch` is restricted to the same
-  public network as `/ingest` by default (`RELAY_ALLOW_REMOTE_VIEW=1` disables
-  it). Cloudflare Access must stay off or the ESP32/browser WebSocket handshakes
-  fail. The DO health endpoint is per device: `/health?device=default`.
+  Lambda tiers; 20 fps / 1.5 s does not. A configured `RELAY_VIEW_KEY` gates
+  `/watch` and the `/health` telemetry field; without it, `/watch` falls back to
+  a best-effort same-public-IP check (unreliable behind CGNAT/mobile hotspots;
+  `RELAY_ALLOW_REMOTE_VIEW=1` disables it). Cloudflare Access must stay off or
+  the ESP32/browser WebSocket handshakes fail. The DO health endpoint is per
+  device: `/health?device=default`.
 - **Docker Desktop for Linux cannot serve LAN TCP payloads through published ports**
   (TCP connect succeeds, HTTP requests never reach the container). The compose stack
   publishes the C++ backend on `0.0.0.0:8080`; on affected Docker Desktop setups use

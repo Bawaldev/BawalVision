@@ -23,20 +23,37 @@ The latest payload is cached in memory, included in `/health?device=` as
 every 3 seconds so the dashboard keeps showing temperature/CPU/heap data even
 when no local C++ backend is reachable.
 
-## Same-network viewing (default)
+## Access control (view key recommended)
 
-By default `/watch` only accepts connections from the same public IP family and
-prefix as the current `/ingest` connection. On a home/office network the ESP32
-and the browser share the router's public address, so the dashboard works
-locally, while a friend on a different Wi-Fi is rejected with HTTP 403. IPv6
-privacy addresses are compared by their `/64` prefix.
+The public-IP check is only a best-effort fallback: mobile hotspots and carrier
+NAT (CGNAT) can give the ESP32 and the browser different public IPs, so the
+dashboard may be rejected even when both are on the same Wi-Fi. Use a view key
+for reliable access control.
 
-Set `RELAY_ALLOW_REMOTE_VIEW=1` in `wrangler.toml` (or as a Worker variable) to
-restore the old public relay behaviour. The optional `RELAY_VIEW_KEY` still
-applies on top of this check, but it is bundled into the browser and is not a
-substitute for network isolation. If the ESP32 is IPv4-only and the browser
-prefers IPv6, use an IPv4-only relay hostname (custom domain with only an `A`
-record); otherwise the two families cannot be compared.
+Set a secret and deploy again:
+
+```bash
+cd relay-cloudflare
+npx wrangler secret put RELAY_VIEW_KEY   # enter a long random value
+npx wrangler deploy
+```
+
+Open the dashboard with the key once:
+
+```text
+https://bawal-vision.vercel.app/live?view_key=<the-same-value>
+```
+
+The dashboard stores it in `localStorage` (`bawal_relay_view_key`) and reuses it
+for the `/watch` WebSocket and the `/health` telemetry request. The key is **not**
+put in the public frontend bundle, so a friend on another Wi-Fi cannot view
+without it. To replace a stored key, append `?view_key=<new-value>`; to clear it,
+run `localStorage.removeItem('bawal_relay_view_key')` in the browser console.
+
+If `RELAY_VIEW_KEY` is unset, `/watch` falls back to the same-public-IP check:
+same IPv4 address, or the same IPv6 `/64`. Set `RELAY_ALLOW_REMOTE_VIEW=1` in
+`wrangler.toml` to disable even that fallback. `PUBLIC_CAMERA_RELAY_VIEW_KEY` is
+deprecated and ignored because anything bundled into the frontend is public.
 
 ## Cloudflare setup
 
@@ -89,9 +106,10 @@ npx wrangler secret put RELAY_VIEW_KEY
 npx wrangler deploy
 ```
 
-`RELAY_VIEW_KEY` is optional. If it is set, configure the browser with
-`PUBLIC_CAMERA_RELAY_VIEW_KEY`; it is visible in the browser bundle and only
-deters casual viewers. The ingest key is the real secret.
+`RELAY_VIEW_KEY` is optional but recommended. If it is set, open the dashboard
+once with `?view_key=<value>` and the browser stores it locally. Do **not** use
+`PUBLIC_CAMERA_RELAY_VIEW_KEY`: public env vars are bundled into the frontend and
+cannot be secret. The ingest key is the real secret.
 
 `RELAY_DEFAULT_DEVICE` is a plain variable in `wrangler.toml` and defaults to
 `default`.
@@ -123,10 +141,12 @@ Set these in Vercel and redeploy:
 ```dotenv
 PUBLIC_CAMERA_RELAY_URL=https://bawal-camera-relay.<subdomain>.workers.dev
 PUBLIC_CAMERA_RELAY_DEVICE=default
-# PUBLIC_CAMERA_RELAY_VIEW_KEY=<only if RELAY_VIEW_KEY is set>
 ```
 
-The dashboard converts the base URL to `wss://.../watch`.
+The dashboard converts the base URL to `wss://.../watch`. When the Worker has a
+`RELAY_VIEW_KEY`, open the dashboard once as
+`https://<dashboard>/live?view_key=<value>`; the key is stored in `localStorage`
+and reused.
 
 ## Object detection
 
@@ -168,10 +188,12 @@ Lower `CAMERA_RELAY_FPS` or use fewer devices.
 ## Troubleshooting
 
 - **401 on ingest/watch:** the key in the URL does not match the Worker secret.
-  Re-run `npx wrangler secret put ...` and update the ESP `.env` or Vercel env.
-- **403 on watch:** the browser is not on the same network as the ESP32. Join
-  the camera's Wi-Fi, or set `RELAY_ALLOW_REMOTE_VIEW=1` for intentional remote
-  viewing.
+  Re-run `npx wrangler secret put ...`; for the browser, reopen the dashboard
+  with `?view_key=<new-value>`.
+- **403 on watch:** no view key is configured and the browser is not on the same
+  public IP as the ESP32 (common behind CGNAT/mobile hotspots). Set
+  `RELAY_VIEW_KEY` and use `?view_key=...`, or set
+  `RELAY_ALLOW_REMOTE_VIEW=1` for intentional remote viewing.
 - **Health says offline:** no frame has arrived within 5 seconds. Check the ESP
   serial log for `Connected to camera relay` and the Worker with
   `npx wrangler tail`.

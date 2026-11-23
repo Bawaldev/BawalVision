@@ -46,10 +46,18 @@ function clientIp(request) {
     ).trim();
 }
 
-function withClientIp(request, ip) {
+function viewKeyAuthorized(request, env) {
+    const expected = env.RELAY_VIEW_KEY || '';
+    if (!expected) return false;
+    return tokenMatches(expected, new URL(request.url).searchParams.get('key'));
+}
+
+function withRelayContext(request, ip, viewAuthorized) {
     const headers = new Headers(request.headers);
     if (ip) headers.set('x-relay-client-ip', ip);
     else headers.delete('x-relay-client-ip');
+    if (viewAuthorized) headers.set('x-relay-view-authorized', '1');
+    else headers.delete('x-relay-view-authorized');
     return new Request(request, { headers });
 }
 
@@ -99,9 +107,10 @@ export default {
             }
             try {
                 const id = env.RELAY.idFromName(device);
-                const statsRequest = withClientIp(
+                const statsRequest = withRelayContext(
                     new Request('https://relay.internal/stats'),
-                    clientIp(request)
+                    clientIp(request),
+                    viewKeyAuthorized(request, env)
                 );
                 const statsRes = await env.RELAY.get(id).fetch(statsRequest);
                 const stats = await statsRes.json();
@@ -131,15 +140,23 @@ export default {
             return upgradeError(400, 'invalid device id');
         }
 
+        let viewAuthorized = false;
         if (url.pathname === '/ingest') {
             if (!tokenMatches(env.RELAY_INGEST_KEY || '', url.searchParams.get('key'))) {
                 return upgradeError(401, 'invalid ingest key');
             }
-        } else if (!tokenMatches(env.RELAY_VIEW_KEY || '', url.searchParams.get('key'))) {
-            return upgradeError(401, 'invalid view key');
+        } else if (env.RELAY_VIEW_KEY) {
+            // A configured view key is the reliable access gate. Same-public-IP
+            // is only a best-effort fallback and fails behind carrier NAT.
+            viewAuthorized = viewKeyAuthorized(request, env);
+            if (!viewAuthorized) {
+                return upgradeError(401, 'invalid view key');
+            }
         }
 
         const id = env.RELAY.idFromName(device);
-        return env.RELAY.get(id).fetch(withClientIp(request, clientIp(request)));
+        return env.RELAY.get(id).fetch(
+            withRelayContext(request, clientIp(request), viewAuthorized)
+        );
     }
 };

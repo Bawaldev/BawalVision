@@ -74,9 +74,10 @@ function nextTelemetry(ws, timeoutMs = 8000) {
 }
 
 const watchUrl = `${wsBase}/watch?device=${encodeURIComponent(device)}${viewKey ? `&key=${encodeURIComponent(viewKey)}` : ''}`;
+const outsiderWatchUrl = `${wsBase}/watch?device=${encodeURIComponent(device)}`;
 const ingestUrl = `${wsBase}/ingest?device=${encodeURIComponent(device)}&key=${encodeURIComponent(key)}`;
 const badKeyUrl = `${wsBase}/ingest?device=${encodeURIComponent(device)}&key=wrong-key`;
-const healthUrl = `${httpBase}/health?device=${encodeURIComponent(device)}`;
+const healthUrl = `${httpBase}/health?device=${encodeURIComponent(device)}${viewKey ? `&key=${encodeURIComponent(viewKey)}` : ''}`;
 
 let watch;
 let ingest;
@@ -106,7 +107,9 @@ try {
     assert.deepEqual(await telemetryReceived, telemetry);
 
     if (localDev) {
-        const outsider = await connect(watchUrl, 403, otherIp);
+        // With a view key configured the wrong key is rejected first (401);
+        // otherwise the same-network check rejects the other IP (403).
+        const outsider = await connect(outsiderWatchUrl, viewKey ? 401 : 403, otherIp);
         assert.equal(outsider, null);
     }
 

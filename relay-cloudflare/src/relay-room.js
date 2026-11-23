@@ -83,13 +83,15 @@ export class RelayRoom {
         const url = new URL(request.url);
         if (url.pathname.endsWith('/stats')) {
             const requestIp = String(request.headers.get('x-relay-client-ip') || '').trim();
-            let includeTelemetry = true;
-            if (this.restrictViews) {
+            const viewAuthorized = request.headers.get('x-relay-view-authorized') === '1';
+            let includeTelemetry = viewAuthorized;
+            if (!includeTelemetry && this.restrictViews) {
                 const expected = this.currentIngestIp() ||
                     String(await this.state.storage.get('ingestIp') || '');
-                if (expected && requestIp) {
-                    includeTelemetry = sameNetwork(expected, requestIp);
-                }
+                includeTelemetry = !expected || !requestIp ||
+                    sameNetwork(expected, requestIp);
+            } else if (!includeTelemetry) {
+                includeTelemetry = true;
             }
             return Response.json(this.stats(includeTelemetry));
         }
@@ -109,8 +111,9 @@ export class RelayRoom {
         }
 
         const requestIp = String(request.headers.get('x-relay-client-ip') || '').trim();
+        const viewAuthorized = request.headers.get('x-relay-view-authorized') === '1';
 
-        if (role === 'watch' && this.restrictViews) {
+        if (role === 'watch' && this.restrictViews && !viewAuthorized) {
             const expected = this.currentIngestIp() ||
                 String(await this.state.storage.get('ingestIp') || '');
             if (expected && requestIp && !sameNetwork(expected, requestIp)) {
@@ -139,7 +142,8 @@ export class RelayRoom {
             if (this.restrictViews && requestIp) {
                 for (const watcher of this.state.getWebSockets('watch')) {
                     const attachment = watcher.deserializeAttachment() || {};
-                    if (attachment.ip && !sameNetwork(requestIp, attachment.ip)) {
+                    if (!attachment.authorized && attachment.ip &&
+                        !sameNetwork(requestIp, attachment.ip)) {
                         try { watcher.close(1008, 'network changed'); } catch {}
                     }
                 }
@@ -151,7 +155,12 @@ export class RelayRoom {
         this.state.acceptWebSocket(server, [role]);
 
         if (role === 'watch') {
-            server.serializeAttachment({ pending: 0, ackCapable: false, ip: requestIp });
+            server.serializeAttachment({
+                pending: 0,
+                ackCapable: false,
+                ip: requestIp,
+                authorized: viewAuthorized
+            });
             if (this.latest) {
                 try {
                     server.send(this.latest);
@@ -215,8 +224,8 @@ export class RelayRoom {
 
         for (const watcher of this.state.getWebSockets('watch')) {
             const state = watcher.deserializeAttachment() || {};
-            if (this.restrictViews && ingestIp && state.ip &&
-                !sameNetwork(ingestIp, state.ip)) {
+            if (this.restrictViews && !state.authorized && ingestIp &&
+                state.ip && !sameNetwork(ingestIp, state.ip)) {
                 try { watcher.close(1008, 'network changed'); } catch {}
                 continue;
             }
@@ -251,8 +260,8 @@ export class RelayRoom {
         const ingestIp = this.currentIngestIp();
         for (const watcher of this.state.getWebSockets('watch')) {
             const state = watcher.deserializeAttachment() || {};
-            if (this.restrictViews && ingestIp && state.ip &&
-                !sameNetwork(ingestIp, state.ip)) {
+            if (this.restrictViews && !state.authorized && ingestIp &&
+                state.ip && !sameNetwork(ingestIp, state.ip)) {
                 try { watcher.close(1008, 'network changed'); } catch {}
                 continue;
             }
