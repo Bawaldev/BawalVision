@@ -1,6 +1,7 @@
 #include "bawal/backend/app.hpp"
 
 #include "bawal/backend/byte_range.hpp"
+#include "bawal/cpu_budget.hpp"
 #include "bawal/backend/database.hpp"
 #include "bawal/backend/net_utils.hpp"
 #include "bawal/backend/serial_provisioner.hpp"
@@ -569,7 +570,9 @@ void BackendApp::configure() {
 
     m_app.bindaddr(m_config.bind_address)
         .port(m_config.port)
-        .multithreaded()
+        // Crow defaults to one event loop per host core; in a cgroup-capped
+        // container that is N times more runnable threads than vCPUs.
+        .concurrency(static_cast<unsigned>(bawal::cpuBudget()))
         .tcp_nodelay()
         .websocket_tcp_nodelay();
 }
