@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <string_view>
 
 #include <curl/curl.h>
@@ -150,10 +151,11 @@ void MjpegIngress::publishFrame(const uint8_t* data, size_t len) {
         data[len - 2] != 0xFF || data[len - 1] != 0xD9) return;
     const uint32_t id = m_frame_id.fetch_add(1, std::memory_order_relaxed) + 1;
     m_last_frame_ns.store(steadyNowNs(), std::memory_order_relaxed);
-    const std::vector<uint8_t> jpeg(data, data + len);
     // Count every complete JPEG that reached the backend. The SHM ring only
     // carries the latest frames; a busy vision worker never queues old work.
-    m_state.updateFrame("ESP32_CAMERA", id, jpeg, 640, 480);
+    m_state.updateFrame("ESP32_CAMERA", id,
+                        std::make_shared<const std::vector<uint8_t>>(data, data + len),
+                        640, 480);
     (void)m_producer.writeFrame(id, data, len, 640, 480);
 }
 

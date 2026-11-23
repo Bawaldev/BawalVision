@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -177,7 +178,7 @@ public:
 
     void updateFrame(std::string_view device_id,
                      uint32_t frame_id,
-                     const std::vector<uint8_t>& jpeg,
+                     std::shared_ptr<const std::vector<uint8_t>> jpeg,
                      uint16_t width = 0,
                      uint16_t height = 0);
 
@@ -221,8 +222,9 @@ public:
     }
 
     void updateAnnotatedJpeg(std::vector<uint8_t> jpeg) {
+        auto frame = std::make_shared<const std::vector<uint8_t>>(std::move(jpeg));
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_latest_annotated_jpeg = std::move(jpeg);
+        m_latest_annotated_jpeg = std::move(frame);
     }
 
     [[nodiscard]] CameraView camera() const;
@@ -247,8 +249,10 @@ private:
     mutable std::mutex m_mutex;
 
     std::string m_device_id;
-    std::vector<uint8_t> m_latest_jpeg;
-    std::vector<uint8_t> m_latest_annotated_jpeg;
+    // Frames are shared, not copied: writers swap the pointer, readers copy
+    // outside the lock so ingest never blocks on a ~100 KB memcpy.
+    std::shared_ptr<const std::vector<uint8_t>> m_latest_jpeg;
+    std::shared_ptr<const std::vector<uint8_t>> m_latest_annotated_jpeg;
     uint16_t m_width{0};
     uint16_t m_height{0};
 

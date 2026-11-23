@@ -1,4 +1,5 @@
 #include "bawal/vision/image/batch_inspector.hpp"
+#include "bawal/cpu_budget.hpp"
 #include "bawal/report/markdown_pdf.hpp"
 #include "bawal/report/report_builder.hpp"
 #include "bawal/vision/simd_food_evaluator.hpp"
@@ -145,14 +146,17 @@ BatchReportSummary BatchInspector::processZipBuffer(
     summary.inspection_type = std::string(kBatchInspectionType);
     summary.generated_at = utcTimestampNow();
     summary.model_arch = std::string(classifier.getModelArchitecture());
+    // Clamp OpenMP to the cgroup quota: a container reports every host core.
+    const int budget = bawal::cpuBudget();
+    int threads = std::min(omp_get_max_threads(), budget);
     if (const char* omp_env = std::getenv("OMP_NUM_THREADS"); omp_env != nullptr && *omp_env != '\0') {
         const int requested_threads = std::atoi(omp_env);
         if (requested_threads > 0) {
-            omp_set_num_threads(requested_threads);
+            threads = std::min(requested_threads, budget);
         }
     }
-    const int max_threads = omp_get_max_threads();
-    summary.omp_threads = max_threads > 0 ? max_threads : 1;
+    omp_set_num_threads(threads);
+    summary.omp_threads = threads;
 #if defined(__ARM_NEON) || defined(__aarch64__)
     const char* simd_str = "ARM NEON";
 #elif defined(__AVX2__)

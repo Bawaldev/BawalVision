@@ -30,9 +30,9 @@ uint64_t BackendState::nowNs() noexcept {
 }
 
 void BackendState::updateFrame(std::string_view device_id, uint32_t frame_id,
-                               const std::vector<uint8_t>& jpeg,
+                               std::shared_ptr<const std::vector<uint8_t>> jpeg,
                                uint16_t width, uint16_t height) {
-    if (!isValidJpeg(jpeg)) {
+    if (!jpeg || !isValidJpeg(*jpeg)) {
         return;
     }
 
@@ -67,7 +67,7 @@ void BackendState::updateFrame(std::string_view device_id, uint32_t frame_id,
         m_height = height;
     }
 
-    m_latest_jpeg = jpeg;
+    m_latest_jpeg = std::move(jpeg);
 
     if (isMockDeviceId(device_id)) {
         return;
@@ -240,8 +240,8 @@ void BackendState::disconnectDevice(std::string_view device_id) {
 
 void BackendState::clearDetectionState() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_latest_jpeg.clear();
-    m_latest_annotated_jpeg.clear();
+    m_latest_jpeg.reset();
+    m_latest_annotated_jpeg.reset();
     m_inspection_sequence = 0;
     m_inspection_timestamp_ns = 0;
     m_inspection_frame_id = 0;
@@ -363,19 +363,27 @@ InspectionView BackendState::inspection() const {
 }
 
 std::vector<uint8_t> BackendState::latestJpeg(std::string_view device_id) const {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (!device_id.empty() && device_id != "*" && device_id != m_device_id) {
-        return {};
+    std::shared_ptr<const std::vector<uint8_t>> frame;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!device_id.empty() && device_id != "*" && device_id != m_device_id) {
+            return {};
+        }
+        frame = m_latest_jpeg;
     }
-    return m_latest_jpeg;
+    return frame ? *frame : std::vector<uint8_t>{};
 }
 
 std::vector<uint8_t> BackendState::latestAnnotatedJpeg(std::string_view device_id) const {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (!device_id.empty() && device_id != "*" && device_id != m_device_id) {
-        return {};
+    std::shared_ptr<const std::vector<uint8_t>> frame;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!device_id.empty() && device_id != "*" && device_id != m_device_id) {
+            return {};
+        }
+        frame = m_latest_annotated_jpeg;
     }
-    return m_latest_annotated_jpeg;
+    return frame ? *frame : std::vector<uint8_t>{};
 }
 
 } // namespace bawal::backend

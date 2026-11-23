@@ -31,6 +31,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -638,7 +639,10 @@ void BackendApp::registerCameraRoutes() {
 
             // Publish metadata before the SHM notification so the vision
             // thread observes the correct device id on the very first frame.
-            m_state.updateFrame(parsed->device_id, parsed->frame_id, parsed->image,
+            // The frame buffer is shared with the state cache, not copied.
+            auto frame_bytes =
+                std::make_shared<const std::vector<uint8_t>>(std::move(parsed->image));
+            m_state.updateFrame(parsed->device_id, parsed->frame_id, frame_bytes,
                                 parsed->width, parsed->height);
 
             // Real ESP32-S3 nodes attach temperature, CPU load, and camera
@@ -665,7 +669,7 @@ void BackendApp::registerCameraRoutes() {
                 m_state.updateTelemetry(sample);
             }
 
-            if (!m_producer.writeFrame(parsed->frame_id, parsed->image,
+            if (!m_producer.writeFrame(parsed->frame_id, *frame_bytes,
                                        parsed->width, parsed->height, 0)) {
                 return jsonError(413, "Frame exceeds the POSIX SHM slot capacity");
             }
@@ -676,7 +680,7 @@ void BackendApp::registerCameraRoutes() {
             body["telemetry_struct"] = "TelemetryIngressPayload";
             body["device_id"] = parsed->device_id;
             body["frame_id"] = parsed->frame_id;
-            body["bytes"] = static_cast<uint64_t>(parsed->image.size());
+            body["bytes"] = static_cast<uint64_t>(frame_bytes->size());
             body["shm_write_sequence"] = m_producer.writeSequence();
             body["message"] = "Frame written to POSIX SHM for the in-process vision thread";
             return crow::response(body);
@@ -840,8 +844,10 @@ void BackendApp::registerCameraRoutes() {
                 static_cast<uint8_t>(data[0]) == 0xFF && static_cast<uint8_t>(data[1]) == 0xD8) {
                 // Ingress from camera node via WebSocket: ingest frame directly into SHM pipeline
                 const uint32_t id = m_state.camera().frame_id + 1;
-                const std::vector<uint8_t> jpeg(data.begin(), data.end());
-                m_state.updateFrame("ESP32_CAMERA", id, jpeg, 640, 480);
+                m_state.updateFrame(
+                    "ESP32_CAMERA", id,
+                    std::make_shared<const std::vector<uint8_t>>(data.begin(), data.end()),
+                    640, 480);
                 (void)m_producer.writeFrame(id, reinterpret_cast<const uint8_t*>(data.data()), data.size(), 640, 480);
 
                 // Broadcast frame to all viewing browser sessions

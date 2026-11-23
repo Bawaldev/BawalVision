@@ -1,5 +1,6 @@
 #include "bawal/vision/pipeline.hpp"
 
+#include "bawal/cpu_budget.hpp"
 #include "bawal/vision/simd_food_evaluator.hpp"
 #include "bawal/ml/ncnn_generator.hpp"
 #include <chrono>
@@ -72,12 +73,14 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         std::cerr << "[Pipeline] Warning: Camera calibration initialization failed.\n";
     }
 
-    const int hw = static_cast<int>(std::thread::hardware_concurrency());
-    int num_threads = std::clamp(hw > 0 ? hw / 2 : 2, 2, 4);
+    // hardware_concurrency() sees every host core inside a container, so size
+    // the pool from the cgroup quota; half the cores (2..4) when it is large.
+    const int budget = bawal::cpuBudget();
+    int num_threads = std::clamp(budget > 4 ? budget / 2 : budget, 1, 4);
     if (const char* env_threads = std::getenv("BAWAL_INFERENCE_THREADS")) {
         const int requested = std::atoi(env_threads);
         if (requested > 0) {
-            num_threads = std::clamp(requested, 1, hw > 0 ? hw : 1);
+            num_threads = std::clamp(requested, 1, budget);
         }
     }
 
