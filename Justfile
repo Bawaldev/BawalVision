@@ -10,9 +10,9 @@ import 'scripts/ml.just'
 import 'scripts/relay.just'
 
 # Generate or refresh cryptographically secure secrets in .env
-[group('Setup')]
-setup:
-    python3 scripts/generate_env.py
+# [group('Setup')]
+# setup:
+#     python3 scripts/generate_env.py
 
 [private]
 default:

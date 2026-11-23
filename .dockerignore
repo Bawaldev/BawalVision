@@ -97,3 +97,7 @@ deploy/test_api.sh
 *.swo
 .DS_Store
 Thumbs.db
+
+!ml/AI1/model/
+!ml/AI1/model/yolov8s_int8/
+!ml/AI1/model/yolov8s_int8/ai1_vision_int8.onnx

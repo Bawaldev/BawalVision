@@ -168,8 +168,10 @@ def main() -> None:
                 name="ai1_yolov8s_det",
                 exist_ok=True,
                 verbose=True,
-                optimizer="AdamW",
-                lr0=0.001,
+                # "auto": ultralytics picks from step count (epochs x dataset / nbs).
+                # >10k steps -> MuSGD (SGD+muon, lr0=0.01); else AdamW (lr0=0.002*5/(4+nc)).
+                optimizer="auto",
+                lr0=0.001,  # ignored by "auto"; keep only if you switch back to a fixed optimizer
                 lrf=0.01,
                 cos_lr=True,
                 warmup_epochs=3.0,
