@@ -5,6 +5,12 @@ POSTGRES_PORT := env_var_or_default("DB_PORT", env_var_or_default("POSTGRES_PORT
 API_URL := "http://localhost:" + BACKEND_PORT + "/api/v1"
 DEV_ID := env_var_or_default("DEVICE_ID", "")
 
+# The backend reads DB_*; .env only defines POSTGRES_*. Exported (not inlined in
+# the recipe) so `just` never echoes the database password.
+export DB_USER := env_var_or_default("DB_USER", env_var_or_default("POSTGRES_USER", "postgres"))
+export DB_PASSWORD := env_var_or_default("DB_PASSWORD", env_var_or_default("POSTGRES_PASSWORD", "postgres"))
+export DB_NAME := env_var_or_default("DB_NAME", env_var_or_default("POSTGRES_DB", "bawal_vision"))
+
 # --- VISION (C++20 & OpenCV) ---
 
 # Install native C++ and OpenCV apt dependencies
@@ -114,9 +120,6 @@ run-backend:
         CROW_PORT={{ BACKEND_PORT }} \
         DB_HOST={{ env_var_or_default("DB_HOST", "localhost") }} \
         DB_PORT={{ POSTGRES_PORT }} \
-        DB_USER={{ env_var_or_default("DB_USER", env_var_or_default("POSTGRES_USER", "postgres")) }} \
-        DB_PASSWORD={{ env_var_or_default("DB_PASSWORD", env_var_or_default("POSTGRES_PASSWORD", "postgres")) }} \
-        DB_NAME={{ env_var_or_default("DB_NAME", env_var_or_default("POSTGRES_DB", "bawal_vision")) }} \
         ./services/build/bin/bawal_backend
 
 # Start PostgreSQL and the C++ backend in Docker (native Docker Engine only;
