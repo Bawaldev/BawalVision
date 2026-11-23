@@ -28,6 +28,10 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@sveltejs/kit"
         update-types: ["version-update:semver-major"]
+      # Vite is pinned in package.json; major/minor bumps break the SvelteKit
+      # build and API contract, so only security patches are picked up.
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   # Maintain Python ML dependencies
   - package-ecosystem: "pip"

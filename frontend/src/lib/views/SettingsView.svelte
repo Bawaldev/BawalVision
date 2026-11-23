@@ -7,6 +7,7 @@
     interface Props {
         config: SystemConfig;
         isOnline?: boolean;
+        isActive?: boolean;
         parallelCores?: number;
         onDeviceConnectionChange?: (connected: boolean, deviceId: string) => void;
         onSaveConfig: (updated: SystemConfig) => void;
@@ -15,6 +16,7 @@
     let {
         config,
         isOnline = false,
+        isActive = true,
         parallelCores = 0,
         onDeviceConnectionChange,
         onSaveConfig
@@ -519,21 +521,34 @@
         } catch {
             // localStorage unavailable; keep the live default.
         }
-        refreshHardwareStatus();
-        void handleScanWifi();
-        // One passive serial probe on load so the port card shows the board's
-        // real SSID without pressing Probe (also warms the backend ACK cache).
-        const probeTimer = setTimeout(() => {
-            if (detectedUsbPorts.length > 0) void handleProbeUsbPort();
-        }, 1800);
+    });
+
+    let hardwareWarmed = false;
+
+    $effect(() => {
+        if (!isActive) return;
+
+        let probeTimer: ReturnType<typeof setTimeout> | null = null;
+        if (!hardwareWarmed) {
+            hardwareWarmed = true;
+            refreshHardwareStatus();
+            void handleScanWifi();
+            // One passive serial probe when the tab is first opened so the port
+            // card shows the board's real SSID without pressing Probe.
+            probeTimer = setTimeout(() => {
+                if (detectedUsbPorts.length > 0) void handleProbeUsbPort();
+            }, 1800);
+        }
+
         const timer = setInterval(() => {
             if (!isWebSerialConnecting) {
                 refreshHardwareStatus();
             }
         }, 1500);
+
         return () => {
             clearInterval(timer);
-            clearTimeout(probeTimer);
+            if (probeTimer) clearTimeout(probeTimer);
         };
     });
 

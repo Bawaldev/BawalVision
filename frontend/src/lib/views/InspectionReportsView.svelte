@@ -1,5 +1,11 @@
 <script lang="ts">
     import InspectionAuditPanel from '../components/InspectionAuditPanel.svelte';
+
+    interface Props {
+        isActive?: boolean;
+    }
+
+    let { isActive = true }: Props = $props();
 </script>
 
 <div class="reports-view">
@@ -18,7 +24,7 @@
         </div>
     </header>
 
-    <InspectionAuditPanel />
+    <InspectionAuditPanel {isActive} />
 </div>
 
 <style>

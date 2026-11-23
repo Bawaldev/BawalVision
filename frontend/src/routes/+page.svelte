@@ -22,6 +22,7 @@
     } from '$lib/api';
     import { detectLocalBackend, getConfiguredApiBase } from '$lib/backendConfig';
     import { env as publicEnv } from '$env/dynamic/public';
+    import { getRelayViewKey } from '$lib/relayConfig';
 
     import type {
         FoodDetection,
@@ -261,7 +262,9 @@
         const base = (publicEnv.PUBLIC_CAMERA_RELAY_URL || '').trim();
         if (!base) return null;
         const device = (publicEnv.PUBLIC_CAMERA_RELAY_DEVICE || 'default').trim() || 'default';
-        const url = `${base.replace(/\/+$/, '')}/health?device=${encodeURIComponent(device)}`;
+        const viewKey = getRelayViewKey();
+        const url = `${base.replace(/\/+$/, '')}/health?device=${encodeURIComponent(device)}` +
+            (viewKey ? `&key=${encodeURIComponent(viewKey)}` : '');
         try {
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) return null;
@@ -574,6 +577,10 @@
         // Controlled, non-blocking polling loop (prevents request stacking on cloud endpoints)
         async function runPollingLoop() {
             if (isDestroyed) return;
+            if (typeof document !== 'undefined' && document.hidden) {
+                pollingTimer = setTimeout(runPollingLoop, 3000);
+                return;
+            }
             await pollBackendData();
             if (!isDestroyed) {
                 pollingTimer = setTimeout(runPollingLoop, 1500);
@@ -906,7 +913,7 @@
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >
-                <InspectionReportsView />
+                <InspectionReportsView isActive={activeTab === 'Inspection Reports'} />
             </div>
 
             <div 
@@ -916,7 +923,7 @@
                 class:slide-forward={transitionDirection === 'forward'}
                 class:slide-backward={transitionDirection === 'backward'}
             >
-                <BatchInspectionView />
+                <BatchInspectionView isActive={activeTab === 'Batch Inspection'} />
             </div>
 
             <div 
@@ -955,6 +962,7 @@
             >
                 <TelemetryResultLogView
                     currentTelemetry={telemetry}
+                    isActive={activeTab === 'Telemetry & Hardware'}
                     history={telemetryHistory}
                 />
             </div>
@@ -978,6 +986,7 @@
             >
                 <SettingsView
                     config={systemConfig}
+                    isActive={activeTab === 'Settings'}
                     {isOnline}
                     {parallelCores}
                     onDeviceConnectionChange={(connected, devId) => {

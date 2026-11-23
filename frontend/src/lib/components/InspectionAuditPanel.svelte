@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
     import { fetchInspectionAuditRecords } from '../api';
     import { resolveApiBase, resolveApiOrigin, detectLocalBackend, isLocalBackendConfigured } from '../backendConfig';
     import type { InspectionAuditRecord } from '../types';
@@ -11,6 +10,12 @@
         generateInspectionLatex,
         generateInspectionMarkdown
     } from '../utils/reportGenerator';
+
+    interface Props {
+        isActive?: boolean;
+    }
+
+    let { isActive = true }: Props = $props();
 
     let records = $state<InspectionAuditRecord[]>([]);
     let isLoading = $state(true);
@@ -79,8 +84,9 @@
         }
     }
 
-    onMount(() => {
-        loadRecords();
+    $effect(() => {
+        if (!isActive) return;
+        void loadRecords();
         const timer = setInterval(loadRecords, 3000);
         return () => clearInterval(timer);
     });

@@ -1,7 +1,13 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
+    import { onDestroy } from 'svelte';
     import { resolveApiBase, resolveApiOrigin, detectLocalBackend, setConfiguredApiBase } from '../backendConfig';
     import { downloadMarkdown, downloadMarkdownPdf } from '../utils/reportGenerator';
+
+    interface Props {
+        isActive?: boolean;
+    }
+
+    let { isActive = true }: Props = $props();
 
     const MAX_ZIP_BYTES = 15 * 1024 * 1024;
 
@@ -31,8 +37,16 @@
         }
     }
 
-    onMount(() => {
-        checkAndDetectBackend();
+    let wasActive = false;
+
+    $effect(() => {
+        if (isActive && !wasActive) {
+            wasActive = true;
+            void checkAndDetectBackend();
+        }
+        if (!isActive) {
+            wasActive = false;
+        }
     });
 
     function getBatchEndpoint(): string {

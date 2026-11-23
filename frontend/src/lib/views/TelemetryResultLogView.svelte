@@ -1,14 +1,14 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
     import { fetchRecords } from '../api';
     import type { InspectionRecord, TelemetryPayload } from '../types';
 
     interface Props {
         currentTelemetry?: TelemetryPayload;
         history?: TelemetryPayload[];
+        isActive?: boolean;
     }
 
-    let { currentTelemetry, history = [] }: Props = $props();
+    let { currentTelemetry, history = [], isActive = true }: Props = $props();
 
     // Records Database State
     let records = $state<InspectionRecord[]>([]);
@@ -88,8 +88,14 @@
         }
     }
 
-    onMount(() => {
-        loadRecords(true);
+    let hasLoaded = false;
+
+    $effect(() => {
+        if (!isActive) return;
+        if (!hasLoaded) {
+            hasLoaded = true;
+            void loadRecords(true);
+        }
         const pollTimer = setInterval(() => {
             loadRecords(false);
         }, 2000);

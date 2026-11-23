@@ -2,6 +2,7 @@
     import { onMount, onDestroy, tick, untrack } from 'svelte';
     import { env as publicEnv } from '$env/dynamic/public';
     import { resolveApiBase, setConfiguredApiBase } from '../backendConfig';
+    import { getRelayViewKey, promptRelayViewKey } from '../relayConfig';
     import type { FoodDetection, SceneOpticalMetrics } from '../types';
 
     interface Props {
@@ -361,10 +362,10 @@
     let lastRelayFpsEmit = 0;
     let relayFpsStaleTimer: ReturnType<typeof setTimeout> | null = null;
     let relayFrameWatchdog: ReturnType<typeof setTimeout> | null = null;
+    let relayKeyPrompted = false;
 
     const relayBaseUrl = (publicEnv.PUBLIC_CAMERA_RELAY_URL || '').trim();
     const relayDeviceId = (publicEnv.PUBLIC_CAMERA_RELAY_DEVICE || 'default').trim() || 'default';
-    const relayViewKey = (publicEnv.PUBLIC_CAMERA_RELAY_VIEW_KEY || '').trim();
     const relayConfigured = relayBaseUrl.length > 0;
 
     function relayWatchUrl(): string {
@@ -376,7 +377,8 @@
             base = `${base.replace(/\/+$/, '')}/watch`;
         }
         const query = new URLSearchParams({ device: relayDeviceId });
-        if (relayViewKey) query.set('key', relayViewKey);
+        const viewKey = getRelayViewKey();
+        if (viewKey) query.set('key', viewKey);
         return `${base}${base.includes('?') ? '&' : '?'}${query.toString()}`;
     }
 
@@ -512,7 +514,19 @@
                 clearRelayFrameWatchdog();
                 if (!isActive || !isTabVisible || sourceMode !== 'live') return;
                 if (!opened && attempt === 0) {
-                    localBackendNotice = '⚠️ Cloud camera relay rejected the connection. Join the camera\'s Wi-Fi (same network) or check <code>PUBLIC_CAMERA_RELAY_URL</code> / <code>RELAY_VIEW_KEY</code>.';
+                    let viewKey = getRelayViewKey();
+                    if (!viewKey && !relayKeyPrompted) {
+                        relayKeyPrompted = true;
+                        viewKey = promptRelayViewKey();
+                        if (viewKey) {
+                            localBackendNotice = '✓ Relay view key saved. Reconnecting…';
+                            setTimeout(() => connectRelayWebSocket(0, true), 150);
+                            return;
+                        }
+                    }
+                    localBackendNotice = viewKey
+                        ? '⚠️ Relay rejected the view key. Append <code>?view_key=...</code> to the dashboard URL to replace the stored key.'
+                        : '⚠️ Cloud camera relay rejected the connection. Join the camera\'s Wi-Fi (same network), or set <code>RELAY_VIEW_KEY</code> and append <code>?view_key=...</code>.';
                     connectBackendLiveWebSocket();
                     return;
                 }
@@ -975,8 +989,8 @@
         }, 200);
         livePushIntervalMs = intervalMs;
         livePushTimer = setInterval(() => {
-            if ((sourceMode === 'live' && isLiveFeedActive && !streamError && isTabVisible) ||
-                (sourceMode === 'device_cam' && isDeviceCamActive && isTabVisible)) {
+            if ((sourceMode === 'live' && isActive && isLiveFeedActive && !streamError && isTabVisible) ||
+                (sourceMode === 'device_cam' && isActive && isDeviceCamActive && isTabVisible)) {
                 captureAndPushLiveFrame();
             }
         }, intervalMs);
@@ -1015,7 +1029,7 @@
     }
 
     function scheduleLiveRefresh() {
-        if (streamUrl || discoveredStreamUrl || sourceMode !== 'live' || !isTabVisible) return;
+        if (!isActive || streamUrl || discoveredStreamUrl || sourceMode !== 'live' || !isTabVisible) return;
         if (liveRefreshTimer !== null) clearTimeout(liveRefreshTimer);
         // The Crow route sends one snapshot and closes the response. Re-arm
         // only after that image loaded so slow responses never pile up.
@@ -1036,6 +1050,7 @@
     onMount(() => {
         window.addEventListener('bawal-source-mode', handleGlobalSourceMode);
         const refreshDiscoveredStream = async () => {
+            if (!isActive) return;
             syncApiBase();
             const candidates = [
                 apiEndpoint('/api/v1/devices/status')
@@ -1438,7 +1453,7 @@
         stopLivePushing();
         // Run continuous frame capture into AI vision pipeline (optimized for network/serverless ingress)
         pushInterval = setInterval(() => {
-            if (sourceMode === 'mock') {
+            if (isActive && isTabVisible && sourceMode === 'mock') {
                 captureAndPushFrame();
             }
         }, 250);
