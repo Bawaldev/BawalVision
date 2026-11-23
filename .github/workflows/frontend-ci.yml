@@ -40,7 +40,7 @@ jobs:
           node-version: '22'
 
       - name: Cache npm Downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('frontend/package.json') }}
