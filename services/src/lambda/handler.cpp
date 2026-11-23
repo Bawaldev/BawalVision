@@ -50,9 +50,9 @@ bool constantTimeEquals(std::string_view lhs, std::string_view rhs) {
     return difference == 0;
 }
 
-std::string noInspectionPayload() {
-    return R"({"frame_id":0,"status":"NO_DATA","device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_LAMBDA","processing_time_ms":0,"surface_temp":0,"message":"No live inspection snapshot available","is_live":false,"detections":[]})";
-}
+// std::string noInspectionPayload() {
+//     return R"({"frame_id":0,"status":"NO_DATA","device_id":"LAMBDA_SERVERLESS","engine_pipeline":"ONNX_INT8_LAMBDA","processing_time_ms":0,"surface_temp":0,"message":"No live inspection snapshot available","is_live":false,"detections":[]})";
+// }
 
 LambdaInspectionResponse errorResponse(int status_code, std::string message,
                                        Clock::time_point start) {

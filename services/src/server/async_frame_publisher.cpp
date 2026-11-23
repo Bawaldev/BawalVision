@@ -58,6 +58,12 @@ bool AsyncAnnotatedFramePublisher::publish(std::string device_id,
         }
         image.copyTo(owned);
     } catch (const cv::Exception&) {
+        if (!owned.empty()) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_spare_image.empty()) {
+                m_spare_image = std::move(owned);
+            }
+        }
         return false;
     }
 

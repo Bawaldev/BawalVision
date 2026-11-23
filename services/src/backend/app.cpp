@@ -566,10 +566,23 @@ void BackendApp::configure() {
 
     registerRoutes();
 
-    m_app.bindaddr(m_config.bind_address).port(m_config.port).multithreaded();
+    m_app.bindaddr(m_config.bind_address)
+        .port(m_config.port)
+        .multithreaded()
+        .tcp_nodelay()
+        .websocket_tcp_nodelay();
 }
 
 void BackendApp::registerRoutes() {
+    // TEMPORARY benchmark endpoint: no auth, no database, no JSON parsing.
+    // Hardcoded body only. Remove before merging.
+    CROW_ROUTE(m_app, "/api/v1/bench-raw")([]() {
+        crow::response res(200,
+                           "{\"status\":\"ok\",\"bench\":\"raw\",\"payload\":\"bawalvision\"}");
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
     CROW_ROUTE(m_app, "/api/v1/health")([this]() {
         crow::json::wvalue body;
         body["status"] = "ok";

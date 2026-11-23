@@ -12,6 +12,7 @@
 #include <vector>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+#include <thread> 
 
 #include "bawal/vision/calibration.hpp"
 #include "bawal/vision/camera_receiver.hpp"
@@ -193,6 +194,7 @@ private:
     DarkDetector m_dark_detector;
     cv::Ptr<cv::CLAHE> m_clahe;
 
+    
     // Runtime configuration is parsed once in initialize() instead of being
     // lazily initialised through function-local statics (which race when the
     // pipeline is driven from more than one thread).
@@ -203,12 +205,23 @@ private:
     bool m_enable_dewarp{false};
     bool m_enable_sr{true};
 
-    // Super-resolution rate limiter (touched only by runInference()).
+    // Serialises every stateful operation on the pipeline (classifier, enhancer,
+    // dewarper, receiver, dark detector, overlay buffer, video source).
+    // recursive_mutex is required because processStream()/execute() hold it
+    // and internally call renderOverlay(), which also locks it.
+    mutable std::recursive_mutex m_pipeline_mutex;
+
+    // Super-resolution rate limiter. m_last_sr_time must only be read/written
+    // while holding m_sr_mutex (see initialize() and runInference()).
     std::mutex m_sr_mutex;
     std::chrono::steady_clock::time_point m_last_sr_time{};
 
-    // Reused HUD destination buffer. Avoids allocating a fresh full-frame Mat
-    // in renderOverlay() for every streamed frame.
+    // The video source is not thread-safe. Track its owning thread and assert
+    // (in debug builds) that every open/grab call comes from that thread.
+    std::thread::id m_video_source_owner{};
+    bool m_video_source_owner_set = false;
+
+    // Reused HUD destination buffer. Access is protected by m_pipeline_mutex.
     cv::Mat m_overlay_buffer;
 
     int m_width{640};

@@ -37,6 +37,35 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
     endif()
 endif()
 
+
+if(ENABLE_ASAN AND ENABLE_TSAN)
+    message(FATAL_ERROR "ASan dan TSan tidak bisa dipakai bersamaan")
+endif()
+
+set(SAN_FLAGS "")
+set(SAN_LINK_FLAGS "")
+
+if(ENABLE_ASAN)
+    set(SAN_FLAGS "${SAN_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+    set(SAN_LINK_FLAGS "${SAN_LINK_FLAGS} -fsanitize=address")
+    message(STATUS "Sanitizer: AddressSanitizer + LeakSanitizer ON")
+endif()
+
+if(ENABLE_TSAN)
+    set(SAN_FLAGS "${SAN_FLAGS} -fsanitize=thread -fno-omit-frame-pointer")
+    set(SAN_LINK_FLAGS "${SAN_LINK_FLAGS} -fsanitize=thread")
+    message(STATUS "Sanitizer: ThreadSanitizer ON")
+endif()
+
+if(ENABLE_UBSAN)
+    set(SAN_FLAGS "${SAN_FLAGS} -fsanitize=undefined -fno-omit-frame-pointer")
+    set(SAN_LINK_FLAGS "${SAN_LINK_FLAGS} -fsanitize=undefined")
+    message(STATUS "Sanitizer: UndefinedBehaviorSanitizer ON")
+endif()
+
+# Terapkan ke semua target setelah baris ini
+add_compile_options(${SAN_FLAGS})
+add_link_options(${SAN_LINK_FLAGS})
 # Optional Intel oneDNN (DNNL) execution provider support for Intel Xeon acceleration
 option(ENABLE_ONEDNN "Enable oneDNN (DNNL) execution provider in ONNX Runtime" OFF)
 if(ENABLE_ONEDNN OR CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")

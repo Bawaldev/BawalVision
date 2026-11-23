@@ -33,6 +33,8 @@ bool envFlagValue(const char* name, bool default_value) noexcept {
 namespace bawal::vision {
 
 bool InspectionPipeline::initialize(std::string_view model_path, int target_width, int target_height) {
+    std::lock_guard<std::recursive_mutex> pipeline_lock(m_pipeline_mutex);
+
     m_width = target_width;
     m_height = target_height;
 
@@ -46,7 +48,6 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         m_conf_threshold.store(0.35f, std::memory_order_relaxed);
     }
 
-    // Parse all runtime flags exactly once, before any worker thread starts.
     m_enable_enhance = true;
     if (const char* ee = std::getenv("ENABLE_ENHANCE")) {
         const std::string_view v(ee);
@@ -60,15 +61,26 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         const std::string_view v(es);
         m_enable_sr = !(v == "0" || v == "false");
     }
-    m_last_sr_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+
+    {
+        std::lock_guard<std::mutex> sr_lock(m_sr_mutex);
+        m_last_sr_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    }
 
     auto calib = CameraCalibrationParams::createDefaultOV5640(cv::Size(m_width, m_height));
     if (!m_dewarper.initCameraCalibration(calib.camera_matrix, calib.dist_coeffs, calib.image_size)) {
         std::cerr << "[Pipeline] Warning: Camera calibration initialization failed.\n";
     }
 
-    // Thread count for YOLO: Limit background inference threads (2-4) to prevent CPU starvation on stream thread
-    const int num_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()) / 2, 2, 4);
+    const int hw = static_cast<int>(std::thread::hardware_concurrency());
+    int num_threads = std::clamp(hw > 0 ? hw / 2 : 2, 2, 4);
+    if (const char* env_threads = std::getenv("BAWAL_INFERENCE_THREADS")) {
+        const int requested = std::atoi(env_threads);
+        if (requested > 0) {
+            num_threads = std::clamp(requested, 1, hw > 0 ? hw : 1);
+        }
+    }
+
     if (!model_path.empty()) {
         if (m_classifier.init(model_path, num_threads)) {
             std::cout << "[Pipeline] Model loaded: " << model_path
@@ -83,31 +95,19 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         (void)m_classifier.init("", num_threads);
     }
 
-    // Persistent CLAHE engine. Clip limit 1.5 is a reasonable default
-    // for food imagery — high enough to bring out texture, low enough
-    // to avoid amplifying sensor noise.
     m_clahe = cv::createCLAHE(1.5, cv::Size(8, 8));
     m_video_source.clahe = m_clahe;
     m_video_source.target_width = m_width;
     m_video_source.target_height = m_height;
 
-    // Serverless deployments disable SR to keep cold starts and per-frame cost
-    // predictable. Skipping enhancer initialization also avoids probing or
-    // generating NCNN weights that will never be used.
     if (!m_enable_sr) {
         std::cout << "[Pipeline] Super-resolution disabled (ENABLE_SR=0)\n";
         return true;
     }
 
-    // Locate weight directory across Docker container and any local working directory
     const std::vector<std::filesystem::path> weight_candidates = {
-        "/app/weights",
-        "weights",
-        "../weights",
-        "../../weights",
-        "../../../weights",
-        "services/weights",
-        "../services/weights"
+        "/app/weights", "weights", "../weights", "../../weights",
+        "../../../weights", "services/weights", "../services/weights"
     };
     std::filesystem::path weight_dir = "weights";
     for (const auto& cand : weight_candidates) {
@@ -120,11 +120,8 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         }
     }
 
-    // Model selection: use the genuine pre-trained realesr-animevideov3-x2 (2x) NCNN model
-    // by default for fast, artifact-free CPU super-resolution. Override via REALESRGAN_MODEL.
     std::string model_name = "realesr-animevideov3-x2";
     int model_scale = 2;
-
     const char* env_model = std::getenv("REALESRGAN_MODEL");
     if (env_model && std::string(env_model).length() > 0) {
         model_name = env_model;
@@ -147,14 +144,6 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
         (void)bawal::ml::NCNNGenerator::generate(gen_cfg);
     }
 
-    // RealESRGAN engine configuration.
-    //
-    // CPU-only settings because the target deployment environment is
-    // AWS Lambda, which has no GPU:
-    //   - use_gpu = 0          : disable Vulkan entirely
-    //   - use_fp16 = 0         : FP16 gives no speedup on CPU
-    //   - tile_size = 128      : keeps working set inside L2 cache
-    //   - prepadding = 8       : small overlap, still hides tile seams
     RealESRGANConfig enhancer_cfg;
     enhancer_cfg.model_dir = weight_dir;
     enhancer_cfg.model_name = model_name;
@@ -173,25 +162,44 @@ bool InspectionPipeline::initialize(std::string_view model_path, int target_widt
 }
 
 bool InspectionPipeline::openVideoSource(SourceMode mode, const std::string& uri) {
+    if (!m_video_source_owner_set) {
+        m_video_source_owner = std::this_thread::get_id();
+        m_video_source_owner_set = true;
+    } else {
+        assert(m_video_source_owner == std::this_thread::get_id() &&
+               "InspectionPipeline::openVideoSource called from wrong thread");
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_pipeline_mutex);
     m_video_source.target_width = m_width;
     m_video_source.target_height = m_height;
     m_video_source.clahe = m_clahe;
     return m_video_source.open(mode, uri);
 }
 
+
 bool InspectionPipeline::processNextSourceFrame(const std::vector<DetectionResult>& active_detections,
                                                 InspectionOutput& out_inspection,
                                                 bool is_mock_video) {
-    cv::Mat frame;
-    if (!m_video_source.grabNextFrame(frame) || frame.empty()) {
-        return false;
+    if (m_video_source_owner_set) {
+        assert(m_video_source_owner == std::this_thread::get_id() &&
+               "InspectionPipeline::processNextSourceFrame called from wrong thread");
     }
-    if (m_video_source.didRewind()) {
-        resetTracker();
+
+    cv::Mat frame;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_pipeline_mutex);
+        if (!m_video_source.grabNextFrame(frame) || frame.empty()) {
+            return false;
+        }
+        if (m_video_source.didRewind()) {
+            resetTracker();
+        }
     }
     const bool mock_flag = is_mock_video || (m_video_source.mode == SourceMode::LOCAL_MP4);
     return processStream(frame, active_detections, out_inspection, mock_flag);
 }
+
 
 bool InspectionPipeline::execute(const uint8_t* raw_bytes, size_t len, InspectionOutput& out_inspection) {
     if (!raw_bytes || len == 0) {
@@ -199,13 +207,17 @@ bool InspectionPipeline::execute(const uint8_t* raw_bytes, size_t len, Inspectio
     }
 
     DecodedFrame decoded;
-    if (!m_receiver.decodeMJPEG(raw_bytes, len, decoded) || decoded.image.empty()) {
-        return false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_pipeline_mutex);
+        if (!m_receiver.decodeMJPEG(raw_bytes, len, decoded) || decoded.image.empty()) {
+            return false;
+        }
     }
 
     out_inspection.frame_id = decoded.frame_id;
     return execute(decoded.image, out_inspection);
 }
+
 
 bool InspectionPipeline::execute(const std::vector<uint8_t>& raw_frame_bytes, InspectionOutput& out_inspection) {
     return execute(raw_frame_bytes.data(), raw_frame_bytes.size(), out_inspection);
@@ -253,9 +265,8 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
                                        InspectionOutput& out_inspection,
                                        bool is_mock_video) {
     if (frame.empty()) return false;
+    std::lock_guard<std::recursive_mutex> pipeline_lock(m_pipeline_mutex);
 
-    // Ensure incoming frame dimensions from Mock Video (MP4) or Camera Stream
-    // are strictly normalized to (m_width, m_height) before entering Dewarp map and ISP
     cv::Mat normalized_frame;
     if (frame.cols != m_width || frame.rows != m_height) {
         cv::resize(frame, normalized_frame, cv::Size(m_width, m_height), 0, 0, cv::INTER_AREA);
@@ -266,10 +277,8 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     const int64_t t_start = cv::getTickCount();
     out_inspection.is_valid = false;
 
-    // Orientation is locked in the sensor driver (set_vflip/set_hmirror).
     cv::Mat oriented = normalized_frame;
 
-    // Lens dewarping: Only active if explicitly requested (ENABLE_DEWARP=1) or perspective map is calibrated
     cv::Mat dewarped;
     if (!is_mock_video && (m_enable_dewarp || m_dewarper.hasPerspective())) {
         if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented;
@@ -278,15 +287,11 @@ bool InspectionPipeline::processStream(const cv::Mat& frame,
     }
     out_inspection.raw_image = dewarped;
 
-    // OpenCV mean-based low-light & underexposure evaluation
     out_inspection.dark_status = m_dark_detector.detect(dewarped);
 
-    // Stream thread: no ISP/SR/CLAHE. AI worker owns all heavy lifting.
     out_inspection.dewarped_image = dewarped;
     out_inspection.detections = active_detections;
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
-    // Publish the partial latency before rendering so the HUD bar can display
-    // the current frame's processing time.
     out_inspection.processing_time_ms =
         ((cv::getTickCount() - t_start) * 1000.0) / cv::getTickFrequency();
     renderOverlay(out_inspection, out_inspection.annotated_image);
@@ -310,19 +315,9 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
 
     out_detections.assign(local_buf.begin(), local_buf.begin() + count);
 
-    // RealESRGAN gating.
-    // The classifier already scores spoilage on the native-resolution crop. Super-resolution only adds
-    // texture information for SMALL crops (distant / tiny food items). Running a 2x tiled CPU SR pass on
-    // large crops cost ~150-900 ms per inference (YOLO itself is ~40-80 ms) and starved the stream thread.
-    //  - Only crops whose longest side <= kMaxSrSide (single ncnn tile) are upscaled.
-    //  - At most one SR pass per inference, and at most once every kSrMinIntervalMs.
-    //  - Disable entirely with ENABLE_SR=0.
     constexpr int kMaxSrSide = 160;
     constexpr int64_t kSrMinIntervalMs = 1000;
 
-    // Reserve the single SR budget slot under a very short critical section,
-    // then release the mutex before the expensive inference. Holding it across
-    // process() would serialize concurrent callers for hundreds of milliseconds.
     bool sr_budget_available = false;
     {
         std::lock_guard<std::mutex> sr_lock(m_sr_mutex);
@@ -341,28 +336,26 @@ bool InspectionPipeline::runInference(const cv::Mat& enhanced_frame,
         cv::Rect crop_rect = det.bbox & cv::Rect(0, 0, enhanced_frame.cols, enhanced_frame.rows);
         if (crop_rect.width >= 16 && crop_rect.height >= 16 &&
             std::max(crop_rect.width, crop_rect.height) <= kMaxSrSide) {
+            sr_budget_available = false;
+
             cv::Mat food_crop = enhanced_frame(crop_rect);
             cv::Mat sr_crop;
-
-            // RealESRGAN Super-Resolution evaluates fine surface texture for spoilage without destructive downsample blending
             if (m_enhancer.process(food_crop, sr_crop) && !sr_crop.empty()) {
                 SpoilageMetric sr_spoilage = evaluateSpoilageAVX2(sr_crop, det.class_name);
-
                 det.spoilage.avg_luminance = 0.5f * sr_spoilage.avg_luminance + 0.5f * det.spoilage.avg_luminance;
                 det.spoilage.discoloration_ratio = 0.5f * sr_spoilage.discoloration_ratio + 0.5f * det.spoilage.discoloration_ratio;
                 det.spoilage.is_visually_spoiled = (det.spoilage.discoloration_ratio > 0.35f);
             }
-            sr_budget_available = false;
         }
     }
     return true;
 }
 
+
 bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_inspection) {
     if (frame.empty()) return false;
+    std::lock_guard<std::recursive_mutex> pipeline_lock(m_pipeline_mutex);
 
-    // Ensure incoming frame dimensions from Mock Video (MP4) or Camera Stream
-    // are strictly normalized to (m_width, m_height) before entering Dewarp map and ISP
     cv::Mat normalized_frame;
     if (frame.cols != m_width || frame.rows != m_height) {
         cv::resize(frame, normalized_frame, cv::Size(m_width, m_height), 0, 0, cv::INTER_AREA);
@@ -372,36 +365,29 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
 
     const int64_t t_start = cv::getTickCount();
 
-    // Orientation is locked in the sensor driver (set_vflip/set_hmirror).
     cv::Mat oriented = normalized_frame;
 
-    // Lens dewarping
     cv::Mat dewarped;
     if (!m_dewarper.process(oriented, dewarped)) dewarped = oriented;
     out_inspection.raw_image = dewarped;
 
-    // OpenCV mean-based low-light & underexposure evaluation
     out_inspection.dark_status = m_dark_detector.detect(dewarped);
 
-    // Lightweight SIMD ISP (zero-copy passthrough for well-lit scenes).
     cv::Mat enhanced;
     enhanceImage(dewarped, enhanced);
     out_inspection.dewarped_image = enhanced;
 
     std::vector<DetectionResult> detected;
     if (runInference(out_inspection.dewarped_image, detected)) {
-        out_inspection.detections = detected;
+        out_inspection.detections = std::move(detected);
     } else {
         out_inspection.detections.clear();
     }
     out_inspection.scene_optical = m_classifier.getLastOpticalMetrics();
 
-    // Publish the partial latency before rendering so the HUD bar can display
-    // the current frame's processing time.
     out_inspection.processing_time_ms =
         ((cv::getTickCount() - t_start) * 1000.0) / cv::getTickFrequency();
 
-    // Single-pass render overlay at the very end (zero duplicate clone)
     renderOverlay(out_inspection, out_inspection.annotated_image);
 
     const int64_t t_end = cv::getTickCount();
@@ -410,10 +396,13 @@ bool InspectionPipeline::execute(const cv::Mat& frame, InspectionOutput& out_ins
     return true;
 }
 
+
 void InspectionPipeline::renderOverlay(const InspectionOutput& inspection, cv::Mat& out_display) {
     if (inspection.dewarped_image.empty()) {
         return;
     }
+
+    std::lock_guard<std::recursive_mutex> lock(m_pipeline_mutex);
 
     const float conf_threshold = m_conf_threshold.load(std::memory_order_relaxed);
 

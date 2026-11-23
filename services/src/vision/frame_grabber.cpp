@@ -120,10 +120,26 @@ void LatestMatMailbox::publish(const cv::Mat& frame) {
         }
     }
 
-    if (buffer.empty() || buffer.size() != frame.size() || buffer.type() != frame.type()) {
-        buffer.create(frame.size(), frame.type());
+    // if (buffer.empty() || buffer.size() != frame.size() || buffer.type() != frame.type()) {
+    //     buffer.create(frame.size(), frame.type());
+    // }
+    // frame.copyTo(buffer);
+
+    try {
+        if (buffer.empty() || buffer.size() != frame.size() || buffer.type() != frame.type()) {
+            buffer.create(frame.size(), frame.type());
+        }
+        frame.copyTo(buffer);
+    } catch (const cv::Exception&) {
+        if (!buffer.empty()) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_recycle.size() < m_recycle_capacity) {
+                m_recycle.push_back(std::move(buffer));
+            }
+        }
+        return;
     }
-    frame.copyTo(buffer);
+
 
     {
         std::lock_guard<std::mutex> lock(m_mutex);
